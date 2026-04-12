@@ -1,0 +1,549 @@
+"""
+scripts/update_upcoming_matches.py
+===================================
+Descarga partidos proximos + odds desde the-odds-api.com
+
+OPTIMIZACIONES DE CREDITOS:
+  - 1 sola region (eu) en lugar de eu,uk,us  → ahorra 67% de creditos
+  - TTL cache: no re-fetcha si los datos tienen menos de API_TTL_HOURS horas
+  - Solo consulta ligas que tienen partidos en los proximos FETCH_DAYS_AHEAD dias
+  - Registra creditos usados/restantes en cada llamada
+  - Delay entre llamadas para no saturar la API
+"""
+
+import sys
+import os
+import time
+import json
+import requests
+import pandas as pd
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
+from sqlalchemy import text
+
+sys.path.append(str(Path(__file__).parent.parent))
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+from config.database import engine
+from config.settings import (
+    ODDS_API_KEY, ODDS_REGION, ODDS_REGION_MLB, ODDS_MARKETS,
+    API_TTL_HOURS, FETCH_DAYS_AHEAD,
+    API_CREDITS_ALERT_THRESHOLD, SPORT_KEYS
+)
+from src.utils.team_normalizer import normalize_team
+
+# ============================================================
+# AUTO-STOP: umbral mínimo de créditos para detener fetch
+# ============================================================
+API_CREDITS_STOP_THRESHOLD = int(os.environ.get("API_CREDITS_STOP_THRESHOLD", "50"))
+_last_known_remaining: int | None = None   # se actualiza en cada respuesta API
+
+# ============================================================
+# ARCHIVO DE CACHE LOCAL
+# ============================================================
+CACHE_FILE = Path(__file__).parent.parent / "data" / "api_cache.json"
+CREDITS_LOG = Path(__file__).parent.parent / "logs" / "api_credits.log"
+
+CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+CREDITS_LOG.parent.mkdir(parents=True, exist_ok=True)
+
+
+def load_cache() -> dict:
+    if CACHE_FILE.exists():
+        with open(CACHE_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+
+def save_cache(cache: dict):
+    with open(CACHE_FILE, "w") as f:
+        json.dump(cache, f, indent=2)
+
+
+def is_cache_valid(cache: dict, sport_key: str) -> bool:
+    """Devuelve True si el cache de esa liga tiene menos de API_TTL_HOURS horas."""
+    if sport_key not in cache:
+        return False
+    last_fetch = datetime.fromisoformat(cache[sport_key]["fetched_at"])
+    age = datetime.now(timezone.utc) - last_fetch
+    return age.total_seconds() < API_TTL_HOURS * 3600
+
+
+def log_credits(sport_key: str, used: str, remaining: str):
+    """Guarda un registro de uso de creditos en logs/api_credits.log"""
+    global _last_known_remaining
+
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    line = f"[{ts}] {sport_key:<40} used={used:<6} remaining={remaining}\n"
+
+    with open(CREDITS_LOG, "a") as f:
+        f.write(line)
+
+    remaining_int = int(remaining) if remaining.isdigit() else 9999
+    _last_known_remaining = remaining_int
+
+    if remaining_int < API_CREDITS_ALERT_THRESHOLD:
+        print(f"  ⚠️  ALERTA: solo quedan {remaining} creditos en la API!")
+
+    # Auto-stop: enviar alerta Telegram cuando se acerca al límite
+    if remaining_int <= API_CREDITS_STOP_THRESHOLD:
+        try:
+            from scripts.notify_telegram import send_message
+            send_message(
+                f"🚨 <b>API CREDITS CRÍTICOS</b>\n\n"
+                f"Créditos restantes: <b>{remaining_int}</b>\n"
+                f"Umbral de parada: {API_CREDITS_STOP_THRESHOLD}\n\n"
+                f"⛔ Se detendrán los fetch de ligas restantes.\n"
+                f"Recarga créditos en the-odds-api.com"
+            )
+        except Exception:
+            pass
+
+
+# ============================================================
+# FETCH CON CACHE + TRACKING
+# ============================================================
+def fetch_data(sport_key: str, cache: dict, force: bool = False) -> list:
+    """
+    Llama a la API si el cache esta vencido o force=True.
+    Retorna la lista de partidos (desde cache o API).
+    """
+    if not force and is_cache_valid(cache, sport_key):
+        age_sec = (
+            datetime.now(timezone.utc)
+            - datetime.fromisoformat(cache[sport_key]["fetched_at"])
+        ).total_seconds()
+        age_min = age_sec / 60
+        age_hrs = age_sec / 3600
+        if age_hrs > 24:
+            print(f"  ⚠️  Cache STALE ({age_hrs:.1f}h) — odds pueden estar desactualizadas")
+        else:
+            print(f"  📦 Cache valido ({age_min:.0f} min) — omitiendo llamada API")
+        return cache[sport_key]["data"]
+
+    # MLB usa libros de EE.UU. (region "us"); futbol usa "eu"
+    region = ODDS_REGION_MLB if sport_key == "baseball_mlb" else ODDS_REGION
+
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
+    params = {
+        "apiKey": ODDS_API_KEY,
+        "regions": region,
+        "markets": ODDS_MARKETS,
+        "oddsFormat": "decimal",
+        "dateFormat": "iso",
+    }
+
+    try:
+        r = requests.get(url, params=params, timeout=15)
+    except requests.RequestException as e:
+        print(f"  ❌ Error de red: {e}")
+        return cache.get(sport_key, {}).get("data", [])
+
+    # --- Tracking de creditos ---
+    used      = r.headers.get("x-requests-used", "?")
+    remaining = r.headers.get("x-requests-remaining", "?")
+    print(f"  💳 Creditos — usados: {used}  |  restantes: {remaining}")
+    log_credits(sport_key, used, remaining)
+
+    if r.status_code != 200:
+        print(f"  ❌ API error {r.status_code}: {r.text[:200]}")
+        return cache.get(sport_key, {}).get("data", [])
+
+    data = r.json()
+    if isinstance(data, dict):  # error JSON
+        print(f"  ❌ API devolvio error: {data}")
+        return cache.get(sport_key, {}).get("data", [])
+
+    # --- Actualizar cache ---
+    cache[sport_key] = {
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "data": data,
+        "credits_remaining": remaining,
+    }
+    save_cache(cache)
+
+    return data
+
+
+# ============================================================
+# LIGAS CON PARTIDOS PROXIMOS (evita fetch innecesario)
+# ============================================================
+def get_active_leagues_in_db() -> set:
+    """
+    Devuelve las sport_keys que ya tienen partidos en los proximos FETCH_DAYS_AHEAD dias.
+    Sirve como referencia, pero siempre buscamos todas para no perder partidos nuevos.
+    """
+    try:
+        cutoff = datetime.now(timezone.utc) + timedelta(days=FETCH_DAYS_AHEAD)
+        df = pd.read_sql(
+            text("""
+                SELECT DISTINCT sport_key
+                FROM upcoming_matches
+                WHERE match_date::timestamp <= :cutoff
+                  AND match_date::timestamp >= NOW()
+            """),
+            engine,
+            params={"cutoff": cutoff},
+        )
+        return set(df["sport_key"].tolist())
+    except Exception:
+        return set()
+
+
+# ============================================================
+# PARSEO DE UN PARTIDO
+# ============================================================
+def parse_match(m: dict, sport: str) -> dict | None:
+    try:
+        home = m["home_team"]
+        away = m["away_team"]
+        home_norm = normalize_team(home).lower().strip()
+        away_norm = normalize_team(away).lower().strip()
+
+        raw_date = m["commence_time"]
+        dt = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+        dt_utc = dt.astimezone(timezone.utc)
+        match_date = dt_utc.strftime("%Y-%m-%d %H:%M:%S")
+        match_day  = dt_utc.strftime("%Y-%m-%d")
+        match_key  = f"{home_norm}_{away_norm}_{match_day}"
+
+        home_odds = draw_odds = away_odds = None
+        over25_odds = under25_odds = None
+        btts_yes_odds = btts_no_odds = None
+        ah_home_odds = ah_away_odds = ah_line = None
+        all_ah_data = []   # lista de (home_line, home_price, away_price)
+
+        # ── LINE SHOPPING + CONSENSO DE BOOKMAKERS ────────────────────────
+        # Line shopping:  guarda el MEJOR precio para el apostador (max odd)
+        # Consenso:       guarda el precio PROMEDIO de todos los bookmakers
+        #
+        # El spread (max - min) / consensus indica qué tan dividido está el
+        # mercado:
+        #   spread < 5%  → mercado eficiente, poca incertidumbre
+        #   spread > 15% → mercado dividido, mayor incertidumbre
+        #
+        # Si best_odds > consensus * 1.10 → línea blanda (soft line) detectada
+
+        all_home_prices = []
+        all_draw_prices = []
+        all_away_prices = []
+        bookmaker_count = 0
+
+        for bookmaker in m.get("bookmakers", []):
+            bk_home = bk_draw = bk_away = None
+
+            for market in bookmaker.get("markets", []):
+                if market["key"] == "h2h":
+                    for o in market["outcomes"]:
+                        name  = o["name"]
+                        price = o["price"]
+                        if name == home:
+                            bk_home = price
+                            if home_odds is None or price > home_odds:
+                                home_odds = price
+                        elif name == away:
+                            bk_away = price
+                            if away_odds is None or price > away_odds:
+                                away_odds = price
+                        elif name.lower() == "draw":
+                            bk_draw = price
+                            if draw_odds is None or price > draw_odds:
+                                draw_odds = price
+
+                elif market["key"] == "totals":
+                    for o in market["outcomes"]:
+                        if o.get("point") == 2.5:
+                            price = o["price"]
+                            if o["name"].lower() == "over":
+                                if over25_odds is None or price > over25_odds:
+                                    over25_odds = price
+                            elif o["name"].lower() == "under":
+                                if under25_odds is None or price > under25_odds:
+                                    under25_odds = price
+
+                elif market["key"] == "btts":
+                    for o in market["outcomes"]:
+                        name  = o["name"].lower()
+                        price = o["price"]
+                        if name == "yes":
+                            if btts_yes_odds is None or price > btts_yes_odds:
+                                btts_yes_odds = price
+                        elif name == "no":
+                            if btts_no_odds is None or price > btts_no_odds:
+                                btts_no_odds = price
+
+                elif market["key"] == "spreads":
+                    # Asian Handicap: recoge (línea del local, precio local, precio visitante)
+                    bk_ah_home = bk_ah_away = bk_ah_line = None
+                    for o in market["outcomes"]:
+                        price = o.get("price")
+                        point = o.get("point")
+                        if price is None or point is None:
+                            continue
+                        if o["name"] == home:
+                            bk_ah_home = price
+                            bk_ah_line = point  # línea aplicada al local (ej: -1.5)
+                        elif o["name"] == away:
+                            bk_ah_away = price
+                    if bk_ah_home and bk_ah_away and bk_ah_line is not None:
+                        all_ah_data.append((bk_ah_line, bk_ah_home, bk_ah_away))
+
+            # Agregar precios a las listas solo si el bookmaker tiene h2h completo
+            if bk_home and bk_away:
+                all_home_prices.append(bk_home)
+                all_away_prices.append(bk_away)
+                if bk_draw:
+                    all_draw_prices.append(bk_draw)
+                bookmaker_count += 1
+
+        # ── Consenso de Asian Handicap: línea más común + mejor precio ───
+        if all_ah_data:
+            from collections import Counter as _Counter
+            lines   = [x[0] for x in all_ah_data]
+            ah_line = _Counter(lines).most_common(1)[0][0]
+            matching = [(h, a) for l, h, a in all_ah_data if l == ah_line]
+            if matching:
+                ah_home_odds = max(h for h, a in matching)
+                ah_away_odds = max(a for h, a in matching)
+
+        # ── Calcular consenso y spread ─────────────────────────────────────
+        def _avg(lst):
+            return round(sum(lst) / len(lst), 3) if lst else None
+
+        def _spread_pct(lst):
+            if not lst or len(lst) < 2:
+                return None
+            avg = sum(lst) / len(lst)
+            if avg == 0:
+                return None
+            return round((max(lst) - min(lst)) / avg * 100, 2)
+
+        consensus_home_odds = _avg(all_home_prices)
+        consensus_draw_odds = _avg(all_draw_prices)
+        consensus_away_odds = _avg(all_away_prices)
+        h2h_spread_pct      = _spread_pct(all_home_prices)   # spread del local como proxy
+
+        return {
+            "fixture_id":           m["id"],
+            "match_date":           match_date,
+            "league":               sport,
+            "sport_key":            sport,
+            "home_team":            home,
+            "away_team":            away,
+            "home_team_norm":       home_norm,
+            "away_team_norm":       away_norm,
+            "match_key":            match_key,
+            "home_odds":            home_odds,
+            "draw_odds":            draw_odds,
+            "away_odds":            away_odds,
+            "over25_odds":          over25_odds,
+            "under25_odds":         under25_odds,
+            "btts_yes_odds":        btts_yes_odds,
+            "btts_no_odds":         btts_no_odds,
+            "consensus_home_odds":  consensus_home_odds,
+            "consensus_draw_odds":  consensus_draw_odds,
+            "consensus_away_odds":  consensus_away_odds,
+            "bookmaker_count":      bookmaker_count,
+            "h2h_spread_pct":       h2h_spread_pct,
+            "ah_home_odds":         ah_home_odds,
+            "ah_away_odds":         ah_away_odds,
+            "ah_line":              ah_line,
+        }
+
+    except Exception as e:
+        print(f"  ❌ Error parseando partido: {e}")
+        return None
+
+
+# ============================================================
+# AUTO-MIGRACIÓN: garantiza que la tabla tiene todas las columnas
+# ============================================================
+def ensure_schema():
+    with engine.begin() as conn:
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()
+        """))
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS home_team_norm TEXT
+        """))
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS away_team_norm TEXT
+        """))
+        # Opening odds — se escriben UNA sola vez (primera vez que se ve el partido)
+        # Usadas por el Line Movement Tracker para detectar movimiento sharp
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS opening_home_odds   FLOAT
+        """))
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS opening_draw_odds   FLOAT
+        """))
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS opening_away_odds   FLOAT
+        """))
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS opening_over25_odds FLOAT
+        """))
+        # Consenso de bookmakers — detecta líneas blandas y spread de mercado
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS consensus_home_odds FLOAT
+        """))
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS consensus_draw_odds FLOAT
+        """))
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS consensus_away_odds FLOAT
+        """))
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS bookmaker_count INT DEFAULT 0
+        """))
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS h2h_spread_pct FLOAT
+        """))
+        # Asian Handicap — obtenido del mercado spreads de The Odds API
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS ah_home_odds FLOAT
+        """))
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS ah_away_odds FLOAT
+        """))
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS ah_line FLOAT
+        """))
+
+
+# ============================================================
+# INSERTAR EN DB
+# ============================================================
+def upsert_matches(rows: list[dict]):
+    if not rows:
+        return
+    with engine.begin() as conn:
+        for r in rows:
+            conn.execute(text("""
+                INSERT INTO upcoming_matches (
+                    match_key, match_date, league, sport_key,
+                    home_team, away_team,
+                    home_odds, draw_odds, away_odds,
+                    over25_odds, under25_odds,
+                    btts_yes_odds, btts_no_odds,
+                    consensus_home_odds, consensus_draw_odds, consensus_away_odds,
+                    bookmaker_count, h2h_spread_pct,
+                    ah_home_odds, ah_away_odds, ah_line
+                )
+                VALUES (
+                    :match_key, :match_date, :league, :sport_key,
+                    :home_team, :away_team,
+                    :home_odds, :draw_odds, :away_odds,
+                    :over25_odds, :under25_odds,
+                    :btts_yes_odds, :btts_no_odds,
+                    :consensus_home_odds, :consensus_draw_odds, :consensus_away_odds,
+                    :bookmaker_count, :h2h_spread_pct,
+                    :ah_home_odds, :ah_away_odds, :ah_line
+                )
+                ON CONFLICT (match_key)
+                DO UPDATE SET
+                    home_odds    = COALESCE(EXCLUDED.home_odds,    upcoming_matches.home_odds),
+                    draw_odds    = COALESCE(EXCLUDED.draw_odds,    upcoming_matches.draw_odds),
+                    away_odds    = COALESCE(EXCLUDED.away_odds,    upcoming_matches.away_odds),
+                    over25_odds  = COALESCE(EXCLUDED.over25_odds,  upcoming_matches.over25_odds),
+                    under25_odds = COALESCE(EXCLUDED.under25_odds, upcoming_matches.under25_odds),
+                    btts_yes_odds = COALESCE(EXCLUDED.btts_yes_odds, upcoming_matches.btts_yes_odds),
+                    btts_no_odds  = COALESCE(EXCLUDED.btts_no_odds,  upcoming_matches.btts_no_odds),
+                    -- Consenso: se actualiza en cada fetch (precio promedio actual)
+                    consensus_home_odds = EXCLUDED.consensus_home_odds,
+                    consensus_draw_odds = EXCLUDED.consensus_draw_odds,
+                    consensus_away_odds = EXCLUDED.consensus_away_odds,
+                    bookmaker_count     = EXCLUDED.bookmaker_count,
+                    h2h_spread_pct      = EXCLUDED.h2h_spread_pct,
+                    -- AH: se actualiza siempre (línea de mercado puede cambiar)
+                    ah_home_odds = COALESCE(EXCLUDED.ah_home_odds, upcoming_matches.ah_home_odds),
+                    ah_away_odds = COALESCE(EXCLUDED.ah_away_odds, upcoming_matches.ah_away_odds),
+                    ah_line      = COALESCE(EXCLUDED.ah_line,      upcoming_matches.ah_line),
+                    updated_at   = NOW(),
+                    -- Opening odds: solo se escriben si aún son NULL (primera vez)
+                    opening_home_odds   = COALESCE(upcoming_matches.opening_home_odds,   EXCLUDED.home_odds),
+                    opening_draw_odds   = COALESCE(upcoming_matches.opening_draw_odds,   EXCLUDED.draw_odds),
+                    opening_away_odds   = COALESCE(upcoming_matches.opening_away_odds,   EXCLUDED.away_odds),
+                    opening_over25_odds = COALESCE(upcoming_matches.opening_over25_odds, EXCLUDED.over25_odds)
+            """), r)
+
+
+# ============================================================
+# MAIN
+# ============================================================
+def _cleanup_old_matches():
+    """Elimina partidos de upcoming_matches que ya pasaron hace más de 7 días."""
+    try:
+        with engine.begin() as conn:
+            r = conn.execute(text("""
+                DELETE FROM upcoming_matches
+                WHERE match_date::timestamp < NOW() - INTERVAL '7 days'
+            """))
+            if r.rowcount > 0:
+                print(f"🗑️  Cleanup: {r.rowcount} partidos antiguos eliminados de upcoming_matches")
+    except Exception as e:
+        print(f"⚠️  Cleanup error: {e}")
+
+
+def update_all(force: bool = False):
+    print("\n📡 ACTUALIZANDO PARTIDOS + ODDS")
+    print(f"   Region: {ODDS_REGION}  |  Mercados: {ODDS_MARKETS}  |  TTL: {API_TTL_HOURS}h\n")
+
+    _cleanup_old_matches()   # eliminar partidos viejos antes de insertar nuevos
+    ensure_schema()   # migración automática — agrega columnas faltantes
+    cache = load_cache()
+    total_rows = 0
+    api_calls  = 0
+
+    for sport in SPORT_KEYS:
+        print(f"🔎 {sport}")
+
+        # ── Auto-stop: no gastar créditos si quedan pocos ──────────────
+        if _last_known_remaining is not None and _last_known_remaining <= API_CREDITS_STOP_THRESHOLD:
+            print(f"  ⛔ AUTO-STOP: solo quedan {_last_known_remaining} créditos (umbral={API_CREDITS_STOP_THRESHOLD}). Saltando {sport}.")
+            continue
+
+        cached = is_cache_valid(cache, sport) and not force
+        data = fetch_data(sport, cache, force=force)
+
+        if not cached:
+            api_calls += 1
+            time.sleep(0.5)  # delay cortés entre llamadas
+
+        rows = [r for m in data if (r := parse_match(m, sport))]
+        upsert_matches(rows)
+        total_rows += len(rows)
+        print(f"   ✅ {len(rows)} partidos procesados")
+
+    print(f"\n✅ DONE — {total_rows} partidos totales | {api_calls} llamadas API realizadas")
+
+    # Creditos estimados consumidos (1 region × 2 mercados = 2 por liga)
+    n_markets = len(ODDS_MARKETS.split(","))
+    n_regions = len(ODDS_REGION.split(","))
+    creditos_estimados = api_calls * n_markets * n_regions
+    print(f"💳 Creditos estimados usados: ~{creditos_estimados}")
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force", action="store_true", help="Ignorar cache y forzar fetch")
+    args = parser.parse_args()
+    update_all(force=args.force)

@@ -1,0 +1,465 @@
+"""
+scripts/orchestrator.py
+=========================
+Runner principal automatizado del Sports Betting Model.
+
+Modos de ejecucion:
+  python scripts/orchestrator.py --mode morning   → fetch odds + analisis + notificacion
+  python scripts/orchestrator.py --mode evening   → closing odds + resultados
+  python scripts/orchestrator.py --mode full      → todo el ciclo completo
+  python scripts/orchestrator.py --mode results   → solo actualizar resultados
+  python scripts/orchestrator.py --mode closing   → closing odds pre-kickoff (30-60 min antes)
+  python scripts/orchestrator.py --mode weekly    → recarga historica + calibracion + reporte
+
+Schedule recomendado (Windows Task Scheduler):
+  06:00 AM  → --mode morning
+  12:00 PM  → --mode closing      (captura odds de cierre antes de los partidos)
+  23:00 PM  → --mode evening
+  Lunes 7AM → --mode weekly
+
+Diseñado para ser llamado por Windows Task Scheduler sin intervencion manual.
+"""
+
+import sys
+import os
+import argparse
+import traceback
+import atexit
+from pathlib import Path
+from datetime import datetime, timezone
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+sys.path.append(str(Path(__file__).parent.parent))
+
+LOG_DIR = Path(__file__).parent.parent / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+LOG_RETENTION_DAYS = 30
+
+
+def _rotate_logs():
+    """Elimina archivos de log con más de LOG_RETENTION_DAYS días de antigüedad."""
+    cutoff = datetime.now().timestamp() - (LOG_RETENTION_DAYS * 86400)
+    deleted = 0
+    for f in LOG_DIR.glob("run_*.log"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                deleted += 1
+        except OSError:
+            pass
+    # También limpiar api_credits.log si supera 1MB
+    credits_log = LOG_DIR / "api_credits.log"
+    try:
+        if credits_log.exists() and credits_log.stat().st_size > 1_000_000:
+            # Mantener solo las últimas 500 líneas
+            lines = credits_log.read_text(encoding="utf-8").splitlines()
+            credits_log.write_text("\n".join(lines[-500:]) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+    if deleted > 0:
+        print(f"🗑️  Log rotation: {deleted} archivos eliminados (>{LOG_RETENTION_DAYS} días)")
+
+
+LOCK_FILE = LOG_DIR / "orchestrator.lock"
+LOCK_STALE_MINUTES = 120  # si el lock tiene más de 2h, considerarlo abandonado
+
+
+def _acquire_lock(mode: str) -> bool:
+    """
+    Crea un lock file para prevenir ejecuciones concurrentes.
+    Retorna True si se adquirió el lock, False si ya hay otro proceso corriendo.
+    """
+    if LOCK_FILE.exists():
+        try:
+            age_sec = datetime.now().timestamp() - LOCK_FILE.stat().st_mtime
+            if age_sec < LOCK_STALE_MINUTES * 60:
+                content = LOCK_FILE.read_text(encoding="utf-8").strip()
+                print(f"⛔ Otro proceso ya está corriendo: {content}")
+                print(f"   Lock file: {LOCK_FILE} (age: {age_sec/60:.0f} min)")
+                return False
+            else:
+                print(f"⚠️  Lock file stale ({age_sec/60:.0f} min > {LOCK_STALE_MINUTES} min), forzando...")
+                LOCK_FILE.unlink()
+        except OSError:
+            pass
+
+    # Crear lock
+    LOCK_FILE.write_text(
+        f"mode={mode} pid={os.getpid()} started={datetime.now().isoformat()}",
+        encoding="utf-8"
+    )
+    return True
+
+
+def _release_lock():
+    """Elimina el lock file."""
+    try:
+        if LOCK_FILE.exists():
+            LOCK_FILE.unlink()
+    except OSError:
+        pass
+
+
+def _ensure_db_indexes():
+    """Crea índices de rendimiento en la DB si no existen."""
+    try:
+        from config.database import engine as _engine
+        from sqlalchemy import text as _text
+        indexes = [
+            # matches: búsquedas por equipo + fecha
+            "CREATE INDEX IF NOT EXISTS idx_matches_home_date ON matches (home_team, date)",
+            "CREATE INDEX IF NOT EXISTS idx_matches_away_date ON matches (away_team, date)",
+            "CREATE INDEX IF NOT EXISTS idx_matches_league    ON matches (league)",
+            # bets_history: queries frecuentes
+            "CREATE INDEX IF NOT EXISTS idx_bets_result       ON bets_history (result)",
+            "CREATE INDEX IF NOT EXISTS idx_bets_match_date   ON bets_history (match_date)",
+            "CREATE INDEX IF NOT EXISTS idx_bets_league       ON bets_history (league)",
+            # upcoming_matches: pipeline usa sport_key + match_date
+            "CREATE INDEX IF NOT EXISTS idx_upcoming_sport    ON upcoming_matches (sport_key)",
+            "CREATE INDEX IF NOT EXISTS idx_upcoming_date     ON upcoming_matches (match_date)",
+        ]
+        with _engine.begin() as conn:
+            for idx_sql in indexes:
+                try:
+                    conn.execute(_text(idx_sql))
+                except Exception:
+                    pass  # índice ya existe o tabla no existe aún
+    except Exception:
+        pass  # no bloquear el pipeline por un error de índices
+
+
+# ============================================================
+# LOGGER
+# ============================================================
+class Logger:
+    def __init__(self, mode: str):
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.log_file = LOG_DIR / f"run_{mode}_{ts}.log"
+        self._fh = open(self.log_file, "w", encoding="utf-8")
+
+    def log(self, msg: str):
+        ts = datetime.now().strftime("%H:%M:%S")
+        line = f"[{ts}] {msg}"
+        print(line)
+        self._fh.write(line + "\n")
+        self._fh.flush()
+
+    def close(self):
+        self._fh.close()
+
+
+def run_step(logger: Logger, name: str, func, *args, **kwargs) -> bool:
+    """Ejecuta un paso y captura errores sin detener el pipeline."""
+    logger.log(f"\n{'='*50}")
+    logger.log(f"PASO: {name}")
+    logger.log(f"{'='*50}")
+    try:
+        func(*args, **kwargs)
+        logger.log(f"✅ {name} — OK")
+        return True
+    except Exception as e:
+        logger.log(f"❌ {name} — ERROR: {e}")
+        logger.log(traceback.format_exc())
+        return False
+
+
+# ============================================================
+# PASOS DEL PIPELINE
+# ============================================================
+
+def step_fetch_odds(force: bool = False):
+    from scripts.update_upcoming_matches import update_all
+    update_all(force=force)
+
+
+def step_load_historical():
+    from scripts.load_historical_data import load_historical_data
+    load_historical_data()
+
+
+def step_enrich():
+    from scripts.enrich_matches import enrich_matches
+    enrich_matches()
+
+
+def step_predict():
+    from src.pipeline.prediction_pipeline import run_prediction_pipeline
+    run_prediction_pipeline()
+
+
+def step_notify():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from config.settings import USER_TIMEZONE
+    now_local = datetime.now(ZoneInfo(USER_TIMEZONE))
+    if now_local.hour >= 12:
+        # Después del mediodía → mostrar picks de MAÑANA
+        from scripts.notify_telegram import send_tomorrow_preview
+        send_tomorrow_preview()
+    else:
+        # Mañana temprano → mostrar picks de HOY
+        from scripts.notify_telegram import notify_best_bets
+        notify_best_bets()
+
+
+def step_closing_odds():
+    from scripts.update_closing_odds import update_closing_odds
+    update_closing_odds()
+
+
+def step_pre_kickoff_closing():
+    """
+    Mejora 6: Fetch closing odds justo antes del kickoff.
+    Actualiza upcoming_matches con odds frescas (que seran las closing odds reales)
+    y luego ejecuta update_closing_odds para asociarlas a bets_history.
+    Diseñado para correr 30-60 min antes de los primeros partidos del dia.
+    """
+    from scripts.update_upcoming_matches import update_all
+    update_all(force=True)
+    from scripts.update_closing_odds import update_closing_odds
+    update_closing_odds()
+
+
+def step_fetch_results():
+    """Descarga resultados recientes desde The Odds API e inserta en matches."""
+    from scripts.fetch_results import fetch_all_results
+    fetch_all_results(days_from=2)
+
+
+def step_results():
+    from src.models.save_bets import update_bet_results
+    update_bet_results()
+
+
+def step_mlb_predict():
+    from src.pipeline.mlb_pipeline import run_mlb_pipeline
+    run_mlb_pipeline()
+
+
+def step_load_mlb():
+    from scripts.load_mlb_data import load_mlb_data
+    load_mlb_data()
+
+
+def step_load_extra_leagues():
+    from scripts.load_extra_leagues import load_extra_leagues
+    load_extra_leagues()
+
+
+# ============================================================
+# MODOS
+# ============================================================
+
+def run_morning(logger: Logger, force_fetch: bool = False):
+    """
+    Ciclo matutino (recomendado: 06:00 AM)
+    1. Fetch odds (respeta TTL cache)
+    2. Enriquecer partidos con stats historicos
+    3. Calcular predicciones + value bets (soccer + MLB)
+    4. Notificar por Telegram
+    """
+    logger.log("MODO: MORNING (fetch + predict + notify)")
+
+    run_step(logger, "Fetch odds",        step_fetch_odds, force_fetch)
+    run_step(logger, "Enrich data",       step_enrich)
+    run_step(logger, "Predictions",       step_predict)
+    # run_step(logger, "MLB Predictions",   step_mlb_predict)  # desactivado — sin creditos MLB
+    run_step(logger, "Telegram",          step_notify)
+
+
+def step_notify_evening():
+    from scripts.notify_telegram import send_evening_summary
+    send_evening_summary()
+
+
+def step_notify_tomorrow():
+    from scripts.notify_telegram import send_tomorrow_preview
+    send_tomorrow_preview()
+
+
+def run_evening(logger: Logger):
+    """
+    Ciclo nocturno (recomendado: 23:00 PM)
+    1. Actualizar closing odds (sin llamada API)
+    2. Actualizar resultados de partidos terminados
+    3. Calcular CLV de bets resueltas
+    4. Correr backtest
+    5. Enviar resumen del dia a Telegram
+    6. Fetch odds frescos para mañana + predicciones + preview
+    """
+    logger.log("MODO: EVENING (closing odds + results + CLV + notify + preview mañana)")
+
+    run_step(logger, "Closing odds",      step_closing_odds)
+    run_step(logger, "Fetch results",     step_fetch_results)
+    run_step(logger, "Results",           step_results)
+    run_step(logger, "CLV update",        step_clv)
+    run_step(logger, "Backtest",          step_backtest)
+    run_step(logger, "Telegram evening",  step_notify_evening)
+
+    # ── Preview de mañana ────────────────────────────────────────────────
+    # Fetchea odds frescos, genera predicciones para los partidos de mañana
+    # y envía el resumen por Telegram. Así el usuario puede preparar sus
+    # apuestas antes de dormir aunque la laptop esté apagada por la mañana.
+    run_step(logger, "Fetch odds (mañana)",       step_fetch_odds)
+    run_step(logger, "Predictions (mañana)",      step_predict)
+    # run_step(logger, "MLB Predictions (mañana)",  step_mlb_predict)  # desactivado — sin creditos MLB
+    run_step(logger, "Preview mañana",            step_notify_tomorrow)
+
+
+def run_full(logger: Logger, force_fetch: bool = False):
+    """Ciclo completo: morning + evening en una sola ejecucion."""
+    logger.log("MODO: FULL")
+
+    run_step(logger, "Fetch odds",   step_fetch_odds, force_fetch)
+    run_step(logger, "Enrich data",  step_enrich)
+    run_step(logger, "Predictions",  step_predict)
+    run_step(logger, "Notify",       step_notify)
+    run_step(logger, "Closing odds",  step_closing_odds)
+    run_step(logger, "Fetch results", step_fetch_results)
+    run_step(logger, "Results",       step_results)
+
+
+def step_backtest():
+    from src.models.backtest_engine import run_backtest
+    run_backtest()
+
+
+def step_clv():
+    from src.models.clv_tracker import update_clv
+    update_clv()
+
+
+def step_optimize_thresholds():
+    from src.models.threshold_optimizer import optimize_thresholds
+    optimize_thresholds(verbose=False)
+
+
+def step_walkforward():
+    from src.models.walkforward_backtest import run_walkforward
+    run_walkforward(verbose=True)
+
+
+def step_weekly_report():
+    from scripts.notify_telegram import send_weekly_report
+    send_weekly_report()
+
+
+def step_calibration():
+    from src.models.calibration_monitor import compute_calibration, check_calibration_alert
+    from scripts.notify_telegram import send_message
+    factors = compute_calibration(verbose=True)
+    alert = check_calibration_alert(factors)
+    if alert:
+        send_message(alert)
+
+
+def step_load_international():
+    from scripts.load_international_data import load_international_data
+    load_international_data(verbose=True)
+
+
+def step_collect_events():
+    from scripts.collect_match_events import collect_match_events
+    collect_match_events(verbose=True)
+
+
+def step_fit_dc_mle():
+    from src.models.dc_mle_fitter import fit_dc_parameters
+    fit_dc_parameters(verbose=True)
+
+
+def run_results_only(logger: Logger):
+    run_step(logger, "Fetch results", step_fetch_results)
+    run_step(logger, "Results",       step_results)
+    run_step(logger, "CLV update",    step_clv)
+    run_step(logger, "Backtest",      step_backtest)
+
+
+# ============================================================
+# MAIN
+# ============================================================
+def main():
+    parser = argparse.ArgumentParser(description="Orchestrator del Sports Betting Model")
+    parser.add_argument(
+        "--mode",
+        choices=["morning", "evening", "full", "results", "weekly", "closing"],
+        default="morning",
+        help="Modo de ejecucion"
+    )
+    parser.add_argument(
+        "--force-fetch",
+        action="store_true",
+        help="Forzar fetch de odds aunque el cache sea valido"
+    )
+    args = parser.parse_args()
+
+    _rotate_logs()   # limpiar logs antiguos antes de cada ejecución
+    _ensure_db_indexes()  # crear índices si no existen
+
+    # ── Task locking: prevenir ejecuciones concurrentes ──────────────────
+    if not _acquire_lock(args.mode):
+        print("❌ Abortando: otra instancia del orchestrator está corriendo.")
+        sys.exit(1)
+    atexit.register(_release_lock)  # liberar lock al terminar (incluso en crash)
+
+    logger = Logger(args.mode)
+    start = datetime.now()
+    logger.log(f"INICIO: {start.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.log(f"Modo: {args.mode}  |  Force fetch: {args.force_fetch}")
+
+    try:
+        if args.mode == "morning":
+            run_morning(logger, args.force_fetch)
+        elif args.mode == "evening":
+            run_evening(logger)
+        elif args.mode == "full":
+            run_full(logger, args.force_fetch)
+        elif args.mode == "results":
+            run_results_only(logger)
+        elif args.mode == "closing":
+            # Mejora 6: Fetch closing odds pre-kickoff
+            # Ejecutar 30-60 min antes de los primeros partidos del dia
+            # Esto captura las odds de cierre reales para calcular CLV
+            run_step(logger, "Pre-kickoff closing odds", step_pre_kickoff_closing)
+        elif args.mode == "weekly":
+            run_step(logger, "Load historical data",     step_load_historical)
+            run_step(logger, "Load international data",  step_load_international)
+            run_step(logger, "Collect match events",     step_collect_events)
+            run_step(logger, "Load extra leagues",       step_load_extra_leagues)
+            # run_step(logger, "Load MLB data",            step_load_mlb)  # desactivado — sin creditos MLB
+            run_step(logger, "Fit DC-MLE parameters",    step_fit_dc_mle)
+            run_step(logger, "Calibration monitor",    step_calibration)
+            run_step(logger, "Optimize thresholds",    step_optimize_thresholds)
+            run_step(logger, "Walk-forward backtest",  step_walkforward)
+            run_step(logger, "Weekly Telegram report", step_weekly_report)
+    except Exception as fatal:
+        # ── Crash report a Telegram ──────────────────────────────────────
+        logger.log(f"💀 ERROR FATAL: {fatal}")
+        logger.log(traceback.format_exc())
+        try:
+            from scripts.notify_telegram import send_message
+            tb_short = traceback.format_exc()[-500:]  # últimos 500 chars del traceback
+            send_message(
+                f"💀 <b>CRASH — orchestrator.py</b>\n\n"
+                f"Modo: <code>{args.mode}</code>\n"
+                f"Error: <code>{str(fatal)[:200]}</code>\n\n"
+                f"<pre>{tb_short}</pre>\n\n"
+                f"Revisa el log: {logger.log_file.name}"
+            )
+        except Exception:
+            pass
+        raise  # re-lanzar para que el exit code sea != 0
+    finally:
+        end = datetime.now()
+        elapsed = (end - start).total_seconds()
+        logger.log(f"\nFIN: {end.strftime('%Y-%m-%d %H:%M:%S')}  ({elapsed:.1f}s)")
+        logger.log(f"Log guardado: {logger.log_file}")
+        logger.close()
+        _release_lock()
+
+
+if __name__ == "__main__":
+    main()

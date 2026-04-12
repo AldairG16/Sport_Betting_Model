@@ -1,0 +1,45 @@
+{
+  "home_win": {
+    "factor": 0.9779,
+    "brier": 0.24188,
+    "n_bets": 73,
+    "win_rate_actual": 0.4384,
+    "win_rate_pred": 0.5164
+  },
+  "draw": {
+    "factor": 1.0,
+    "brier": null,
+    "n_bets": 10,
+    "win_rate_actual": null,
+    "win_rate_pred": null
+  },
+  "away_win": {
+    "factor": 1.0,
+    "brier": null,
+    "n_bets": 36,
+    "win_rate_actual": null,
+    "win_rate_pred": null
+  },
+  "over25": {
+    "factor": 0.9632,
+    "brier": 0.26438,
+    "n_bets": 88,
+    "win_rate_actual": 0.5114,
+    "win_rate_pred": 0.6466
+  },
+  "under25": {
+    "factor": 1.0,
+    "brier": null,
+    "n_bets": 8,
+    "win_rate_actual": null,
+    "win_rate_pred": null
+  },
+  "btts": {
+    "factor": 1.0,
+    "brier": null,
+    "n_bets": 0,
+    "win_rate_actual": null,
+    "win_rate_pred": null
+  },
+  "updated_at": "2026-04-09T17:39:10.715843"
+}

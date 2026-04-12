@@ -1,0 +1,10 @@
+{
+  "edge_min": 0.06,
+  "kelly_fraction": 0.25,
+  "min_probability": 0.4,
+  "max_odds": 4.0,
+  "min_odds": 1.5,
+  "updated_at": "2026-04-09 17:39:10",
+  "sample_size": 251,
+  "simulated": false
+}
