@@ -1,6 +1,28 @@
-pandas
-requests
-sqlalchemy
-psycopg2-binary
-scikit-learn
-scipy
+# ── Core data ─────────────────────────────────────────
+numpy==2.4.2
+pandas==3.0.1
+scipy==1.17.1
+scikit-learn==1.8.0
+xgboost==3.2.0
+
+# ── Database ───────────────────────────────────────────
+SQLAlchemy==2.0.44
+psycopg2-binary==2.9.11
+
+# ── HTTP / APIs ────────────────────────────────────────
+requests==2.32.5
+urllib3==2.6.3
+certifi==2026.2.25
+
+# ── HTML parsing (load_historical_fbref) ──────────────
+beautifulsoup4==4.14.3
+
+# ── Fuzzy team matching ────────────────────────────────
+RapidFuzz==3.14.3
+
+# ── Timezone support ──────────────────────────────────
+tzdata==2025.2
+python-dateutil==2.9.0.post0
+
+# ── Testing ────────────────────────────────────────────
+pytest==9.0.3

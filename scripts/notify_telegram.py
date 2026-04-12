@@ -463,6 +463,65 @@ def send_tomorrow_preview():
 
 
 # ============================================================
+# HEALTH CHECK
+# ============================================================
+def send_health_check(mode: str, bets_generated: int, elapsed_seconds: float, steps_ok: int, steps_total: int):
+    """
+    Envia un resumen de salud del pipeline a Telegram al finalizar cada modo.
+
+    Args:
+        mode:             modo del orchestrator (morning, evening, etc.)
+        bets_generated:   numero de apuestas generadas en este ciclo
+        elapsed_seconds:  tiempo total de ejecucion en segundos
+        steps_ok:         pasos que terminaron sin error
+        steps_total:      total de pasos ejecutados
+    """
+    from src.models.bankroll_manager import get_bankroll_stats
+    from scripts.update_upcoming_matches import CREDITS_LOG
+    from pathlib import Path as _Path
+
+    # Leer creditos restantes del log
+    credits_remaining = "?"
+    try:
+        if CREDITS_LOG.exists():
+            lines = CREDITS_LOG.read_text(encoding="utf-8").splitlines()
+            for line in reversed(lines):
+                if "remaining=" in line:
+                    credits_remaining = line.split("remaining=")[-1].strip()
+                    break
+    except Exception:
+        pass
+
+    # Bankroll stats
+    try:
+        stats = get_bankroll_stats()
+        bankroll_line = (
+            f"💰 Bankroll: <b>{stats['current']:.2f}u</b> "
+            f"(ROI: {stats['roi_pct']:+.1f}%  |  DD: {stats['drawdown_pct']:.1f}%)"
+        )
+    except Exception:
+        bankroll_line = "💰 Bankroll: no disponible"
+
+    status_icon = "✅" if steps_ok == steps_total else "⚠️"
+    elapsed_str = f"{elapsed_seconds:.0f}s" if elapsed_seconds < 120 else f"{elapsed_seconds/60:.1f}m"
+
+    msg = (
+        f"{status_icon} <b>Pipeline OK — {mode.upper()}</b>\n\n"
+        f"📊 Bets generadas: <b>{bets_generated}</b>\n"
+        f"{bankroll_line}\n"
+        f"💳 Créditos API restantes: {credits_remaining}\n"
+        f"⚙️  Pasos: {steps_ok}/{steps_total} exitosos\n"
+        f"⏱️  Tiempo: {elapsed_str}\n"
+    )
+
+    if steps_ok < steps_total:
+        msg += f"\n⚠️ {steps_total - steps_ok} paso(s) con error — revisar log"
+
+    send_message(msg)
+    print(f"📋 Health check enviado a Telegram")
+
+
+# ============================================================
 # REPORTE SEMANAL
 # ============================================================
 def send_weekly_report():

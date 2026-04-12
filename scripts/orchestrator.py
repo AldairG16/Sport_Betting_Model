@@ -139,6 +139,8 @@ class Logger:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_file = LOG_DIR / f"run_{mode}_{ts}.log"
         self._fh = open(self.log_file, "w", encoding="utf-8")
+        self.steps_ok    = 0
+        self.steps_total = 0
 
     def log(self, msg: str):
         ts = datetime.now().strftime("%H:%M:%S")
@@ -156,9 +158,11 @@ def run_step(logger: Logger, name: str, func, *args, **kwargs) -> bool:
     logger.log(f"\n{'='*50}")
     logger.log(f"PASO: {name}")
     logger.log(f"{'='*50}")
+    logger.steps_total += 1
     try:
         func(*args, **kwargs)
         logger.log(f"✅ {name} — OK")
+        logger.steps_ok += 1
         return True
     except Exception as e:
         logger.log(f"❌ {name} — ERROR: {e}")
@@ -457,6 +461,31 @@ def main():
         elapsed = (end - start).total_seconds()
         logger.log(f"\nFIN: {end.strftime('%Y-%m-%d %H:%M:%S')}  ({elapsed:.1f}s)")
         logger.log(f"Log guardado: {logger.log_file}")
+
+        # ── Health check: resumen de salud del ciclo ──────────────────────
+        # Solo para modos que generan apuestas (morning, evening, full)
+        if args.mode in ("morning", "evening", "full"):
+            try:
+                from scripts.notify_telegram import send_health_check
+                from config.database import engine as _engine
+                from sqlalchemy import text as _text
+                # Contar bets pending generadas en las últimas 12 horas
+                _df = __import__("pandas").read_sql(_text("""
+                    SELECT COUNT(*) as n FROM bets_history
+                    WHERE result = 'pending'
+                      AND match_date > NOW()
+                """), _engine)
+                bets_count = int(_df.iloc[0]["n"])
+                send_health_check(
+                    mode=args.mode,
+                    bets_generated=bets_count,
+                    elapsed_seconds=elapsed,
+                    steps_ok=logger.steps_ok,
+                    steps_total=logger.steps_total,
+                )
+            except Exception:
+                pass  # nunca bloquear el finally por el health check
+
         logger.close()
         _release_lock()
 
