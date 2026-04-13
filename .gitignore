@@ -30,6 +30,10 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+# ── DB backups ────────────────────────────────────────
+data/*.dump
+data/*.sql
+
 # ── Orchestrator lock ─────────────────────────────────
 orchestrator.lock
 

@@ -1,0 +1,39 @@
+name: Closing Odds Pipeline
+
+on:
+  schedule:
+    # 12:00 PM Mexico City (UTC-6) = 18:00 UTC
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+jobs:
+  closing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run closing odds pipeline
+        env:
+          DB_URL:                       ${{ secrets.DB_URL }}
+          ODDS_API_KEY:                 ${{ secrets.ODDS_API_KEY }}
+          TELEGRAM_BOT_TOKEN:           ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:             ${{ secrets.TELEGRAM_CHAT_ID }}
+          API_TTL_HOURS:                ${{ secrets.API_TTL_HOURS }}
+          ODDS_REGION:                  ${{ secrets.ODDS_REGION }}
+          ODDS_MARKETS:                 ${{ secrets.ODDS_MARKETS }}
+          FETCH_DAYS_AHEAD:             ${{ secrets.FETCH_DAYS_AHEAD }}
+          API_CREDITS_ALERT_THRESHOLD:  ${{ secrets.API_CREDITS_ALERT_THRESHOLD }}
+          USER_TIMEZONE:                America/Mexico_City
+        run: python scripts/orchestrator.py --mode closing
