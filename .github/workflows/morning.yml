@@ -5,6 +5,9 @@ on:
     # 06:00 AM Mexico City (UTC-6) = 12:00 UTC
     - cron: '0 12 * * *'
   workflow_dispatch:   # permite lanzar manualmente desde GitHub
+  push:
+    branches: [ master ]
+    paths: [ '.github/workflows/morning.yml' ]
 
 jobs:
   morning:
