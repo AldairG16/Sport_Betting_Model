@@ -142,6 +142,12 @@ MARKET_LABELS = {
     "dc_12":      "Doble Oportunidad 12",
     "shots_over_5.5":  "Tiros al Arco Over 5.5",
     "shots_under_5.5": "Tiros al Arco Under 5.5",
+    "h1_home":  "1er Tiempo Local gana",
+    "h1_draw":  "1er Tiempo Empate",
+    "h1_away":  "1er Tiempo Visitante gana",
+    "h2_home":  "2do Tiempo Local gana",
+    "h2_draw":  "2do Tiempo Empate",
+    "h2_away":  "2do Tiempo Visitante gana",
 }
 
 

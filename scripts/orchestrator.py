@@ -103,6 +103,35 @@ def _release_lock():
         pass
 
 
+def _check_world_cup_activation():
+    """
+    Auto-activa soccer_fifa_world_cup en SPORT_KEYS si la fecha >= 2026-06-11.
+    Modifica la lista en memoria — no cambia settings.py en disco.
+    Envía notificación Telegram la primera vez que se activa.
+    """
+    from datetime import date
+    WORLD_CUP_START = date(2026, 6, 11)
+    WORLD_CUP_KEY   = "soccer_fifa_world_cup"
+
+    if date.today() < WORLD_CUP_START:
+        return   # aún no es momento
+
+    import config.settings as _settings
+    if WORLD_CUP_KEY not in _settings.SPORT_KEYS:
+        _settings.SPORT_KEYS.append(WORLD_CUP_KEY)
+        print(f"🌍 MUNDIAL 2026: '{WORLD_CUP_KEY}' activado automáticamente")
+        try:
+            from scripts.notify_telegram import send_message
+            send_message(
+                "🌍 <b>MUNDIAL FIFA 2026 ACTIVADO</b>\n\n"
+                "El modelo ahora incluye partidos del Mundial.\n"
+                "Liga: <code>soccer_fifa_world_cup</code>\n\n"
+                "¡Buena suerte! ⚽🏆"
+            )
+        except Exception:
+            pass
+
+
 def _ensure_db_indexes():
     """Crea índices de rendimiento en la DB si no existen."""
     try:
@@ -400,8 +429,9 @@ def main():
     )
     args = parser.parse_args()
 
-    _rotate_logs()   # limpiar logs antiguos antes de cada ejecución
-    _ensure_db_indexes()  # crear índices si no existen
+    _rotate_logs()              # limpiar logs antiguos antes de cada ejecución
+    _check_world_cup_activation()  # activar Mundial 2026 si llegó la fecha
+    _ensure_db_indexes()        # crear índices si no existen
 
     # ── Task locking: prevenir ejecuciones concurrentes ──────────────────
     if not _acquire_lock(args.mode):

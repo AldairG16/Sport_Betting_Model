@@ -283,6 +283,47 @@ def update_bet_results():
                             outcome = "unresolved"
                             profit  = 0.0
 
+                elif market in ("h1_home", "h1_draw", "h1_away",
+                                "h2_home", "h2_draw", "h2_away"):
+                    # Requiere columnas de goles por tiempo en la tabla matches
+                    match_date = pd.to_datetime(row["match_date"])
+                    ht_df = pd.read_sql(text("""
+                        SELECT home_goals_ht, away_goals_ht,
+                               home_goals_h2, away_goals_h2
+                        FROM matches
+                        WHERE LOWER(home_team) = :home
+                        AND LOWER(away_team) = :away
+                        AND date BETWEEN :date_from AND :date_to
+                        ORDER BY date DESC
+                        LIMIT 1
+                    """), engine, params={
+                        "home":      home.lower(),
+                        "away":      away.lower(),
+                        "date_from": (match_date - pd.Timedelta(days=3)).strftime("%Y-%m-%d"),
+                        "date_to":   (match_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                    })
+                    if ht_df.empty:
+                        outcome = "unresolved"
+                        profit  = 0.0
+                    else:
+                        half = market.split("_")[0]   # "h1" o "h2"
+                        side = "_".join(market.split("_")[1:])  # "home", "draw", "away"
+                        col_h = "home_goals_ht" if half == "h1" else "home_goals_h2"
+                        col_a = "away_goals_ht" if half == "h1" else "away_goals_h2"
+                        gh = ht_df.iloc[0][col_h]
+                        ga = ht_df.iloc[0][col_a]
+                        if gh is None or ga is None or pd.isna(gh) or pd.isna(ga):
+                            outcome = "unresolved"
+                            profit  = 0.0
+                        else:
+                            gh, ga = float(gh), float(ga)
+                            if side == "home" and gh > ga:
+                                outcome = "win"
+                            elif side == "away" and ga > gh:
+                                outcome = "win"
+                            elif side == "draw" and gh == ga:
+                                outcome = "win"
+
                 elif market.startswith("corners_over_") or market.startswith("corners_under_"):
                     # Resolver bets de córners usando home_corners + away_corners de matches
                     match_date = pd.to_datetime(row["match_date"])
@@ -506,6 +547,38 @@ def update_closing_odds():
                     closing_odds = odds_row.get("ah_home_odds")
                 else:
                     closing_odds = odds_row.get("ah_away_odds")
+
+            elif market == "dc_1x":
+                closing_odds = odds_row.get("dc_1x_odds")
+            elif market == "dc_x2":
+                closing_odds = odds_row.get("dc_x2_odds")
+            elif market == "dc_12":
+                closing_odds = odds_row.get("dc_12_odds")
+
+            elif market == "h1_home":
+                closing_odds = odds_row.get("h1_home_odds")
+            elif market == "h1_draw":
+                closing_odds = odds_row.get("h1_draw_odds")
+            elif market == "h1_away":
+                closing_odds = odds_row.get("h1_away_odds")
+            elif market == "h2_home":
+                closing_odds = odds_row.get("h2_home_odds")
+            elif market == "h2_draw":
+                closing_odds = odds_row.get("h2_draw_odds")
+            elif market == "h2_away":
+                closing_odds = odds_row.get("h2_away_odds")
+
+            elif market.startswith("corners_over_") or market.startswith("corners_under_"):
+                if market.startswith("corners_over_"):
+                    closing_odds = odds_row.get("corners_over_odds")
+                else:
+                    closing_odds = odds_row.get("corners_under_odds")
+
+            elif market.startswith("cards_over_") or market.startswith("cards_under_"):
+                if market.startswith("cards_over_"):
+                    closing_odds = odds_row.get("cards_over_odds")
+                else:
+                    closing_odds = odds_row.get("cards_under_odds")
 
             if closing_odds is None:
                 continue

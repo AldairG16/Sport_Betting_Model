@@ -215,6 +215,20 @@ def parse_match(m: dict, sport: str) -> dict | None:
         ah_home_odds = ah_away_odds = ah_line = None
         all_ah_data = []   # lista de (home_line, home_price, away_price)
 
+        # ── Nuevos mercados Phase 1 ──────────────────────────────────────
+        dnb_home_odds = dnb_away_odds = None
+        dc_1x_odds = dc_x2_odds = dc_12_odds = None
+        h1_home_odds = h1_draw_odds = h1_away_odds = None
+        h2_home_odds = h2_draw_odds = h2_away_odds = None
+
+        # ── Nuevos mercados Phase 2 (corners + cards de API) ────────────
+        corners_over_odds = corners_under_odds = corners_line = None
+        cards_over_odds = cards_under_odds = cards_line = None
+        all_corners_data = []   # lista de (line, over_price, under_price)
+        all_cards_data = []     # lista de (line, over_price, under_price)
+        CORNERS_TARGET_LINE = 9.5
+        CARDS_TARGET_LINE   = 4.5
+
         # ── LINE SHOPPING + CONSENSO DE BOOKMAKERS ────────────────────────
         # Line shopping:  guarda el MEJOR precio para el apostador (max odd)
         # Consenso:       guarda el precio PROMEDIO de todos los bookmakers
@@ -290,6 +304,101 @@ def parse_match(m: dict, sport: str) -> dict | None:
                     if bk_ah_home and bk_ah_away and bk_ah_line is not None:
                         all_ah_data.append((bk_ah_line, bk_ah_home, bk_ah_away))
 
+                elif market["key"] == "draw_no_bet":
+                    for o in market["outcomes"]:
+                        price = o.get("price")
+                        if price is None:
+                            continue
+                        if o["name"] == home:
+                            if dnb_home_odds is None or price > dnb_home_odds:
+                                dnb_home_odds = price
+                        elif o["name"] == away:
+                            if dnb_away_odds is None or price > dnb_away_odds:
+                                dnb_away_odds = price
+
+                elif market["key"] == "double_chance":
+                    for o in market["outcomes"]:
+                        price = o.get("price")
+                        name  = o.get("name", "").strip()
+                        if price is None:
+                            continue
+                        # API usa "1X", "12", "X2"
+                        if name == "1X":
+                            if dc_1x_odds is None or price > dc_1x_odds:
+                                dc_1x_odds = price
+                        elif name == "12":
+                            if dc_12_odds is None or price > dc_12_odds:
+                                dc_12_odds = price
+                        elif name == "X2":
+                            if dc_x2_odds is None or price > dc_x2_odds:
+                                dc_x2_odds = price
+
+                elif market["key"] == "h2h_h1":
+                    for o in market["outcomes"]:
+                        price = o.get("price")
+                        name  = o.get("name", "")
+                        if price is None:
+                            continue
+                        if name == home:
+                            if h1_home_odds is None or price > h1_home_odds:
+                                h1_home_odds = price
+                        elif name == away:
+                            if h1_away_odds is None or price > h1_away_odds:
+                                h1_away_odds = price
+                        elif name.lower() == "draw":
+                            if h1_draw_odds is None or price > h1_draw_odds:
+                                h1_draw_odds = price
+
+                elif market["key"] == "h2h_h2":
+                    for o in market["outcomes"]:
+                        price = o.get("price")
+                        name  = o.get("name", "")
+                        if price is None:
+                            continue
+                        if name == home:
+                            if h2_home_odds is None or price > h2_home_odds:
+                                h2_home_odds = price
+                        elif name == away:
+                            if h2_away_odds is None or price > h2_away_odds:
+                                h2_away_odds = price
+                        elif name.lower() == "draw":
+                            if h2_draw_odds is None or price > h2_draw_odds:
+                                h2_draw_odds = price
+
+                elif market["key"] == "alternate_totals_corners":
+                    bk_co = bk_cu = bk_cl = None
+                    for o in market["outcomes"]:
+                        price = o.get("price")
+                        point = o.get("point")
+                        name  = o.get("name", "").lower()
+                        if price is None or point is None:
+                            continue
+                        if name == "over":
+                            if bk_cl is None or abs(point - CORNERS_TARGET_LINE) < abs(bk_cl - CORNERS_TARGET_LINE):
+                                bk_cl = point
+                                bk_co = price
+                        elif name == "under" and bk_cl is not None and point == bk_cl:
+                            bk_cu = price
+                    if bk_co and bk_cu and bk_cl is not None:
+                        all_corners_data.append((bk_cl, bk_co, bk_cu))
+
+                elif market["key"] == "alternate_totals_cards":
+                    bk_co = bk_cu = bk_cl = None
+                    for o in market["outcomes"]:
+                        price = o.get("price")
+                        point = o.get("point")
+                        name  = o.get("name", "").lower()
+                        if price is None or point is None:
+                            continue
+                        if name == "over":
+                            if bk_cl is None or abs(point - CARDS_TARGET_LINE) < abs(bk_cl - CARDS_TARGET_LINE):
+                                bk_cl = point
+                                bk_co = price
+                        elif name == "under" and bk_cl is not None and point == bk_cl:
+                            bk_cu = price
+                    if bk_co and bk_cu and bk_cl is not None:
+                        all_cards_data.append((bk_cl, bk_co, bk_cu))
+
             # Agregar precios a las listas solo si el bookmaker tiene h2h completo
             if bk_home and bk_away:
                 all_home_prices.append(bk_home)
@@ -307,6 +416,26 @@ def parse_match(m: dict, sport: str) -> dict | None:
             if matching:
                 ah_home_odds = max(h for h, a in matching)
                 ah_away_odds = max(a for h, a in matching)
+
+        # ── Consenso de corners: línea más común + mejor precio ─────────────
+        if all_corners_data:
+            from collections import Counter as _Counter2
+            c_lines = [x[0] for x in all_corners_data]
+            corners_line = _Counter2(c_lines).most_common(1)[0][0]
+            c_matching = [(ov, un) for l, ov, un in all_corners_data if l == corners_line]
+            if c_matching:
+                corners_over_odds  = max(ov for ov, _ in c_matching)
+                corners_under_odds = max(un for _, un in c_matching)
+
+        # ── Consenso de cards: línea más común + mejor precio ────────────────
+        if all_cards_data:
+            from collections import Counter as _Counter3
+            cd_lines = [x[0] for x in all_cards_data]
+            cards_line = _Counter3(cd_lines).most_common(1)[0][0]
+            cd_matching = [(ov, un) for l, ov, un in all_cards_data if l == cards_line]
+            if cd_matching:
+                cards_over_odds  = max(ov for ov, _ in cd_matching)
+                cards_under_odds = max(un for _, un in cd_matching)
 
         # ── Calcular consenso y spread ─────────────────────────────────────
         def _avg(lst):
@@ -350,6 +479,25 @@ def parse_match(m: dict, sport: str) -> dict | None:
             "ah_home_odds":         ah_home_odds,
             "ah_away_odds":         ah_away_odds,
             "ah_line":              ah_line,
+            # Phase 1: nuevos mercados
+            "dnb_home_odds":        dnb_home_odds,
+            "dnb_away_odds":        dnb_away_odds,
+            "dc_1x_odds":           dc_1x_odds,
+            "dc_x2_odds":           dc_x2_odds,
+            "dc_12_odds":           dc_12_odds,
+            "h1_home_odds":         h1_home_odds,
+            "h1_draw_odds":         h1_draw_odds,
+            "h1_away_odds":         h1_away_odds,
+            "h2_home_odds":         h2_home_odds,
+            "h2_draw_odds":         h2_draw_odds,
+            "h2_away_odds":         h2_away_odds,
+            # Phase 2: corners + cards de API
+            "corners_over_odds":    corners_over_odds,
+            "corners_under_odds":   corners_under_odds,
+            "corners_line":         corners_line,
+            "cards_over_odds":      cards_over_odds,
+            "cards_under_odds":     cards_under_odds,
+            "cards_line":           cards_line,
         }
 
     except Exception as e:
@@ -426,6 +574,29 @@ def ensure_schema():
             ALTER TABLE upcoming_matches
             ADD COLUMN IF NOT EXISTS ah_line FLOAT
         """))
+        # ── Phase 1: Draw No Bet (API directo) ──────────────────────────────
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS dnb_home_odds FLOAT"))
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS dnb_away_odds FLOAT"))
+        # ── Phase 1: Double Chance ───────────────────────────────────────────
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS dc_1x_odds FLOAT"))
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS dc_x2_odds FLOAT"))
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS dc_12_odds FLOAT"))
+        # ── Phase 1: First Half 1X2 ──────────────────────────────────────────
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS h1_home_odds FLOAT"))
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS h1_draw_odds FLOAT"))
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS h1_away_odds FLOAT"))
+        # ── Phase 1: Second Half 1X2 ─────────────────────────────────────────
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS h2_home_odds FLOAT"))
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS h2_draw_odds FLOAT"))
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS h2_away_odds FLOAT"))
+        # ── Phase 2: Corners from API ─────────────────────────────────────────
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS corners_over_odds FLOAT"))
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS corners_under_odds FLOAT"))
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS corners_line FLOAT"))
+        # ── Phase 2: Cards from API ───────────────────────────────────────────
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS cards_over_odds FLOAT"))
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS cards_under_odds FLOAT"))
+        conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS cards_line FLOAT"))
 
 
 # ============================================================
@@ -445,7 +616,13 @@ def upsert_matches(rows: list[dict]):
                     btts_yes_odds, btts_no_odds,
                     consensus_home_odds, consensus_draw_odds, consensus_away_odds,
                     bookmaker_count, h2h_spread_pct,
-                    ah_home_odds, ah_away_odds, ah_line
+                    ah_home_odds, ah_away_odds, ah_line,
+                    dnb_home_odds, dnb_away_odds,
+                    dc_1x_odds, dc_x2_odds, dc_12_odds,
+                    h1_home_odds, h1_draw_odds, h1_away_odds,
+                    h2_home_odds, h2_draw_odds, h2_away_odds,
+                    corners_over_odds, corners_under_odds, corners_line,
+                    cards_over_odds, cards_under_odds, cards_line
                 )
                 VALUES (
                     :match_key, :match_date, :league, :sport_key,
@@ -455,7 +632,13 @@ def upsert_matches(rows: list[dict]):
                     :btts_yes_odds, :btts_no_odds,
                     :consensus_home_odds, :consensus_draw_odds, :consensus_away_odds,
                     :bookmaker_count, :h2h_spread_pct,
-                    :ah_home_odds, :ah_away_odds, :ah_line
+                    :ah_home_odds, :ah_away_odds, :ah_line,
+                    :dnb_home_odds, :dnb_away_odds,
+                    :dc_1x_odds, :dc_x2_odds, :dc_12_odds,
+                    :h1_home_odds, :h1_draw_odds, :h1_away_odds,
+                    :h2_home_odds, :h2_draw_odds, :h2_away_odds,
+                    :corners_over_odds, :corners_under_odds, :corners_line,
+                    :cards_over_odds, :cards_under_odds, :cards_line
                 )
                 ON CONFLICT (match_key)
                 DO UPDATE SET
@@ -481,7 +664,26 @@ def upsert_matches(rows: list[dict]):
                     opening_home_odds   = COALESCE(upcoming_matches.opening_home_odds,   EXCLUDED.home_odds),
                     opening_draw_odds   = COALESCE(upcoming_matches.opening_draw_odds,   EXCLUDED.draw_odds),
                     opening_away_odds   = COALESCE(upcoming_matches.opening_away_odds,   EXCLUDED.away_odds),
-                    opening_over25_odds = COALESCE(upcoming_matches.opening_over25_odds, EXCLUDED.over25_odds)
+                    opening_over25_odds = COALESCE(upcoming_matches.opening_over25_odds, EXCLUDED.over25_odds),
+                    -- Phase 1: nuevos mercados (se actualizan si llega precio mejor)
+                    dnb_home_odds  = COALESCE(EXCLUDED.dnb_home_odds,  upcoming_matches.dnb_home_odds),
+                    dnb_away_odds  = COALESCE(EXCLUDED.dnb_away_odds,  upcoming_matches.dnb_away_odds),
+                    dc_1x_odds     = COALESCE(EXCLUDED.dc_1x_odds,     upcoming_matches.dc_1x_odds),
+                    dc_x2_odds     = COALESCE(EXCLUDED.dc_x2_odds,     upcoming_matches.dc_x2_odds),
+                    dc_12_odds     = COALESCE(EXCLUDED.dc_12_odds,     upcoming_matches.dc_12_odds),
+                    h1_home_odds   = COALESCE(EXCLUDED.h1_home_odds,   upcoming_matches.h1_home_odds),
+                    h1_draw_odds   = COALESCE(EXCLUDED.h1_draw_odds,   upcoming_matches.h1_draw_odds),
+                    h1_away_odds   = COALESCE(EXCLUDED.h1_away_odds,   upcoming_matches.h1_away_odds),
+                    h2_home_odds   = COALESCE(EXCLUDED.h2_home_odds,   upcoming_matches.h2_home_odds),
+                    h2_draw_odds   = COALESCE(EXCLUDED.h2_draw_odds,   upcoming_matches.h2_draw_odds),
+                    h2_away_odds   = COALESCE(EXCLUDED.h2_away_odds,   upcoming_matches.h2_away_odds),
+                    -- Phase 2: corners + cards API
+                    corners_over_odds  = COALESCE(EXCLUDED.corners_over_odds,  upcoming_matches.corners_over_odds),
+                    corners_under_odds = COALESCE(EXCLUDED.corners_under_odds, upcoming_matches.corners_under_odds),
+                    corners_line       = COALESCE(EXCLUDED.corners_line,       upcoming_matches.corners_line),
+                    cards_over_odds    = COALESCE(EXCLUDED.cards_over_odds,    upcoming_matches.cards_over_odds),
+                    cards_under_odds   = COALESCE(EXCLUDED.cards_under_odds,   upcoming_matches.cards_under_odds),
+                    cards_line         = COALESCE(EXCLUDED.cards_line,         upcoming_matches.cards_line)
             """), r)
 
 

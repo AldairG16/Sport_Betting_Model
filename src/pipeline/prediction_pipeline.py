@@ -490,17 +490,46 @@ def run_prediction_pipeline():
         # DNB probs (siempre disponible desde Poisson)
         _dnb = get_dnb_probs(lambda_home, lambda_away)
 
-        # DNB implied odds derivadas de h2h (sin llamada API adicional)
+        # DNB odds: preferir las de API (draw_no_bet), fallback a derivadas de h2h
+        _dnb_home_api = safe_odds(row.get("dnb_home_odds") if hasattr(row, "get") else getattr(row, "dnb_home_odds", None))
+        _dnb_away_api = safe_odds(row.get("dnb_away_odds") if hasattr(row, "get") else getattr(row, "dnb_away_odds", None))
+
         _dnb_home_odds = _dnb_away_odds = None
-        _h_odds = safe_odds(row.home_odds)
-        _a_odds = safe_odds(row.away_odds)
-        if _h_odds and _a_odds:
-            _imp_h = 1.0 / _h_odds
-            _imp_a = 1.0 / _a_odds
-            _imp_sum = _imp_h + _imp_a
-            if _imp_sum > 0:
-                _dnb_home_odds = round(_imp_sum / _imp_h, 3)   # ≈ home_odds × (1 - draw_prob_implied)
-                _dnb_away_odds = round(_imp_sum / _imp_a, 3)
+        if _dnb_home_api and _dnb_away_api:
+            _dnb_home_odds = _dnb_home_api
+            _dnb_away_odds = _dnb_away_api
+        else:
+            # Fallback: derivar de h2h odds
+            _h_odds = safe_odds(row.home_odds)
+            _a_odds = safe_odds(row.away_odds)
+            if _h_odds and _a_odds:
+                _imp_h = 1.0 / _h_odds
+                _imp_a = 1.0 / _a_odds
+                _imp_sum = _imp_h + _imp_a
+                if _imp_sum > 0:
+                    _dnb_home_odds = round(_imp_sum / _imp_h, 3)
+                    _dnb_away_odds = round(_imp_sum / _imp_a, 3)
+
+        # ── Double Chance odds de API ────────────────────────────────────
+        _dc_1x_odds = safe_odds(row.get("dc_1x_odds") if hasattr(row, "get") else getattr(row, "dc_1x_odds", None))
+        _dc_x2_odds = safe_odds(row.get("dc_x2_odds") if hasattr(row, "get") else getattr(row, "dc_x2_odds", None))
+        _dc_12_odds = safe_odds(row.get("dc_12_odds") if hasattr(row, "get") else getattr(row, "dc_12_odds", None))
+
+        # ── Half-time odds de API ─────────────────────────────────────────
+        _h1_home_odds = safe_odds(row.get("h1_home_odds") if hasattr(row, "get") else getattr(row, "h1_home_odds", None))
+        _h1_draw_odds = safe_odds(row.get("h1_draw_odds") if hasattr(row, "get") else getattr(row, "h1_draw_odds", None))
+        _h1_away_odds = safe_odds(row.get("h1_away_odds") if hasattr(row, "get") else getattr(row, "h1_away_odds", None))
+        _h2_home_odds = safe_odds(row.get("h2_home_odds") if hasattr(row, "get") else getattr(row, "h2_home_odds", None))
+        _h2_draw_odds = safe_odds(row.get("h2_draw_odds") if hasattr(row, "get") else getattr(row, "h2_draw_odds", None))
+        _h2_away_odds = safe_odds(row.get("h2_away_odds") if hasattr(row, "get") else getattr(row, "h2_away_odds", None))
+
+        # ── Corners / Cards odds de API ───────────────────────────────────
+        _corners_over_api  = safe_odds(row.get("corners_over_odds")  if hasattr(row, "get") else getattr(row, "corners_over_odds", None))
+        _corners_under_api = safe_odds(row.get("corners_under_odds") if hasattr(row, "get") else getattr(row, "corners_under_odds", None))
+        _corners_line_api  = row.get("corners_line") if hasattr(row, "get") else getattr(row, "corners_line", None)
+        _cards_over_api    = safe_odds(row.get("cards_over_odds")   if hasattr(row, "get") else getattr(row, "cards_over_odds", None))
+        _cards_under_api   = safe_odds(row.get("cards_under_odds")  if hasattr(row, "get") else getattr(row, "cards_under_odds", None))
+        _cards_line_api    = row.get("cards_line") if hasattr(row, "get") else getattr(row, "cards_line", None)
 
         # =========================
         # 1X2 — DIXON-COLES
@@ -580,6 +609,34 @@ def run_prediction_pipeline():
         poisson_probs = totals_and_btts(lambda_home, lambda_away)
 
         # =========================
+        # HALF-TIME PREDICTIONS (h2h_h1 / h2h_h2)
+        # =========================
+        # Modelamos primer tiempo con λ/2 (misma forma, mitad de goles esperados)
+        # y segundo tiempo con λ * 0.55 (ligeramente más goles en el 2T que en el 1T)
+        # Solo generamos probs si la API nos dio odds para esos mercados.
+
+        lh_h1 = min(lambda_home / 2.0, 2.0)
+        la_h1 = min(lambda_away / 2.0, 2.0)
+        lh_h2 = min(lambda_home * 0.55, 2.0)
+        la_h2 = min(lambda_away * 0.55, 2.0)
+
+        if _h1_home_odds or _h1_draw_odds or _h1_away_odds:
+            from src.models.dixon_coles_model import match_outcomes as _mo
+            h1h, h1d, h1a = _mo(lh_h1, la_h1)
+            h1_total = h1h + h1d + h1a
+            model_probs["h1_home"] = clamp_prob(h1h / h1_total)
+            model_probs["h1_draw"] = clamp_prob(h1d / h1_total)
+            model_probs["h1_away"] = clamp_prob(h1a / h1_total)
+
+        if _h2_home_odds or _h2_draw_odds or _h2_away_odds:
+            from src.models.dixon_coles_model import match_outcomes as _mo2
+            h2h, h2d, h2a = _mo2(lh_h2, la_h2)
+            h2_total = h2h + h2d + h2a
+            model_probs["h2_home"] = clamp_prob(h2h / h2_total)
+            model_probs["h2_draw"] = clamp_prob(h2d / h2_total)
+            model_probs["h2_away"] = clamp_prob(h2a / h2_total)
+
+        # =========================
         # OVER/UNDER POR LIGA
         # =========================
         # Calibra over25 con la tasa histórica real de la liga.
@@ -616,22 +673,21 @@ def run_prediction_pipeline():
         # =========================
         # CORNERS COMO MERCADO
         # =========================
-        # Sin fetch de odds extra. Usamos cuota fija de referencia (1.80)
-        # típica de mercados de córners. Solo apostamos cuando el edge es alto.
         CORNERS_DEFAULT_ODDS = 1.80
+        CARDS_DEFAULT_ODDS   = 1.80
 
         if corners_prediction:
-            cl = 9.5   # línea más común en mercado europeo
+            # Usar la línea de la API si está disponible, fallback 9.5
+            cl = float(_corners_line_api) if _corners_line_api is not None else 9.5
             over_key  = f"corners_over_{cl}"
             under_key = f"corners_under_{cl}"
             model_probs[over_key]  = clamp_prob(corners_prediction["over95"])
             model_probs[under_key] = clamp_prob(corners_prediction["under95"])
 
-        CARDS_DEFAULT_ODDS = 1.80
         if cards_prediction:
-            cl = 4.5   # línea más común en mercado de tarjetas
-            model_probs["cards_over_4.5"]  = clamp_prob(cards_prediction["over45"])
-            model_probs["cards_under_4.5"] = clamp_prob(cards_prediction["under45"])
+            cl_c = float(_cards_line_api) if _cards_line_api is not None else 4.5
+            model_probs[f"cards_over_{cl_c}"]  = clamp_prob(cards_prediction["over45"])
+            model_probs[f"cards_under_{cl_c}"] = clamp_prob(cards_prediction["under45"])
 
         # =========================
         # OVER 1.5 / OVER 3.5 GOLES
@@ -708,11 +764,43 @@ def run_prediction_pipeline():
             if _ah_away_odds:
                 market_probs[f"ah_away_{_ah_line:+.1f}"] = 1.0 / _ah_away_odds
 
-        # DNB market probs (derivadas de h2h odds)
+        # DNB market probs (API directo o derivadas)
         if _dnb_home_odds:
             market_probs["dnb_home"] = 1.0 / _dnb_home_odds
         if _dnb_away_odds:
             market_probs["dnb_away"] = 1.0 / _dnb_away_odds
+
+        # Double Chance market probs (API)
+        if _dc_1x_odds:
+            market_probs["dc_1x"] = 1.0 / _dc_1x_odds
+        if _dc_x2_odds:
+            market_probs["dc_x2"] = 1.0 / _dc_x2_odds
+        if _dc_12_odds:
+            market_probs["dc_12"] = 1.0 / _dc_12_odds
+
+        # Half-time market probs (API)
+        if _h1_home_odds:
+            market_probs["h1_home"] = 1.0 / _h1_home_odds
+        if _h1_draw_odds:
+            market_probs["h1_draw"] = 1.0 / _h1_draw_odds
+        if _h1_away_odds:
+            market_probs["h1_away"] = 1.0 / _h1_away_odds
+        if _h2_home_odds:
+            market_probs["h2_home"] = 1.0 / _h2_home_odds
+        if _h2_draw_odds:
+            market_probs["h2_draw"] = 1.0 / _h2_draw_odds
+        if _h2_away_odds:
+            market_probs["h2_away"] = 1.0 / _h2_away_odds
+
+        # Corners / Cards market probs (API → usa odds reales en vez de fijas)
+        if _corners_over_api:
+            market_probs[f"corners_over_{_corners_line_api or 9.5}"] = 1.0 / _corners_over_api
+        if _corners_under_api:
+            market_probs[f"corners_under_{_corners_line_api or 9.5}"] = 1.0 / _corners_under_api
+        if _cards_over_api:
+            market_probs[f"cards_over_{_cards_line_api or 4.5}"] = 1.0 / _cards_over_api
+        if _cards_under_api:
+            market_probs[f"cards_under_{_cards_line_api or 4.5}"] = 1.0 / _cards_under_api
 
         # =========================
         # CALIBRATION
@@ -760,13 +848,21 @@ def run_prediction_pipeline():
             odds[f"ah_home_{_ah_line:+.1f}"] = _ah_home_odds
             odds[f"ah_away_{_ah_line:+.1f}"] = _ah_away_odds
 
-        # Corners odds fijas (sin consumo de créditos API)
-        if corners_prediction:
+        # Corners odds: preferir API, fallback a odds fijas
+        if _corners_over_api and _corners_line_api is not None:
+            _cl = float(_corners_line_api)
+            odds[f"corners_over_{_cl}"]  = _corners_over_api
+            odds[f"corners_under_{_cl}"] = _corners_under_api or CORNERS_DEFAULT_ODDS
+        elif corners_prediction:
             odds["corners_over_9.5"]  = CORNERS_DEFAULT_ODDS
             odds["corners_under_9.5"] = CORNERS_DEFAULT_ODDS
 
-        # Cards odds fijas (sin consumo de créditos API)
-        if cards_prediction:
+        # Cards odds: preferir API, fallback a odds fijas
+        if _cards_over_api and _cards_line_api is not None:
+            _cdl = float(_cards_line_api)
+            odds[f"cards_over_{_cdl}"]  = _cards_over_api
+            odds[f"cards_under_{_cdl}"] = _cards_under_api or CARDS_DEFAULT_ODDS
+        elif cards_prediction:
             odds["cards_over_4.5"]  = CARDS_DEFAULT_ODDS
             odds["cards_under_4.5"] = CARDS_DEFAULT_ODDS
 
@@ -781,14 +877,38 @@ def run_prediction_pipeline():
             odds["shots_over_5.5"]  = SHOTS_DEFAULT_ODDS
             odds["shots_under_5.5"] = SHOTS_DEFAULT_ODDS
 
-        # Doble oportunidad: odds derivadas de 1x2 existentes
-        _h = safe_odds(row.home_odds)
-        _d = safe_odds(row.draw_odds)
-        _a = safe_odds(row.away_odds)
-        if _h and _d and _a:
-            odds["dc_1x"] = round(1.0 / (1.0/_h + 1.0/_d), 3)
-            odds["dc_x2"] = round(1.0 / (1.0/_d + 1.0/_a), 3)
-            odds["dc_12"] = round(1.0 / (1.0/_h + 1.0/_a), 3)
+        # Double Chance: preferir API, fallback a derivadas de 1x2
+        if _dc_1x_odds:
+            odds["dc_1x"] = _dc_1x_odds
+        if _dc_x2_odds:
+            odds["dc_x2"] = _dc_x2_odds
+        if _dc_12_odds:
+            odds["dc_12"] = _dc_12_odds
+        if not (_dc_1x_odds and _dc_x2_odds and _dc_12_odds):
+            _h = safe_odds(row.home_odds)
+            _d = safe_odds(row.draw_odds)
+            _a = safe_odds(row.away_odds)
+            if _h and _d and _a:
+                if not _dc_1x_odds:
+                    odds["dc_1x"] = round(1.0 / (1.0/_h + 1.0/_d), 3)
+                if not _dc_x2_odds:
+                    odds["dc_x2"] = round(1.0 / (1.0/_d + 1.0/_a), 3)
+                if not _dc_12_odds:
+                    odds["dc_12"] = round(1.0 / (1.0/_h + 1.0/_a), 3)
+
+        # Half-time odds (de API)
+        if _h1_home_odds:
+            odds["h1_home"] = _h1_home_odds
+        if _h1_draw_odds:
+            odds["h1_draw"] = _h1_draw_odds
+        if _h1_away_odds:
+            odds["h1_away"] = _h1_away_odds
+        if _h2_home_odds:
+            odds["h2_home"] = _h2_home_odds
+        if _h2_draw_odds:
+            odds["h2_draw"] = _h2_draw_odds
+        if _h2_away_odds:
+            odds["h2_away"] = _h2_away_odds
 
         # =========================
         # CALIBRACIÓN DE PROBABILIDADES
@@ -998,6 +1118,12 @@ def run_prediction_pipeline():
             "under_3.5": "goals_35",
             "btts":      "btts",
             "btts_no":   "btts",
+            "h1_home":   "h1_1x2",
+            "h1_draw":   "h1_1x2",
+            "h1_away":   "h1_1x2",
+            "h2_home":   "h2_1x2",
+            "h2_draw":   "h2_1x2",
+            "h2_away":   "h2_1x2",
         }
 
         # Mercados con odds fijas → desactivados (edges inflados sin odds reales)

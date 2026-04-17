@@ -103,6 +103,11 @@ SPORT_KEYS = [
     # ── Americas extra ──────────────────────────────────────────────
     "soccer_usa_mls",                     # -44% ROI, tough league (monitoreando)
 
+    # ── Mundial 2026 (auto-activado el 11 de junio de 2026) ─────────
+    # La función _check_world_cup_activation() en orchestrator.py lo
+    # agrega automáticamente al iniciar si la fecha >= 2026-06-11.
+    # "soccer_fifa_world_cup",            # Activado vía orchestrator
+
     # ── REMOVIDAS (ahorro de creditos API) ──────────────────────────
     # ROI negativo confirmado en walk-forward de 332 bets.
     # "soccer_netherlands_eredivisie",     # -50.3% ROI
