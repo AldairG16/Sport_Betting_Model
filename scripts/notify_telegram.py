@@ -690,7 +690,10 @@ def send_evening_summary():
     """
     print("\n📲 ENVIANDO RESUMEN NOCTURNO...\n")
 
-    today = datetime.now(timezone.utc).date()
+    from zoneinfo import ZoneInfo
+    from config.settings import USER_TIMEZONE
+    today    = datetime.now(ZoneInfo(USER_TIMEZONE)).date()
+    date_str = today.strftime("%d/%m/%Y")
 
     try:
         df = pd.read_sql(f"""
@@ -702,9 +705,7 @@ def send_evening_summary():
     except Exception as e:
         print(f"❌ Error leyendo bets: {e}")
         return
-
-    date_str = datetime.now().strftime("%d/%m/%Y")
-    lines    = [f"🌙 <b>RESUMEN DEL DÍA — {date_str}</b>", ""]
+    lines = [f"🌙 <b>RESUMEN DEL DÍA — {date_str}</b>", ""]
 
     if df.empty:
         lines.append("Sin apuestas para hoy.")
