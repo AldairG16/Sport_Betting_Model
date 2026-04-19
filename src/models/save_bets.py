@@ -76,11 +76,13 @@ def update_bet_results():
 
     print("\n📡 UPDATING BET RESULTS...\n")
 
+    # Fix timezone: esperar 3h después del kickoff para asegurar que el
+    # partido terminó (match_date es el kickoff en UTC, 90+15 min + buffer).
     df = pd.read_sql("""
         SELECT *
         FROM bets_history
         WHERE result = 'pending'
-        AND match_date < NOW()
+        AND match_date < NOW() - INTERVAL '3 hours'
     """, engine)
 
     if df.empty:
@@ -113,9 +115,9 @@ def update_bet_results():
                 # =========================
                 # FETCH RESULT (NORMALIZED)
                 # =========================
-                # CRITICO: filtrar por fecha del partido (±3 dias)
-                # Sin este filtro, el sistema usa resultados de partidos
-                # de temporadas anteriores entre los mismos equipos.
+                # Fix: rango ±1 día (antes ±3d/+1d causaba tomar el partido
+                # EQUIVOCADO en ligas con fixture congestion — ej. Premier
+                # League juega sábado Y miércoles la misma semana).
                 match_date = pd.to_datetime(row["match_date"])
                 result_df = pd.read_sql(text("""
                     SELECT home_goals, away_goals
@@ -123,13 +125,14 @@ def update_bet_results():
                     WHERE LOWER(home_team) = :home
                     AND LOWER(away_team) = :away
                     AND date BETWEEN :date_from AND :date_to
-                    ORDER BY date DESC
+                    ORDER BY ABS(EXTRACT(EPOCH FROM (date::timestamp - :exact_date::timestamp))) ASC
                     LIMIT 1
                 """), engine, params={
-                    "home":      home.lower(),
-                    "away":      away.lower(),
-                    "date_from": (match_date - pd.Timedelta(days=3)).strftime("%Y-%m-%d"),
-                    "date_to":   (match_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                    "home":       home.lower(),
+                    "away":       away.lower(),
+                    "date_from":  (match_date - pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                    "date_to":    (match_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                    "exact_date": match_date.strftime("%Y-%m-%d"),
                 })
 
                 if result_df.empty:
@@ -137,6 +140,12 @@ def update_bet_results():
 
                 hg = result_df.iloc[0]["home_goals"]
                 ag = result_df.iloc[0]["away_goals"]
+
+                # Fix: validar NULL antes de comparar (antes causaba TypeError
+                # silencioso → bet quedaba "pending" indefinidamente → profit
+                # real se perdía del learning)
+                if hg is None or ag is None or pd.isna(hg) or pd.isna(ag):
+                    continue
 
                 outcome = "loss"
                 profit = -stake
@@ -413,21 +422,28 @@ def update_bet_results():
                     home = normalize_team(home)
                     away = normalize_team(away)
                     match_date = pd.to_datetime(row["match_date"])
+                    # Fix: rango ±1 día (antes ±3 días tomaba partido incorrecto)
                     result_df = pd.read_sql(text("""
                         SELECT home_goals, away_goals
                         FROM matches
                         WHERE LOWER(home_team) = :home
                         AND LOWER(away_team) = :away
                         AND date BETWEEN :date_from AND :date_to
-                        ORDER BY date DESC
+                        ORDER BY ABS(EXTRACT(EPOCH FROM (date::timestamp - :exact_date::timestamp))) ASC
                         LIMIT 1
                     """), engine, params={
-                        "home":      home.lower(),
-                        "away":      away.lower(),
-                        "date_from": (match_date - pd.Timedelta(days=3)).strftime("%Y-%m-%d"),
-                        "date_to":   (match_date + pd.Timedelta(days=3)).strftime("%Y-%m-%d"),
+                        "home":       home.lower(),
+                        "away":       away.lower(),
+                        "date_from":  (match_date - pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                        "date_to":    (match_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                        "exact_date": match_date.strftime("%Y-%m-%d"),
                     })
                     if not result_df.empty:
+                        # Validar que los goles existan (si son NULL, dejar unresolved)
+                        _hg = result_df.iloc[0]["home_goals"]
+                        _ag = result_df.iloc[0]["away_goals"]
+                        if _hg is None or _ag is None or pd.isna(_hg) or pd.isna(_ag):
+                            continue
                         # Resultado encontrado → re-insertar como pending para que se resuelva
                         conn.execute(text("""
                             UPDATE bets_history
@@ -435,8 +451,9 @@ def update_bet_results():
                             WHERE id = :id
                         """), {"id": int(row["id"])})
                         recheck_count += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Fix: logging para no perder errores silenciosamente
+                    print(f"⚠️  Recheck error ({row.get('match', '?')}): {e}")
         if recheck_count > 0:
             print(f"🔄 {recheck_count} bets 'unresolved' re-marcadas como 'pending' (resultado encontrado)")
 
@@ -458,8 +475,11 @@ def update_closing_odds():
 
     print("\n📡 UPDATING CLOSING ODDS...\n")
 
+    # Fix: incluir match_date para filtrar el partido correcto (antes
+    # un bet de hace 3 meses tomaba las odds de un partido FUTURO del
+    # mismo enfrentamiento → CLV completamente falso)
     df = pd.read_sql("""
-        SELECT id, match, market
+        SELECT id, match, market, match_date
         FROM bets_history
         WHERE closing_odds IS NULL
     """, engine)
@@ -476,22 +496,30 @@ def update_closing_odds():
 
             match = row["match"]
             market = row["market"]
+            bet_match_date = pd.to_datetime(row["match_date"])
 
             try:
                 home, away = match.split(" vs ")
             except ValueError:
                 continue
 
+            # Fix: buscar el partido MÁS CERCANO en fecha (±4 horas del
+            # kickoff original). Esto garantiza que tomamos odds del partido
+            # correcto, no de otro enfrentamiento futuro del mismo equipo.
             odds_df = pd.read_sql(text("""
                 SELECT *
                 FROM upcoming_matches
                 WHERE LOWER(home_team) = :home
                 AND LOWER(away_team) = :away
-                ORDER BY match_date DESC
+                AND match_date::timestamp BETWEEN :date_from AND :date_to
+                ORDER BY ABS(EXTRACT(EPOCH FROM (match_date::timestamp - :exact_date::timestamp))) ASC
                 LIMIT 1
             """), engine, params={
-                "home": home.lower(),
-                "away": away.lower()
+                "home":       home.lower(),
+                "away":       away.lower(),
+                "date_from":  (bet_match_date - pd.Timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S"),
+                "date_to":    (bet_match_date + pd.Timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S"),
+                "exact_date": bet_match_date.strftime("%Y-%m-%d %H:%M:%S"),
             })
 
             if odds_df.empty:
