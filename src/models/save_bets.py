@@ -125,7 +125,7 @@ def update_bet_results():
                     WHERE LOWER(home_team) = :home
                     AND LOWER(away_team) = :away
                     AND date BETWEEN :date_from AND :date_to
-                    ORDER BY ABS(EXTRACT(EPOCH FROM (date::timestamp - :exact_date::timestamp))) ASC
+                    ORDER BY ABS(EXTRACT(EPOCH FROM (date::timestamp - CAST(:exact_date AS timestamp)))) ASC
                     LIMIT 1
                 """), engine, params={
                     "home":       home.lower(),
@@ -429,7 +429,7 @@ def update_bet_results():
                         WHERE LOWER(home_team) = :home
                         AND LOWER(away_team) = :away
                         AND date BETWEEN :date_from AND :date_to
-                        ORDER BY ABS(EXTRACT(EPOCH FROM (date::timestamp - :exact_date::timestamp))) ASC
+                        ORDER BY ABS(EXTRACT(EPOCH FROM (date::timestamp - CAST(:exact_date AS timestamp)))) ASC
                         LIMIT 1
                     """), engine, params={
                         "home":       home.lower(),
@@ -512,7 +512,7 @@ def update_closing_odds():
                 WHERE LOWER(home_team) = :home
                 AND LOWER(away_team) = :away
                 AND match_date::timestamp BETWEEN :date_from AND :date_to
-                ORDER BY ABS(EXTRACT(EPOCH FROM (match_date::timestamp - :exact_date::timestamp))) ASC
+                ORDER BY ABS(EXTRACT(EPOCH FROM (match_date::timestamp - CAST(:exact_date AS timestamp)))) ASC
                 LIMIT 1
             """), engine, params={
                 "home":       home.lower(),
