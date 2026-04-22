@@ -27,6 +27,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Restore API cache
+        uses: actions/cache@v4
+        with:
+          path: data/api_cache.json
+          key: odds-api-cache-${{ github.run_id }}
+          restore-keys: |
+            odds-api-cache-
+
       - name: Run evening pipeline
         env:
           DB_URL:                       ${{ secrets.DB_URL }}

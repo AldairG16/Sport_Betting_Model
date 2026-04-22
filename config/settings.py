@@ -39,8 +39,11 @@ if not DB_URL:
 ODDS_API_KEY     = os.environ.get("ODDS_API_KEY", "")
 ODDS_REGION      = os.environ.get("ODDS_REGION", "eu")          # 1 region = ahorro de creditos
 ODDS_REGION_MLB  = os.environ.get("ODDS_REGION_MLB", "us")      # MLB usa libros de EE.UU.
-ODDS_MARKETS     = os.environ.get("ODDS_MARKETS", "h2h,totals,spreads")
-API_TTL_HOURS    = int(os.environ.get("API_TTL_HOURS", "8"))     # 8h = ~1 fetch/dia = ~270 creditos/mes
+# Solo markets "featured" en /odds (otros requieren /events/{id}/odds vía enrichment).
+# No incluir specialty (double_chance, h1/h2, corners, cards) aquí — pagas doble.
+ODDS_MARKETS     = os.environ.get("ODDS_MARKETS", "h2h,totals,spreads,btts,draw_no_bet")
+# TTL 12h = 2 fetches/día (morning + evening), closing reutiliza cache del morning
+API_TTL_HOURS    = int(os.environ.get("API_TTL_HOURS", "12"))
 FETCH_DAYS_AHEAD = int(os.environ.get("FETCH_DAYS_AHEAD", "7"))
 API_CREDITS_ALERT_THRESHOLD = int(os.environ.get("API_CREDITS_ALERT_THRESHOLD", "100"))
 

@@ -249,9 +249,14 @@ def step_pre_kickoff_closing():
     Actualiza upcoming_matches con odds frescas (que seran las closing odds reales)
     y luego ejecuta update_closing_odds para asociarlas a bets_history.
     Diseñado para correr 30-60 min antes de los primeros partidos del dia.
+
+    IMPORTANTE: respeta el cache TTL. No usa force=True porque los picks
+    del morning (~6h antes) ya quedaron registrados en bets_history con
+    sus odds; re-fetchear con force tira ~600 créditos extra por día y
+    mueve poco la aguja de CLV vs dejar que el cache TTL expire natural.
     """
     from scripts.update_upcoming_matches import update_all
-    update_all(force=True)
+    update_all(force=False)
     from scripts.update_closing_odds import update_closing_odds
     update_closing_odds()
 

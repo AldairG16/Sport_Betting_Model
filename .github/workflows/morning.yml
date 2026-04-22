@@ -27,6 +27,18 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Persistir api_cache.json entre runs — sin esto cada Action arranca
+      # con cache vacío y hace full fetch (~60 créditos base + ~560 enrich).
+      # Con cache persistido, el closing (6h después) y evening (15h después)
+      # reutilizan lo que descargó el morning.
+      - name: Restore API cache
+        uses: actions/cache@v4
+        with:
+          path: data/api_cache.json
+          key: odds-api-cache-${{ github.run_id }}
+          restore-keys: |
+            odds-api-cache-
+
       - name: Run morning pipeline
         env:
           DB_URL:                       ${{ secrets.DB_URL }}

@@ -37,8 +37,17 @@ from src.utils.team_normalizer import normalize_team
 # ============================================================
 # AUTO-STOP: umbral mínimo de créditos para detener fetch
 # ============================================================
-API_CREDITS_STOP_THRESHOLD = int(os.environ.get("API_CREDITS_STOP_THRESHOLD", "50"))
+API_CREDITS_STOP_THRESHOLD = int(os.environ.get("API_CREDITS_STOP_THRESHOLD", "500"))
+# Cap global de créditos a gastar en UNA invocación. Hard-cap de seguridad
+# para prevenir fugas tipo la del 21-abr-26 (~20K créditos en un día).
+MAX_CREDITS_PER_RUN = int(os.environ.get("MAX_CREDITS_PER_RUN", "800"))
+# Cap de eventos enriquecidos por invocación. Cada enrichment call = ~5
+# créditos (5 markets × 1 region). 40 eventos × 5 × 3 runs/día = 600/día.
+MAX_ENRICHMENTS_PER_RUN = int(os.environ.get("MAX_ENRICHMENTS_PER_RUN", "40"))
+
 _last_known_remaining: int | None = None   # se actualiza en cada respuesta API
+_initial_remaining:    int | None = None   # remaining al inicio de la invocación
+_credits_used_this_run: int = 0            # acumulador local (estimado)
 
 # ============================================================
 # ARCHIVO DE CACHE LOCAL
@@ -73,7 +82,7 @@ def is_cache_valid(cache: dict, sport_key: str) -> bool:
 
 def log_credits(sport_key: str, used: str, remaining: str):
     """Guarda un registro de uso de creditos en logs/api_credits.log"""
-    global _last_known_remaining
+    global _last_known_remaining, _initial_remaining
 
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     line = f"[{ts}] {sport_key:<40} used={used:<6} remaining={remaining}\n"
@@ -83,9 +92,32 @@ def log_credits(sport_key: str, used: str, remaining: str):
 
     remaining_int = int(remaining) if remaining.isdigit() else 9999
     _last_known_remaining = remaining_int
+    # Capturar remaining inicial (para enforcar MAX_CREDITS_PER_RUN)
+    if _initial_remaining is None:
+        _initial_remaining = remaining_int
 
     if remaining_int < API_CREDITS_ALERT_THRESHOLD:
         print(f"  ⚠️  ALERTA: solo quedan {remaining} creditos en la API!")
+
+    # Detector de fuga: si gastamos más de MAX_CREDITS_PER_RUN en esta
+    # invocación, matar todo. Protege contra bugs que disparen loops.
+    if _initial_remaining is not None:
+        burn = _initial_remaining - remaining_int
+        if burn > MAX_CREDITS_PER_RUN:
+            try:
+                from scripts.notify_telegram import send_message
+                send_message(
+                    f"🚨 <b>FUGA DE CRÉDITOS DETECTADA</b>\n\n"
+                    f"Gastado en esta invocación: <b>{burn}</b>\n"
+                    f"Cap configurado: {MAX_CREDITS_PER_RUN}\n"
+                    f"Restantes: {remaining_int}\n\n"
+                    f"⛔ Pipeline abortando para proteger el balance."
+                )
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"Credit burn ({burn}) exceeded MAX_CREDITS_PER_RUN ({MAX_CREDITS_PER_RUN})"
+            )
 
     # Auto-stop: enviar alerta Telegram cuando se acerca al límite
     if remaining_int <= API_CREDITS_STOP_THRESHOLD:
@@ -177,12 +209,14 @@ def fetch_data(sport_key: str, cache: dict, force: bool = False) -> list:
 # por evento. Solo llamamos para eventos en próximos ENRICH_DAYS_AHEAD días
 # para no gastar créditos en matches lejanos cuyos precios cambiarán mucho.
 
+# btts y draw_no_bet están en ODDS_MARKETS (endpoint /odds). Aquí solo pedimos
+# los que NO vienen de featured: 5 markets × 1 region = 5 créditos/evento.
 SPECIALTY_MARKETS = (
-    "btts,draw_no_bet,double_chance,h2h_h1,h2h_h2,"
+    "double_chance,h2h_h1,h2h_h2,"
     "alternate_totals_corners,alternate_totals_cards"
 )
-ENRICH_DAYS_AHEAD = int(os.environ.get("ENRICH_DAYS_AHEAD", "3"))
-ENRICH_CACHE_TTL_HOURS = int(os.environ.get("ENRICH_CACHE_TTL_HOURS", "6"))
+ENRICH_DAYS_AHEAD = int(os.environ.get("ENRICH_DAYS_AHEAD", "2"))
+ENRICH_CACHE_TTL_HOURS = int(os.environ.get("ENRICH_CACHE_TTL_HOURS", "12"))
 
 
 def _enrich_cache_key(event_id: str) -> str:
@@ -224,9 +258,11 @@ def fetch_event_specialty_markets(sport_key: str, event_id: str, cache: dict) ->
     except requests.RequestException:
         return []
 
+    used      = r.headers.get("x-requests-used",      "?")
     remaining = r.headers.get("x-requests-remaining", "?")
-    if remaining.isdigit():
-        _last_known_remaining = int(remaining)
+    # Loguear también enrichment calls para visibilidad completa.
+    # log_credits() también dispara el "fuga detector" y auto-stop.
+    log_credits(f"enrich:{sport_key}", used, remaining)
 
     if r.status_code != 200:
         return []
@@ -249,8 +285,12 @@ def fetch_event_specialty_markets(sport_key: str, event_id: str, cache: dict) ->
     return bookmakers
 
 
+# Markets que SOLO vienen del endpoint /events/{id}/odds (no de /odds).
+# Si un evento ya tiene AL MENOS UNO de estos → ya se enriqueció antes.
+# btts/dnb están excluidos porque esos SÍ vienen del base endpoint y no
+# indican que hicimos la llamada per-event.
 _SPECIALTY_KEYS = {
-    "btts", "draw_no_bet", "double_chance",
+    "double_chance",
     "h2h_h1", "h2h_h2", "h2h_3_way_h1", "h2h_3_way_h2",
     "alternate_totals_corners", "alternate_totals_cards",
 }
@@ -265,6 +305,10 @@ def _event_already_enriched(m: dict) -> bool:
     return False
 
 
+# Contador GLOBAL (entre llamadas de sports) para respetar MAX_ENRICHMENTS_PER_RUN
+_enrichments_this_run: int = 0
+
+
 def enrich_events_with_specialty(sport_key: str, events: list, cache: dict) -> int:
     """
     Para cada evento en 'events' cuyo match comienza dentro de ENRICH_DAYS_AHEAD,
@@ -274,11 +318,18 @@ def enrich_events_with_specialty(sport_key: str, events: list, cache: dict) -> i
 
     Skip si el evento ya viene enriquecido (cache principal caliente).
 
+    Respeta MAX_ENRICHMENTS_PER_RUN globalmente (entre sports) para evitar
+    fugas de créditos cuando hay muchos eventos.
+
     Retorna el número de eventos enriquecidos.
     """
-    global _last_known_remaining
+    global _last_known_remaining, _enrichments_this_run
 
     if not events:
+        return 0
+
+    # Cap global alcanzado — no hacer más calls
+    if _enrichments_this_run >= MAX_ENRICHMENTS_PER_RUN:
         return 0
 
     cutoff = datetime.now(timezone.utc) + timedelta(days=ENRICH_DAYS_AHEAD)
@@ -286,7 +337,18 @@ def enrich_events_with_specialty(sport_key: str, events: list, cache: dict) -> i
     enriched = 0
     skipped_cached = 0
 
-    for m in events:
+    # Ordenar por fecha ASC para priorizar partidos más próximos
+    events_sorted = sorted(
+        events,
+        key=lambda m: m.get("commence_time", "")
+    )
+
+    for m in events_sorted:
+        # Cap global
+        if _enrichments_this_run >= MAX_ENRICHMENTS_PER_RUN:
+            print(f"  ⛔ Cap enrichment alcanzado ({MAX_ENRICHMENTS_PER_RUN}) — parando")
+            break
+
         # Solo próximos N días
         try:
             dt = datetime.fromisoformat(m["commence_time"].replace("Z", "+00:00"))
@@ -325,6 +387,7 @@ def enrich_events_with_specialty(sport_key: str, events: list, cache: dict) -> i
                 m.setdefault("bookmakers", []).append(bk)
 
         enriched += 1
+        _enrichments_this_run += 1
         # Delay cortés entre requests
         time.sleep(0.2)
 
@@ -878,9 +941,57 @@ def _cleanup_old_matches():
         print(f"⚠️  Cleanup error: {e}")
 
 
+def _preflight_credits_check() -> int | None:
+    """
+    Pregunta a /v4/sports (gratis, 0 créditos) por el balance actual.
+    Fija _last_known_remaining para que el auto-stop funcione desde el
+    primer call real. Retorna remaining (int) o None si falla.
+    """
+    global _last_known_remaining, _initial_remaining
+    try:
+        r = requests.get(
+            "https://api.the-odds-api.com/v4/sports",
+            params={"apiKey": ODDS_API_KEY},
+            timeout=10,
+        )
+        remaining = r.headers.get("x-requests-remaining", "?")
+        if remaining.isdigit():
+            rem = int(remaining)
+            _last_known_remaining = rem
+            _initial_remaining    = rem
+            print(f"💳 Preflight: {rem} créditos disponibles")
+            return rem
+    except Exception as e:
+        print(f"⚠️  Preflight falló: {e}")
+    return None
+
+
 def update_all(force: bool = False):
+    global _enrichments_this_run, _initial_remaining, _credits_used_this_run
+    # Reset contadores de esta invocación (importante si se llama 2×
+    # en el mismo proceso — ej. evening cycle).
+    _enrichments_this_run = 0
+    _initial_remaining    = None
+    _credits_used_this_run = 0
+
     print("\n📡 ACTUALIZANDO PARTIDOS + ODDS")
     print(f"   Region: {ODDS_REGION}  |  Mercados: {ODDS_MARKETS}  |  TTL: {API_TTL_HOURS}h\n")
+
+    # Preflight: fija el auto-stop desde el primer call
+    remaining = _preflight_credits_check()
+    if remaining is not None and remaining <= API_CREDITS_STOP_THRESHOLD:
+        print(f"⛔ Abortando: solo {remaining} créditos, umbral={API_CREDITS_STOP_THRESHOLD}")
+        try:
+            from scripts.notify_telegram import send_message
+            send_message(
+                f"⛔ <b>Pipeline abortado — créditos bajos</b>\n\n"
+                f"Restantes: <b>{remaining}</b>\n"
+                f"Umbral: {API_CREDITS_STOP_THRESHOLD}\n\n"
+                f"Recarga créditos en the-odds-api.com"
+            )
+        except Exception:
+            pass
+        return
 
     _cleanup_old_matches()   # eliminar partidos viejos antes de insertar nuevos
     ensure_schema()   # migración automática — agrega columnas faltantes
