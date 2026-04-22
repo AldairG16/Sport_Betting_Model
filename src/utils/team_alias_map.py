@@ -22,7 +22,8 @@ TEAM_ALIASES = {
     "dep riestra": "deportivo riestra",
     "ca tigre ba": "tigre",
     "ca osasuna": "osasuna",
-    "independiente rivadavia": "independiente",
+    # NOTA: "independiente rivadavia" está más abajo mapeado a "ind rivadavia"
+    # (forma canónica), NO se debe mapear a "independiente" porque es otro club.
 
     # europa
     "kln": "koln",
@@ -30,7 +31,6 @@ TEAM_ALIASES = {
 
     # mls
     "los angeles": "lafc",
-    "la galaxy": "la galaxy",
     # MLS
     "inter miami": "inter miami cf",
     "lafc": "los angeles fc",
@@ -38,22 +38,15 @@ TEAM_ALIASES = {
     "new york city": "new york city fc",
     "ny red bulls": "new york red bulls",
     "seattle sounders": "seattle sounders fc",
-    "portland timbers": "portland timbers",
     "sporting kansas city": "sporting kc",
-    "san jose earthquakes": "san jose earthquakes",
     "vancouver whitecaps": "vancouver whitecaps fc",
     "toronto": "toronto fc",
     "atlanta united fc": "atlanta united",
     "austin fc": "austin",
     "charlotte fc": "charlotte",
     "fc dallas": "dallas",
-    "houston dynamo": "houston dynamo",
-    "dc united": "dc united",
     "columbus crew sc": "columbus crew",
-    "colorado rapids": "colorado rapids",
-    "real salt lake": "real salt lake",
     "orlando city": "orlando city sc",
-    "philadelphia union": "philadelphia union",
     "nashville": "nashville sc",
     "montreal": "cf montreal",
     "minnesota united": "minnesota united fc",
@@ -69,11 +62,14 @@ TEAM_ALIASES = {
     "racing club": "racing",
     "talleres": "talleres cordoba",
     "independiente rivadavia": "ind rivadavia",
+    "estudiantes la plata": "estudiantes",
+    "estudiantes lp": "estudiantes",
 
     # México
     "tigres": "tigres uanl",
     "pumas": "pumas unam",
     "guadalajara": "chivas",
+    "guadalajara chivas": "chivas",
 
     # Europa fixes
     "wolverhampton wanderers": "wolves",
@@ -91,15 +87,14 @@ TEAM_ALIASES.update({
     # =========================
 
     "bayern": "bayern munich",
-    "gladbach": "borussia monchengladbach",
 
-    "wolves": "wolverhampton wanderers",
-
+    # MLS inversions — consolidan a forma canónica CORTA
+    # (NAME_MAP expande, aquí contraemos en 3er pass)
     "inter miami cf": "inter miami",
     "los angeles fc": "lafc",
-    "la galaxy": "los angeles galaxy",
+    # NOTA: "la galaxy" NO se mapea — es la forma canónica corta;
+    # "los angeles galaxy" → "la galaxy" (main dict).
 
-    "fc dallas": "dallas",
     "fc cincinnati": "cincinnati",
     "fc juarez": "juarez",
 
@@ -124,7 +119,6 @@ TEAM_ALIASES.update({
     "belgrano de cordoba": "belgrano",
     "instituto de cordoba": "instituto",
     "sarmiento de junin": "sarmiento",
-    "estudiantes lp":"Estudiantes",
     "bragantino sp": "bragantino",
 
     # europa
@@ -136,11 +130,10 @@ TEAM_ALIASES.update({
     "tsg hoffenheim": "hoffenheim",
 
     # españa
-    "ca osasuna": "osasuna",
     "elche cf": "elche",
 
     # otros
     "rb leipzig": "leipzig",
     # "paris fc" es un equipo distinto a PSG — NO se mapea
-    
+
 })

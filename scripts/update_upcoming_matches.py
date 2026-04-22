@@ -611,6 +611,7 @@ def upsert_matches(rows: list[dict]):
                 INSERT INTO upcoming_matches (
                     match_key, match_date, league, sport_key,
                     home_team, away_team,
+                    home_team_norm, away_team_norm,
                     home_odds, draw_odds, away_odds,
                     over25_odds, under25_odds,
                     btts_yes_odds, btts_no_odds,
@@ -627,6 +628,7 @@ def upsert_matches(rows: list[dict]):
                 VALUES (
                     :match_key, :match_date, :league, :sport_key,
                     :home_team, :away_team,
+                    :home_team_norm, :away_team_norm,
                     :home_odds, :draw_odds, :away_odds,
                     :over25_odds, :under25_odds,
                     :btts_yes_odds, :btts_no_odds,
@@ -642,6 +644,8 @@ def upsert_matches(rows: list[dict]):
                 )
                 ON CONFLICT (match_key)
                 DO UPDATE SET
+                    home_team_norm = EXCLUDED.home_team_norm,
+                    away_team_norm = EXCLUDED.away_team_norm,
                     home_odds    = COALESCE(EXCLUDED.home_odds,    upcoming_matches.home_odds),
                     draw_odds    = COALESCE(EXCLUDED.draw_odds,    upcoming_matches.draw_odds),
                     away_odds    = COALESCE(EXCLUDED.away_odds,    upcoming_matches.away_odds),

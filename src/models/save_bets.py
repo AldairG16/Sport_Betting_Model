@@ -506,17 +506,21 @@ def update_closing_odds():
             # Fix: buscar el partido MÁS CERCANO en fecha (±4 horas del
             # kickoff original). Esto garantiza que tomamos odds del partido
             # correcto, no de otro enfrentamiento futuro del mismo equipo.
+            # upcoming_matches.home_team / away_team vienen RAW de la API
+            # (ej. "Independiente Rivadavia"). Usamos home_team_norm / away_team_norm
+            # que guardan la forma canónica (ej. "ind rivadavia"), que es la misma
+            # que aparece en bets_history.match.
             odds_df = pd.read_sql(text("""
                 SELECT *
                 FROM upcoming_matches
-                WHERE LOWER(home_team) = :home
-                AND LOWER(away_team) = :away
+                WHERE home_team_norm = :home
+                AND away_team_norm = :away
                 AND match_date::timestamp BETWEEN :date_from AND :date_to
                 ORDER BY ABS(EXTRACT(EPOCH FROM (match_date::timestamp - CAST(:exact_date AS timestamp)))) ASC
                 LIMIT 1
             """), engine, params={
-                "home":       home.lower(),
-                "away":       away.lower(),
+                "home":       normalize_team(home).lower().strip(),
+                "away":       normalize_team(away).lower().strip(),
                 "date_from":  (bet_match_date - pd.Timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S"),
                 "date_to":    (bet_match_date + pd.Timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S"),
                 "exact_date": bet_match_date.strftime("%Y-%m-%d %H:%M:%S"),

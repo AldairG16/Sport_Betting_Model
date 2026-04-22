@@ -63,10 +63,6 @@ TEAM_NAME_MAP = {
     # FIXES IMPORTANTES
     # =========================
 
-    "wolverhampton wanderers": "wolves",
-    "koln": "fc koln",
-    "hamburger sv": "hamburg",
-    "borussia monchengladbach": "gladbach",
     # Inglaterra
     "wolverhampton wanderers": "wolves",
     "brighton and hove albion": "brighton",
@@ -78,6 +74,9 @@ TEAM_NAME_MAP = {
     "celta vigo": "celta",
 
     # Alemania
+    "koln": "fc koln",
+    "hamburger sv": "hamburg",
+    "borussia monchengladbach": "gladbach",
     "vfb stuttgart": "stuttgart",
     "vfl wolfsburg": "wolfsburg",
     "eintracht frankfurt": "ein frankfurt",
@@ -89,7 +88,8 @@ TEAM_NAME_MAP = {
     # Italia
     "as roma": "roma",
     "hellas verona": "verona",
-    "inter miami": "inter milan",
+    # NOTA: NUNCA mapear "inter miami" a "inter milan" — son equipos
+    # distintos (MLS vs Serie A). Ver src/utils/team_alias_map.py.
 }
 
 
