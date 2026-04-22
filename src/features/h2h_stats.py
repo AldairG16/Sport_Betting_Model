@@ -30,12 +30,18 @@ H2H_MIN    = 3     # Mínimo de encuentros para confiar en la señal
 # MAIN FUNCTION
 # =========================
 
-def get_h2h_stats(home_team: str, away_team: str) -> dict | None:
+def get_h2h_stats(home_team: str, away_team: str, cutoff_date=None) -> dict | None:
     """
     Calcula estadísticas H2H entre home_team y away_team.
 
     Perspectiva: siempre desde el equipo que juega de LOCAL hoy
     (home_team), independientemente de cómo jugaron en el pasado.
+
+    Args:
+        home_team:    nombre del equipo local
+        away_team:    nombre del equipo visitante
+        cutoff_date:  opcional. Si se pasa, excluye partidos en date >= cutoff.
+                      CRÍTICO para backtest: evita temporal leakage.
 
     Returns:
         {
@@ -53,17 +59,25 @@ def get_h2h_stats(home_team: str, away_team: str) -> dict | None:
     home = normalize_team(home_team)
     away = normalize_team(away_team)
 
+    where_clause = """
+        ((LOWER(home_team) = LOWER(:home) AND LOWER(away_team) = LOWER(:away))
+         OR (LOWER(home_team) = LOWER(:away) AND LOWER(away_team) = LOWER(:home)))
+    """
+    params = {"home": home, "away": away, "window": H2H_WINDOW}
+    if cutoff_date is not None:
+        where_clause += " AND date < :cutoff"
+        params["cutoff"] = pd.to_datetime(cutoff_date).strftime("%Y-%m-%d")
+
     df = pd.read_sql(
-        text("""
+        text(f"""
             SELECT home_team, away_team, home_goals, away_goals, date
             FROM matches
-            WHERE (LOWER(home_team) = LOWER(:home) AND LOWER(away_team) = LOWER(:away))
-               OR (LOWER(home_team) = LOWER(:away) AND LOWER(away_team) = LOWER(:home))
+            WHERE {where_clause}
             ORDER BY date DESC
             LIMIT :window
         """),
         engine,
-        params={"home": home, "away": away, "window": H2H_WINDOW}
+        params=params
     )
 
     if df.empty or len(df) < H2H_MIN:

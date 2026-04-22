@@ -23,20 +23,24 @@ FORM_MIN_VENUE   = 4    # mínimo para usar forma de venue (si no, usa combinada
 # FORM CON DECAY EXPONENCIAL
 # =========================
 
-def get_team_form(team, venue: str = None):
+def get_team_form(team, venue: str = None, cutoff_date=None):
     """
     Calcula las métricas de forma de un equipo con decay exponencial.
 
     Args:
-        team:  nombre del equipo
-        venue: "home"  → solo partidos en casa
-               "away"  → solo partidos fuera
-               None    → combinado (comportamiento original)
+        team:         nombre del equipo
+        venue:        "home"  → solo partidos en casa
+                      "away"  → solo partidos fuera
+                      None    → combinado (comportamiento original)
+        cutoff_date:  opcional. Si se pasa, excluye partidos en date >= cutoff.
+                      CRÍTICO para backtest: evita temporal leakage al usar
+                      partidos que aún no habían ocurrido al momento de la bet.
 
     Mejoras vs versión anterior:
       - Parámetro venue: permite separar forma local vs visitante
       - home_attack/home_defense más precisos para el pipeline
       - Fallback a forma combinada si hay < FORM_MIN_VENUE partidos de venue
+      - Parámetro cutoff_date: evita look-ahead bias en backtesting.
 
     Returns:
         dict con métricas de forma o None si DB vacía
@@ -51,8 +55,14 @@ def get_team_form(team, venue: str = None):
         where_clause = "LOWER(away_team) = LOWER(:team)"
         window       = FORM_WINDOW_VENUE
     else:
-        where_clause = "LOWER(home_team) = LOWER(:team) OR LOWER(away_team) = LOWER(:team)"
+        where_clause = "(LOWER(home_team) = LOWER(:team) OR LOWER(away_team) = LOWER(:team))"
         window       = FORM_WINDOW
+
+    # Cutoff temporal para evitar leakage en backtesting
+    params = {"team": team, "window": window}
+    if cutoff_date is not None:
+        where_clause += " AND date < :cutoff"
+        params["cutoff"] = pd.to_datetime(cutoff_date).strftime("%Y-%m-%d")
 
     df = pd.read_sql(
         text(f"""
@@ -63,12 +73,12 @@ def get_team_form(team, venue: str = None):
             LIMIT :window
         """),
         engine,
-        params={"team": team, "window": window}
+        params=params
     )
 
     # ── Si usamos venue y hay pocos datos → fallback a forma combinada ────
     if venue and len(df) < FORM_MIN_VENUE:
-        return get_team_form(team, venue=None)
+        return get_team_form(team, venue=None, cutoff_date=cutoff_date)
 
     # =========================
     # CASO 1: HAY DATOS REALES

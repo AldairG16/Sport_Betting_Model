@@ -362,8 +362,8 @@ def _build_bets_by_league(bets: pd.DataFrame, header: str) -> tuple:
 
 
 def format_bets_message(bets: pd.DataFrame) -> str:
-    now      = datetime.now(timezone.utc)
-    date_str = now.strftime("%d/%m/%Y %H:%M UTC")
+    now      = datetime.now(ZoneInfo(USER_TIMEZONE))
+    date_str = now.strftime("%d/%m/%Y %H:%M")
     header   = f"⚽ <b>BETTING PICKS — {date_str}</b>"
     msg, _ = _build_bets_by_league(bets, header)
     return msg
@@ -582,7 +582,7 @@ def send_weekly_report():
     except Exception:
         bk = {"current": 100, "initial": 100, "roi_pct": 0, "total_profit": 0, "drawdown_pct": 0}
 
-    now_str  = datetime.now().strftime("%d/%m/%Y")
+    now_str  = datetime.now(ZoneInfo(USER_TIMEZONE)).strftime("%d/%m/%Y")
     lines    = [f"📊 <b>REPORTE SEMANAL — {now_str}</b>", ""]
 
     # ── Sección: esta semana ───────────────────────────────────────────────
@@ -765,7 +765,7 @@ if __name__ == "__main__":
         ok = send_message(
             "✅ <b>Sports Betting Model</b>\n\n"
             "Conexion con Telegram funcionando correctamente.\n"
-            f"<i>{datetime.now().strftime('%Y-%m-%d %H:%M')}</i>"
+            f"<i>{datetime.now(ZoneInfo(USER_TIMEZONE)).strftime('%Y-%m-%d %H:%M')}</i>"
         )
         print("✅ Test enviado" if ok else "❌ Test fallido")
     elif args.report:

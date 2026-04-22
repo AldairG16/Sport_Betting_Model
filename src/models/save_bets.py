@@ -244,23 +244,56 @@ def update_bet_results():
                     # Formato: "ah_home_-1.5" o "ah_away_-1.5"
                     # La línea embebida es SIEMPRE la handicap del local
                     try:
-                        parts     = market.split("_")          # ["ah", "home", "-1.5"]
-                        side      = parts[1]                   # "home" o "away"
-                        home_line = float(parts[2])            # -1.5, -1.0, +0.5 ...
-                        margin    = hg - ag                    # positivo = local gana
-                        diff      = margin + home_line
+                        parts     = market.split("_", 2)        # ["ah", "home", "-1.5"]
+                        side      = parts[1]                    # "home" o "away"
+                        home_line = float(parts[2])             # -1.5, -1.0, +0.5, -0.25, +0.75 ...
+                        margin    = hg - ag                     # positivo = local gana
 
-                        if abs(diff) < 1e-9:                   # push (línea entera exacta)
-                            outcome = "push"
-                            profit  = 0.0
-                        elif diff > 0:                         # local cubre
-                            if side == "home":
+                        # Detectar quarter-ball (-0.25, +0.75, -1.25, +1.75, etc.)
+                        # Pinnacle/Asian books resuelven dividiendo el stake 50/50
+                        # entre las dos medias líneas adyacentes.
+                        frac = abs(home_line - round(home_line * 2) / 2)  # distancia a la media más cercana
+                        is_quarter = abs(home_line * 4 - round(home_line * 4)) < 1e-6 and frac > 1e-6
+
+                        def _resolve_half(line_val):
+                            """Devuelve (outcome, profit) para stake/2 en una línea de media o entera."""
+                            d = margin + line_val
+                            half_stake = stake / 2.0
+                            if abs(d) < 1e-9:
+                                return ("push", 0.0)
+                            home_covers = d > 0
+                            won = (home_covers and side == "home") or (not home_covers and side == "away")
+                            if won:
+                                return ("win", half_stake * (odds - 1))
+                            return ("loss", -half_stake)
+
+                        if is_quarter:
+                            lo_out, lo_prof = _resolve_half(home_line - 0.25)
+                            hi_out, hi_prof = _resolve_half(home_line + 0.25)
+                            profit = lo_prof + hi_prof
+                            if lo_out == "win" and hi_out == "win":
                                 outcome = "win"
-                        else:                                   # visitante cubre
-                            if side == "away":
-                                outcome = "win"
-                    except (IndexError, ValueError):
-                        pass   # market mal formateado → queda como "loss"
+                            elif lo_out == "loss" and hi_out == "loss":
+                                outcome = "loss"
+                            elif "win" in (lo_out, hi_out):
+                                outcome = "half_win"
+                            else:
+                                outcome = "half_loss"
+                        else:
+                            diff = margin + home_line
+                            if abs(diff) < 1e-9:                # push (línea entera exacta)
+                                outcome = "push"
+                                profit  = 0.0
+                            elif diff > 0:                       # local cubre
+                                if side == "home":
+                                    outcome = "win"
+                            else:                                # visitante cubre
+                                if side == "away":
+                                    outcome = "win"
+                    except (IndexError, ValueError) as ah_err:
+                        print(f"⚠️  AH market mal formateado '{market}': {ah_err}")
+                        # outcome queda como "loss" por default — mejor loggear
+                        # que fallar silenciosamente
 
                 elif market.startswith("cards_over_") or market.startswith("cards_under_"):
                     match_date = pd.to_datetime(row["match_date"])

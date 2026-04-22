@@ -105,7 +105,7 @@ def run_backtest(min_bets: int = 5) -> dict:
             SELECT *
             FROM bets_history
             WHERE result IS NOT NULL
-              AND result::text NOT IN ('pending', 'null', '')
+              AND result::text NOT IN ('pending', 'null', '', 'unresolved', 'stale')
             ORDER BY match_date
         """, engine)
     except Exception as e:

@@ -13,18 +13,27 @@ from config.database import engine
 
 def calculate_clv(open_odds, closing_odds, overround_est: float = 0.05):
     """
-    Calcula Closing Line Value con ajuste de overround.
+    Calcula Closing Line Value.
 
     CLV > 0: apostamos a mejor precio que el cierre → edge real
     CLV < 0: el mercado movió en nuestra contra → señal negativa
 
+    NOTA: El ajuste de overround previo multiplicaba AMBAS probabilidades
+    por el mismo factor (1 - overround/2), lo cual se cancela al restarlas:
+        p_o*f - p_c*f = (p_o - p_c) * f   (solo escala, no quita overround)
+    Quitar overround de verdad requiere las odds de TODOS los outcomes del
+    mercado (home+draw+away en 1X2, over+under en O/U, etc.), las cuales
+    no almacenamos por bet. Así que usamos CLV como diferencia directa de
+    probabilidades implícitas — interpretación simple y matemáticamente
+    honesta.
+
     Args:
         open_odds:      odds al momento de apostar
-        closing_odds:   odds al cierre del mercado (antes del partido)
-        overround_est:  overround estimado del bookmaker (default 5%)
+        closing_odds:   odds al cierre del mercado
+        overround_est:  parámetro legacy (ignorado — se mantiene por compat)
 
     Returns:
-        CLV como diferencia de probabilidades limpias [float] o None
+        CLV como diferencia de probabilidades implícitas [float] o None
     """
     if open_odds is None or closing_odds is None:
         return None
@@ -33,13 +42,12 @@ def calculate_clv(open_odds, closing_odds, overround_est: float = 0.05):
         return None
 
     try:
-        # Convertir a probabilidades limpias (sin overround)
-        open_prob  = (1 / open_odds)    * (1 - overround_est / 2)
-        close_prob = (1 / closing_odds) * (1 - overround_est / 2)
+        open_prob  = 1 / open_odds
+        close_prob = 1 / closing_odds
 
-        # CLV = diferencia entre prob de apertura y cierre
         # Positivo = apostamos ANTES de que el mercado ajustara en nuestra contra
-        clv = open_prob - close_prob
+        # (nuestro precio implicaba menor prob que el cierre → +EV histórico)
+        clv = close_prob - open_prob
 
         return round(clv, 4)
 
