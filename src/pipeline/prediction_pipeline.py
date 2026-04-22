@@ -848,23 +848,23 @@ def run_prediction_pipeline():
             odds[f"ah_home_{_ah_line:+.1f}"] = _ah_home_odds
             odds[f"ah_away_{_ah_line:+.1f}"] = _ah_away_odds
 
-        # Corners odds: preferir API, fallback a odds fijas
+        # Corners odds: SOLO si la API trae odds reales.
+        # El fallback a CORNERS_DEFAULT_ODDS generaba edge ficticio: el modelo
+        # comparaba su prob Poisson contra una odd hardcoded (no la del mercado)
+        # y "detectaba" ventaja aunque no la hubiera.
         if _corners_over_api and _corners_line_api is not None:
             _cl = float(_corners_line_api)
             odds[f"corners_over_{_cl}"]  = _corners_over_api
             odds[f"corners_under_{_cl}"] = _corners_under_api or CORNERS_DEFAULT_ODDS
-        elif corners_prediction:
-            odds["corners_over_9.5"]  = CORNERS_DEFAULT_ODDS
-            odds["corners_under_9.5"] = CORNERS_DEFAULT_ODDS
 
-        # Cards odds: preferir API, fallback a odds fijas
+        # Cards odds: SOLO si la API trae odds reales. Mismo motivo.
+        # Además: cards requiere datos históricos en la liga — get_team_cards
+        # ya retorna None si hay < 5 partidos con data, por lo que
+        # cards_prediction ya no se genera en esos casos.
         if _cards_over_api and _cards_line_api is not None:
             _cdl = float(_cards_line_api)
             odds[f"cards_over_{_cdl}"]  = _cards_over_api
             odds[f"cards_under_{_cdl}"] = _cards_under_api or CARDS_DEFAULT_ODDS
-        elif cards_prediction:
-            odds["cards_over_4.5"]  = CARDS_DEFAULT_ODDS
-            odds["cards_under_4.5"] = CARDS_DEFAULT_ODDS
 
         # Over 1.5 / 3.5 odds de referencia fijas
         odds["over_1.5"]  = OVER15_ODDS

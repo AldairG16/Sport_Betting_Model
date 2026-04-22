@@ -168,6 +168,176 @@ def fetch_data(sport_key: str, cache: dict, force: bool = False) -> list:
 
 
 # ============================================================
+# ENRICH: SPECIALTY MARKETS (btts, dnb, dc, h1/h2, corners, cards)
+# ============================================================
+# El endpoint /odds solo devuelve mercados "featured" (h2h, totals, spreads).
+# Los demás requieren un call per-event a /events/{id}/odds. Ahí pagamos
+# 1 crédito por cada market ÚNICO devuelto × regions.
+# Con region=eu y 5 markets con buena cobertura, costo típico = ~5 créditos
+# por evento. Solo llamamos para eventos en próximos ENRICH_DAYS_AHEAD días
+# para no gastar créditos en matches lejanos cuyos precios cambiarán mucho.
+
+SPECIALTY_MARKETS = (
+    "btts,draw_no_bet,double_chance,h2h_h1,h2h_h2,"
+    "alternate_totals_corners,alternate_totals_cards"
+)
+ENRICH_DAYS_AHEAD = int(os.environ.get("ENRICH_DAYS_AHEAD", "3"))
+ENRICH_CACHE_TTL_HOURS = int(os.environ.get("ENRICH_CACHE_TTL_HOURS", "6"))
+
+
+def _enrich_cache_key(event_id: str) -> str:
+    return f"_enrich:{event_id}"
+
+
+def fetch_event_specialty_markets(sport_key: str, event_id: str, cache: dict) -> list:
+    """
+    Llama /events/{id}/odds con markets specialty, retorna la lista de
+    'bookmakers' parseable por parse_match(). Usa cache con TTL corto.
+    Si la API falla o no hay créditos, retorna [] (enrichment opcional).
+    """
+    global _last_known_remaining
+
+    cache_key = _enrich_cache_key(event_id)
+    if cache_key in cache:
+        try:
+            last = datetime.fromisoformat(cache[cache_key]["fetched_at"])
+            if (datetime.now(timezone.utc) - last).total_seconds() < ENRICH_CACHE_TTL_HOURS * 3600:
+                return cache[cache_key].get("bookmakers", [])
+        except Exception:
+            pass
+
+    # Auto-stop: no gastar créditos si quedan pocos
+    if _last_known_remaining is not None and _last_known_remaining <= API_CREDITS_STOP_THRESHOLD:
+        return []
+
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event_id}/odds"
+    params = {
+        "apiKey":     ODDS_API_KEY,
+        "regions":    ODDS_REGION,
+        "markets":    SPECIALTY_MARKETS,
+        "oddsFormat": "decimal",
+        "dateFormat": "iso",
+    }
+
+    try:
+        r = requests.get(url, params=params, timeout=15)
+    except requests.RequestException:
+        return []
+
+    remaining = r.headers.get("x-requests-remaining", "?")
+    if remaining.isdigit():
+        _last_known_remaining = int(remaining)
+
+    if r.status_code != 200:
+        return []
+
+    try:
+        data = r.json()
+    except Exception:
+        return []
+
+    if not isinstance(data, dict) or "bookmakers" not in data:
+        return []
+
+    bookmakers = data.get("bookmakers", [])
+
+    cache[cache_key] = {
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "bookmakers": bookmakers,
+    }
+
+    return bookmakers
+
+
+_SPECIALTY_KEYS = {
+    "btts", "draw_no_bet", "double_chance",
+    "h2h_h1", "h2h_h2", "h2h_3_way_h1", "h2h_3_way_h2",
+    "alternate_totals_corners", "alternate_totals_cards",
+}
+
+
+def _event_already_enriched(m: dict) -> bool:
+    """True si el evento ya trae markets specialty (del cache principal)."""
+    for bk in m.get("bookmakers", []):
+        for mk in bk.get("markets", []):
+            if mk.get("key") in _SPECIALTY_KEYS:
+                return True
+    return False
+
+
+def enrich_events_with_specialty(sport_key: str, events: list, cache: dict) -> int:
+    """
+    Para cada evento en 'events' cuyo match comienza dentro de ENRICH_DAYS_AHEAD,
+    llama a la API per-event con specialty markets y appendea los bookmakers
+    al dict del evento (in-place). El parser parse_match() ya sabe procesar
+    esos mercados.
+
+    Skip si el evento ya viene enriquecido (cache principal caliente).
+
+    Retorna el número de eventos enriquecidos.
+    """
+    global _last_known_remaining
+
+    if not events:
+        return 0
+
+    cutoff = datetime.now(timezone.utc) + timedelta(days=ENRICH_DAYS_AHEAD)
+    now    = datetime.now(timezone.utc)
+    enriched = 0
+    skipped_cached = 0
+
+    for m in events:
+        # Solo próximos N días
+        try:
+            dt = datetime.fromisoformat(m["commence_time"].replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if dt < now or dt > cutoff:
+            continue
+
+        # Si el evento ya trae markets specialty (viene de cache principal
+        # enriquecido en la sesión previa), no repetimos el call.
+        if _event_already_enriched(m):
+            skipped_cached += 1
+            continue
+
+        event_id = m.get("id")
+        if not event_id:
+            continue
+
+        # Auto-stop si quedan pocos créditos
+        if _last_known_remaining is not None and _last_known_remaining <= API_CREDITS_STOP_THRESHOLD:
+            print(f"  ⛔ AUTO-STOP enrichment: {_last_known_remaining} créditos restantes")
+            break
+
+        extra_bookmakers = fetch_event_specialty_markets(sport_key, event_id, cache)
+        if not extra_bookmakers:
+            continue
+
+        # Merge: appendear al campo bookmakers del evento. Si un bookmaker
+        # ya existe, le agregamos sus markets specialty.
+        existing = {bk["key"]: bk for bk in m.get("bookmakers", [])}
+        for bk in extra_bookmakers:
+            key = bk["key"]
+            if key in existing:
+                existing[key].setdefault("markets", []).extend(bk.get("markets", []))
+            else:
+                m.setdefault("bookmakers", []).append(bk)
+
+        enriched += 1
+        # Delay cortés entre requests
+        time.sleep(0.2)
+
+    if enriched:
+        save_cache(cache)
+
+    if skipped_cached:
+        print(f"   (cache hit: {skipped_cached} eventos ya enriquecidos)")
+
+    return enriched
+
+
+# ============================================================
 # LIGAS CON PARTIDOS PROXIMOS (evita fetch innecesario)
 # ============================================================
 def get_active_leagues_in_db() -> set:
@@ -732,6 +902,14 @@ def update_all(force: bool = False):
         if not cached:
             api_calls += 1
             time.sleep(0.5)  # delay cortés entre llamadas
+
+        # ── ENRICH: specialty markets (btts, dnb, dc, h1/h2, corners, cards) ──
+        # Solo para soccer (MLB no tiene estos mercados). Solo eventos próximos
+        # a jugarse (ENRICH_DAYS_AHEAD). Con cache 6h.
+        if sport.startswith("soccer_") and data:
+            n_enr = enrich_events_with_specialty(sport, data, cache)
+            if n_enr > 0:
+                print(f"   ✨ {n_enr} eventos enriquecidos con specialty markets")
 
         rows = [r for m in data if (r := parse_match(m, sport))]
         upsert_matches(rows)
