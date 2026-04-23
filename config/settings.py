@@ -45,7 +45,8 @@ ODDS_MARKETS     = os.environ.get("ODDS_MARKETS", "h2h,totals,spreads,btts,draw_
 # TTL 12h = 2 fetches/día (morning + evening), closing reutiliza cache del morning
 API_TTL_HOURS    = int(os.environ.get("API_TTL_HOURS", "12"))
 FETCH_DAYS_AHEAD = int(os.environ.get("FETCH_DAYS_AHEAD", "7"))
-API_CREDITS_ALERT_THRESHOLD = int(os.environ.get("API_CREDITS_ALERT_THRESHOLD", "100"))
+# Alerta temprana: 10% del plan de 20K = avisa con ~3 días de margen
+API_CREDITS_ALERT_THRESHOLD = int(os.environ.get("API_CREDITS_ALERT_THRESHOLD", "2000"))
 
 # ============================================================
 # BANKROLL

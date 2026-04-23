@@ -50,5 +50,8 @@ jobs:
           ODDS_MARKETS:                 ${{ secrets.ODDS_MARKETS }}
           FETCH_DAYS_AHEAD:             ${{ secrets.FETCH_DAYS_AHEAD }}
           API_CREDITS_ALERT_THRESHOLD:  ${{ secrets.API_CREDITS_ALERT_THRESHOLD }}
+          API_CREDITS_STOP_THRESHOLD:   ${{ secrets.API_CREDITS_STOP_THRESHOLD }}
+          MAX_CREDITS_PER_RUN:          ${{ secrets.MAX_CREDITS_PER_RUN }}
+          MAX_ENRICHMENTS_PER_RUN:      ${{ secrets.MAX_ENRICHMENTS_PER_RUN }}
           USER_TIMEZONE:                America/Mexico_City
         run: python scripts/orchestrator.py --mode morning
