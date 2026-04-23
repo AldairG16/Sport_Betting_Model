@@ -490,19 +490,31 @@ def update_bet_results():
         if recheck_count > 0:
             print(f"🔄 {recheck_count} bets 'unresolved' re-marcadas como 'pending' (resultado encontrado)")
 
-    # ── Timeout: bets pendientes de hace +7 días sin resultado en DB ──────
-    # Aplica a partidos internacionales (clasificatorias, amistosos) que
-    # no están en football-data.co.uk y nunca se resolverán automáticamente.
-    # Usamos 7 días (en vez de 3) para dar tiempo a que lleguen los resultados.
+    # ── Timeout escalado (2 etapas) ─────────────────────────────────────
+    # Etapa 1: pending → unresolved después de 3 días sin resultado en DB.
+    #          Valor agresivo: evita acumulación de "zombies" pending y
+    #          libera la ventana de re-check para intentar resolverlos.
+    # Etapa 2: unresolved → stale después de 7 días. Terminal: ya no
+    #          va a llegar resultado (mercado sin fuente de datos, ej.
+    #          córners en ligas sin cobertura). No contamina calibración.
     with engine.begin() as conn:
-        r = conn.execute(text("""
+        r1 = conn.execute(text("""
             UPDATE bets_history
             SET result = 'unresolved'
             WHERE result = 'pending'
+              AND match_date < NOW() - INTERVAL '3 days'
+        """))
+        if r1.rowcount > 0:
+            print(f"⚠️  {r1.rowcount} bets 'pending' → 'unresolved' (tras 3 días sin resultado)")
+
+        r2 = conn.execute(text("""
+            UPDATE bets_history
+            SET result = 'stale'
+            WHERE result = 'unresolved'
               AND match_date < NOW() - INTERVAL '7 days'
         """))
-        if r.rowcount > 0:
-            print(f"⚠️  {r.rowcount} bets marcadas 'unresolved' (sin resultado en DB tras 7 dias)")
+        if r2.rowcount > 0:
+            print(f"🗑️  {r2.rowcount} bets 'unresolved' → 'stale' (tras 7 días sin datos fuente)")
 
 def update_closing_odds():
 
@@ -543,20 +555,23 @@ def update_closing_odds():
             # (ej. "Independiente Rivadavia"). Usamos home_team_norm / away_team_norm
             # que guardan la forma canónica (ej. "ind rivadavia"), que es la misma
             # que aparece en bets_history.match.
+            # upcoming_matches.match_date es TIMESTAMPTZ. Pasamos strings
+            # con offset UTC explícito (+00:00) para que la comparación sea
+            # inequívoca (bet_match_date es naive pero sabemos que está en UTC).
             odds_df = pd.read_sql(text("""
                 SELECT *
                 FROM upcoming_matches
                 WHERE home_team_norm = :home
                 AND away_team_norm = :away
-                AND match_date::timestamp BETWEEN :date_from AND :date_to
-                ORDER BY ABS(EXTRACT(EPOCH FROM (match_date::timestamp - CAST(:exact_date AS timestamp)))) ASC
+                AND match_date BETWEEN :date_from::timestamptz AND :date_to::timestamptz
+                ORDER BY ABS(EXTRACT(EPOCH FROM (match_date - :exact_date::timestamptz))) ASC
                 LIMIT 1
             """), engine, params={
                 "home":       normalize_team(home).lower().strip(),
                 "away":       normalize_team(away).lower().strip(),
-                "date_from":  (bet_match_date - pd.Timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S"),
-                "date_to":    (bet_match_date + pd.Timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S"),
-                "exact_date": bet_match_date.strftime("%Y-%m-%d %H:%M:%S"),
+                "date_from":  (bet_match_date - pd.Timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S+00:00"),
+                "date_to":    (bet_match_date + pd.Timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S+00:00"),
+                "exact_date": bet_match_date.strftime("%Y-%m-%d %H:%M:%S+00:00"),
             })
 
             if odds_df.empty:

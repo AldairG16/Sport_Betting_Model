@@ -25,7 +25,7 @@ import json
 import sys
 import os
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 import numpy as np
@@ -42,6 +42,11 @@ MARKETS = ["home_win", "draw", "away_win", "over25", "under25", "btts"]
 # Limitar para no sobre-corregir con pocos datos
 CAL_FACTOR_MIN = 0.75
 CAL_FACTOR_MAX = 1.30
+
+# Ventana temporal para calibración: solo los últimos N días.
+# Evita que apuestas viejas (temporadas previas, modelo anterior) contaminen
+# el factor actual — si el modelo mejoró, las bets viejas sesgan hacia abajo.
+CALIBRATION_WINDOW_DAYS = 60
 
 
 # ─────────────────────────────────────────────────────────────
@@ -72,7 +77,9 @@ def _neutral_factors() -> dict:
 
 def _save_calibration_factors(factors: dict):
     CALIBRATION_FILE.parent.mkdir(parents=True, exist_ok=True)
-    factors["updated_at"] = datetime.now().isoformat()
+    # tz-aware UTC: evita ambigüedad cuando el script corre en distintas zonas
+    factors["updated_at"]    = datetime.now(timezone.utc).isoformat()
+    factors["window_days"]   = CALIBRATION_WINDOW_DAYS
     with open(CALIBRATION_FILE, "w") as f:
         json.dump(factors, f, indent=2)
 
@@ -109,13 +116,17 @@ def compute_calibration(min_bets: int = MIN_BETS_FOR_CALIBRATION,
         dict con factores por mercado y métricas
     """
     try:
-        df = pd.read_sql("""
+        # Filtro de ventana temporal: sólo últimos CALIBRATION_WINDOW_DAYS días.
+        # Esto desacopla la calibración del modelo *actual* del histórico lejano
+        # (bets generadas con thresholds/features distintos).
+        df = pd.read_sql(f"""
             SELECT market, probability, result
             FROM bets_history
             WHERE result IN ('win', 'loss')
               AND probability IS NOT NULL
               AND probability > 0
               AND probability < 1
+              AND match_date >= NOW() - INTERVAL '{CALIBRATION_WINDOW_DAYS} days'
         """, engine)
     except Exception as e:
         print(f"❌ calibration_monitor: no se pudo leer bets_history: {e}")

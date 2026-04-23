@@ -112,13 +112,22 @@ SPORT_KEYS = [
     # agrega automáticamente al iniciar si la fecha >= 2026-06-11.
     # "soccer_fifa_world_cup",            # Activado vía orchestrator
 
+    # ── NOTAS IMPORTANTES sobre keys de torneos ─────────────────────
+    # • Liga MX Liguilla (playoffs): NO existe key separada en The Odds API.
+    #   La fase final cae bajo "soccer_mexico_ligamx" automáticamente.
+    # • UCL knockout: mismo caso — "soccer_uefa_champs_league" cubre
+    #   fase de grupos Y eliminatorias.  Se removió abajo por ROI negativo.
+    # • UECL (Conference League) existe como "soccer_uefa_europa_conference_league"
+    #   pero no se agrega aún — sin backtest histórico con muestra suficiente.
+
     # ── REMOVIDAS (ahorro de creditos API) ──────────────────────────
     # ROI negativo confirmado en walk-forward de 332 bets.
     # "soccer_netherlands_eredivisie",     # -50.3% ROI
     # "soccer_conmebol_copa_libertadores", # -100% ROI
     # "soccer_fifa_world_cup_qualifiers_europe",  # -44.6% ROI
-    # "soccer_uefa_champs_league",         # -100% ROI
+    # "soccer_uefa_champs_league",         # -100% ROI (incluye knockout)
     # "soccer_uefa_europa_league",         # -64.5% ROI
+    # "soccer_uefa_europa_conference_league",  # sin backtest — no activada
 
     # MLB (beisbol) — desactivado temporalmente para ahorrar creditos API
     # "baseball_mlb",

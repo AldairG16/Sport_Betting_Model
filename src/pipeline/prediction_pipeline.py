@@ -5,7 +5,67 @@ import numpy as np
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+from sqlalchemy import text as _sql_text
+
 from config.database import engine
+
+
+# ─────────────────────────────────────────────────────────────
+# COVERAGE GATE — evita generar bets en mercados sin data
+# ─────────────────────────────────────────────────────────────
+# Umbral mínimo de cobertura para permitir bets de un mercado stats-based.
+# Si la liga no tiene al menos N% de partidos con córners (o tarjetas) en los
+# últimos 30 días, NO generar bets de ese mercado: quedarían siempre en
+# 'unresolved' por falta de fuente de datos y contaminan la calibración.
+_COVERAGE_MIN_PCT      = 0.50
+_COVERAGE_WINDOW_DAYS  = 30
+_COVERAGE_CACHE: dict  = {}   # key=(league, market_kind) → bool
+
+
+def _has_coverage(league: str, market_kind: str) -> bool:
+    """
+    Devuelve True si la liga tiene >= _COVERAGE_MIN_PCT de partidos con datos
+    fuente en los últimos _COVERAGE_WINDOW_DAYS días. Cachea por (liga, kind).
+
+    market_kind: "corners" | "cards" | "shots" | "ht"
+    """
+    if not league:
+        return False
+    key = (league, market_kind)
+    if key in _COVERAGE_CACHE:
+        return _COVERAGE_CACHE[key]
+
+    cols_map = {
+        "corners": ("home_corners", "away_corners"),
+        "cards":   ("home_yellow",  "away_yellow"),
+        "shots":   ("home_shots_target", "away_shots_target"),
+        "ht":      ("home_goals_ht", "away_goals_ht"),
+    }
+    if market_kind not in cols_map:
+        _COVERAGE_CACHE[key] = False
+        return False
+
+    c1, c2 = cols_map[market_kind]
+    try:
+        df = pd.read_sql(
+            _sql_text(f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE {c1} IS NOT NULL AND {c2} IS NOT NULL) AS with_data,
+                    COUNT(*) AS total
+                FROM matches
+                WHERE date >= (NOW() - INTERVAL '{_COVERAGE_WINDOW_DAYS} days')::date
+                  AND league = :league
+            """),
+            engine,
+            params={"league": league},
+        )
+        total = int(df.iloc[0]["total"]) if not df.empty else 0
+        with_data = int(df.iloc[0]["with_data"]) if not df.empty else 0
+        pct = (with_data / total) if total > 0 else 0.0
+        _COVERAGE_CACHE[key] = (pct >= _COVERAGE_MIN_PCT)
+    except Exception:
+        _COVERAGE_CACHE[key] = False
+    return _COVERAGE_CACHE[key]
 
 from src.features.elo_rating import compute_elo
 from src.features.team_form import get_team_form
@@ -676,7 +736,13 @@ def run_prediction_pipeline():
         CORNERS_DEFAULT_ODDS = 1.80
         CARDS_DEFAULT_ODDS   = 1.80
 
-        if corners_prediction:
+        # Gate de cobertura: si la liga no tiene >= 50% de partidos con
+        # córners/tarjetas en los últimos 30 días, NO generamos bets para
+        # ese mercado — quedarían 'unresolved' indefinidamente y ensuciarían
+        # la calibración + el bankroll en paper.
+        _league_for_gate = row.get("sport_key") if hasattr(row, "get") else getattr(row, "sport_key", "")
+
+        if corners_prediction and _has_coverage(_league_for_gate, "corners"):
             # Usar la línea de la API si está disponible, fallback 9.5
             cl = float(_corners_line_api) if _corners_line_api is not None else 9.5
             over_key  = f"corners_over_{cl}"
@@ -684,7 +750,7 @@ def run_prediction_pipeline():
             model_probs[over_key]  = clamp_prob(corners_prediction["over95"])
             model_probs[under_key] = clamp_prob(corners_prediction["under95"])
 
-        if cards_prediction:
+        if cards_prediction and _has_coverage(_league_for_gate, "cards"):
             cl_c = float(_cards_line_api) if _cards_line_api is not None else 4.5
             model_probs[f"cards_over_{cl_c}"]  = clamp_prob(cards_prediction["over45"])
             model_probs[f"cards_under_{cl_c}"] = clamp_prob(cards_prediction["under45"])

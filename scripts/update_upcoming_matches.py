@@ -438,7 +438,10 @@ def parse_match(m: dict, sport: str) -> dict | None:
         raw_date = m["commence_time"]
         dt = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
         dt_utc = dt.astimezone(timezone.utc)
-        match_date = dt_utc.strftime("%Y-%m-%d %H:%M:%S")
+        # ISO con offset explícito (+00:00) — upcoming_matches.match_date ahora
+        # es TIMESTAMPTZ. Pasar un naive string provocaría que Postgres use la
+        # session timezone, causando desfase si ésta no es UTC.
+        match_date = dt_utc.isoformat()          # ej: '2026-04-22T01:00:00+00:00'
         match_day  = dt_utc.strftime("%Y-%m-%d")
         match_key  = f"{home_norm}_{away_norm}_{match_day}"
 

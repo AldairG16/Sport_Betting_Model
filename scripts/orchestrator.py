@@ -262,9 +262,22 @@ def step_pre_kickoff_closing():
 
 
 def step_fetch_results():
-    """Descarga resultados recientes desde The Odds API e inserta en matches."""
+    """Descarga resultados recientes desde The Odds API e inserta en matches.
+    days_from=5 (antes 2) para recuperar resultados con retraso de publicación
+    y reducir bets que se quedan en 'unresolved' indefinidamente."""
     from scripts.fetch_results import fetch_all_results
-    fetch_all_results(days_from=2)
+    fetch_all_results(days_from=5)
+
+
+def step_fetch_results_backup():
+    """Fallback: football-data.co.uk rellena córners/tarjetas/tiros que The
+    Odds API /scores no entrega. Sólo cubre ligas europeas mapeadas.
+    Nunca falla el pipeline: si la descarga rompe, se registra y continúa."""
+    try:
+        from scripts.fetch_results_backup_fbdata import fetch_fbdata_backup
+        fetch_fbdata_backup(days=10, verbose=True)
+    except Exception as e:
+        print(f"⚠️  fbdata backup skipped: {e}")
 
 
 def step_results():
@@ -332,6 +345,7 @@ def run_evening(logger: Logger):
 
     run_step(logger, "Closing odds",      step_closing_odds)
     run_step(logger, "Fetch results",     step_fetch_results)
+    run_step(logger, "Fetch results (fbdata backup)", step_fetch_results_backup)
     run_step(logger, "Results",           step_results)
     run_step(logger, "CLV update",        step_clv)
     run_step(logger, "Backtest",          step_backtest)
