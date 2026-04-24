@@ -30,20 +30,27 @@ from config.database import engine
 from config.settings import (
     ODDS_API_KEY, ODDS_REGION, ODDS_REGION_MLB, ODDS_MARKETS,
     API_TTL_HOURS, FETCH_DAYS_AHEAD,
-    API_CREDITS_ALERT_THRESHOLD, SPORT_KEYS
+    API_CREDITS_ALERT_THRESHOLD, SPORT_KEYS,
+    env_int,
 )
 from src.utils.team_normalizer import normalize_team
 
 # ============================================================
 # AUTO-STOP: umbral mínimo de créditos para detener fetch
 # ============================================================
-API_CREDITS_STOP_THRESHOLD = int(os.environ.get("API_CREDITS_STOP_THRESHOLD", "500"))
+# Plan $30/mes = 20K créditos. Umbral default = 500 = ~2.5% del plan, deja
+# margen para finalizar el mes sin agotar. IMPORTANTE: usar `env_int` en
+# lugar de `int(os.environ.get(...))` porque si el secret de GitHub Actions
+# no está definido, `${{ secrets.X }}` se expande a "" y `int("")` truena
+# con ValueError — eso fue la causa real del freeze de upcoming_matches
+# desde 17-abr-26.
+API_CREDITS_STOP_THRESHOLD = env_int("API_CREDITS_STOP_THRESHOLD", 500)
 # Cap global de créditos a gastar en UNA invocación. Hard-cap de seguridad
 # para prevenir fugas tipo la del 21-abr-26 (~20K créditos en un día).
-MAX_CREDITS_PER_RUN = int(os.environ.get("MAX_CREDITS_PER_RUN", "800"))
+MAX_CREDITS_PER_RUN = env_int("MAX_CREDITS_PER_RUN", 800)
 # Cap de eventos enriquecidos por invocación. Cada enrichment call = ~5
 # créditos (5 markets × 1 region). 40 eventos × 5 × 3 runs/día = 600/día.
-MAX_ENRICHMENTS_PER_RUN = int(os.environ.get("MAX_ENRICHMENTS_PER_RUN", "40"))
+MAX_ENRICHMENTS_PER_RUN = env_int("MAX_ENRICHMENTS_PER_RUN", 40)
 
 _last_known_remaining: int | None = None   # se actualiza en cada respuesta API
 _initial_remaining:    int | None = None   # remaining al inicio de la invocación
@@ -215,8 +222,8 @@ SPECIALTY_MARKETS = (
     "double_chance,h2h_h1,h2h_h2,"
     "alternate_totals_corners,alternate_totals_cards"
 )
-ENRICH_DAYS_AHEAD = int(os.environ.get("ENRICH_DAYS_AHEAD", "2"))
-ENRICH_CACHE_TTL_HOURS = int(os.environ.get("ENRICH_CACHE_TTL_HOURS", "12"))
+ENRICH_DAYS_AHEAD = env_int("ENRICH_DAYS_AHEAD", 2)
+ENRICH_CACHE_TTL_HOURS = env_int("ENRICH_CACHE_TTL_HOURS", 12)
 
 
 def _enrich_cache_key(event_id: str) -> str:

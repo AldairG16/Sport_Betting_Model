@@ -24,6 +24,37 @@ def _load_env():
 
 _load_env()
 
+
+# ============================================================
+# ENV HELPERS — robustos a string vacío
+# ============================================================
+# IMPORTANTE: `int(os.environ.get("X", "default"))` TRUENA si la env var X
+# existe pero es string vacío. Esto pasa típicamente en GitHub Actions cuando
+# `${{ secrets.X }}` se expande a "" porque el secret no está configurado.
+# El ValueError resultante aborta el pipeline antes de escribir nada → fue
+# la causa real del freeze de upcoming_matches desde 17-abr-26.
+# Estos helpers devuelven el default si la var no existe, es "", o no parsea.
+
+def env_int(name: str, default: int) -> int:
+    v = os.environ.get(name, "")
+    if not v or not v.strip():
+        return default
+    try:
+        return int(v.strip())
+    except (ValueError, TypeError):
+        return default
+
+
+def env_float(name: str, default: float) -> float:
+    v = os.environ.get(name, "")
+    if not v or not v.strip():
+        return default
+    try:
+        return float(v.strip())
+    except (ValueError, TypeError):
+        return default
+
+
 # ============================================================
 # DATABASE
 # ============================================================
@@ -43,10 +74,12 @@ ODDS_REGION_MLB  = os.environ.get("ODDS_REGION_MLB", "us")      # MLB usa libros
 # No incluir specialty (double_chance, h1/h2, corners, cards) aquí — pagas doble.
 ODDS_MARKETS     = os.environ.get("ODDS_MARKETS", "h2h,totals,spreads,btts,draw_no_bet")
 # TTL 12h = 2 fetches/día (morning + evening), closing reutiliza cache del morning
-API_TTL_HOURS    = int(os.environ.get("API_TTL_HOURS", "12"))
-FETCH_DAYS_AHEAD = int(os.environ.get("FETCH_DAYS_AHEAD", "7"))
-# Alerta temprana: 10% del plan de 20K = avisa con ~3 días de margen
-API_CREDITS_ALERT_THRESHOLD = int(os.environ.get("API_CREDITS_ALERT_THRESHOLD", "2000"))
+API_TTL_HOURS    = env_int("API_TTL_HOURS", 12)
+FETCH_DAYS_AHEAD = env_int("FETCH_DAYS_AHEAD", 7)
+# Alerta temprana. Plan $30/mes = 20K créditos. Avisa cuando queden ≤2000
+# (~10% del total ≈ 3 días de margen al ritmo de ~600-700 créditos/día).
+# Override con API_CREDITS_ALERT_THRESHOLD=... en .env o en secrets de GH.
+API_CREDITS_ALERT_THRESHOLD = env_int("API_CREDITS_ALERT_THRESHOLD", 2000)
 
 # ============================================================
 # BANKROLL
@@ -54,7 +87,7 @@ API_CREDITS_ALERT_THRESHOLD = int(os.environ.get("API_CREDITS_ALERT_THRESHOLD", 
 # Capital inicial en unidades. Agrega INITIAL_BANKROLL=1000 en .env
 # para usar una cantidad diferente. Este valor solo se usa la primera
 # vez que se inicializa la tabla bankroll en la DB.
-INITIAL_BANKROLL = float(os.environ.get("INITIAL_BANKROLL", "100"))
+INITIAL_BANKROLL = env_float("INITIAL_BANKROLL", 100.0)
 
 # ============================================================
 # WEATHER API (OpenWeatherMap — gratis 1,000 calls/día)

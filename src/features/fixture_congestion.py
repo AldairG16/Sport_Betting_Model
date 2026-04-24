@@ -62,10 +62,13 @@ def get_fixture_congestion(team: str, match_date) -> dict:
     team_lower = team.lower().strip()
 
     # ── Normalizar fecha ──────────────────────────────────────────────────
-    if isinstance(match_date, str):
-        match_date = pd.to_datetime(match_date)
-    elif not isinstance(match_date, datetime):
-        match_date = pd.Timestamp(match_date).to_pydatetime()
+    # `matches.date` es TIMESTAMP tz-naive, pero `upcoming_matches.match_date`
+    # es ahora TIMESTAMPTZ (tz-aware UTC). Forzamos TODO a naive-UTC para
+    # evitar "Cannot subtract tz-naive and tz-aware datetime-like objects".
+    ts = pd.Timestamp(match_date)
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert("UTC").tz_localize(None)
+    match_date = ts.to_pydatetime()
 
     # ── Consultar últimos 5 partidos del equipo antes del partido en cuestión
     try:
@@ -87,14 +90,19 @@ def get_fixture_congestion(team: str, match_date) -> dict:
     if df.empty:
         return _default_congestion()
 
-    df["date"] = pd.to_datetime(df["date"])
+    # Forzar ambos lados de la resta a naive (matches.date ya es naive, pero
+    # por defensa contra un futuro cambio a TIMESTAMPTZ en matches).
+    df["date"] = pd.to_datetime(df["date"], utc=False)
+    if getattr(df["date"].dt, "tz", None) is not None:
+        df["date"] = df["date"].dt.tz_convert("UTC").dt.tz_localize(None)
 
     # ── Días de descanso ─────────────────────────────────────────────────
     last_match = df["date"].iloc[0]
-    days_rest  = max(0, (pd.Timestamp(match_date) - last_match).days)
+    md_naive = pd.Timestamp(match_date)  # ya es naive tras el bloque anterior
+    days_rest  = max(0, (md_naive - last_match).days)
 
     # ── Partidos en los últimos 10 días ──────────────────────────────────
-    cutoff_10d     = pd.Timestamp(match_date) - timedelta(days=10)
+    cutoff_10d     = md_naive - timedelta(days=10)
     matches_in_10d = int((df["date"] >= cutoff_10d).sum())
 
     # ── Multiplicador base ───────────────────────────────────────────────
