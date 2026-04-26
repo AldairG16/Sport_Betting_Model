@@ -696,15 +696,32 @@ def send_evening_summary():
     date_str = today.strftime("%d/%m/%Y")
 
     try:
+        # Fix: usar _tz_date_filter para que el día se calcule en USER_TIMEZONE
+        # (consistente con notify_best_bets y send_tomorrow_preview).
+        # Antes: `match_date::date = today` evaluaba la fecha en UTC, mientras
+        # que `today` venía en hora local — desfase de hasta 6h en MX.
         df = pd.read_sql(f"""
             SELECT match, market, odds, stake, result, profit
             FROM bets_history
-            WHERE match_date::date = '{today}'
+            WHERE {_tz_date_filter('match_date', today)}
             ORDER BY match_date
         """, engine)
     except Exception as e:
         print(f"❌ Error leyendo bets: {e}")
         return
+
+    # ── Diagnóstico: si todas las bets siguen pending, el problema NO es el
+    # filtro de fecha sino que step_fetch_results / step_results no resolvió.
+    # Imprimir un resumen claro al log para identificar la causa real la
+    # próxima vez sin tener que adivinar.
+    n_total    = len(df)
+    n_resolved = int(df["result"].isin(["win", "loss", "push", "half_win", "half_loss"]).sum()) if n_total else 0
+    n_pending  = int((df["result"] == "pending").sum()) if n_total else 0
+    print(f"🌙 Resumen del día: today={today} ({USER_TIMEZONE})")
+    print(f"   Bets encontradas: {n_total}  |  resueltas: {n_resolved}  |  pendientes: {n_pending}")
+    if n_total > 0 and n_resolved == 0:
+        print("   ⚠️  TODAS pendientes — investigar step_fetch_results / step_results")
+
     lines = [f"🌙 <b>RESUMEN DEL DÍA — {date_str}</b>", ""]
 
     if df.empty:
