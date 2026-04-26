@@ -32,10 +32,10 @@ from src.utils.team_normalizer import normalize_team
 SCORES_URL = "https://api.the-odds-api.com/v4/sports/{sport}/scores/"
 
 
-def fetch_scores_for_league(sport_key: str, days_from: int = 2) -> list:
+def fetch_scores_for_league(sport_key: str, days_from: int = 2) -> tuple[list, bool]:
     """
     Descarga resultados completados para una liga.
-    Returns lista de dicts con home_team, away_team, home_goals, away_goals, date.
+    Returns (lista de dicts, ok) — ok=False si la API rechazó la petición.
     """
     url = SCORES_URL.format(sport=sport_key)
     try:
@@ -47,7 +47,7 @@ def fetch_scores_for_league(sport_key: str, days_from: int = 2) -> list:
         data = r.json()
     except Exception as e:
         print(f"   ⚠️  Error fetching {sport_key}: {e}")
-        return []
+        return [], False
 
     results = []
     for match in data:
@@ -83,7 +83,7 @@ def fetch_scores_for_league(sport_key: str, days_from: int = 2) -> list:
             "league":     sport_key,
         })
 
-    return results
+    return results, True
 
 
 def insert_results(results: list) -> tuple[int, int]:
@@ -124,9 +124,15 @@ def fetch_all_results(days_from: int = 2, verbose: bool = True) -> int:
 
     total_inserted = 0
     credits_used   = 0
+    leagues_ok     = 0
+    leagues_err    = 0
 
     for sport_key in SPORT_KEYS:
-        results = fetch_scores_for_league(sport_key, days_from)
+        results, ok = fetch_scores_for_league(sport_key, days_from)
+        if not ok:
+            leagues_err += 1
+            continue
+        leagues_ok += 1
         if not results:
             continue
 
@@ -145,6 +151,19 @@ def fetch_all_results(days_from: int = 2, verbose: bool = True) -> int:
     if verbose:
         print(f"\n✅ Total nuevos resultados: {total_inserted}")
         print(f"   Créditos API usados: {credits_used} (1 por liga)")
+        print(f"   Ligas OK: {leagues_ok}  |  Ligas con error API: {leagues_err}")
+
+    # Si TODAS las ligas fallaron, no es un problema de datos — es un bug de
+    # configuración (param inválido, API key, rate limit). Levantar excepción
+    # para que el orchestrator marque el step como fallido en vez de seguir
+    # con `matches` vacío y dejar todas las bets `pending` silenciosamente.
+    if leagues_err > 0 and leagues_ok == 0 and len(SPORT_KEYS) > 0:
+        raise RuntimeError(
+            f"fetch_all_results: TODAS las {leagues_err} ligas fallaron contra "
+            f"la API. Probable bug de configuración (daysFrom inválido, API key, "
+            f"rate limit). Sin marcadores en `matches`, todas las bets se "
+            f"quedarían pending."
+        )
 
     return total_inserted
 

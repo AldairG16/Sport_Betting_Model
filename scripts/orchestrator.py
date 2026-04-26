@@ -263,10 +263,13 @@ def step_pre_kickoff_closing():
 
 def step_fetch_results():
     """Descarga resultados recientes desde The Odds API e inserta en matches.
-    days_from=5 (antes 2) para recuperar resultados con retraso de publicación
-    y reducir bets que se quedan en 'unresolved' indefinidamente."""
+
+    days_from=3 — MÁXIMO permitido por la API. Valores >3 devuelven 422
+    Unprocessable Entity para todas las ligas → 0 resultados → todas las
+    bets se quedan 'pending'. (Bug introducido en b657178 con days_from=5.)
+    """
     from scripts.fetch_results import fetch_all_results
-    fetch_all_results(days_from=5)
+    fetch_all_results(days_from=3)
 
 
 def step_fetch_results_backup():
