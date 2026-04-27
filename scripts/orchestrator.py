@@ -307,6 +307,25 @@ def step_load_extra_leagues():
 # MODOS
 # ============================================================
 
+def _alert_step_failed(step_name: str):
+    """Manda un mensaje a Telegram cuando un paso crítico falla.
+
+    Sin esto, si step_predict truena, step_notify corre igual y manda
+    "Sin value bets para hoy" — mensaje engañoso que oculta el bug
+    durante días. Esto le avisa al usuario en cuanto pasa.
+    """
+    try:
+        from scripts.notify_telegram import send_message
+        send_message(
+            f"🚨 <b>Pipeline ERROR</b>\n\n"
+            f"Step fallido: <b>{step_name}</b>\n\n"
+            f"⚠️ Las predicciones / notificaciones de hoy NO son confiables.\n"
+            f"Revisa el log del run en GitHub Actions."
+        )
+    except Exception:
+        pass
+
+
 def run_morning(logger: Logger, force_fetch: bool = False):
     """
     Ciclo matutino (recomendado: 06:00 AM)
@@ -319,9 +338,16 @@ def run_morning(logger: Logger, force_fetch: bool = False):
 
     run_step(logger, "Fetch odds",        step_fetch_odds, force_fetch)
     run_step(logger, "Enrich data",       step_enrich)
-    run_step(logger, "Predictions",       step_predict)
+    predict_ok = run_step(logger, "Predictions", step_predict)
     # run_step(logger, "MLB Predictions",   step_mlb_predict)  # desactivado — sin creditos MLB
-    run_step(logger, "Telegram",          step_notify)
+
+    # Si predict falló, NO mandamos "Sin value bets" — mandamos alerta.
+    # Antes: el usuario veía "Sin value bets para hoy" sin saber que era un bug.
+    if predict_ok:
+        run_step(logger, "Telegram",      step_notify)
+    else:
+        logger.log("⚠️  Saltando step_notify — predictions falló. Enviando alerta.")
+        _alert_step_failed("Predictions")
 
 
 def step_notify_evening():
@@ -359,9 +385,16 @@ def run_evening(logger: Logger):
     # y envía el resumen por Telegram. Así el usuario puede preparar sus
     # apuestas antes de dormir aunque la laptop esté apagada por la mañana.
     run_step(logger, "Fetch odds (mañana)",       step_fetch_odds)
-    run_step(logger, "Predictions (mañana)",      step_predict)
+    predict_ok = run_step(logger, "Predictions (mañana)", step_predict)
     # run_step(logger, "MLB Predictions (mañana)",  step_mlb_predict)  # desactivado — sin creditos MLB
-    run_step(logger, "Preview mañana",            step_notify_tomorrow)
+
+    # Mismo guard que run_morning: si predict truena, no enviamos un preview
+    # vacío que confunda al usuario — enviamos alerta.
+    if predict_ok:
+        run_step(logger, "Preview mañana",        step_notify_tomorrow)
+    else:
+        logger.log("⚠️  Saltando preview mañana — predictions falló. Enviando alerta.")
+        _alert_step_failed("Predictions (mañana)")
 
 
 def run_full(logger: Logger, force_fetch: bool = False):

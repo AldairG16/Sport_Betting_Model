@@ -680,6 +680,13 @@ def run_prediction_pipeline():
         lh_h2 = min(lambda_home * 0.55, 2.0)
         la_h2 = min(lambda_away * 0.55, 2.0)
 
+        # IMPORTANTE: inicializar model_probs ANTES de que h1/h2 le asigne keys.
+        # Si NO se inicializa aquí y un partido tiene _h1_*_odds o _h2_*_odds
+        # (viene del enrichment per-event), el `if` de abajo dispara
+        # UnboundLocalError porque `model_probs = {...}` está más adelante.
+        # Más adelante usamos .update(...) en vez de `=` para no perder estas keys.
+        model_probs: dict = {}
+
         if _h1_home_odds or _h1_draw_odds or _h1_away_odds:
             from src.models.dixon_coles_model import match_outcomes as _mo
             h1h, h1d, h1a = _mo(lh_h1, la_h1)
@@ -718,7 +725,10 @@ def run_prediction_pipeline():
 
         totals_probs = totals_extended(lambda_home, lambda_away)
 
-        model_probs = {
+        # .update() (no `=`) — preserva las keys h1_*/h2_* asignadas arriba.
+        # Antes del fix esto era `model_probs = {...}` que sobreescribía el dict
+        # y borraba silenciosamente cualquier predicción de half-time.
+        model_probs.update({
             "home_win": home_win,
             "draw": draw,
             "away_win": away_win,
@@ -726,7 +736,7 @@ def run_prediction_pipeline():
             "under25": clamp_prob(poisson_probs["under25"]),
             "btts": clamp_prob(poisson_probs["btts_yes"]),
             "btts_no": clamp_prob(poisson_probs["btts_no"])
-        }
+        })
 
         model_probs.update(totals_probs)
 
