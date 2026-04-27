@@ -55,6 +55,20 @@ def env_float(name: str, default: float) -> float:
         return default
 
 
+def env_str(name: str, default: str) -> str:
+    """Lee un env string. Devuelve default si la var no existe o es "" / whitespace.
+
+    Necesario para GitHub Actions: cuando un secret no está configurado,
+    `${{ secrets.X }}` se expande a "" y `os.environ.get("X", "default")`
+    devuelve "" (no `default`). Eso fue lo que rompió ODDS_MARKETS al
+    expandirse a string vacío y mandar `markets=` (parser inválido) a la API.
+    """
+    v = os.environ.get(name, "")
+    if not v or not v.strip():
+        return default
+    return v.strip()
+
+
 # ============================================================
 # DATABASE
 # ============================================================
@@ -68,11 +82,17 @@ if not DB_URL:
 # ODDS API
 # ============================================================
 ODDS_API_KEY     = os.environ.get("ODDS_API_KEY", "")
-ODDS_REGION      = os.environ.get("ODDS_REGION", "eu")          # 1 region = ahorro de creditos
-ODDS_REGION_MLB  = os.environ.get("ODDS_REGION_MLB", "us")      # MLB usa libros de EE.UU.
-# Solo markets "featured" en /odds (otros requieren /events/{id}/odds vía enrichment).
-# No incluir specialty (double_chance, h1/h2, corners, cards) aquí — pagas doble.
-ODDS_MARKETS     = os.environ.get("ODDS_MARKETS", "h2h,totals,spreads,btts,draw_no_bet")
+ODDS_REGION      = env_str("ODDS_REGION", "eu")          # 1 region = ahorro de creditos
+ODDS_REGION_MLB  = env_str("ODDS_REGION_MLB", "us")      # MLB usa libros de EE.UU.
+# SOLO markets "featured" en /odds — la API responde 422 INVALID_MARKET si
+# se incluyen specialty (btts, draw_no_bet, double_chance, h1/h2, corners,
+# cards). Esos se piden vía /events/{id}/odds en update_upcoming_matches.py
+# (función fetch_event_specialty_markets / SPECIALTY_MARKETS).
+#
+# NO uses os.environ.get() crudo: si el secret de GH Actions no está
+# configurado, se expande a "" y "" gana al default → manda `markets=`
+# vacío a la API y rompe TODAS las ligas (bug del 26-abr-26).
+ODDS_MARKETS     = env_str("ODDS_MARKETS", "h2h,totals,spreads")
 # TTL 12h = 2 fetches/día (morning + evening), closing reutiliza cache del morning
 API_TTL_HOURS    = env_int("API_TTL_HOURS", 12)
 FETCH_DAYS_AHEAD = env_int("FETCH_DAYS_AHEAD", 7)

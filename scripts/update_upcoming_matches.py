@@ -216,10 +216,12 @@ def fetch_data(sport_key: str, cache: dict, force: bool = False) -> list:
 # por evento. Solo llamamos para eventos en próximos ENRICH_DAYS_AHEAD días
 # para no gastar créditos en matches lejanos cuyos precios cambiarán mucho.
 
-# btts y draw_no_bet están en ODDS_MARKETS (endpoint /odds). Aquí solo pedimos
-# los que NO vienen de featured: 5 markets × 1 region = 5 créditos/evento.
+# Importante: btts y draw_no_bet TAMBIÉN son specialty markets — el endpoint
+# /odds los rechaza con 422 INVALID_MARKET (verificado 26-abr-26 con la API
+# en producción). Por eso van aquí, no en ODDS_MARKETS.
+# Total: 7 markets × 1 region = 7 créditos por evento enriquecido.
 SPECIALTY_MARKETS = (
-    "double_chance,h2h_h1,h2h_h2,"
+    "btts,draw_no_bet,double_chance,h2h_h1,h2h_h2,"
     "alternate_totals_corners,alternate_totals_cards"
 )
 ENRICH_DAYS_AHEAD = env_int("ENRICH_DAYS_AHEAD", 2)
@@ -294,9 +296,10 @@ def fetch_event_specialty_markets(sport_key: str, event_id: str, cache: dict) ->
 
 # Markets que SOLO vienen del endpoint /events/{id}/odds (no de /odds).
 # Si un evento ya tiene AL MENOS UNO de estos → ya se enriqueció antes.
-# btts/dnb están excluidos porque esos SÍ vienen del base endpoint y no
-# indican que hicimos la llamada per-event.
+# btts y draw_no_bet AHORA están aquí porque /odds los rechaza con 422
+# (verificado 26-abr-26): ya no son featured, son specialty per-event.
 _SPECIALTY_KEYS = {
+    "btts", "draw_no_bet",
     "double_chance",
     "h2h_h1", "h2h_h2", "h2h_3_way_h1", "h2h_3_way_h2",
     "alternate_totals_corners", "alternate_totals_cards",
