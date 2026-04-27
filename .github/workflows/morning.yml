@@ -1,5 +1,9 @@
 name: Morning Pipeline
 
+# Trigger manual via push: cualquier modificación a este archivo lanza el
+# pipeline una vez. Se usa para verificar fixes sin esperar al cron de las 6 AM.
+# Última verificación: 27-abr-26 — fix UnboundLocalError en model_probs.
+
 on:
   schedule:
     # 06:00 AM Mexico City (UTC-6) = 12:00 UTC
