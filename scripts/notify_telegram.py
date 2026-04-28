@@ -50,6 +50,24 @@ def _tz_date_filter(col: str, date) -> str:
     return f"({col} AT TIME ZONE 'UTC' AT TIME ZONE '{USER_TIMEZONE}')::date = '{date}'"
 
 
+# ── Contador de picks mostrados en la última notificación ─────────────────────
+# Lo lee `orchestrator.py` en el `finally` para construir el health-check con
+# el número REAL de picks confiables del día (no el total de pending en DB,
+# que incluye partidos de los próximos 3-7 días y daba la falsa sensación de
+# "se generaron 10 pero solo veo 1").
+_LAST_PICKS_SHOWN: int = 0
+
+
+def get_last_picks_shown() -> int:
+    """Devuelve cuántos picks se incluyeron en la última notificación enviada."""
+    return _LAST_PICKS_SHOWN
+
+
+def _set_last_picks_shown(n: int) -> None:
+    global _LAST_PICKS_SHOWN
+    _LAST_PICKS_SHOWN = int(n)
+
+
 # ============================================================
 # SEND MESSAGE
 # ============================================================
@@ -361,12 +379,16 @@ def _build_bets_by_league(bets: pd.DataFrame, header: str) -> tuple:
     return "\n".join(lines), total
 
 
-def format_bets_message(bets: pd.DataFrame) -> str:
+def format_bets_message(bets: pd.DataFrame) -> tuple:
+    """
+    Devuelve (mensaje, n_picks_confiables_incluidos).
+    El n_picks lo usa notify_best_bets() para registrar cuántos se mostraron
+    (distinto de len(bets), que incluye sospechosas y duplicadas correladas).
+    """
     now      = datetime.now(ZoneInfo(USER_TIMEZONE))
     date_str = now.strftime("%d/%m/%Y %H:%M")
     header   = f"⚽ <b>BETTING PICKS — {date_str}</b>"
-    msg, _ = _build_bets_by_league(bets, header)
-    return msg
+    return _build_bets_by_league(bets, header)
 
 
 # ============================================================
@@ -403,13 +425,15 @@ def notify_best_bets():
             "Sin value bets detectadas para hoy."
         )
         send_message(msg)
+        _set_last_picks_shown(0)
         return
 
-    msg = format_bets_message(bets)
+    msg, n_sent = format_bets_message(bets)
     ok  = send_message(msg)
 
     if ok:
-        print(f"✅ Enviadas {len(bets)} bets a Telegram")
+        _set_last_picks_shown(n_sent)
+        print(f"✅ Enviados {n_sent} picks confiables a Telegram (de {len(bets)} pending crudas)")
     else:
         print("❌ No se pudo enviar a Telegram")
 
@@ -452,6 +476,7 @@ def send_tomorrow_preview():
             "Sin value bets detectadas para mañana."
         )
         send_message(msg)
+        _set_last_picks_shown(0)
         return
 
     date_str = tomorrow.strftime("%d/%m/%Y")
@@ -463,6 +488,7 @@ def send_tomorrow_preview():
     ok  = send_message(msg)
 
     if ok:
+        _set_last_picks_shown(n_sent)
         print(f"✅ Preview de mañana enviado ({n_sent} bets mostradas de {len(bets)} totales)")
     else:
         print("❌ No se pudo enviar preview a Telegram")
@@ -471,16 +497,31 @@ def send_tomorrow_preview():
 # ============================================================
 # HEALTH CHECK
 # ============================================================
-def send_health_check(mode: str, bets_generated: int, elapsed_seconds: float, steps_ok: int, steps_total: int):
+def send_health_check(
+    mode: str,
+    picks_today: int,
+    pending_total: int,
+    elapsed_seconds: float,
+    steps_ok: int,
+    steps_total: int,
+    picks_label: str = "Picks del día",
+):
     """
     Envia un resumen de salud del pipeline a Telegram al finalizar cada modo.
 
     Args:
         mode:             modo del orchestrator (morning, evening, etc.)
-        bets_generated:   numero de apuestas generadas en este ciclo
+        picks_today:      picks confiables incluidos en la notificación enviada
+                          (mismo número que el "Total: N apuestas confiables" del
+                           mensaje de picks). 0 si no se envió notificación.
+        pending_total:    total de bets pending futuras en la DB (incluye picks
+                          de mañana, pasado mañana, etc.). Útil como diagnóstico
+                          pero NO refleja lo que el usuario verá en el mensaje.
         elapsed_seconds:  tiempo total de ejecucion en segundos
         steps_ok:         pasos que terminaron sin error
         steps_total:      total de pasos ejecutados
+        picks_label:      etiqueta a usar en el mensaje (varía morning vs evening:
+                          "Picks de hoy" / "Picks de mañana").
     """
     from src.models.bankroll_manager import get_bankroll_stats
     from scripts.update_upcoming_matches import CREDITS_LOG
@@ -513,7 +554,8 @@ def send_health_check(mode: str, bets_generated: int, elapsed_seconds: float, st
 
     msg = (
         f"{status_icon} <b>Pipeline OK — {mode.upper()}</b>\n\n"
-        f"📊 Bets generadas: <b>{bets_generated}</b>\n"
+        f"🎯 {picks_label}: <b>{picks_today}</b>\n"
+        f"📋 Pending totales en DB: {pending_total}\n"
         f"{bankroll_line}\n"
         f"💳 Créditos API restantes: {credits_remaining}\n"
         f"⚙️  Pasos: {steps_ok}/{steps_total} exitosos\n"

@@ -548,25 +548,48 @@ def main():
         logger.log(f"Log guardado: {logger.log_file}")
 
         # ── Health check: resumen de salud del ciclo ──────────────────────
-        # Solo para modos que generan apuestas (morning, evening, full)
+        # Solo para modos que generan apuestas (morning, evening, full).
+        # IMPORTANTE: el mensaje muestra DOS números:
+        #   • "Picks del día" → cuántos picks confiables se enviaron al chat
+        #     (lo que el usuario realmente verá). Viene del contador module-level
+        #     `_LAST_PICKS_SHOWN` en notify_telegram, fijado por notify_best_bets
+        #     o send_tomorrow_preview al terminar de mandar el mensaje.
+        #   • "Pending totales en DB" → total de pending futuras (incluye días
+        #     siguientes). Sirve de diagnóstico, no es lo que el usuario apuesta.
+        # Antes solo aparecía "Bets generadas: 10" (= pending totales) y el
+        # mensaje de picks mostraba 1 → falsa sensación de desincronización.
         if args.mode in ("morning", "evening", "full"):
             try:
-                from scripts.notify_telegram import send_health_check
+                from scripts.notify_telegram import send_health_check, get_last_picks_shown
                 from config.database import engine as _engine
                 from sqlalchemy import text as _text
-                # Contar bets pending generadas en las últimas 12 horas
                 _df = __import__("pandas").read_sql(_text("""
                     SELECT COUNT(*) as n FROM bets_history
                     WHERE result = 'pending'
                       AND match_date > NOW()
                 """), _engine)
-                bets_count = int(_df.iloc[0]["n"])
+                pending_total = int(_df.iloc[0]["n"])
+                picks_today   = get_last_picks_shown()
+
+                # Etiqueta consistente con el día que muestra step_notify:
+                # antes de mediodía local → picks de HOY; después → picks de MAÑANA.
+                from datetime import datetime as _dt
+                from zoneinfo import ZoneInfo as _ZI
+                from config.settings import USER_TIMEZONE as _TZ
+                _now_local = _dt.now(_ZI(_TZ))
+                if args.mode == "evening" or _now_local.hour >= 12:
+                    picks_label = "Picks de mañana"
+                else:
+                    picks_label = "Picks de hoy"
+
                 send_health_check(
                     mode=args.mode,
-                    bets_generated=bets_count,
+                    picks_today=picks_today,
+                    pending_total=pending_total,
                     elapsed_seconds=elapsed,
                     steps_ok=logger.steps_ok,
                     steps_total=logger.steps_total,
+                    picks_label=picks_label,
                 )
             except Exception:
                 pass  # nunca bloquear el finally por el health check
