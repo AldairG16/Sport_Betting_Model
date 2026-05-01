@@ -497,74 +497,122 @@ def send_tomorrow_preview():
 # ============================================================
 # PRE-KICKOFF VERDICT (analista deportivo automático)
 # ============================================================
+def _format_kickoff_label(match_date) -> str:
+    """
+    Devuelve 'Hoy HH:MM' / 'Mañana HH:MM' / 'DD/MM HH:MM' según corresponda
+    (en zona horaria del usuario).
+    """
+    try:
+        dt = pd.to_datetime(match_date)
+        if dt.tzinfo is None:
+            dt = dt.tz_localize(timezone.utc)
+        dt_local = dt.tz_convert(ZoneInfo(USER_TIMEZONE))
+    except Exception:
+        return ""
+    today = _local_today()
+    tomorrow = _local_tomorrow()
+    d = dt_local.date()
+    if d == today:
+        return f"Hoy {dt_local.strftime('%H:%M')}"
+    if d == tomorrow:
+        return f"Mañana {dt_local.strftime('%H:%M')}"
+    return dt_local.strftime("%d/%m %H:%M")
+
+
+def _format_lineups_label(raw: str) -> str:
+    """L0/L1/L2 -> 'Sin info' / 'Confirmadas' / 'Probables'."""
+    if not raw:
+        return "Sin info"
+    s = str(raw).strip().upper()
+    if s.startswith("L1"): return "Confirmadas"
+    if s.startswith("L2"): return "Probables"
+    if s.startswith("L0"): return "Sin info"
+    return raw  # fallback: mostrar lo que mande el modelo
+
+
+def _format_match_title(match: str) -> str:
+    """'gazisehir gaziantep vs besiktas jk' -> 'Gazisehir Gaziantep vs Besiktas Jk'."""
+    if not match or " vs " not in match:
+        return (match or "").title()
+    home, away = match.split(" vs ", 1)
+    return f"{home.title()} vs {away.title()}"
+
+
 def send_pre_kickoff_verdict(verdicts: list) -> bool:
     """
     Envia los dictámenes del pre-kickoff analyst a Telegram.
+
+    Formato (Opción 3 — minimal):
+      • STRONG / MEDIUM se muestran con detalle (1 bloque por bet)
+      • SKIP se agrupan al final en una sola sección (1 línea por bet)
 
     Cada verdict es un dict con las claves:
       match, match_date, market, odds, edge,
       verdict (STRONG|MEDIUM|SKIP), confidence (1-5),
       reasoning, lineups, key_factors, sources
-
-    El mensaje es solo informativo: NO modifica bets_history.
-    Las apuestas siguen activas y se resuelven normal en el ciclo evening.
     """
     if not verdicts:
         return False
 
+    actionable = [v for v in verdicts if (v.get("verdict") or "").upper() in ("STRONG", "MEDIUM")]
+    skipped    = [v for v in verdicts if (v.get("verdict") or "").upper() == "SKIP"]
+
     icon_map = {"STRONG": "🟢", "MEDIUM": "🟡", "SKIP": "🔴"}
-    lines = ["🔍 <b>ANÁLISIS PRE-KICKOFF</b>", ""]
+    lines = ["🔍 <b>PRE-KICKOFF</b>", ""]
 
-    for v in verdicts:
-        # Hora local del partido
-        try:
-            dt = pd.to_datetime(v["match_date"])
-            if dt.tzinfo is None:
-                dt = dt.tz_localize(timezone.utc)
-            dt_local = dt.tz_convert(ZoneInfo(USER_TIMEZONE))
-            hh = dt_local.strftime("%d/%m %H:%M")
-        except Exception:
-            hh = ""
+    # ── 1) STRONG / MEDIUM con detalle ──────────────────────────────────────
+    if actionable:
+        for v in actionable:
+            verdict      = (v.get("verdict") or "MEDIUM").upper()
+            icon         = icon_map.get(verdict, "⚪")
+            kickoff      = _format_kickoff_label(v.get("match_date"))
+            match_title  = _format_match_title(v.get("match", ""))
+            market_label = _get_market_label(v.get("market", ""), v.get("match", ""))
 
-        market_label = _get_market_label(v.get("market", ""), v.get("match", ""))
-        verdict      = (v.get("verdict") or "MEDIUM").upper()
-        icon         = icon_map.get(verdict, "⚪")
-        try:
-            confidence = int(v.get("confidence", 1) or 1)
-        except (TypeError, ValueError):
-            confidence = 1
-        stars = "⭐" * max(1, min(5, confidence))
+            try:    confidence = int(v.get("confidence", 1) or 1)
+            except (TypeError, ValueError): confidence = 1
+            stars = "⭐" * max(1, min(5, confidence))
 
-        try:    odds_val = float(v.get("odds", 0))
-        except (TypeError, ValueError): odds_val = 0.0
-        try:    edge_pct = float(v.get("edge", 0)) * 100
-        except (TypeError, ValueError): edge_pct = 0.0
+            try:    odds_val = float(v.get("odds", 0))
+            except (TypeError, ValueError): odds_val = 0.0
+            try:    edge_pct = float(v.get("edge", 0)) * 100
+            except (TypeError, ValueError): edge_pct = 0.0
 
-        lines.append(f"{icon} <b>{v.get('match', '')}</b>  {hh}")
-        lines.append(
-            f"   🎯 {market_label} @{odds_val:.2f}  "
-            f"(+{edge_pct:.1f}%)"
-        )
-        lines.append(f"   <b>{verdict}</b> — Confianza: {stars}")
+            lines.append(f"{icon} <b>{verdict}</b>  {stars}")
+            lines.append(f"🏟️ <b>{match_title}</b>")
+            lines.append(f"🕐 {kickoff}")
+            lines.append(f"🎯 {market_label} @{odds_val:.2f}  (+{edge_pct:.1f}%)")
 
-        reasoning = (v.get("reasoning") or "").strip()
-        if reasoning:
-            lines.append(f"   💬 {reasoning}")
+            reasoning = (v.get("reasoning") or "").strip()
+            if reasoning:
+                lines.append(f"💡 {reasoning}")
 
-        lineups = (v.get("lineups") or "").strip()
-        if lineups:
-            lines.append(f"   👥 Lineups: {lineups}")
-
-        # Si hay key_factors, mostrar 1-2 más relevantes (compacto)
-        kf = v.get("key_factors") or []
-        if isinstance(kf, list) and kf:
-            shown = " • ".join(str(x) for x in kf[:2])
-            lines.append(f"   📌 {shown}")
-
+            lineups = _format_lineups_label(v.get("lineups", ""))
+            lines.append(f"👥 {lineups}")
+            lines.append("")
+    else:
+        lines.append("<i>Sin apuestas accionables (todas SKIP).</i>")
         lines.append("")
 
-    lines.append("<i>Solo informativo — la apuesta sigue activa en el modelo "
-                 "y se resuelve normal al final del día.</i>")
+    # ── 2) SKIP agrupados (1 línea por bet) ─────────────────────────────────
+    if skipped:
+        lines.append("━━━━━━━━━━━━━━━━━━")
+        lines.append(f"🔴 <b>Descartados ({len(skipped)}):</b>")
+        for v in skipped:
+            match_title  = _format_match_title(v.get("match", ""))
+            market_label = _get_market_label(v.get("market", ""), v.get("match", ""))
+            reason       = (v.get("reasoning") or "").strip()
+            # Acortar reason a ≤60 chars para mantener 1 línea
+            if len(reason) > 60:
+                reason = reason[:57] + "..."
+            line = f"• <b>{match_title}</b> — {market_label}"
+            if reason:
+                line += f" ({reason})"
+            lines.append(line)
+        lines.append("")
+
+    lines.append("<i>Solo informativo — las apuestas siguen activas "
+                 "y se resuelven normal al final del día.</i>")
 
     return send_message("\n".join(lines))
 

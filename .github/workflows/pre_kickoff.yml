@@ -1,7 +1,7 @@
 name: Pre-Kickoff Analyst
 
-# Corre cada 30 min y revisa si hay apuestas confiables que arrancan en
-# 30-75 min. Para cada una llama al pre_kickoff_analyst.py:
+# Corre cada 15 min y revisa si hay apuestas confiables que arrancan en
+# 30-90 min. Para cada una llama al pre_kickoff_analyst.py:
 #  1. Construye contexto cuantitativo desde la DB (gratis, sin tokens)
 #  2. Aplica filtro rule-based "SKIP" para descartar apuestas obvias
 #  3. Solo si pasa el filtro, llama a Claude API con web_search (alineaciones,
@@ -13,9 +13,10 @@ name: Pre-Kickoff Analyst
 
 on:
   schedule:
-    # Cada 30 min, todo el día. La mayoría de runs terminará en <5 seg
-    # (sin bets en ventana = exit barato).
-    - cron: '*/30 * * * *'
+    # Cada 15 min, todo el día. La mayoría de runs terminará en <5 seg
+    # (sin bets en ventana = exit barato). Cada partido tiene 4 chances
+    # de ser capturado dentro de la ventana 30-90 min.
+    - cron: '*/15 * * * *'
   workflow_dispatch:   # manual desde la UI de Actions
   push:
     branches: [ master ]

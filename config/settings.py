@@ -131,10 +131,11 @@ TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # Ventana (en minutos desde NOW) para considerar bets como "pre-kickoff".
-# Default 30-75 = atrapa partidos que arrancan en aprox 45 min, con
-# margen para que el cron cada 30 min capture todo sin solapar.
+# Default 30-90 = atrapa partidos que arrancan en aprox 45-75 min.
+# Combinado con cron cada 15 min, da 4 oportunidades de capturar cada partido
+# (resiliente a retrasos del cron de GH Actions).
 PRE_KICKOFF_WINDOW_MIN = env_int("PRE_KICKOFF_WINDOW_MIN", 30)
-PRE_KICKOFF_WINDOW_MAX = env_int("PRE_KICKOFF_WINDOW_MAX", 75)
+PRE_KICKOFF_WINDOW_MAX = env_int("PRE_KICKOFF_WINDOW_MAX", 90)
 
 # ============================================================
 # LIGAS ACTIVAS
