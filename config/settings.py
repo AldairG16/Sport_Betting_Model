@@ -123,6 +123,20 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # ============================================================
+# ANTHROPIC API (Pre-Kickoff Analyst)
+# ============================================================
+# Usado por scripts/pre_kickoff_analyst.py para validar apuestas
+# 30-75 min antes del kickoff con Claude + web_search.
+# Si la var no está, el script imprime warning y sale sin error.
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+# Ventana (en minutos desde NOW) para considerar bets como "pre-kickoff".
+# Default 30-75 = atrapa partidos que arrancan en aprox 45 min, con
+# margen para que el cron cada 30 min capture todo sin solapar.
+PRE_KICKOFF_WINDOW_MIN = env_int("PRE_KICKOFF_WINDOW_MIN", 30)
+PRE_KICKOFF_WINDOW_MAX = env_int("PRE_KICKOFF_WINDOW_MAX", 75)
+
+# ============================================================
 # LIGAS ACTIVAS
 # ============================================================
 # Zona horaria local del usuario (para calcular "hoy" y "mañana" correctamente)

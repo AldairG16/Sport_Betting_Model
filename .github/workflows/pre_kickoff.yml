@@ -1,0 +1,57 @@
+name: Pre-Kickoff Analyst
+
+# Corre cada 30 min y revisa si hay apuestas confiables que arrancan en
+# 30-75 min. Para cada una llama al pre_kickoff_analyst.py:
+#  1. Construye contexto cuantitativo desde la DB (gratis, sin tokens)
+#  2. Aplica filtro rule-based "SKIP" para descartar apuestas obvias
+#  3. Solo si pasa el filtro, llama a Claude API con web_search (alineaciones,
+#     lesiones de últimas 48h)
+#  4. Manda el dictamen STRONG/MEDIUM/SKIP a Telegram
+#
+# NO modifica bets_history — las apuestas siguen pending y se resuelven
+# normal en el ciclo evening.
+
+on:
+  schedule:
+    # Cada 30 min, todo el día. La mayoría de runs terminará en <5 seg
+    # (sin bets en ventana = exit barato).
+    - cron: '*/30 * * * *'
+  workflow_dispatch:   # manual desde la UI de Actions
+  push:
+    branches: [ master ]
+    paths: [ '.github/workflows/pre_kickoff.yml' ]
+
+# Si un run anterior se está ejecutando aún, lo cancelamos para evitar
+# análisis duplicados (idempotencia adicional sobre el ON CONFLICT del INSERT).
+concurrency:
+  group: pre-kickoff
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pre-kickoff analyst
+        env:
+          DB_URL:                   ${{ secrets.DB_URL }}
+          ANTHROPIC_API_KEY:        ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN:       ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:         ${{ secrets.TELEGRAM_CHAT_ID }}
+          PRE_KICKOFF_WINDOW_MIN:   ${{ secrets.PRE_KICKOFF_WINDOW_MIN }}
+          PRE_KICKOFF_WINDOW_MAX:   ${{ secrets.PRE_KICKOFF_WINDOW_MAX }}
+          USER_TIMEZONE:            America/Mexico_City
+        run: python scripts/pre_kickoff_analyst.py

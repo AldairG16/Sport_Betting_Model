@@ -495,6 +495,81 @@ def send_tomorrow_preview():
 
 
 # ============================================================
+# PRE-KICKOFF VERDICT (analista deportivo automático)
+# ============================================================
+def send_pre_kickoff_verdict(verdicts: list) -> bool:
+    """
+    Envia los dictámenes del pre-kickoff analyst a Telegram.
+
+    Cada verdict es un dict con las claves:
+      match, match_date, market, odds, edge,
+      verdict (STRONG|MEDIUM|SKIP), confidence (1-5),
+      reasoning, lineups, key_factors, sources
+
+    El mensaje es solo informativo: NO modifica bets_history.
+    Las apuestas siguen activas y se resuelven normal en el ciclo evening.
+    """
+    if not verdicts:
+        return False
+
+    icon_map = {"STRONG": "🟢", "MEDIUM": "🟡", "SKIP": "🔴"}
+    lines = ["🔍 <b>ANÁLISIS PRE-KICKOFF</b>", ""]
+
+    for v in verdicts:
+        # Hora local del partido
+        try:
+            dt = pd.to_datetime(v["match_date"])
+            if dt.tzinfo is None:
+                dt = dt.tz_localize(timezone.utc)
+            dt_local = dt.tz_convert(ZoneInfo(USER_TIMEZONE))
+            hh = dt_local.strftime("%d/%m %H:%M")
+        except Exception:
+            hh = ""
+
+        market_label = _get_market_label(v.get("market", ""), v.get("match", ""))
+        verdict      = (v.get("verdict") or "MEDIUM").upper()
+        icon         = icon_map.get(verdict, "⚪")
+        try:
+            confidence = int(v.get("confidence", 1) or 1)
+        except (TypeError, ValueError):
+            confidence = 1
+        stars = "⭐" * max(1, min(5, confidence))
+
+        try:    odds_val = float(v.get("odds", 0))
+        except (TypeError, ValueError): odds_val = 0.0
+        try:    edge_pct = float(v.get("edge", 0)) * 100
+        except (TypeError, ValueError): edge_pct = 0.0
+
+        lines.append(f"{icon} <b>{v.get('match', '')}</b>  {hh}")
+        lines.append(
+            f"   🎯 {market_label} @{odds_val:.2f}  "
+            f"(+{edge_pct:.1f}%)"
+        )
+        lines.append(f"   <b>{verdict}</b> — Confianza: {stars}")
+
+        reasoning = (v.get("reasoning") or "").strip()
+        if reasoning:
+            lines.append(f"   💬 {reasoning}")
+
+        lineups = (v.get("lineups") or "").strip()
+        if lineups:
+            lines.append(f"   👥 Lineups: {lineups}")
+
+        # Si hay key_factors, mostrar 1-2 más relevantes (compacto)
+        kf = v.get("key_factors") or []
+        if isinstance(kf, list) and kf:
+            shown = " • ".join(str(x) for x in kf[:2])
+            lines.append(f"   📌 {shown}")
+
+        lines.append("")
+
+    lines.append("<i>Solo informativo — la apuesta sigue activa en el modelo "
+                 "y se resuelve normal al final del día.</i>")
+
+    return send_message("\n".join(lines))
+
+
+# ============================================================
 # HEALTH CHECK
 # ============================================================
 def send_health_check(

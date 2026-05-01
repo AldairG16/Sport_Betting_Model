@@ -133,10 +133,31 @@ def _check_world_cup_activation():
 
 
 def _ensure_db_indexes():
-    """Crea índices de rendimiento en la DB si no existen."""
+    """Crea índices y tablas auxiliares en la DB si no existen."""
     try:
         from config.database import engine as _engine
         from sqlalchemy import text as _text
+        # Tabla del Pre-Kickoff Analyst — log de dictámenes 45 min antes del kickoff.
+        # NO se toca bets_history. Es solo un canal informativo paralelo.
+        ddl = [
+            # ── Tabla pre_kickoff_analyses ─────────────────────────────────
+            """
+            CREATE TABLE IF NOT EXISTS pre_kickoff_analyses (
+                id            SERIAL PRIMARY KEY,
+                match         TEXT        NOT NULL,
+                match_date    TIMESTAMP   NOT NULL,
+                market        VARCHAR(50) NOT NULL,
+                verdict       VARCHAR(20) NOT NULL,
+                confidence    INT         NOT NULL,
+                reasoning     TEXT,
+                lineups       TEXT,
+                sources       JSONB,
+                analyzed_at   TIMESTAMP   DEFAULT NOW(),
+                UNIQUE(match, market, match_date)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_prekickoff_match_date ON pre_kickoff_analyses (match_date)",
+        ]
         indexes = [
             # matches: búsquedas por equipo + fecha
             "CREATE INDEX IF NOT EXISTS idx_matches_home_date ON matches (home_team, date)",
@@ -151,11 +172,11 @@ def _ensure_db_indexes():
             "CREATE INDEX IF NOT EXISTS idx_upcoming_date     ON upcoming_matches (match_date)",
         ]
         with _engine.begin() as conn:
-            for idx_sql in indexes:
+            for stmt in ddl + indexes:
                 try:
-                    conn.execute(_text(idx_sql))
+                    conn.execute(_text(stmt))
                 except Exception:
-                    pass  # índice ya existe o tabla no existe aún
+                    pass  # índice/tabla ya existe o tabla relacionada no existe aún
     except Exception:
         pass  # no bloquear el pipeline por un error de índices
 
