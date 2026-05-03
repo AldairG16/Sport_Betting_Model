@@ -122,6 +122,13 @@ WEATHER_API_KEY = os.environ.get("WEATHER_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 
+# Bot dedicado para mensajes del pre-kickoff analyst.
+# Si no se configuran, cae al bot principal (backward compatible).
+# Se separó para no saturar el canal con SKIPs (cron cada 15 min puede
+# generar varios mensajes/día).
+TELEGRAM_BOT_TOKEN_PREKICKOFF = os.environ.get("TELEGRAM_BOT_TOKEN_PREKICKOFF", "")
+TELEGRAM_CHAT_ID_PREKICKOFF   = os.environ.get("TELEGRAM_CHAT_ID_PREKICKOFF", "")
+
 # ============================================================
 # ANTHROPIC API (Pre-Kickoff Analyst)
 # ============================================================

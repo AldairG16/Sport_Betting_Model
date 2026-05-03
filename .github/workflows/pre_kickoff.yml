@@ -48,11 +48,16 @@ jobs:
 
       - name: Run pre-kickoff analyst
         env:
-          DB_URL:                   ${{ secrets.DB_URL }}
-          ANTHROPIC_API_KEY:        ${{ secrets.ANTHROPIC_API_KEY }}
-          TELEGRAM_BOT_TOKEN:       ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:         ${{ secrets.TELEGRAM_CHAT_ID }}
-          PRE_KICKOFF_WINDOW_MIN:   ${{ secrets.PRE_KICKOFF_WINDOW_MIN }}
-          PRE_KICKOFF_WINDOW_MAX:   ${{ secrets.PRE_KICKOFF_WINDOW_MAX }}
-          USER_TIMEZONE:            America/Mexico_City
+          DB_URL:                          ${{ secrets.DB_URL }}
+          ANTHROPIC_API_KEY:               ${{ secrets.ANTHROPIC_API_KEY }}
+          # Bot principal (fallback si no se configura el dedicado)
+          TELEGRAM_BOT_TOKEN:              ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:                ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Bot dedicado para pre-kickoff (separa el ruido del canal principal).
+          # Si no se configura, send_message_prekickoff cae al bot principal.
+          TELEGRAM_BOT_TOKEN_PREKICKOFF:   ${{ secrets.TELEGRAM_BOT_TOKEN_PREKICKOFF }}
+          TELEGRAM_CHAT_ID_PREKICKOFF:     ${{ secrets.TELEGRAM_CHAT_ID_PREKICKOFF }}
+          PRE_KICKOFF_WINDOW_MIN:          ${{ secrets.PRE_KICKOFF_WINDOW_MIN }}
+          PRE_KICKOFF_WINDOW_MAX:          ${{ secrets.PRE_KICKOFF_WINDOW_MAX }}
+          USER_TIMEZONE:                   America/Mexico_City
         run: python scripts/pre_kickoff_analyst.py

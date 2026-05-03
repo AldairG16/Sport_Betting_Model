@@ -29,7 +29,13 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from config.database import engine
-from config.settings import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, USER_TIMEZONE
+from config.settings import (
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_ID,
+    TELEGRAM_BOT_TOKEN_PREKICKOFF,
+    TELEGRAM_CHAT_ID_PREKICKOFF,
+    USER_TIMEZONE,
+)
 
 
 # ── Helpers de fecha en hora local del usuario ────────────────────────────────
@@ -74,20 +80,19 @@ def _set_last_picks_shown(n: int) -> None:
 TELEGRAM_MAX_CHARS = 4000   # límite real de Telegram es 4096, dejamos margen
 
 
-def send_message(text: str) -> bool:
+def _send_to_bot(text: str, bot_token: str, chat_id: str, label: str = "Telegram") -> bool:
     """
-    Envia un mensaje a Telegram.
-    Si el texto supera TELEGRAM_MAX_CHARS lo divide en múltiples mensajes.
-    Retorna True si todos los fragmentos se enviaron correctamente.
+    Implementación interna que manda un texto a (bot_token, chat_id) específicos.
+    Maneja chunking, retry con backoff exponencial y rate-limiting (429).
+    `label` se usa solo para los logs (distinguir bot principal vs prekickoff).
     """
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("⚠️  Telegram no configurado. Agrega TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID en .env")
+    if not bot_token or not chat_id:
+        print(f"⚠️  {label} no configurado (token o chat_id vacíos).")
         return False
 
     # Dividir en chunks si es muy largo
     chunks = []
     while len(text) > TELEGRAM_MAX_CHARS:
-        # Cortar en el último salto de línea antes del límite
         cut = text.rfind("\n", 0, TELEGRAM_MAX_CHARS)
         if cut == -1:
             cut = TELEGRAM_MAX_CHARS
@@ -95,12 +100,12 @@ def send_message(text: str) -> bool:
         text = text[cut:].lstrip("\n")
     chunks.append(text)
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     all_ok = True
 
     for chunk in chunks:
         payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
+            "chat_id": chat_id,
             "text": chunk,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
@@ -114,28 +119,52 @@ def send_message(text: str) -> bool:
                     sent = True
                     break
                 elif r.status_code == 429:
-                    # Rate limited — esperar el tiempo que indica la API
                     retry_after = int(r.headers.get("Retry-After", 5))
-                    print(f"⏳ Telegram rate-limited, esperando {retry_after}s...")
+                    print(f"⏳ {label} rate-limited, esperando {retry_after}s...")
                     import time
                     time.sleep(retry_after)
                     continue
                 else:
-                    print(f"❌ Telegram error {r.status_code} (intento {attempt+1}/3): {r.text[:200]}")
+                    print(f"❌ {label} error {r.status_code} (intento {attempt+1}/3): {r.text[:200]}")
             except requests.RequestException as e:
-                print(f"❌ Error de red Telegram (intento {attempt+1}/3): {e}")
+                print(f"❌ Error de red {label} (intento {attempt+1}/3): {e}")
 
             if attempt < 2:
                 import time
-                wait = 2 ** (attempt + 1)  # 2s, 4s
+                wait = 2 ** (attempt + 1)
                 print(f"   Reintentando en {wait}s...")
                 time.sleep(wait)
 
         if not sent:
-            print(f"❌ Telegram: mensaje no enviado tras 3 intentos")
+            print(f"❌ {label}: mensaje no enviado tras 3 intentos")
             all_ok = False
 
     return all_ok
+
+
+def send_message(text: str) -> bool:
+    """
+    Envia un mensaje al bot PRINCIPAL (canal de morning/evening/health/etc).
+    Si el texto supera TELEGRAM_MAX_CHARS lo divide en múltiples mensajes.
+    Retorna True si todos los fragmentos se enviaron correctamente.
+    """
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️  Telegram no configurado. Agrega TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID en .env")
+        return False
+    return _send_to_bot(text, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Telegram")
+
+
+def send_message_prekickoff(text: str) -> bool:
+    """
+    Envia un mensaje al bot DEDICADO de pre-kickoff.
+    Si las vars _PREKICKOFF no están configuradas, cae al bot principal
+    (backward compatible). Esto evita silencio total si el usuario aún no
+    creó el bot dedicado en Telegram.
+    """
+    bot_token = TELEGRAM_BOT_TOKEN_PREKICKOFF or TELEGRAM_BOT_TOKEN
+    chat_id   = TELEGRAM_CHAT_ID_PREKICKOFF   or TELEGRAM_CHAT_ID
+    label     = "Telegram-PreKickoff" if TELEGRAM_BOT_TOKEN_PREKICKOFF else "Telegram"
+    return _send_to_bot(text, bot_token, chat_id, label)
 
 
 # ============================================================
@@ -290,6 +319,75 @@ _RESULT_GROUPS = [
 ]
 
 
+# ── Ligas Tier-1 garantizadas en el top de Telegram ──────────────────────────
+# Big 5 europeos: aunque su max edge histórico sea ~0.15 (vs 0.30+ de ligas
+# blandas como Brasil/Argentina/China), el usuario quiere recibir picks de
+# estas ligas por relevancia. Sin garantía explícita, el head(N) global por
+# edge nunca los selecciona.
+_TIER1_LEAGUES = {
+    "soccer_epl",
+    "soccer_germany_bundesliga",
+    "soccer_spain_la_liga",
+    "soccer_france_ligue_one",
+    "soccer_italy_serie_a",
+}
+
+# Cap de bets que se muestran en el mensaje matutino y en el resumen nocturno.
+# 15 es manejable sin saturar Telegram. Más allá pierde legibilidad.
+# Se usa tanto en _build_bets_by_league() (morning) como en send_evening_summary()
+# (evening) para que ambos mensajes muestren el MISMO conjunto de bets.
+MAX_TELEGRAM_BETS = 15
+
+
+def _diversified_top(confiables: pd.DataFrame, max_bets: int) -> pd.DataFrame:
+    """
+    Selecciona hasta `max_bets` picks priorizando cobertura de ligas tier-1.
+
+    Algoritmo:
+    1. Toma el top-N global ordenado por edge (candidato base).
+    2. Para cada liga tier-1 que NO esté representada en ese top, reserva 1
+       slot con su mejor pick disponible.
+    3. Los slots tier-1 reservados desplazan a los picks de menor edge del
+       top global (los más cercanos al corte).
+
+    Esto garantiza recibir picks de PL/Bundesliga/LaLiga/Ligue 1/Serie A
+    cuando existan, sin sacrificar más de 5 slots del top edge.
+    """
+    if confiables.empty:
+        return confiables
+
+    sorted_pool = confiables.sort_values("edge", ascending=False).reset_index(drop=True)
+
+    # Si hay menos picks que el cap, devolver todo
+    if len(sorted_pool) <= max_bets:
+        return sorted_pool
+
+    # Candidato base: top-N por edge
+    top_global = sorted_pool.head(max_bets)
+    tier1_in_top = set(top_global[top_global["league"].isin(_TIER1_LEAGUES)]["league"])
+
+    # Tier-1 que tienen picks pero quedaron fuera del top
+    missing_tier1 = []
+    for league in _TIER1_LEAGUES:
+        if league in tier1_in_top:
+            continue
+        league_picks = sorted_pool[sorted_pool["league"] == league]
+        if not league_picks.empty:
+            missing_tier1.append(league_picks.head(1))
+
+    if not missing_tier1:
+        return top_global
+
+    forced_df = pd.concat(missing_tier1)
+    n_forced = len(forced_df)
+
+    # Llenar resto con top edge global, excluyendo los forzados
+    remaining_pool = sorted_pool.drop(forced_df.index)
+    rest = remaining_pool.head(max_bets - n_forced)
+
+    return pd.concat([forced_df, rest]).sort_values("edge", ascending=False).reset_index(drop=True)
+
+
 def _dedup_correlated(bets: pd.DataFrame) -> pd.DataFrame:
     """
     Si un partido tiene tanto 'away_win' como 'dnb_away' (o 'home_win'/'dnb_home'),
@@ -328,10 +426,11 @@ def _build_bets_by_league(bets: pd.DataFrame, header: str) -> tuple:
     if confiables.empty:
         return f"{header}\n\nSin value bets confiables.", 0
 
-    # ── TOP 15 mejores bets del día (por edge) ────────────────────────
-    # 115 bets es inmanejable. Mostrar solo las mejores 15.
-    MAX_TELEGRAM_BETS = 15
-    confiables = confiables.sort_values("edge", ascending=False).head(MAX_TELEGRAM_BETS)
+    # ── TOP 15 con diversificación tier-1 (Big 5 europeos garantizados) ──
+    # Antes: head(15) global por edge → ligas blandas (Brasil/Argentina/China,
+    # max edge 0.30-0.50) ocupaban todos los slots y las europeas (max edge
+    # ~0.15) nunca aparecían. Ahora reservamos 1 slot por tier-1 con picks.
+    confiables = _diversified_top(confiables, MAX_TELEGRAM_BETS)
 
     confiables = confiables.sort_values(["league", "edge"], ascending=[True, False])
 
@@ -557,41 +656,47 @@ def send_pre_kickoff_verdict(verdicts: list) -> bool:
     actionable = [v for v in verdicts if (v.get("verdict") or "").upper() in ("STRONG", "MEDIUM")]
     skipped    = [v for v in verdicts if (v.get("verdict") or "").upper() == "SKIP"]
 
+    # ── Filtro SKIP-only: si NO hay nada accionable, silencio total ──────
+    # El cron corre cada 15 min y muchos partidos generan solo SKIPs.
+    # Notificar "todos descartados" cada vez sería ruido. Solo escribimos
+    # cuando hay al menos 1 STRONG o MEDIUM que el usuario debería revisar.
+    if not actionable:
+        n_skip = len(skipped)
+        print(f"✓ Pre-kickoff: {n_skip} verdicts pero 0 accionables — silencio "
+              f"(no se envía mensaje)")
+        return False
+
     icon_map = {"STRONG": "🟢", "MEDIUM": "🟡", "SKIP": "🔴"}
     lines = ["🔍 <b>PRE-KICKOFF</b>", ""]
 
     # ── 1) STRONG / MEDIUM con detalle ──────────────────────────────────────
-    if actionable:
-        for v in actionable:
-            verdict      = (v.get("verdict") or "MEDIUM").upper()
-            icon         = icon_map.get(verdict, "⚪")
-            kickoff      = _format_kickoff_label(v.get("match_date"))
-            match_title  = _format_match_title(v.get("match", ""))
-            market_label = _get_market_label(v.get("market", ""), v.get("match", ""))
+    for v in actionable:
+        verdict      = (v.get("verdict") or "MEDIUM").upper()
+        icon         = icon_map.get(verdict, "⚪")
+        kickoff      = _format_kickoff_label(v.get("match_date"))
+        match_title  = _format_match_title(v.get("match", ""))
+        market_label = _get_market_label(v.get("market", ""), v.get("match", ""))
 
-            try:    confidence = int(v.get("confidence", 1) or 1)
-            except (TypeError, ValueError): confidence = 1
-            stars = "⭐" * max(1, min(5, confidence))
+        try:    confidence = int(v.get("confidence", 1) or 1)
+        except (TypeError, ValueError): confidence = 1
+        stars = "⭐" * max(1, min(5, confidence))
 
-            try:    odds_val = float(v.get("odds", 0))
-            except (TypeError, ValueError): odds_val = 0.0
-            try:    edge_pct = float(v.get("edge", 0)) * 100
-            except (TypeError, ValueError): edge_pct = 0.0
+        try:    odds_val = float(v.get("odds", 0))
+        except (TypeError, ValueError): odds_val = 0.0
+        try:    edge_pct = float(v.get("edge", 0)) * 100
+        except (TypeError, ValueError): edge_pct = 0.0
 
-            lines.append(f"{icon} <b>{verdict}</b>  {stars}")
-            lines.append(f"🏟️ <b>{match_title}</b>")
-            lines.append(f"🕐 {kickoff}")
-            lines.append(f"🎯 {market_label} @{odds_val:.2f}  (+{edge_pct:.1f}%)")
+        lines.append(f"{icon} <b>{verdict}</b>  {stars}")
+        lines.append(f"🏟️ <b>{match_title}</b>")
+        lines.append(f"🕐 {kickoff}")
+        lines.append(f"🎯 {market_label} @{odds_val:.2f}  (+{edge_pct:.1f}%)")
 
-            reasoning = (v.get("reasoning") or "").strip()
-            if reasoning:
-                lines.append(f"💡 {reasoning}")
+        reasoning = (v.get("reasoning") or "").strip()
+        if reasoning:
+            lines.append(f"💡 {reasoning}")
 
-            lineups = _format_lineups_label(v.get("lineups", ""))
-            lines.append(f"👥 {lineups}")
-            lines.append("")
-    else:
-        lines.append("<i>Sin apuestas accionables (todas SKIP).</i>")
+        lineups = _format_lineups_label(v.get("lineups", ""))
+        lines.append(f"👥 {lineups}")
         lines.append("")
 
     # ── 2) SKIP agrupados (1 línea por bet) ─────────────────────────────────
@@ -614,7 +719,9 @@ def send_pre_kickoff_verdict(verdicts: list) -> bool:
     lines.append("<i>Solo informativo — las apuestas siguen activas "
                  "y se resuelven normal al final del día.</i>")
 
-    return send_message("\n".join(lines))
+    # Bot dedicado de pre-kickoff (con fallback al principal si no está
+    # configurado). Esto evita saturar el canal de morning/evening.
+    return send_message_prekickoff("\n".join(lines))
 
 
 # ============================================================
@@ -865,8 +972,11 @@ def send_evening_summary():
         # (consistente con notify_best_bets y send_tomorrow_preview).
         # Antes: `match_date::date = today` evaluaba la fecha en UTC, mientras
         # que `today` venía en hora local — desfase de hasta 6h en MX.
-        df = pd.read_sql(f"""
-            SELECT match, market, odds, stake, result, profit
+        # Incluimos edge/probability/match_date para poder aplicar el mismo
+        # filtro de confiables que la notificación matutina.
+        df_all = pd.read_sql(f"""
+            SELECT match, match_date, market, odds, stake, result, profit,
+                   edge, probability, COALESCE(league, '') AS league
             FROM bets_history
             WHERE {_tz_date_filter('match_date', today)}
             ORDER BY match_date
@@ -875,22 +985,45 @@ def send_evening_summary():
         print(f"❌ Error leyendo bets: {e}")
         return
 
+    # ── Filtrar para alinear con la notificación matutina ────────────────
+    # Antes: el resumen mostraba 58 bets (TODAS las del día), mientras que
+    # el morning mandó solo 15 (post `_is_suspicious` + dedup + diversified
+    # top 15). El usuario solo apuesta las 15 que recibió, así que el
+    # resumen debe contar y mostrar exclusivamente esas. La DB sigue
+    # guardando todo (las descartadas no se borran).
+    if not df_all.empty:
+        df = df_all[df_all.apply(_is_suspicious, axis=1) == False].copy()
+        df = _dedup_correlated(df)
+        # Mismo cap + diversificación que el morning para que el subset
+        # mostrado aquí sea exactamente el mismo que se notificó.
+        df = _diversified_top(df, MAX_TELEGRAM_BETS)
+        # Re-ordenar por hora del partido (el resumen del día es cronológico,
+        # no por edge — más fácil de leer al final del día).
+        if not df.empty:
+            df = df.sort_values("match_date").reset_index(drop=True)
+    else:
+        df = df_all
+
     # ── Diagnóstico: si todas las bets siguen pending, el problema NO es el
     # filtro de fecha sino que step_fetch_results / step_results no resolvió.
-    # Imprimir un resumen claro al log para identificar la causa real la
-    # próxima vez sin tener que adivinar.
-    n_total    = len(df)
-    n_resolved = int(df["result"].isin(["win", "loss", "push", "half_win", "half_loss"]).sum()) if n_total else 0
-    n_pending  = int((df["result"] == "pending").sum()) if n_total else 0
+    n_total      = len(df)
+    n_total_all  = len(df_all)
+    n_resolved   = int(df["result"].isin(["win", "loss", "push", "half_win", "half_loss"]).sum()) if n_total else 0
+    n_pending    = int((df["result"] == "pending").sum()) if n_total else 0
+    n_descartado = n_total_all - n_total
     print(f"🌙 Resumen del día: today={today} ({USER_TIMEZONE})")
-    print(f"   Bets encontradas: {n_total}  |  resueltas: {n_resolved}  |  pendientes: {n_pending}")
+    print(f"   Bets totales en DB: {n_total_all}  |  confiables: {n_total}  |  descartadas: {n_descartado}")
+    print(f"   Confiables: resueltas={n_resolved}  pendientes={n_pending}")
     if n_total > 0 and n_resolved == 0:
         print("   ⚠️  TODAS pendientes — investigar step_fetch_results / step_results")
 
     lines = [f"🌙 <b>RESUMEN DEL DÍA — {date_str}</b>", ""]
 
     if df.empty:
-        lines.append("Sin apuestas para hoy.")
+        if n_total_all > 0:
+            lines.append(f"Sin apuestas confiables para hoy ({n_total_all} descartadas por filtro).")
+        else:
+            lines.append("Sin apuestas para hoy.")
         send_message("\n".join(lines))
         return
 
