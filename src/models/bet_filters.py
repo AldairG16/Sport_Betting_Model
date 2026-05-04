@@ -37,7 +37,9 @@ def bet_quality_filter(bets):
     filtered = []
 
     for bet in bets:
-        edge = bet.get("edge", 0)
+        # `edge_market` (prob - implied) es el verdadero edge. `edge` (= edge_ev)
+        # infla con odds altas. Filtros de cap deben ir sobre edge_market.
+        edge = bet.get("edge_market", bet.get("edge", 0))
         market = bet.get("market", "")
 
         # ❌ Edge irreal — señal de modelo roto o odds fijas

@@ -168,14 +168,14 @@ SPORT_KEYS = [
     "soccer_italy_serie_a",              # -23% ROI, tough league
 
     # ── Tier 3: Europa — mercados blandos, pocos sharps ────────────
-    "soccer_turkey_super_league",         # 2276 matches, mercado blando
+    # "soccer_turkey_super_league",       # BLOQUEADA 04-may-26: -1.05u/12 bets en 60d (mercado se hizo eficiente)
     "soccer_belgium_first_div",           # 2058 matches, predecible
     "soccer_greece_super_league",         # 1865 matches, MUY blando
 
     # ── Tier 4: Asia + Scandinavia — calendario verano, blandos ──
-    "soccer_japan_j_league",              # 4523 matches, mas citada para rentabilidad
+    # "soccer_japan_j_league",            # BLOQUEADA 04-may-26: -12.46u/24 bets en 60d, 17% WR — peor liga del modelo
     "soccer_korea_kleague1",              # 3403 matches, predecible
-    "soccer_norway_eliteserien",          # 3403 matches, goleadora, liga verano
+    # "soccer_norway_eliteserien",        # BLOQUEADA 04-may-26: solo 32 partidos historicos — sample insuficiente
     "soccer_sweden_allsvenskan",          # 3392 matches, liga verano
     "soccer_china_superleague",           # 2840 matches, mercado MUY blando
 

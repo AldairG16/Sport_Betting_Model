@@ -40,3 +40,12 @@ jobs:
           API_CREDITS_ALERT_THRESHOLD:  ${{ secrets.API_CREDITS_ALERT_THRESHOLD }}
           USER_TIMEZONE:                America/Mexico_City
         run: python scripts/orchestrator.py --mode weekly
+
+      - name: CLV calibration audit
+        env:
+          DB_URL:              ${{ secrets.DB_URL }}
+          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+          USER_TIMEZONE:       America/Mexico_City
+        run: python scripts/clv_audit.py
+        continue-on-error: true   # auditoría informativa — no rompe pipeline

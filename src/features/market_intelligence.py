@@ -5,7 +5,9 @@ def market_intelligence_filter(bets):
     for bet in bets:
 
         market = bet["market"]
-        edge = bet["edge"]
+        # `edge_market` = prob - implied (edge real). `edge` (= edge_ev) infla
+        # con odds altas. Filtros se aplican sobre el verdadero edge.
+        edge = bet.get("edge_market", bet["edge"])
         odds = bet["odds"]
         prob = bet.get("probability", 0.5)
 
@@ -82,7 +84,7 @@ def add_market_score(bets):
     for bet in bets:
 
         prob = bet.get("probability", 0.5)
-        edge = bet["edge"]
+        edge = bet.get("edge_market", bet["edge"])  # edge real, no EV inflado
         odds = bet["odds"]
         market = bet["market"]
 

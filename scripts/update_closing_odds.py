@@ -31,18 +31,42 @@ from src.utils.team_normalizer import normalize_team
 # ============================================================
 # MAIN
 # ============================================================
-def update_closing_odds():
+def update_closing_odds(only_near_kickoff: bool = True):
+    """
+    Actualiza closing odds en bets_history.
+
+    only_near_kickoff: si True (default), SOLO procesa bets cuyo partido
+        arranca dentro de los próximos 90 minutos. Esto es CRÍTICO porque
+        este script suele correr varias veces al día — sin este filtro,
+        partidos que arrancan a las 23:00 reciben "closing odds" del
+        mediodía, contaminando la métrica CLV.
+
+        El audit del 04-may-26 reveló que 157 bets con CLV+ acumularon
+        -23u — síntoma claro de closing odds capturadas demasiado pronto.
+    """
     print("\n📡 ACTUALIZANDO CLOSING ODDS (desde DB, sin llamada API)...\n")
 
     # Bets que aun no tienen closing odds y siguen pendientes.
     # Nota: bets_history usa result='pending' (no NULL) — filtrar por NULL
     # dejaba el script sin trabajo y ningún closing odds se guardaba.
-    bets = pd.read_sql("""
-        SELECT id, match, market, odds
-        FROM bets_history
-        WHERE closing_odds IS NULL
-          AND (result = 'pending' OR result IS NULL)
-    """, engine)
+    if only_near_kickoff:
+        # Solo bets cuyo partido arranca en <=90 min (closing odds reales)
+        bets = pd.read_sql(text("""
+            SELECT id, match, market, odds
+            FROM bets_history
+            WHERE closing_odds IS NULL
+              AND (result = 'pending' OR result IS NULL)
+              AND match_date <= NOW() AT TIME ZONE 'UTC' + INTERVAL '90 minutes'
+              AND match_date >= NOW() AT TIME ZONE 'UTC' - INTERVAL '4 hours'
+        """), engine)
+    else:
+        # Modo backfill: procesa TODAS las pendientes (one_shot_data_quality_cleanup)
+        bets = pd.read_sql("""
+            SELECT id, match, market, odds
+            FROM bets_history
+            WHERE closing_odds IS NULL
+              AND (result = 'pending' OR result IS NULL)
+        """, engine)
 
     if bets.empty:
         print("✅ No hay bets pendientes de closing odds")

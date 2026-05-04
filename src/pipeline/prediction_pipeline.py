@@ -63,7 +63,11 @@ def _has_coverage(league: str, market_kind: str) -> bool:
         with_data = int(df.iloc[0]["with_data"]) if not df.empty else 0
         pct = (with_data / total) if total > 0 else 0.0
         _COVERAGE_CACHE[key] = (pct >= _COVERAGE_MIN_PCT)
-    except Exception:
+    except Exception as e:
+        # Si la query falla, asumimos que la liga NO tiene cobertura
+        # (conservador: no usar señales no validables). Logueamos para que
+        # el orchestrator vea el warning en el log de GH Actions.
+        print(f"⚠️  league_coverage_ok({league}): error en query — asumiendo sin cobertura. {e}")
         _COVERAGE_CACHE[key] = False
     return _COVERAGE_CACHE[key]
 
@@ -182,8 +186,11 @@ def run_prediction_pipeline():
                 f"⛔ Apuestas pausadas automáticamente.\n"
                 f"Recarga el bankroll o espera resultados pendientes."
             )
-        except Exception:
-            pass
+        except Exception as e:
+            # Si Telegram cae no rompemos el pipeline, pero AVISAMOS al log:
+            # antes este bloque silenciaba el alert de circuit breaker —
+            # podías quedarte sin enterar de que el bankroll cruzó el umbral.
+            print(f"⚠️  Circuit breaker activo pero NO se pudo notificar a Telegram: {e}")
         return
 
     # ── Factores de calibración (Brier) ───────────────────────────────────
@@ -1123,7 +1130,11 @@ def run_prediction_pipeline():
                 sharp_confirmed += 1
             elif adj_edge < bet["edge"]:
                 sharp_rejected += 1
+            # Calculamos factor de ajuste sobre edge_ev y lo aplicamos también
+            # a edge_market (el verdadero edge usado por filtros downstream).
+            _adj_factor = (adj_edge / bet["edge"]) if bet["edge"] > 0 else 1.0
             bet["edge"]        = adj_edge
+            bet["edge_market"] = max(min(bet.get("edge_market", 0) * _adj_factor, 0.25), -0.25)
             bet["probability"] = min(0.95, bet["probability"] * (1 + (adj_conf - confidence) * 0.3))
             filtered_bets.append(bet)
 
@@ -1139,7 +1150,13 @@ def run_prediction_pipeline():
         # =========================
         # FILTROS DE CALIDAD (optimizados con 332 bets walk-forward)
         # =========================
-        MIN_EDGE = 0.10        # piso global de edge
+        # ⚠️  IMPORTANTE — bug detectado 04-may-26 por model-auditor:
+        # `bet["edge"]` es `edge_ev` ((prob*odds)-1), NO el edge real.
+        # `bet["edge_market"]` (prob - implied_prob) es el verdadero edge.
+        # Antes filtrábamos `bet["edge"] < 0.10` que con odds 5.0 dejaba
+        # pasar bets con solo 5% de edge real → bucket 15-20% edge tenía
+        # -23.7% ROI (overfit). Ahora filtramos sobre edge_market real.
+        MIN_EDGE = 0.05        # 5% de edge real vs línea (era 0.10 sobre EV inflado)
         MAX_ODDS = 3.80        # elimina longshots que no pegan
 
         # Ligas problemáticas: exigir más edge
@@ -1149,12 +1166,17 @@ def run_prediction_pipeline():
             "soccer_france_ligue_one",
         }
         # Ligas bloqueadas: ROI negativo consistente en walk-forward backtest
+        # + bloqueos NUEVOS por desempeño en producción (60d rolling, 04-may-26)
         BLOCKED_LEAGUES = {
             "soccer_fifa_world_cup_qualifiers_europe",  # -44.6% ROI, datos basura
             "soccer_uefa_europa_league",                # -64.5% ROI
             "soccer_netherlands_eredivisie",             # -50.3% ROI
             "soccer_conmebol_copa_libertadores",         # -100% ROI (2 bets, 0 wins)
             "soccer_uefa_champs_league",                 # -100% ROI (1 bet, 0 wins)
+            # ── Bloqueos por producción (model-auditor RED, 04-may-26) ──
+            "soccer_japan_j_league",                     # -12.46u, 17% WR (24 bets/60d) — peor liga del modelo
+            "soccer_turkey_super_league",                # -1.05u, 25% WR (12 bets/60d) — mercado se hizo eficiente
+            "soccer_norway_eliteserien",                 # solo 32 partidos historicos — sample insuficiente para apostar
         }
         _league = row.get("league", row.get("sport_key", ""))
         if _league in BLOCKED_LEAGUES:
@@ -1166,8 +1188,10 @@ def run_prediction_pipeline():
         _match_dow = None
         try:
             _match_dow = pd.to_datetime(date).weekday()  # 0=Lun ... 6=Dom
-        except Exception:
-            pass
+        except Exception as e:
+            # Si la fecha no parsea, no aplicamos penalización midweek.
+            # Loguear permite detectar formatos raros en upcoming_matches.
+            print(f"⚠️  No se pudo parsear match_date={date!r} para weekday: {e}")
         MIDWEEK_DAYS = {0, 1, 2}     # Lunes, Martes, Miércoles
         _midweek = _match_dow in MIDWEEK_DAYS if _match_dow is not None else False
 
@@ -1246,16 +1270,19 @@ def run_prediction_pipeline():
                 continue
 
             # ── Edge mínimo dinámico ─────────────────────────────────
-            if _league in TOUGH_LEAGUES and bet["edge"] < 0.12:
+            # Usar `edge_market` (prob - implied) — el verdadero edge.
+            # `edge` (= edge_ev) infla con odds altas y rompe filtros.
+            _edge_real = bet.get("edge_market", bet["edge"])
+            if _league in TOUGH_LEAGUES and _edge_real < 0.07:
                 continue
 
             # ── Mejora 5: Penalización entre semana ──────────────────
             # Lun-Mié: exigir 40% más edge (ROI -28% a -60% historico)
             _min_edge = MIN_EDGE
             if _midweek:
-                _min_edge = MIN_EDGE * 1.4   # 0.10 → 0.14
+                _min_edge = MIN_EDGE * 1.4   # 0.05 → 0.07
 
-            if bet["edge"] < _min_edge:
+            if _edge_real < _min_edge:
                 continue
             if bet["odds"] > MAX_ODDS:
                 continue
@@ -1275,7 +1302,10 @@ def run_prediction_pipeline():
                 "market":      bet["market"],
                 "probability": bet["probability"],
                 "odds":        bet["odds"],
-                "edge":        bet["edge"],
+                # Guardamos `edge_market` (verdadero edge vs línea) en lugar
+                # de `edge_ev`. A partir de 04-may-26 bets_history.edge mide
+                # `prob - implied`, no `(prob*odds)-1` (que era inflado).
+                "edge":        bet.get("edge_market", bet["edge"]),
                 "stake":       stake
             })
 

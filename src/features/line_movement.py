@@ -36,7 +36,10 @@ CONFIDENCE_PENALTY  = 0.10   # -10% confianza si sharp contradice
 
 # Filtro duro: si la línea cayó MÁS de este % en contra de nuestra apuesta
 # el edge ya fue detectado por el mercado y probablemente desapareció → skip
-HARD_SKIP_THRESHOLD = 0.08   # 8% de caída = señal suficientemente fuerte para descartar
+# 04-may-26: bajamos de 0.08 → 0.05 después del audit que detectó CLV invertido.
+# El modelo pierde dinero cuando la línea se mueve contra él → ser más estricto
+# evita esas pérdidas (157 bets CLV+ → -23u sugiere edge falso post-movimiento).
+HARD_SKIP_THRESHOLD = 0.05   # 5% de caída = descartar (era 8%)
 MIN_BOOKMAKERS      = 4      # Menos de 4 casas = mercado poco líquido → skip
 
 

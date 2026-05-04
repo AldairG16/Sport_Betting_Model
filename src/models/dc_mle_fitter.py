@@ -237,8 +237,13 @@ def _load_params() -> dict:
             with open(DC_PARAMS_FILE, "r") as f:
                 _cached_params = json.load(f)
             return _cached_params
-        except Exception:
-            pass
+        except Exception as e:
+            # JSON corrupto o IO error → caemos a {} que produce λ defaults.
+            # El silencio era peligroso: el pipeline corría con λ=1.5 sin
+            # avisar que los params MLE no se cargaron. Loguear es esencial
+            # para detectar corrupción de DC_PARAMS_FILE.
+            print(f"⚠️  No se pudo cargar DC_PARAMS_FILE ({DC_PARAMS_FILE}): {e}. "
+                  f"Pipeline correrá con λ defaults — re-ejecutar weekly fit.")
 
     return {}
 
