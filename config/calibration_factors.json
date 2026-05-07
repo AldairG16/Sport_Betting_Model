@@ -1,45 +1,688 @@
 {
   "home_win": {
-    "factor": 0.9779,
-    "brier": 0.24188,
-    "n_bets": 73,
-    "win_rate_actual": 0.4384,
-    "win_rate_pred": 0.5164
+    "factor": 0.921,
+    "brier": 0.24407,
+    "n_bets": 125,
+    "win_rate_actual": 0.456,
+    "win_rate_pred": 0.5055,
+    "raw_factor": 0.902,
+    "clamp": [
+      0.3,
+      1.7
+    ],
+    "isotonic": {
+      "x": [
+        0.2066812165850657,
+        0.3760350854041826,
+        0.376070862426875,
+        0.382712166375,
+        0.384011551,
+        0.40581466523780313,
+        0.410100700625,
+        0.6064,
+        0.6071518981298254,
+        0.610485,
+        0.6141258266712882,
+        0.6894499999999999,
+        0.698925,
+        0.7576425657,
+        0.7705435837499999,
+        0.8464897979999999
+      ],
+      "y": [
+        0.2,
+        0.2,
+        0.3333333333333333,
+        0.3333333333333333,
+        0.375,
+        0.375,
+        0.4383561643835616,
+        0.4383561643835616,
+        0.5,
+        0.5,
+        0.6428571428571429,
+        0.6428571428571429,
+        0.7142857142857143,
+        0.7142857142857143,
+        1.0,
+        1.0
+      ]
+    }
   },
   "draw": {
-    "factor": 1.0,
-    "brier": null,
-    "n_bets": 10,
-    "win_rate_actual": null,
-    "win_rate_pred": null
+    "factor": 1.12,
+    "brier": 0.22532,
+    "n_bets": 15,
+    "win_rate_actual": 0.4,
+    "win_rate_pred": 0.2941,
+    "raw_factor": 1.3601,
+    "clamp": [
+      0.75,
+      1.3
+    ],
+    "isotonic": null
   },
   "away_win": {
-    "factor": 1.0,
-    "brier": null,
-    "n_bets": 36,
-    "win_rate_actual": null,
-    "win_rate_pred": null
+    "factor": 0.8345,
+    "brier": 0.21648,
+    "n_bets": 53,
+    "win_rate_actual": 0.283,
+    "win_rate_pred": 0.3821,
+    "raw_factor": 0.7408,
+    "clamp": [
+      0.5,
+      1.5
+    ],
+    "isotonic": {
+      "x": [
+        0.16963407449681528,
+        0.2029473976425174,
+        0.22466403196607682,
+        0.28513811592132543,
+        0.287304444398124,
+        0.52272,
+        0.5282691811811812,
+        0.644433167850983,
+        0.675005
+      ],
+      "y": [
+        0.0,
+        0.0,
+        0.2222222222222222,
+        0.2222222222222222,
+        0.2727272727272727,
+        0.2727272727272727,
+        0.5,
+        0.5,
+        1.0
+      ]
+    }
   },
   "over25": {
-    "factor": 0.9632,
-    "brier": 0.26438,
-    "n_bets": 88,
-    "win_rate_actual": 0.5114,
-    "win_rate_pred": 0.6466
+    "factor": 0.8668,
+    "brier": 0.25455,
+    "n_bets": 166,
+    "win_rate_actual": 0.5301,
+    "win_rate_pred": 0.6291,
+    "raw_factor": 0.8427,
+    "clamp": [
+      0.3,
+      1.7
+    ],
+    "isotonic": {
+      "x": [
+        0.37425505782072976,
+        0.4685718007372187,
+        0.48476018374151086,
+        0.5541240410861039,
+        0.5551727486639357,
+        0.6261637707400401,
+        0.6308343264829116,
+        0.6359969448317949,
+        0.6369220005608858,
+        0.75
+      ],
+      "y": [
+        0.3333333333333333,
+        0.3333333333333333,
+        0.3684210526315789,
+        0.3684210526315789,
+        0.4772727272727273,
+        0.4772727272727273,
+        0.6,
+        0.6,
+        0.6265060240963856,
+        0.6265060240963856
+      ]
+    }
   },
   "under25": {
+    "factor": 0.9273,
+    "brier": 0.25313,
+    "n_bets": 27,
+    "win_rate_actual": 0.5185,
+    "win_rate_pred": 0.6125,
+    "raw_factor": 0.8466,
+    "clamp": [
+      0.75,
+      1.3
+    ],
+    "isotonic": null
+  },
+  "btts": {
     "factor": 1.0,
     "brier": null,
     "n_bets": 8,
     "win_rate_actual": null,
     "win_rate_pred": null
   },
-  "btts": {
+  "btts_no": {
+    "factor": 0.874,
+    "brier": 0.29091,
+    "n_bets": 10,
+    "win_rate_actual": 0.3,
+    "win_rate_pred": 0.6049,
+    "raw_factor": 0.496,
+    "clamp": [
+      0.75,
+      1.3
+    ],
+    "isotonic": null
+  },
+  "dnb_home": {
+    "factor": 0.9109,
+    "brier": 0.23272,
+    "n_bets": 11,
+    "win_rate_actual": 0.4545,
+    "win_rate_pred": 0.6805,
+    "raw_factor": 0.668,
+    "clamp": [
+      0.75,
+      1.3
+    ],
+    "isotonic": null
+  },
+  "dnb_away": {
+    "factor": 0.9825,
+    "brier": 0.2321,
+    "n_bets": 13,
+    "win_rate_actual": 0.5385,
+    "win_rate_pred": 0.5716,
+    "raw_factor": 0.942,
+    "clamp": [
+      0.75,
+      1.3
+    ],
+    "isotonic": null
+  },
+  "dc_1x": {
+    "factor": 0.9864,
+    "brier": 0.23834,
+    "n_bets": 18,
+    "win_rate_actual": 0.6111,
+    "win_rate_pred": 0.634,
+    "raw_factor": 0.9638,
+    "clamp": [
+      0.75,
+      1.3
+    ],
+    "isotonic": null
+  },
+  "dc_x2": {
+    "factor": 0.9853,
+    "brier": 0.28961,
+    "n_bets": 18,
+    "win_rate_actual": 0.5556,
+    "win_rate_pred": 0.5783,
+    "raw_factor": 0.9607,
+    "clamp": [
+      0.75,
+      1.3
+    ],
+    "isotonic": null
+  },
+  "dc_12": {
+    "factor": 0.9838,
+    "brier": 0.18171,
+    "n_bets": 13,
+    "win_rate_actual": 0.7692,
+    "win_rate_pred": 0.8128,
+    "raw_factor": 0.9463,
+    "clamp": [
+      0.75,
+      1.3
+    ],
+    "isotonic": null
+  },
+  "ah_home_fav": {
+    "factor": 0.7821,
+    "brier": 0.31052,
+    "n_bets": 15,
+    "win_rate_actual": 0.2,
+    "win_rate_pred": 0.5775,
+    "raw_factor": 0.3463,
+    "clamp": [
+      0.75,
+      1.3
+    ],
+    "isotonic": null
+  },
+  "ah_home_pk": {
+    "factor": 0.8245,
+    "brier": 0.29466,
+    "n_bets": 17,
+    "win_rate_actual": 0.2941,
+    "win_rate_pred": 0.5713,
+    "raw_factor": 0.5148,
+    "clamp": [
+      0.75,
+      1.3
+    ],
+    "isotonic": null
+  },
+  "ah_home_dog": {
+    "factor": 1.0143,
+    "brier": 0.2239,
+    "n_bets": 11,
+    "win_rate_actual": 0.6364,
+    "win_rate_pred": 0.6041,
+    "raw_factor": 1.0534,
+    "clamp": [
+      0.75,
+      1.3
+    ],
+    "isotonic": null
+  },
+  "ah_away_fav": {
+    "factor": 0.774,
+    "brier": 0.32489,
+    "n_bets": 23,
+    "win_rate_actual": 0.3043,
+    "win_rate_pred": 0.6352,
+    "raw_factor": 0.4792,
+    "clamp": [
+      0.75,
+      1.3
+    ],
+    "isotonic": null
+  },
+  "ah_away_pk": {
+    "factor": 0.9701,
+    "brier": 0.26001,
+    "n_bets": 12,
+    "win_rate_actual": 0.5,
+    "win_rate_pred": 0.5584,
+    "raw_factor": 0.8953,
+    "clamp": [
+      0.75,
+      1.3
+    ],
+    "isotonic": null
+  },
+  "ah_away_dog": {
     "factor": 1.0,
     "brier": null,
-    "n_bets": 0,
+    "n_bets": 4,
     "win_rate_actual": null,
     "win_rate_pred": null
   },
-  "updated_at": "2026-04-09T17:39:10.715843"
+  "by_league": {
+    "soccer_argentina_primera_division": {
+      "home_win": {
+        "factor": 1.0095,
+        "brier": 0.24203,
+        "n_bets": 27,
+        "win_rate_actual": 0.5185,
+        "win_rate_pred": 0.5083,
+        "raw_factor": 1.02,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      },
+      "draw": {
+        "factor": 1.0682,
+        "brier": 0.24501,
+        "n_bets": 6,
+        "win_rate_actual": 0.5,
+        "win_rate_pred": 0.3548,
+        "raw_factor": 1.4093,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      },
+      "away_win": {
+        "factor": 0.9477,
+        "brier": 0.17148,
+        "n_bets": 5,
+        "win_rate_actual": 0.2,
+        "win_rate_pred": 0.3155,
+        "raw_factor": 0.634,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      },
+      "over25": {
+        "factor": 1.0706,
+        "brier": 0.2725,
+        "n_bets": 11,
+        "win_rate_actual": 0.5455,
+        "win_rate_pred": 0.4319,
+        "raw_factor": 1.2631,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      },
+      "under25": {
+        "factor": 0.9957,
+        "brier": 0.19122,
+        "n_bets": 7,
+        "win_rate_actual": 0.7143,
+        "win_rate_pred": 0.7308,
+        "raw_factor": 0.9774,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      }
+    },
+    "soccer_brazil_campeonato": {
+      "home_win": {
+        "factor": 0.9856,
+        "brier": 0.23051,
+        "n_bets": 24,
+        "win_rate_actual": 0.5417,
+        "win_rate_pred": 0.5597,
+        "raw_factor": 0.9677,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      },
+      "away_win": {
+        "factor": 0.9496,
+        "brier": 0.18048,
+        "n_bets": 8,
+        "win_rate_actual": 0.25,
+        "win_rate_pred": 0.3288,
+        "raw_factor": 0.7604,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      },
+      "over25": {
+        "factor": 1.1133,
+        "brier": 0.21105,
+        "n_bets": 22,
+        "win_rate_actual": 0.7273,
+        "win_rate_pred": 0.5737,
+        "raw_factor": 1.2678,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      }
+    },
+    "soccer_efl_champ": {
+      "home_win": {
+        "factor": 0.8438,
+        "brier": 0.22188,
+        "n_bets": 8,
+        "win_rate_actual": 0.125,
+        "win_rate_pred": 0.4842,
+        "raw_factor": 0.2582,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      },
+      "away_win": {
+        "factor": 1.0128,
+        "brier": 0.33386,
+        "n_bets": 9,
+        "win_rate_actual": 0.4444,
+        "win_rate_pred": 0.4211,
+        "raw_factor": 1.0555,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      },
+      "over25": {
+        "factor": 0.8851,
+        "brier": 0.25734,
+        "n_bets": 20,
+        "win_rate_actual": 0.45,
+        "win_rate_pred": 0.6315,
+        "raw_factor": 0.7126,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      }
+    },
+    "soccer_epl": {
+      "over25": {
+        "factor": 0.9194,
+        "brier": 0.28026,
+        "n_bets": 11,
+        "win_rate_actual": 0.4545,
+        "win_rate_pred": 0.6498,
+        "raw_factor": 0.6995,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      }
+    },
+    "soccer_france_ligue_one": {
+      "home_win": {
+        "factor": 0.9319,
+        "brier": 0.19099,
+        "n_bets": 7,
+        "win_rate_actual": 0.2857,
+        "win_rate_pred": 0.4464,
+        "raw_factor": 0.64,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      },
+      "over25": {
+        "factor": 0.9064,
+        "brier": 0.26599,
+        "n_bets": 13,
+        "win_rate_actual": 0.4615,
+        "win_rate_pred": 0.6686,
+        "raw_factor": 0.6903,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      }
+    },
+    "soccer_germany_bundesliga": {
+      "home_win": {
+        "factor": 0.8475,
+        "brier": 0.23785,
+        "n_bets": 8,
+        "win_rate_actual": 0.125,
+        "win_rate_pred": 0.4534,
+        "raw_factor": 0.2757,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      },
+      "over25": {
+        "factor": 1.0057,
+        "brier": 0.21285,
+        "n_bets": 11,
+        "win_rate_actual": 0.7273,
+        "win_rate_pred": 0.7122,
+        "raw_factor": 1.0212,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      }
+    },
+    "soccer_italy_serie_a": {
+      "away_win": {
+        "factor": 0.9789,
+        "brier": 0.16187,
+        "n_bets": 8,
+        "win_rate_actual": 0.375,
+        "win_rate_pred": 0.4168,
+        "raw_factor": 0.8998,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      },
+      "over25": {
+        "factor": 0.8275,
+        "brier": 0.28564,
+        "n_bets": 16,
+        "win_rate_actual": 0.3125,
+        "win_rate_pred": 0.6198,
+        "raw_factor": 0.5042,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      }
+    },
+    "soccer_mexico_ligamx": {
+      "home_win": {
+        "factor": 1.0465,
+        "brier": 0.30988,
+        "n_bets": 10,
+        "win_rate_actual": 0.6,
+        "win_rate_pred": 0.5059,
+        "raw_factor": 1.1861,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      },
+      "over25": {
+        "factor": 0.9904,
+        "brier": 0.20502,
+        "n_bets": 5,
+        "win_rate_actual": 0.6,
+        "win_rate_pred": 0.6431,
+        "raw_factor": 0.933,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      }
+    },
+    "soccer_netherlands_eredivisie": {
+      "over25": {
+        "factor": 0.9466,
+        "brier": 0.28284,
+        "n_bets": 9,
+        "win_rate_actual": 0.5556,
+        "win_rate_pred": 0.7227,
+        "raw_factor": 0.7687,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      }
+    },
+    "soccer_portugal_primeira_liga": {
+      "over25": {
+        "factor": 1.0248,
+        "brier": 0.19021,
+        "n_bets": 11,
+        "win_rate_actual": 0.7273,
+        "win_rate_pred": 0.6657,
+        "raw_factor": 1.0926,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      }
+    },
+    "soccer_spain_la_liga": {
+      "home_win": {
+        "factor": 1.1712,
+        "brier": 0.31297,
+        "n_bets": 10,
+        "win_rate_actual": 0.7,
+        "win_rate_pred": 0.4155,
+        "raw_factor": 1.6848,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      },
+      "over25": {
+        "factor": 0.9927,
+        "brier": 0.25108,
+        "n_bets": 15,
+        "win_rate_actual": 0.6667,
+        "win_rate_pred": 0.6815,
+        "raw_factor": 0.9782,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      }
+    },
+    "soccer_usa_mls": {
+      "under25": {
+        "factor": 0.9986,
+        "brier": 0.28357,
+        "n_bets": 6,
+        "win_rate_actual": 0.5,
+        "win_rate_pred": 0.5042,
+        "raw_factor": 0.9917,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      },
+      "dc_x2": {
+        "factor": 0.9898,
+        "brier": 0.34071,
+        "n_bets": 5,
+        "win_rate_actual": 0.6,
+        "win_rate_pred": 0.6463,
+        "raw_factor": 0.9284,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      },
+      "ah_away_fav": {
+        "factor": 0.9441,
+        "brier": 0.25642,
+        "n_bets": 7,
+        "win_rate_actual": 0.4286,
+        "win_rate_pred": 0.6082,
+        "raw_factor": 0.7046,
+        "clamp": [
+          0.75,
+          1.3
+        ],
+        "isotonic": null
+      }
+    }
+  },
+  "updated_at": "2026-05-07T16:05:46.573933+00:00",
+  "window_days": 90
 }

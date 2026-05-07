@@ -231,3 +231,76 @@ def get_motivation_factor(team: str, league: str) -> float:
         return EUROPE_BOOST  # +4%
 
     return 0.0  # zona media, sin ajuste
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# MEJORA #12 (Sprint 2) — Detector de partidos "raros"
+# ─────────────────────────────────────────────────────────────────────────
+# Cuando AMBOS equipos están en zona media sin objetivos cerca del final de
+# temporada, los partidos son impredecibles: rotaciones masivas, jugadores
+# en liquidación, intensidad baja. El modelo no captura esto y suele sobre-
+# predecir resultados "lógicos".
+#
+# Esta función devuelve True si el partido se considera "dead rubber" o
+# sustancialmente raro. El pipeline puede usarlo para:
+#   - saltar la apuesta (más conservador)
+#   - reducir confidence/stake al 50% (más agresivo)
+
+DEAD_RUBBER_GAMES_LEFT = 5    # final de temporada
+
+
+def is_unreliable_match(home_team: str, away_team: str, league: str) -> tuple[bool, str]:
+    """
+    Devuelve (True, reason) si el partido se considera poco fiable para apostar:
+      • Dead rubber (ambos en zona media, fin de temporada)
+      • Asimetría extrema de motivación (uno con todo a perder, otro con nada)
+
+    Si no se puede determinar (liga sin standings, datos faltos), devuelve
+    (False, "indeterminado") para no bloquear apuestas por error.
+    """
+    if league not in LEAGUE_SIZES:
+        return (False, "no aplica liga")
+
+    standings = _get_current_standings(league)
+    if standings.empty:
+        return (False, "sin standings")
+
+    def _row(team: str):
+        team_lower = team.lower()
+        m = standings[standings["team"].str.lower().str.contains(
+            team_lower[:8], na=False, regex=False
+        )]
+        return m.iloc[0] if not m.empty else None
+
+    rh = _row(home_team)
+    ra = _row(away_team)
+    if rh is None or ra is None:
+        return (False, "equipos no encontrados")
+
+    n_teams     = LEAGUE_SIZES[league]
+    n_relegated = RELEGATION_SPOTS.get(league, 3)
+    n_europe    = EUROPE_SPOTS.get(league, 6)
+    safe_zone_lo = n_europe + 2          # > posición safe_zone_lo y < safe_zone_hi = zona media
+    safe_zone_hi = n_teams - n_relegated - 1
+
+    games_remaining = max(0, n_teams - 1 - int(rh["played"]))
+
+    # 1) Dead rubber — ambos en zona media + fin de temporada
+    pos_h = int(rh["position"])
+    pos_a = int(ra["position"])
+    in_mid_h = safe_zone_lo < pos_h <= safe_zone_hi
+    in_mid_a = safe_zone_lo < pos_a <= safe_zone_hi
+    if games_remaining <= DEAD_RUBBER_GAMES_LEFT and in_mid_h and in_mid_a:
+        return (True, f"dead rubber: ambos zona media (pos {pos_h} vs {pos_a}), {games_remaining}j")
+
+    # 2) Asimetría extrema — uno clasificado/campeón vs otro descendido
+    fh = get_motivation_factor(home_team, league)
+    fa = get_motivation_factor(away_team, league)
+    # Si un equipo tiene factor "fight" (positivo) y el otro "descenso ya
+    # confirmado / título asegurado" (negativo), el resultado es ruidoso.
+    if fh > 0.03 and fa < -0.05:
+        return (True, f"asimetría: home motivado ({fh:+.2f}) vs away sin objetivo ({fa:+.2f})")
+    if fa > 0.03 and fh < -0.05:
+        return (True, f"asimetría: away motivado ({fa:+.2f}) vs home sin objetivo ({fh:+.2f})")
+
+    return (False, "ok")

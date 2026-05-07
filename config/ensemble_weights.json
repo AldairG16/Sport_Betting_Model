@@ -1,0 +1,16 @@
+{
+  "_comment": "Pesos del ensemble (DC, ELO, Form) sobreescritos por mercado.",
+  "_purpose": "ensemble_model._adaptive_weights() lee este archivo PRIMERO. Si encuentra match para (market, agreement_band), usa esos pesos en vez de los hardcoded.",
+  "_regen": "Manual o via scripts (a futuro). Solo regenerar tras validar con backtest A/B.",
+  "_format_example": {
+    "by_market": {
+      "home_win": {
+        "high": [0.60, 0.25, 0.15],
+        "med":  [0.50, 0.30, 0.20],
+        "low":  [0.35, 0.45, 0.20]
+      }
+    }
+  },
+  "_updated_at": null,
+  "by_market": {}
+}

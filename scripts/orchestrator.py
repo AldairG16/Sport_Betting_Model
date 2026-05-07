@@ -480,6 +480,44 @@ def step_fit_dc_mle():
     fit_dc_parameters(verbose=True)
 
 
+def step_drift_detection():
+    """MEJORA #15 — drift detection automático cada semana.
+
+    Compara últimos 30d vs ventana referencia (60-120d). Si detecta drift
+    (KS p<0.05 o ΔBrier>0.05 o ΔROI>10pp), manda alerta a Telegram.
+    """
+    try:
+        from src.models.drift_detector import detect_drift, format_drift_report
+        from scripts.notify_telegram import send_message
+        report = detect_drift(by_league=True)
+        msg = format_drift_report(report, max_lines=15)
+        # Solo enviar si hay alerta — no inundar el canal con "sin drift"
+        if report.get("alerts"):
+            send_message(msg)
+            print(f"🚨 Drift detectado — {len(report['alerts'])} alertas → Telegram")
+        else:
+            print("✅ Sin drift detectado")
+    except Exception as e:
+        # Drift es informativo — un error no debe bloquear el weekly
+        print(f"⚠️  Drift detection falló: {e}")
+
+
+def step_refresh_clv_cache():
+    """MEJORA #14 — refresca data/clv_cache.json para que kelly_stake
+    use el CLV trailing al modular kelly_fraction. Llamado en weekly.
+    """
+    try:
+        from src.models.betting_engine import refresh_clv_cache
+        result = refresh_clv_cache()
+        n_markets = len(result.get("by_market", {}))
+        if "error" in result:
+            print(f"⚠️  CLV refresh falló: {result['error']}")
+        else:
+            print(f"✅ CLV cache refrescado: {n_markets} mercados")
+    except Exception as e:
+        print(f"⚠️  CLV refresh falló: {e}")
+
+
 def run_results_only(logger: Logger):
     run_step(logger, "Fetch results", step_fetch_results)
     run_step(logger, "Results",       step_results)
@@ -541,10 +579,12 @@ def main():
             run_step(logger, "Load extra leagues",       step_load_extra_leagues)
             # run_step(logger, "Load MLB data",            step_load_mlb)  # desactivado — sin creditos MLB
             run_step(logger, "Fit DC-MLE parameters",    step_fit_dc_mle)
-            run_step(logger, "Calibration monitor",    step_calibration)
-            run_step(logger, "Optimize thresholds",    step_optimize_thresholds)
-            run_step(logger, "Walk-forward backtest",  step_walkforward)
-            run_step(logger, "Weekly Telegram report", step_weekly_report)
+            run_step(logger, "Calibration monitor",      step_calibration)
+            run_step(logger, "Refresh CLV cache",        step_refresh_clv_cache)   # Mejora #14
+            run_step(logger, "Drift detection",          step_drift_detection)     # Mejora #15
+            run_step(logger, "Optimize thresholds",      step_optimize_thresholds)
+            run_step(logger, "Walk-forward backtest",    step_walkforward)
+            run_step(logger, "Weekly Telegram report",   step_weekly_report)
     except Exception as fatal:
         # ── Crash report a Telegram ──────────────────────────────────────
         logger.log(f"💀 ERROR FATAL: {fatal}")

@@ -1,0 +1,214 @@
+{
+  "by_market": {
+    "ah_away_+0.0": {
+      "n": 1,
+      "avg_clv": 0.0,
+      "by_league": {}
+    },
+    "ah_away_+0.5": {
+      "n": 1,
+      "avg_clv": 0.0,
+      "by_league": {}
+    },
+    "ah_away_+1.0": {
+      "n": 1,
+      "avg_clv": 0.0,
+      "by_league": {}
+    },
+    "ah_away_-0.2": {
+      "n": 3,
+      "avg_clv": 0.02581,
+      "by_league": {}
+    },
+    "ah_away_-0.5": {
+      "n": 2,
+      "avg_clv": 0.0,
+      "by_league": {}
+    },
+    "ah_away_-1.0": {
+      "n": 1,
+      "avg_clv": -0.0049,
+      "by_league": {}
+    },
+    "ah_away_-1.2": {
+      "n": 1,
+      "avg_clv": 0.11602,
+      "by_league": {}
+    },
+    "ah_away_-1.5": {
+      "n": 4,
+      "avg_clv": 0.00159,
+      "by_league": {}
+    },
+    "ah_away_-1.8": {
+      "n": 2,
+      "avg_clv": -0.03641,
+      "by_league": {}
+    },
+    "ah_home_+0.0": {
+      "n": 5,
+      "avg_clv": 0.04084,
+      "by_league": {}
+    },
+    "ah_home_+0.2": {
+      "n": 1,
+      "avg_clv": 0.0,
+      "by_league": {}
+    },
+    "ah_home_+0.5": {
+      "n": 3,
+      "avg_clv": 0.02852,
+      "by_league": {}
+    },
+    "ah_home_+0.8": {
+      "n": 1,
+      "avg_clv": 0.02674,
+      "by_league": {}
+    },
+    "ah_home_+1.0": {
+      "n": 2,
+      "avg_clv": 0.00273,
+      "by_league": {}
+    },
+    "ah_home_+1.8": {
+      "n": 1,
+      "avg_clv": -0.00971,
+      "by_league": {}
+    },
+    "ah_home_+2.0": {
+      "n": 1,
+      "avg_clv": -0.12621,
+      "by_league": {}
+    },
+    "ah_home_-0.2": {
+      "n": 1,
+      "avg_clv": 0.0,
+      "by_league": {}
+    },
+    "ah_home_-0.5": {
+      "n": 4,
+      "avg_clv": -0.03155,
+      "by_league": {}
+    },
+    "ah_home_-1.0": {
+      "n": 2,
+      "avg_clv": -0.01601,
+      "by_league": {}
+    },
+    "ah_home_-1.5": {
+      "n": 2,
+      "avg_clv": 0.0,
+      "by_league": {}
+    },
+    "away_win": {
+      "n": 24,
+      "avg_clv": 0.06219,
+      "by_league": {
+        "soccer_efl_champ": {
+          "n": 9,
+          "avg_clv": 0.13243
+        },
+        "soccer_italy_serie_a": {
+          "n": 5,
+          "avg_clv": -0.00027
+        }
+      }
+    },
+    "btts_no": {
+      "n": 10,
+      "avg_clv": -0.00539,
+      "by_league": {}
+    },
+    "cards_under_3.5": {
+      "n": 1,
+      "avg_clv": 0.0,
+      "by_league": {}
+    },
+    "corners_over_9.5": {
+      "n": 2,
+      "avg_clv": 0.0,
+      "by_league": {}
+    },
+    "dnb_away": {
+      "n": 4,
+      "avg_clv": -0.04708,
+      "by_league": {}
+    },
+    "dnb_home": {
+      "n": 7,
+      "avg_clv": 0.00108,
+      "by_league": {}
+    },
+    "draw": {
+      "n": 6,
+      "avg_clv": -0.03243,
+      "by_league": {}
+    },
+    "home_win": {
+      "n": 62,
+      "avg_clv": 0.04199,
+      "by_league": {
+        "soccer_argentina_primera_division": {
+          "n": 9,
+          "avg_clv": 0.01808
+        },
+        "soccer_brazil_campeonato": {
+          "n": 14,
+          "avg_clv": -0.00426
+        },
+        "soccer_efl_champ": {
+          "n": 8,
+          "avg_clv": 0.32253
+        },
+        "soccer_france_ligue_one": {
+          "n": 6,
+          "avg_clv": -0.01162
+        }
+      }
+    },
+    "over25": {
+      "n": 96,
+      "avg_clv": 0.0011,
+      "by_league": {
+        "soccer_brazil_campeonato": {
+          "n": 7,
+          "avg_clv": -0.04415
+        },
+        "soccer_efl_champ": {
+          "n": 19,
+          "avg_clv": 0.00078
+        },
+        "soccer_epl": {
+          "n": 6,
+          "avg_clv": 0.00338
+        },
+        "soccer_france_ligue_one": {
+          "n": 10,
+          "avg_clv": -0.00206
+        },
+        "soccer_italy_serie_a": {
+          "n": 11,
+          "avg_clv": 0.00734
+        },
+        "soccer_netherlands_eredivisie": {
+          "n": 9,
+          "avg_clv": 0.0185
+        },
+        "soccer_portugal_primeira_liga": {
+          "n": 7,
+          "avg_clv": -0.00467
+        },
+        "soccer_spain_la_liga": {
+          "n": 5,
+          "avg_clv": -0.01346
+        }
+      }
+    },
+    "under25": {
+      "n": 12,
+      "avg_clv": -0.00763,
+      "by_league": {}
+    }
+  },
+  "updated_at": "2026-05-07T15:44:06.848943"
+}

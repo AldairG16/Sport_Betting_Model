@@ -1,0 +1,26 @@
+{
+  "_comment": "Baseline Brier \u2014 regenerado por scripts/regen_brier_baseline.py",
+  "_purpose": "tests/test_brier_regression.py compara contra estos valores.",
+  "_regen": "Solo regenerar tras validar mejoras con backtest A/B.",
+  "_updated_at": "2026-05-07",
+  "global_brier": 0.2447,
+  "markets": {
+    "home_win": 0.2441,
+    "draw": 0.2253,
+    "away_win": 0.2165,
+    "over25": 0.2545,
+    "under25": 0.2531,
+    "btts_no": 0.2909,
+    "dnb_home": 0.2327,
+    "dnb_away": 0.2321,
+    "dc_1x": 0.2383,
+    "dc_x2": 0.2896,
+    "dc_12": 0.1817,
+    "ah_home_fav": 0.3105,
+    "ah_home_pk": 0.2947,
+    "ah_home_dog": 0.2239,
+    "ah_away_fav": 0.3249,
+    "ah_away_pk": 0.26
+  },
+  "regression_tol_pct": 0.05
+}

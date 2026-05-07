@@ -107,8 +107,27 @@ from src.models.asian_handicap_model import prob_ah, get_dnb_probs
 from src.features.weather_impact import get_weather_multiplier
 from src.models.monte_carlo_simulatior import simulate_match, mc_confidence_vs_analytical
 from src.models.bankroll_manager import get_current_bankroll, ensure_bankroll_schema
-from src.models.calibration_monitor import load_calibration_factors, get_calibration_factor
+from src.models.calibration_monitor import (
+    load_calibration_factors,
+    get_calibration_factor,
+    apply_calibration,
+    MIN_BETS_FOR_CALIBRATION,
+)
 from src.models.dc_mle_fitter import get_dc_lambdas, is_params_fresh, DC_MLE_WEIGHT
+
+
+# Torneos donde la mayoría de partidos se juegan en sede neutral.
+# Se usa para anular el `home_adv` del MLE en estos partidos — sin esto,
+# el modelo aplica una ventaja artificial al "local" del bracket que no
+# existe en la realidad (Brasil vs Argentina en USA = 50/50 de venue).
+NEUTRAL_VENUE_LEAGUES = {
+    "soccer_fifa_world_cup",
+    "soccer_uefa_euro",
+    "soccer_conmebol_copa_america",
+    "soccer_concacaf_gold_cup",
+    "soccer_afcon",
+    "soccer_afc_asian_cup",
+}
 from src.features.league_calibration import get_over25_rate, OVER25_SHRINK
 
 # =========================
@@ -198,14 +217,21 @@ def run_prediction_pipeline():
     # Si el archivo no existe aún, usa factores neutros (1.0 = sin ajuste)
     cal_factors = load_calibration_factors()
     cal_active  = any(
-        isinstance(v, dict) and v.get("n_bets", 0) >= 50
+        isinstance(v, dict) and v.get("n_bets", 0) >= MIN_BETS_FOR_CALIBRATION
         for k, v in cal_factors.items()
-        if k != "updated_at"
+        if k not in ("updated_at", "window_days", "by_league")
     )
     if cal_active:
-        print("📐 Factores de calibración activos")
+        n_calibrated = sum(
+            1 for k, v in cal_factors.items()
+            if isinstance(v, dict) and v.get("n_bets", 0) >= MIN_BETS_FOR_CALIBRATION
+            and k not in ("updated_at", "window_days", "by_league")
+        )
+        print(f"📐 Factores de calibración activos ({n_calibrated} mercados, "
+              f"min_bets={MIN_BETS_FOR_CALIBRATION})")
     else:
-        print("📐 Calibración: datos insuficientes (< 50 bets), usando factores neutros")
+        print(f"📐 Calibración: datos insuficientes (< {MIN_BETS_FOR_CALIBRATION} bets), "
+              f"usando factores neutros")
 
     # ── Parámetros MLE Dixon-Coles ─────────────────────────────────────────
     # Si existen parámetros ajustados recientes (<= 8 días), los usa.
@@ -215,6 +241,27 @@ def run_prediction_pipeline():
         print("🔧 Parámetros DC-MLE cargados (ajuste reciente)")
     else:
         print("🔧 DC-MLE: sin parámetros frescos, usando solo forma actual")
+
+    # MEJORA #3 (06-may-26): cargar rho de DC para corregir matriz score.
+    # rho es el parámetro tau de Dixon-Coles. SOLO se aplica si el fit
+    # detectó señal (|rho| > 0.02). Si el fit dejó rho=0 (corner solution
+    # del optimizador), aplicar un -0.13 empírico podría EMPEORAR el modelo
+    # en este dataset — mejor mantener Poisson cruda y dejar que la
+    # calibración por mercado (Mejora #1+#2) corrija el bias residual.
+    try:
+        from src.models.dc_mle_fitter import _load_params as _load_dc_params
+        _dc_params  = _load_dc_params() or {}
+        _rho_fit    = float(_dc_params.get("rho", 0.0) or 0.0)
+        if abs(_rho_fit) < 0.02:
+            DC_RHO_GLOBAL = None
+            print(f"🔧 DC rho fitteado={_rho_fit:+.3f} ≈0 → BTTS usa Poisson cruda")
+            print(f"   (calibración por mercado corrige bias residual)")
+        else:
+            DC_RHO_GLOBAL = _rho_fit
+            print(f"🔧 DC rho={DC_RHO_GLOBAL:+.3f} (BTTS con tau-correction activa)")
+    except Exception as _e:
+        DC_RHO_GLOBAL = None
+        print(f"⚠️  DC rho no disponible ({_e}) → Poisson cruda")
 
     elo = compute_elo()
 
@@ -520,7 +567,11 @@ def run_prediction_pipeline():
         # Si algún equipo no está en los parámetros MLE → 100% forma actual.
 
         if mle_fresh:
-            mle_result = get_dc_lambdas(home, away)
+            # Detectar venue neutral por liga — fundamental para Mundial,
+            # Euro, Copa América y otros torneos en sede única.
+            _league_for_neutral = row.get("league", row.get("sport_key", ""))
+            _is_neutral_match   = _league_for_neutral in NEUTRAL_VENUE_LEAGUES
+            mle_result = get_dc_lambdas(home, away, is_neutral=_is_neutral_match)
             if mle_result is not None:
                 mle_lh, mle_la = mle_result
                 lambda_home = lambda_home * (1 - DC_MLE_WEIGHT) + mle_lh * DC_MLE_WEIGHT
@@ -673,7 +724,10 @@ def run_prediction_pipeline():
         # POISSON
         # =========================
 
-        poisson_probs = totals_and_btts(lambda_home, lambda_away)
+        # MEJORA #3: pasar rho para usar Dixon-Coles tau-correction.
+        # Mejora calibración de BTTS (-30pp de bias en sample 90d).
+        poisson_probs = totals_and_btts(lambda_home, lambda_away,
+                                        rho=DC_RHO_GLOBAL)
 
         # =========================
         # HALF-TIME PREDICTIONS (h2h_h1 / h2h_h2)
@@ -1005,15 +1059,23 @@ def run_prediction_pipeline():
         # Después aplica factores por mercado si hay suficientes datos.
         GLOBAL_CALIBRATION = 0.85
 
+        # Liga del partido — usado para calibración específica (Mundial/Euro/etc.)
+        _row_league = row.get("league", row.get("sport_key", "")) if hasattr(row, "get") \
+                      else getattr(row, "league", "") or getattr(row, "sport_key", "")
+
         for market in list(probabilities.keys()):
             # Paso 1: corrección global de sobreconfianza
             probabilities[market] = probabilities[market] * GLOBAL_CALIBRATION
 
-            # Paso 2: corrección por mercado (si hay 50+ bets históricas)
+            # Paso 2: calibración por mercado.
+            # MEJORA #5 — apply_calibration usa isotonic regression (curva
+            # no-paramétrica) cuando hay sample suficiente (n>=30); si no,
+            # cae al factor escalar suavizado bayesianamente. Para mercados
+            # sin sample, deja la prob sin tocar.
             if cal_active:
-                factor = get_calibration_factor(market)
-                if factor != 1.0:
-                    probabilities[market] *= factor
+                probabilities[market] = apply_calibration(
+                    probabilities[market], market, league=_row_league
+                )
 
             # Clamp final
             probabilities[market] = min(0.95, max(0.05, probabilities[market]))
@@ -1156,8 +1218,42 @@ def run_prediction_pipeline():
         # Antes filtrábamos `bet["edge"] < 0.10` que con odds 5.0 dejaba
         # pasar bets con solo 5% de edge real → bucket 15-20% edge tenía
         # -23.7% ROI (overfit). Ahora filtramos sobre edge_market real.
-        MIN_EDGE = 0.05        # 5% de edge real vs línea (era 0.10 sobre EV inflado)
+        MIN_EDGE = 0.05        # default — usado si el mercado no está en MIN_EDGE_BY_MARKET
         MAX_ODDS = 3.80        # elimina longshots que no pegan
+
+        # MEJORA #3 (Sprint 2 — 06-may-26): MIN_EDGE adaptativo por mercado.
+        # Valores derivados del backtest 120d sobre 585 bets — para cada mercado
+        # se barrió el threshold 0.03..0.15 y se eligió un punto conservador
+        # (no el óptimo absoluto, para evitar overfit con muestras chicas).
+        # Mercados sin entrada caen al MIN_EDGE global (0.05).
+        MIN_EDGE_BY_MARKET = {
+            # Mercados grandes (n≥100) — mantenemos cerca del 5% global para
+            # no recortar +EV ya validado en producción. El A/B sobre 386 bets
+            # muestra que subir estos a 0.06 recorta ~6 bets ganadoras.
+            "home_win":     0.05,
+            "over25":       0.05,
+            "under25":      0.04,   # backtest: +EV a edge bajo (n=25)
+
+            # Mercados pequeños/ruidosos — exigir mayor edge
+            "draw":         0.08,   # n=15 — alta varianza
+            "btts":         0.06,   # bias estructural BTTS sobreestimado
+            "btts_no":      0.10,   # backtest -42% ROI a 5% → solo alto edge
+            "dnb_away":     0.08,   # backtest: positivo solo en edge alto
+
+            # Doble oportunidad (cuotas bajas — necesitan más edge para +EV)
+            "dc_1x":        0.06,
+            "dc_x2":        0.06,
+
+            # Asian Handicap — longshot bias en dogs requiere más edge
+            "ah_home_fav":  0.05,
+            "ah_home_pk":   0.06,
+            "ah_home_dog":  0.08,
+            "ah_away_fav":  0.05,
+            "ah_away_pk":   0.06,
+            "ah_away_dog":  0.08,
+            # `away_win` y `dnb_home` siguen BLOQUEADOS (líneas más abajo) —
+            # no figuran aquí porque el filtro de mercado-bloqueado los corta.
+        }
 
         # Ligas problemáticas: exigir más edge
         TOUGH_LEAGUES = {
@@ -1181,6 +1277,19 @@ def run_prediction_pipeline():
         _league = row.get("league", row.get("sport_key", ""))
         if _league in BLOCKED_LEAGUES:
             continue
+
+        # ── MEJORA #12: filtro de partidos "raros" ─────────────────
+        # Dead rubber (ambos en zona media, fin de temporada) o asimetría
+        # extrema de motivación → resultado impredecible. Saltar.
+        try:
+            from src.features.motivation_factor import is_unreliable_match
+            _unreliable, _why = is_unreliable_match(
+                row.get("home_team",""), row.get("away_team",""), _league
+            )
+            if _unreliable:
+                continue
+        except Exception:
+            pass   # si la feature falla, no bloquea
 
         # ── Penalización Lun-Mié (ROI -27% a -60%) ──────────────────
         # Partidos entre semana (copas, recuperaciones) tienen datos
@@ -1269,18 +1378,21 @@ def run_prediction_pipeline():
             if mkt == "draw" and not (2.5 <= _odds <= 5.0):
                 continue
 
-            # ── Edge mínimo dinámico ─────────────────────────────────
+            # ── Edge mínimo dinámico (Mejora #3 — por mercado) ──────
             # Usar `edge_market` (prob - implied) — el verdadero edge.
             # `edge` (= edge_ev) infla con odds altas y rompe filtros.
             _edge_real = bet.get("edge_market", bet["edge"])
-            if _league in TOUGH_LEAGUES and _edge_real < 0.07:
-                continue
 
-            # ── Mejora 5: Penalización entre semana ──────────────────
-            # Lun-Mié: exigir 40% más edge (ROI -28% a -60% historico)
-            _min_edge = MIN_EDGE
+            # 1) Threshold base por mercado (Mejora #3)
+            _min_edge = MIN_EDGE_BY_MARKET.get(mkt, MIN_EDGE)
+
+            # 2) Bump por liga problemática (Italia, MLS, Ligue 1)
+            if _league in TOUGH_LEAGUES:
+                _min_edge = max(_min_edge, 0.07)
+
+            # 3) Bump por partido entre semana Lun-Mié (datos menos fiables)
             if _midweek:
-                _min_edge = MIN_EDGE * 1.4   # 0.05 → 0.07
+                _min_edge *= 1.4
 
             if _edge_real < _min_edge:
                 continue
@@ -1293,7 +1405,14 @@ def run_prediction_pipeline():
             if group and group in groups_used:
                 continue
 
-            stake = kelly_stake(bet["probability"], bet["odds"], bankroll=current_bankroll)
+            # MEJORA #14: pasar market+league para que kelly_stake module la
+            # fracción según el CLV histórico (ver _adjusted_kelly_fraction).
+            stake = kelly_stake(
+                bet["probability"], bet["odds"],
+                bankroll=current_bankroll,
+                market=mkt,
+                league=_league,
+            )
 
             all_bets.append({
                 "match":       f"{home} vs {away}",
@@ -1464,6 +1583,67 @@ def run_prediction_pipeline():
             f"Exposición: {sum(b['stake'] for b in all_bets)/current_bankroll*100:.1f}%"
         )
 
-    save_bets(all_bets)
+    # =========================
+    # PAPER-TRADING SPLIT (Kill-Switch Mundial)
+    # =========================
+    # Las ligas en PAPER_ONLY_LEAGUES NO entran a bets_history. Su única
+    # huella es data/paper_trades.jsonl. Esto garantiza que durante el
+    # periodo de validación del Mundial 2026 el modelo pueda predecir sin
+    # contaminar bankroll, ROI ni CLV.
+    from config.settings import PAPER_ONLY_LEAGUES
 
+    real_bets  = []
+    paper_bets = []
+    for b in all_bets:
+        if b.get("league") in PAPER_ONLY_LEAGUES:
+            b["is_paper"] = True
+            paper_bets.append(b)
+        else:
+            b["is_paper"] = False
+            real_bets.append(b)
+
+    if paper_bets:
+        _persist_paper_bets(paper_bets)
+        print(f"\n📝 PAPER-TRADING: {len(paper_bets)} bets de "
+              f"{', '.join(sorted(PAPER_ONLY_LEAGUES))} → data/paper_trades.jsonl "
+              f"(NO insertadas en bets_history)")
+
+    save_bets(real_bets)
+
+    # Devolvemos TODAS (real + paper) para que notify_telegram las muestre
     return all_bets
+
+
+def _persist_paper_bets(paper_bets: list[dict]) -> None:
+    """
+    Append-only log de bets paper-trading.
+
+    Formato JSONL en data/paper_trades.jsonl. Cada línea es un dict serializable.
+    No usa la DB (queremos cero contaminación con datos reales).
+    """
+    import json
+    from pathlib import Path
+    from datetime import datetime, timezone
+
+    paper_log = Path(__file__).resolve().parents[2] / "data" / "paper_trades.jsonl"
+    paper_log.parent.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    try:
+        with open(paper_log, "a", encoding="utf-8") as f:
+            for b in paper_bets:
+                row = {
+                    "logged_at":   timestamp,
+                    "match":       b.get("match"),
+                    "match_date":  str(b.get("match_date", "")),
+                    "league":      b.get("league"),
+                    "market":      b.get("market"),
+                    "probability": float(b.get("probability", 0)),
+                    "odds":        float(b.get("odds", 0)),
+                    "edge":        float(b.get("edge", 0)),
+                    "stake":       float(b.get("stake", 0)),
+                }
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception as e:
+        # No rompemos el pipeline si el log falla — solo avisamos
+        print(f"⚠️  No se pudo escribir paper_trades.jsonl: {e}")

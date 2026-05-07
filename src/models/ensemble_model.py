@@ -118,25 +118,79 @@ def _agreement(p1, p2, p3) -> float:
 # PESOS ADAPTATIVOS
 # =========================
 
-def _adaptive_weights(agreement: float, elo_available: bool) -> tuple[float, float, float]:
+# MEJORA #8 (Sprint 3) — Pesos del ensemble configurables vía JSON.
+# Si config/ensemble_weights.json tiene pesos para un mercado dado, se usan
+# esos en lugar de los hardcoded. Permite tuneo sin tocar código y prepara
+# terreno para un stacking model real (LR/GBM sobre predicciones).
+import json as _json
+from pathlib import Path as _Path
+
+_ENSEMBLE_WEIGHTS_FILE = (
+    _Path(__file__).parent.parent.parent / "config" / "ensemble_weights.json"
+)
+_ensemble_weights_cache: dict | None = None
+
+
+def _load_ensemble_weights() -> dict:
+    """Carga los pesos overrideados desde JSON (cache en memoria)."""
+    global _ensemble_weights_cache
+    if _ensemble_weights_cache is not None:
+        return _ensemble_weights_cache
+    try:
+        if _ENSEMBLE_WEIGHTS_FILE.exists():
+            _ensemble_weights_cache = _json.loads(_ENSEMBLE_WEIGHTS_FILE.read_text())
+        else:
+            _ensemble_weights_cache = {}
+    except Exception:
+        _ensemble_weights_cache = {}
+    return _ensemble_weights_cache
+
+
+def _agreement_band(agreement: float) -> str:
+    """Convierte agreement [0,1] en bucket discreto."""
+    if agreement >= 0.80: return "high"
+    if agreement >= 0.50: return "med"
+    return "low"
+
+
+def _adaptive_weights(agreement: float, elo_available: bool,
+                       market: str | None = None) -> tuple[float, float, float]:
     """
     Ajusta los pesos según el nivel de acuerdo entre señales.
 
     Alta coincidencia → Dixon-Coles domina (es la señal más sofisticada)
     Baja coincidencia → más peso a ELO (señal más estable a largo plazo)
     Sin ELO           → redistribuye peso entre Dixon y Form
+
+    Mejora #8: si `market` se provee y hay override en
+    config/ensemble_weights.json para (market, agreement_band), usa esos
+    pesos en lugar de los hardcoded. Esto permite tuneo sin tocar código.
     """
     if not elo_available:
         return 0.70, 0.00, 0.30
 
+    # Override desde JSON
+    if market is not None:
+        weights = _load_ensemble_weights()
+        by_market = weights.get("by_market", {})
+        market_node = by_market.get(market, {})
+        band_weights = market_node.get(_agreement_band(agreement))
+        if isinstance(band_weights, (list, tuple)) and len(band_weights) == 3:
+            try:
+                w_dc, w_elo, w_form = (float(x) for x in band_weights)
+                # Sanity check — pesos deben sumar ~1 y ser positivos
+                total = w_dc + w_elo + w_form
+                if 0.95 <= total <= 1.05 and min(w_dc, w_elo, w_form) >= 0:
+                    return w_dc / total, w_elo / total, w_form / total
+            except (TypeError, ValueError):
+                pass   # mal formado, cae a defaults
+
+    # Defaults hardcoded (los mismos que antes)
     if agreement >= 0.80:
-        # Señales muy alineadas → confiar en la más sofisticada
         return 0.60, 0.25, 0.15
     elif agreement >= 0.50:
-        # Acuerdo moderado → pesos balanceados
         return 0.50, 0.30, 0.20
     else:
-        # Señales divergentes → más peso a ELO (más estable)
         return 0.35, 0.45, 0.20
 
 
@@ -152,6 +206,7 @@ def ensemble_predict(
     home_defense: float,
     away_attack:  float,
     away_defense: float,
+    market:       str | None = None,
 ) -> dict:
     """
     Combina las tres señales en una predicción unificada.
@@ -196,8 +251,8 @@ def ensemble_predict(
         (form_h, form_d, form_a)
     )
 
-    # Pesos adaptativos
-    w_dc, w_elo, w_form = _adaptive_weights(agreement, elo_available)
+    # Pesos adaptativos (con override por mercado si existe en JSON — Mejora #8)
+    w_dc, w_elo, w_form = _adaptive_weights(agreement, elo_available, market=market)
 
     # Blend final
     h = dc_h * w_dc + elo_h * w_elo + form_h * w_form

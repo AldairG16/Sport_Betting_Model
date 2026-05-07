@@ -61,11 +61,68 @@ DECAY_PER_DAY   = 0.006    # decay temporal — vida media ~115 días (antes 0.0
                            # Más sensible a forma reciente y cambios de entrenador
 MIN_MATCHES     = 8        # mínimo de partidos para incluir un equipo en el ajuste
 MAX_SEASONS     = 3        # usar solo últimas 3 temporadas (≈ 3 × 365 días)
-REGULARIZATION  = 0.001    # L2 regularization para evitar overfitting en equipos con pocos datos
-MAX_ITER        = 300      # iteraciones máximas del optimizador
+MAX_ITER        = 2000     # iteraciones máximas del optimizador
+                           # L-BFGS-B con limited-memory Hessian → ~30s aún con 2000 iters
+                           # Necesario para convergencia plena con prior + reg fuerte
+
+# ─── L2 Regularization (Sprint 1 — item #1, 06-may-26) ──────────────────
+# El fit anterior tenía REG=0.001 sobre attacks/defenses y NADA sobre rho.
+# Síntomas: rho=0.0 (corner solution) — el optimizador se quedaba pegado
+# al borde superior por dos razones: (a) `np.clip` mataba el gradiente,
+# (b) sin prior, pequeñas variaciones de data movían rho cualquier dirección.
+#
+# Fixes aplicados:
+#   1. Transformación sigmoide de rho → siempre en (-0.5, 0), gradiente fluye.
+#   2. Prior bayesiano fuerte sobre rho (PRIOR_RHO=-0.10, REG_RHO=50)
+#      → centrado en el valor empírico DC97 (Dixon-Coles 1997).
+#   3. L2 sobre teams subido 10x (0.001 → 0.01) para shrinkage efectivo
+#      en los 534 equipos (muchos con n<20 partidos).
+REG_TEAMS       = 0.001    # L2 sobre attacks/defenses (mismo valor original)
+                           # 0.005 y 0.01 sobre-encogían: x0 arranca en zeros
+                           # y la reg fuerte impide que los params "alcancen"
+                           # su escala natural (std ~0.58) antes que se acabe
+                           # MAX_ITER. El L2 estaba aplastando el dynamic range
+                           # 3x (std 0.58 → 0.19) → top teams indiferenciables
+                           # de mid-tier → Brier individual peor.
+                           # Conclusión: el rho era el verdadero problema, NO
+                           # la reg de teams. Mantenemos 0.001 (reg suave).
+REG_RHO         = 50.0     # L2 sobre desviación de rho del prior (fuerte)
+PRIOR_RHO       = -0.10    # valor empírico DC97 (~ promedio fútbol europeo)
+RHO_BOUND       = 0.5      # |rho| <= 0.5 (límite sano vía sigmoide)
+
+# Backwards-compat: REGULARIZATION antiguo se mapea a REG_TEAMS por si
+# algún script externo lo importaba.
+REGULARIZATION  = REG_TEAMS
 
 # ─── Blend con el pipeline actual ────────────────────────────────────────
 DC_MLE_WEIGHT   = 0.40     # 40% MLE + 60% forma actual → transición suave
+
+
+def _rho_from_x(x):
+    """
+    Transforma el parámetro libre x ∈ ℝ a rho ∈ (-0.5, 0) vía sigmoide.
+    rho = -RHO_BOUND * sigmoid(x)
+    Inversa: x = log(-rho / (RHO_BOUND + rho))   con rho < 0.
+
+    Por qué: el código viejo usaba `np.clip(params[-1], -0.5, 0.0)` directamente
+    sobre el parámetro a optimizar. Eso crea un plateau con gradiente nulo
+    cuando params[-1] > 0, y SLSQP queda atrapado en rho=0 (corner solution).
+    Con sigmoide, rho siempre vive estrictamente dentro del rango y el
+    gradiente fluye en todo ℝ.
+    """
+    # clip estabiliza la exp para evitar overflow en x muy positivos
+    x_safe = np.clip(x, -50.0, 50.0)
+    return -RHO_BOUND / (1.0 + np.exp(-x_safe))
+
+
+def _x_from_rho(rho):
+    """Inversa de _rho_from_x — usada para inicializar."""
+    rho = float(rho)
+    if rho >= 0:
+        rho = -1e-6
+    if rho <= -RHO_BOUND:
+        rho = -RHO_BOUND + 1e-6
+    return float(np.log(-rho / (RHO_BOUND + rho)))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -88,7 +145,8 @@ def fit_dc_parameters(verbose: bool = True) -> dict:
 
     try:
         df = pd.read_sql(f"""
-            SELECT home_team, away_team, home_goals, away_goals, date
+            SELECT home_team, away_team, home_goals, away_goals, date,
+                   COALESCE(neutral, FALSE) AS neutral
             FROM matches
             WHERE home_goals IS NOT NULL
               AND away_goals IS NOT NULL
@@ -131,16 +189,24 @@ def fit_dc_parameters(verbose: bool = True) -> dict:
     hg      = df["home_goals"].values.astype(int)
     ag      = df["away_goals"].values.astype(int)
     weights = df["weight"].values
+    # Multiplicador de home_adv: 0.0 si neutral, 1.0 si venue normal.
+    # Crítico para selecciones nacionales (Mundial 2026, Euro, Copa América)
+    # donde la mayoría de partidos se juegan en sede neutral. Sin esto, el
+    # fitter aprende un home_adv inflado que sobreestima al "local" en los
+    # partidos del Mundial.
+    h_adv_mult = (~df["neutral"].astype(bool).values).astype(float)
 
     # ── Función de log-verosimilitud (vectorizada) ────────────────────────
     def neg_log_likelihood(params):
         attacks  = params[:n_teams]
         defenses = params[n_teams : 2 * n_teams]
         home_adv = params[-2]
-        rho      = np.clip(params[-1], -0.5, 0.0)
+        # rho via sigmoide → siempre en (-RHO_BOUND, 0), gradiente fluye
+        rho      = _rho_from_x(params[-1])
 
         # Lambdas en log-espacio (garantiza λ > 0)
-        lam_h = np.exp(attacks[h_idx] + defenses[a_idx] + home_adv)
+        # h_adv_mult = 0 en partidos neutrales → home_adv no contribuye
+        lam_h = np.exp(attacks[h_idx] + defenses[a_idx] + home_adv * h_adv_mult)
         lam_a = np.exp(attacks[a_idx] + defenses[h_idx])
 
         # Log-probabilidades de Poisson
@@ -154,41 +220,85 @@ def fit_dc_parameters(verbose: bool = True) -> dict:
         # Log-likelihood total con pesos
         ll = weights * (log_p_h + log_p_a + log_tau)
 
-        # L2 regularization (evita extremos con pocos datos)
-        reg = REGULARIZATION * (np.sum(attacks**2) + np.sum(defenses**2))
+        # L2 regularization sobre teams (evita extremos con pocos datos)
+        reg_teams = REG_TEAMS * (np.sum(attacks**2) + np.sum(defenses**2))
+        # Prior bayesiano sobre rho hacia el valor empírico DC97 = -0.10
+        # Sin esto el optimizer derivaba a rho=0 por ruido en data internacional.
+        reg_rho   = REG_RHO * (rho - PRIOR_RHO) ** 2
 
-        return -(np.sum(ll) - reg)
+        return -(np.sum(ll) - reg_teams - reg_rho)
 
     # ── Parámetros iniciales ──────────────────────────────────────────────
-    x0              = np.zeros(2 * n_teams + 2)
-    x0[-2]          = 0.25   # home_advantage inicial
-    x0[-1]          = -0.13  # rho inicial (valor empírico DC97)
+    # Warm start desde el fit anterior si existe, así el optimizador no
+    # tiene que recorrer todo el camino desde x0=0 → ahorra ~50% iters
+    # y mantiene el dynamic range natural de teams (std ~0.58 en attacks).
+    # Sin warm-start, con 669 teams × 2 params = 1340 dims, L-BFGS-B se
+    # queda corto y devuelve params demasiado encogidos hacia 0.
+    x0 = np.zeros(2 * n_teams + 2)
+    x0[-2] = 0.25                       # home_advantage inicial
+    x0[-1] = _x_from_rho(PRIOR_RHO)     # rho inicial = prior
+
+    if DC_PARAMS_FILE.exists():
+        try:
+            with open(DC_PARAMS_FILE, "r") as f:
+                prev = json.load(f)
+            prev_teams = prev.get("teams", {})
+            warm = 0
+            for team, idx in team_idx.items():
+                p = prev_teams.get(team)
+                if p:
+                    x0[idx]            = p["attack"]
+                    x0[n_teams + idx]  = p["defense"]
+                    warm += 1
+            if warm > 0:
+                # home_adv del fit previo (si existe) — más cerca del óptimo
+                if "home_adv" in prev:
+                    x0[-2] = float(prev["home_adv"])
+                if verbose:
+                    print(f"   Warm-start: {warm}/{n_teams} equipos heredados de fit previo")
+        except Exception as e:
+            if verbose:
+                print(f"   Warm-start falló ({e}) — arrancando desde zeros")
 
     # ── Optimización ─────────────────────────────────────────────────────
-    # Restricción: mean(attacks) = 0 para identificabilidad
-    constraints = [{"type": "eq", "fun": lambda x: np.mean(x[:n_teams])}]
-
+    # Antes: SLSQP con constraint mean(attacks)=0. Funcionaba pero se trababa
+    # con 1070 params (10+ min con MAX_ITER=500) por finite differences O(n²).
+    #
+    # Ahora: L-BFGS-B sin constraint + identificabilidad post-fit.
+    # El modelo Dixon-Coles es invariante al shift α→α+c, β→β-c (los
+    # lambdas no cambian). Entonces optimizamos libremente y al terminar
+    # restamos mean(α) de los attacks y se lo sumamos a los defenses.
+    # L-BFGS-B con limited-memory Hessian escala O(n), no O(n²) → ~30s.
     if verbose:
-        print("   Optimizando... (puede tardar 20-60 segundos)")
+        print("   Optimizando con L-BFGS-B... (~20-40 segundos)")
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         result = minimize(
             neg_log_likelihood,
             x0,
-            method="SLSQP",
-            constraints=constraints,
-            options={"maxiter": MAX_ITER, "ftol": 1e-7, "disp": False},
+            method="L-BFGS-B",
+            options={"maxiter": MAX_ITER, "ftol": 1e-7, "gtol": 1e-5, "disp": False},
         )
 
     if not result.success and verbose:
         print(f"   ⚠️  Optimizador no convergió perfectamente: {result.message}")
 
     params   = result.x
-    attacks  = params[:n_teams]
-    defenses = params[n_teams : 2 * n_teams]
+    attacks  = params[:n_teams].copy()
+    defenses = params[n_teams : 2 * n_teams].copy()
     home_adv = float(params[-2])
-    rho      = float(np.clip(params[-1], -0.5, 0.0))
+    # Mismo destransformado que neg_log_likelihood — NO usar np.clip aquí
+    # porque mata el gradiente y produce el corner solution rho=0.0.
+    rho      = float(_rho_from_x(params[-1]))
+
+    # ── Identificabilidad por simetría del modelo ─────────────────────────
+    # Dixon-Coles es invariante a α→α+c, β→β-c (los λ no cambian).
+    # Restamos la media de attacks y la sumamos a defenses → mean(α)=0.
+    # Esto ancla la escala de los parámetros sin afectar las predicciones.
+    alpha_mean = float(np.mean(attacks))
+    attacks  -= alpha_mean
+    defenses += alpha_mean
 
     # ── Guardar resultados ─────────────────────────────────────────────────
     team_params = {
@@ -248,13 +358,21 @@ def _load_params() -> dict:
     return {}
 
 
-def get_dc_lambdas(home_team: str, away_team: str) -> tuple[float, float] | None:
+def get_dc_lambdas(
+    home_team: str,
+    away_team: str,
+    is_neutral: bool = False,
+) -> tuple[float, float] | None:
     """
     Retorna (lambda_home, lambda_away) usando los parámetros MLE ajustados.
 
     Args:
-        home_team: nombre del equipo local (normalizado)
-        away_team: nombre del equipo visitante (normalizado)
+        home_team:  nombre del equipo local (normalizado)
+        away_team:  nombre del equipo visitante (normalizado)
+        is_neutral: True si el partido se juega en sede neutral (Mundial,
+                    Euro, Copa América, finales/semifinales en sede única).
+                    Cuando True, home_adv se anula → lambdas simétricas en
+                    términos de venue. Crítico para selecciones nacionales.
 
     Returns:
         (lambda_home, lambda_away) o None si algún equipo no está en los parámetros
@@ -278,7 +396,7 @@ def get_dc_lambdas(home_team: str, away_team: str) -> tuple[float, float] | None
     if home_p is None or away_p is None:
         return None
 
-    home_adv = params.get("home_adv", 0.25)
+    home_adv = 0.0 if is_neutral else params.get("home_adv", 0.25)
 
     lambda_home = np.exp(home_p["attack"] + away_p["defense"] + home_adv)
     lambda_away = np.exp(away_p["attack"] + home_p["defense"])
