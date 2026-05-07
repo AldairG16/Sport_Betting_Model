@@ -151,6 +151,31 @@ PRE_KICKOFF_WINDOW_MAX = env_int("PRE_KICKOFF_WINDOW_MAX", 90)
 # Cambia este valor en .env si estás en otra zona: USER_TIMEZONE=America/New_York
 USER_TIMEZONE = os.environ.get("USER_TIMEZONE", "America/Mexico_City")
 
+# ============================================================
+# WORLD CUP 2026 KILL-SWITCH
+# ============================================================
+# Default: False → modelo NO apuesta dinero real en `soccer_fifa_world_cup`.
+# Cuando False, las predicciones del Mundial:
+#   - NO se insertan en bets_history (no afectan bankroll/ROI/CLV)
+#   - Se loguean a data/paper_trades.jsonl
+#   - Se muestran en Telegram con tag [PAPER]
+#   - Pre-kickoff analyst NO las analiza (no están en bets_history)
+#
+# Para activar dinero real en Mundial:
+#   1. Validar walk-forward 2022 con ROI ≥ 0
+#   2. Validar paper-trading 1-2 semanas
+#   3. Setear WORLD_CUP_BETTING_ENABLED=true como secret de GitHub
+#   4. Re-ejecutar el workflow
+#
+# Variable de entorno: WORLD_CUP_BETTING_ENABLED ("true" / "false")
+WORLD_CUP_BETTING_ENABLED = env_str("WORLD_CUP_BETTING_ENABLED", "false").lower() == "true"
+
+# Ligas tratadas como "paper-only" hasta que el kill-switch esté en true.
+PAPER_ONLY_LEAGUES = set()
+if not WORLD_CUP_BETTING_ENABLED:
+    PAPER_ONLY_LEAGUES.add("soccer_fifa_world_cup")
+
+
 SPORT_KEYS = [
     # ── Tier 1: Ligas RENTABLES (walk-forward ROI positivo) ──────────
     "soccer_brazil_campeonato",           # +53.7% ROI, mejor liga del modelo
@@ -160,7 +185,7 @@ SPORT_KEYS = [
     "soccer_argentina_primera_division",  # +10.3% ROI, alta varianza
     "soccer_portugal_primeira_liga",      # +25.8% ROI, mercados blandos
     "soccer_spain_la_liga",               # +10.0% ROI, estable
-    "soccer_spl",                         # 2189 partidos historicos, datos ya cargados
+    # "soccer_spl",                       # BLOQUEADA 06-may-26: -2.45u/6 bets en 90d (-52% ROI), mercado pequeño
 
     # ── Tier 2: Big 5 con ROI marginal (monitoreando) ───────────────
     "soccer_epl",                         # -25% ROI pero muestra chica (7 bets)
@@ -177,7 +202,7 @@ SPORT_KEYS = [
     "soccer_korea_kleague1",              # 3403 matches, predecible
     # "soccer_norway_eliteserien",        # BLOQUEADA 04-may-26: solo 32 partidos historicos — sample insuficiente
     "soccer_sweden_allsvenskan",          # 3392 matches, liga verano
-    "soccer_china_superleague",           # 2840 matches, mercado MUY blando
+    # "soccer_china_superleague",         # BLOQUEADA 06-may-26: -1.12u/5 bets en 60d (-22% ROI), liga lejana → ahorra créditos API
 
     # ── Americas extra ──────────────────────────────────────────────
     "soccer_usa_mls",                     # -44% ROI, tough league (monitoreando)

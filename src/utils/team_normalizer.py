@@ -2,6 +2,7 @@ import unicodedata
 
 from src.utils.team_name_map import TEAM_NAME_MAP
 from src.utils.team_alias_map import TEAM_ALIASES
+from src.utils.national_team_aliases import NATIONAL_TEAM_ALIASES
 
 
 # =========================
@@ -41,6 +42,11 @@ def normalize_team(name):
 
     name = clean_name(name)
 
+    # STEP 0: aliases de selecciones nacionales (preferente — corre antes
+    # que el resto porque "korea republic" → "south korea" debe resolverse
+    # antes de que TEAM_ALIASES lo tome por error como un club).
+    name = NATIONAL_TEAM_ALIASES.get(name, name)
+
     # STEP 1 alias
     name = TEAM_ALIASES.get(name, name)
 
@@ -49,5 +55,9 @@ def normalize_team(name):
 
     # 🔥 STEP 3 (CRÍTICO): segundo alias pass
     name = TEAM_ALIASES.get(name, name)
+
+    # STEP 4: segundo pass nacional — captura cuando STEP 2 dejó un nombre
+    # canónico que aún tiene alias (raro pero defensivo).
+    name = NATIONAL_TEAM_ALIASES.get(name, name)
 
     return name

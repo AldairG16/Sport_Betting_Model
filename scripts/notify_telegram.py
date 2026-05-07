@@ -17,6 +17,7 @@ Uso:
 
 import sys
 import os
+import json
 import requests
 import pandas as pd
 from pathlib import Path
@@ -248,6 +249,7 @@ LEAGUE_LABELS = {
     "soccer_argentina_primera_division":        "Argentina",
     "soccer_conmebol_copa_libertadores":        "Libertadores",
     "soccer_fifa_world_cup_qualifiers_europe":  "WCQ Europa",
+    "soccer_fifa_world_cup":                    "Mundial 2026",
     # Nuevas ligas europeas (mercados blandos)
     "soccer_turkey_super_league":               "Super Lig Turquia",
     "soccer_belgium_first_div":                 "Jupiler Pro League",
@@ -491,6 +493,145 @@ def format_bets_message(bets: pd.DataFrame) -> tuple:
 
 
 # ============================================================
+# PAPER-TRADING SECTION (Mundial 2026, etc.)
+# ============================================================
+# Las apuestas de ligas en `PAPER_ONLY_LEAGUES` (típicamente
+# `soccer_fifa_world_cup`) NO entran a `bets_history` mientras el kill-switch
+# `WORLD_CUP_BETTING_ENABLED=false`. Se loguean a `data/paper_trades.jsonl`
+# para auditoría. Esta sección las muestra en Telegram con tag [PAPER] para
+# que el usuario vea las predicciones del modelo sin que afecten bankroll.
+PAPER_LOG_PATH = Path(__file__).resolve().parents[1] / "data" / "paper_trades.jsonl"
+
+
+def _read_paper_trades_for_date(target_date) -> list:
+    """
+    Lee data/paper_trades.jsonl y filtra entradas cuyo match_date (UTC) caiga
+    en `target_date` (interpretado en USER_TIMEZONE).
+    Devuelve lista de dicts (puede ser vacía).
+    """
+    if not PAPER_LOG_PATH.exists():
+        return []
+
+    rows = []
+    try:
+        with open(PAPER_LOG_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except Exception as e:
+        print(f"⚠️  No se pudo leer paper trades log: {e}")
+        return []
+
+    # Filtrar por fecha local del usuario
+    out = []
+    seen = set()      # (match, market) — evita duplicados de reruns del pipeline
+    tz = ZoneInfo(USER_TIMEZONE)
+    for r in rows:
+        md = r.get("match_date")
+        if not md:
+            continue
+        try:
+            dt = pd.to_datetime(md)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            local_date = dt.astimezone(tz).date()
+        except Exception:
+            continue
+        if local_date != target_date:
+            continue
+        key = (r.get("match", ""), r.get("market", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+
+    # Orden: por match_date ASC, luego por edge DESC
+    out.sort(key=lambda x: (x.get("match_date", ""), -float(x.get("edge", 0) or 0)))
+    return out
+
+
+def _format_paper_bets_section(target_date) -> str:
+    """
+    Construye un bloque Telegram con las apuestas paper-trading del día.
+    Devuelve "" si no hay paper trades.
+    """
+    paper_rows = _read_paper_trades_for_date(target_date)
+    if not paper_rows:
+        return ""
+
+    lines = [
+        "",
+        "━" * 25,
+        "📝 <b>[PAPER-TRADING — sin dinero real]</b>",
+        "<i>Predicciones del modelo NO incluidas en bankroll.</i>",
+        "",
+    ]
+
+    # Agrupar por liga
+    by_league = {}
+    for r in paper_rows:
+        lg = r.get("league", "")
+        by_league.setdefault(lg, []).append(r)
+
+    bet_num = 1
+    for league_key in sorted(by_league.keys()):
+        league_label = LEAGUE_LABELS.get(league_key, league_key or "Otras")
+        lines.append(f"🏆 <b>{league_label}</b>")
+
+        for r in by_league[league_key]:
+            market_label = _get_market_label(r.get("market", ""), r.get("match", ""))
+            try:
+                edge_pct = round(float(r.get("edge", 0)) * 100, 1)
+            except Exception:
+                edge_pct = 0.0
+            try:
+                prob_pct = round(float(r.get("probability", 0)) * 100, 1)
+            except Exception:
+                prob_pct = 0.0
+            try:
+                odds_val = round(float(r.get("odds", 0)), 2)
+            except Exception:
+                odds_val = 0.0
+            try:
+                stake_val = round(float(r.get("stake", 0)), 2)
+            except Exception:
+                stake_val = 0.0
+
+            date_match = ""
+            md = r.get("match_date")
+            if md:
+                try:
+                    dt = pd.to_datetime(md)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    dt_local = dt.astimezone(ZoneInfo(USER_TIMEZONE))
+                    date_match = dt_local.strftime("%d/%m %H:%M")
+                except Exception:
+                    pass
+
+            lines.append(
+                f"📝 {bet_num}. <b>{r.get('match', '')}</b>  {date_match}\n"
+                f"   🎯 {market_label}  @{odds_val}\n"
+                f"   📈 Edge: +{edge_pct}%  |  Prob: {prob_pct}%  |  💰 {stake_val}u <i>(simulada)</i>"
+            )
+            bet_num += 1
+
+        lines.append("")
+
+    total = bet_num - 1
+    lines.append(
+        f"<i>Total paper: {total} predicción{'es' if total != 1 else ''} "
+        f"(activar con WORLD_CUP_BETTING_ENABLED=true).</i>"
+    )
+    return "\n".join(lines)
+
+
+# ============================================================
 # MAIN
 # ============================================================
 def notify_best_bets():
@@ -517,22 +658,38 @@ def notify_best_bets():
         print(f"❌ Error leyendo bets: {e}")
         return
 
+    # Paper-trading section (Mundial 2026, etc.) — se agrega aunque NO haya
+    # confiables reales. Usuario debe ver predicciones del Mundial aunque
+    # estén desactivadas para apuesta real.
+    paper_section = _format_paper_bets_section(today)
+
     if bets.empty:
         print("⚠️  Sin value bets para hoy")
-        msg = (
-            f"⚽ <b>BETTING MODEL — {today.strftime('%d/%m/%Y')}</b>\n\n"
-            "Sin value bets detectadas para hoy."
-        )
+        if paper_section:
+            msg = (
+                f"⚽ <b>BETTING MODEL — {today.strftime('%d/%m/%Y')}</b>\n\n"
+                "Sin value bets confiables para apostar hoy."
+                f"\n{paper_section}"
+            )
+        else:
+            msg = (
+                f"⚽ <b>BETTING MODEL — {today.strftime('%d/%m/%Y')}</b>\n\n"
+                "Sin value bets detectadas para hoy."
+            )
         send_message(msg)
         _set_last_picks_shown(0)
         return
 
     msg, n_sent = format_bets_message(bets)
+    if paper_section:
+        msg = msg + "\n" + paper_section
     ok  = send_message(msg)
 
     if ok:
         _set_last_picks_shown(n_sent)
         print(f"✅ Enviados {n_sent} picks confiables a Telegram (de {len(bets)} pending crudas)")
+        if paper_section:
+            print("📝 Sección [PAPER] añadida al mensaje (Mundial / paper-only).")
     else:
         print("❌ No se pudo enviar a Telegram")
 
