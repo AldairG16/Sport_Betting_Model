@@ -641,13 +641,23 @@ def notify_best_bets():
     today = _local_today()
 
     try:
+        # u_dedup: dedup upcoming_matches por (home_norm, away_norm, sport_key)
+        # quedándonos con la row más reciente. Evita matchear con rows stale
+        # (mismo partido con fecha vieja) cuando la API corrige la fecha.
         bets = pd.read_sql(f"""
+            WITH u_dedup AS (
+                SELECT DISTINCT ON (home_team_norm, away_team_norm, sport_key)
+                       home_team, away_team, sport_key, updated_at
+                FROM upcoming_matches
+                ORDER BY home_team_norm, away_team_norm, sport_key,
+                         updated_at DESC NULLS LAST
+            )
             SELECT DISTINCT ON (match, market)
                    b.match, b.match_date, b.market,
                    b.probability, b.odds, b.edge, b.stake,
                    COALESCE(u.sport_key, b.league, '') as league
             FROM bets_history b
-            LEFT JOIN upcoming_matches u
+            LEFT JOIN u_dedup u
               ON LOWER(u.home_team) = LOWER(SPLIT_PART(b.match, ' vs ', 1))
              AND LOWER(u.away_team) = LOWER(SPLIT_PART(b.match, ' vs ', 2))
             WHERE {_tz_date_filter('b.match_date', today)}
@@ -709,12 +719,19 @@ def send_tomorrow_preview():
 
     try:
         bets = pd.read_sql(f"""
+            WITH u_dedup AS (
+                SELECT DISTINCT ON (home_team_norm, away_team_norm, sport_key)
+                       home_team, away_team, sport_key, updated_at
+                FROM upcoming_matches
+                ORDER BY home_team_norm, away_team_norm, sport_key,
+                         updated_at DESC NULLS LAST
+            )
             SELECT DISTINCT ON (match, market)
                    b.match, b.match_date, b.market,
                    b.probability, b.odds, b.edge, b.stake,
                    COALESCE(u.sport_key, b.league, '') as league
             FROM bets_history b
-            LEFT JOIN upcoming_matches u
+            LEFT JOIN u_dedup u
               ON LOWER(u.home_team) = LOWER(SPLIT_PART(b.match, ' vs ', 1))
              AND LOWER(u.away_team) = LOWER(SPLIT_PART(b.match, ' vs ', 2))
             WHERE {_tz_date_filter('b.match_date', tomorrow)}
@@ -824,11 +841,12 @@ def send_pre_kickoff_verdict(verdicts: list) -> bool:
         return False
 
     icon_map = {"STRONG": "🟢", "MEDIUM": "🟡", "SKIP": "🔴"}
-    lines = ["🔍 <b>PRE-KICKOFF</b>", ""]
+    lines = ["🔍 <b>PRE-KICKOFF — VEREDICTO DEL ANALISTA</b>", ""]
 
     # ── 1) STRONG / MEDIUM con detalle ──────────────────────────────────────
     for v in actionable:
         verdict      = (v.get("verdict") or "MEDIUM").upper()
+        decision     = (v.get("decision") or "").upper().strip()
         icon         = icon_map.get(verdict, "⚪")
         kickoff      = _format_kickoff_label(v.get("match_date"))
         match_title  = _format_match_title(v.get("match", ""))
@@ -843,14 +861,36 @@ def send_pre_kickoff_verdict(verdicts: list) -> bool:
         try:    edge_pct = float(v.get("edge", 0)) * 100
         except (TypeError, ValueError): edge_pct = 0.0
 
+        # Probabilidad estimada por el analista (entero 0-100)
+        try:    prob_pct = int(v.get("probability", 0) or 0)
+        except (TypeError, ValueError): prob_pct = 0
+
+        # Probabilidad implícita de la cuota (para que el usuario vea el edge)
+        implied_pct = (1.0 / odds_val) * 100 if odds_val > 1 else 0.0
+
+        # Decisión final destacada
+        dec_icon = "✅" if decision == "APUESTA" else "❌"
+        dec_label = decision or ("APUESTA" if verdict in ("STRONG", "MEDIUM") else "NO APUESTA")
+
         lines.append(f"{icon} <b>{verdict}</b>  {stars}")
         lines.append(f"🏟️ <b>{match_title}</b>")
         lines.append(f"🕐 {kickoff}")
-        lines.append(f"🎯 {market_label} @{odds_val:.2f}  (+{edge_pct:.1f}%)")
+        lines.append(f"🎯 {market_label} @{odds_val:.2f}  (modelo +{edge_pct:.1f}%)")
+        if prob_pct > 0:
+            lines.append(f"📊 Probabilidad estimada: <b>{prob_pct}%</b>  "
+                         f"(cuota implica {implied_pct:.0f}%)")
+        lines.append(f"{dec_icon} <b>{dec_label}</b>")
 
         reasoning = (v.get("reasoning") or "").strip()
         if reasoning:
             lines.append(f"💡 {reasoning}")
+
+        # Factores clave (lista breve)
+        factors = v.get("key_factors") or []
+        if isinstance(factors, list) and factors:
+            shown = [str(f).strip() for f in factors if str(f).strip()][:4]
+            if shown:
+                lines.append("🔑 " + " · ".join(shown))
 
         lineups = _format_lineups_label(v.get("lineups", ""))
         lines.append(f"👥 {lineups}")
@@ -859,22 +899,25 @@ def send_pre_kickoff_verdict(verdicts: list) -> bool:
     # ── 2) SKIP agrupados (1 línea por bet) ─────────────────────────────────
     if skipped:
         lines.append("━━━━━━━━━━━━━━━━━━")
-        lines.append(f"🔴 <b>Descartados ({len(skipped)}):</b>")
+        lines.append(f"❌ <b>NO APOSTAR — Descartados ({len(skipped)}):</b>")
         for v in skipped:
             match_title  = _format_match_title(v.get("match", ""))
             market_label = _get_market_label(v.get("market", ""), v.get("match", ""))
             reason       = (v.get("reasoning") or "").strip()
-            # Acortar reason a ≤60 chars para mantener 1 línea
-            if len(reason) > 60:
-                reason = reason[:57] + "..."
-            line = f"• <b>{match_title}</b> — {market_label}"
+            try:    prob_pct = int(v.get("probability", 0) or 0)
+            except (TypeError, ValueError): prob_pct = 0
+            # Acortar reason a ≤55 chars para mantener 1 línea
+            if len(reason) > 55:
+                reason = reason[:52] + "..."
+            prob_str = f" [{prob_pct}%]" if prob_pct > 0 else ""
+            line = f"• <b>{match_title}</b> — {market_label}{prob_str}"
             if reason:
                 line += f" ({reason})"
             lines.append(line)
         lines.append("")
 
-    lines.append("<i>Solo informativo — las apuestas siguen activas "
-                 "y se resuelven normal al final del día.</i>")
+    lines.append("<i>Veredicto del analista — las apuestas siguen activas "
+                 "en el modelo y se resuelven normal al final del día.</i>")
 
     # Bot dedicado de pre-kickoff (con fallback al principal si no está
     # configurado). Esto evita saturar el canal de morning/evening.

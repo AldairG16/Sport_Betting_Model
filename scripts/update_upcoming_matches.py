@@ -954,6 +954,38 @@ def _cleanup_old_matches():
         print(f"⚠️  Cleanup error: {e}")
 
 
+def _cleanup_stale_duplicates():
+    """
+    Elimina rows duplicadas en upcoming_matches del mismo partido (mismo
+    home_norm + away_norm + sport_key) cuando existe otra row con
+    `updated_at` MÁS reciente. Esto pasa cuando la API corrige la fecha
+    de un fixture (placeholder 00:00 UTC → kickoff real días después):
+    como `match_key` incluye la fecha, la corrección crea una row nueva
+    en vez de UPDATE, y la vieja queda stale.
+
+    Bug detectado el 8-may-2026 con Talleres vs Belgrano y otros 10 partidos
+    (AR/PT/EPL) — el pipeline generaba bets sobre rows desactualizadas.
+    """
+    try:
+        with engine.begin() as conn:
+            r = conn.execute(text("""
+                DELETE FROM upcoming_matches u
+                WHERE EXISTS (
+                    SELECT 1 FROM upcoming_matches v
+                    WHERE  v.home_team_norm = u.home_team_norm
+                      AND  v.away_team_norm = u.away_team_norm
+                      AND  v.sport_key      = u.sport_key
+                      AND  v.match_key     <> u.match_key
+                      AND  v.updated_at     > u.updated_at
+                )
+            """))
+            if r.rowcount > 0:
+                print(f"🗑️  Cleanup duplicados: {r.rowcount} rows stale eliminadas "
+                      f"(misma combinación de equipos con updated_at más reciente)")
+    except Exception as e:
+        print(f"⚠️  Cleanup duplicados error: {e}")
+
+
 def _preflight_credits_check() -> int | None:
     """
     Pregunta a /v4/sports (gratis, 0 créditos) por el balance actual.
@@ -1039,6 +1071,11 @@ def update_all(force: bool = False):
         upsert_matches(rows)
         total_rows += len(rows)
         print(f"   ✅ {len(rows)} partidos procesados")
+
+    # Limpieza de duplicados stale: si la API corrigió la fecha de un fixture
+    # (placeholder 00:00 UTC → kickoff real), elimina la row vieja para que la
+    # pipeline no vea 2 versiones del mismo partido.
+    _cleanup_stale_duplicates()
 
     print(f"\n✅ DONE — {total_rows} partidos totales | {api_calls} llamadas API realizadas")
 

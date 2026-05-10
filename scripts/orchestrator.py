@@ -157,6 +157,12 @@ def _ensure_db_indexes():
             )
             """,
             "CREATE INDEX IF NOT EXISTS idx_prekickoff_match_date ON pre_kickoff_analyses (match_date)",
+            # ── Migración aditiva: probability (0-100) y decision (APUESTA/NO APUESTA) ──
+            # Se agregaron 09-may-26 para que el analista sea más específico y
+            # para construir loop de aprendizaje (calibración real vs estimada).
+            # Nullables → backward compatible con rows viejas.
+            "ALTER TABLE pre_kickoff_analyses ADD COLUMN IF NOT EXISTS probability INT",
+            "ALTER TABLE pre_kickoff_analyses ADD COLUMN IF NOT EXISTS decision VARCHAR(15)",
         ]
         indexes = [
             # matches: búsquedas por equipo + fecha

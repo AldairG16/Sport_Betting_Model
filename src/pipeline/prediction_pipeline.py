@@ -265,11 +265,20 @@ def run_prediction_pipeline():
 
     elo = compute_elo()
 
+    # DISTINCT ON dedup: cuando un partido tiene 2 rows en upcoming_matches
+    # (típicamente un row stale con match_date vieja + uno nuevo con la fecha
+    # corregida), nos quedamos con el más reciente por updated_at. Esto evita
+    # generar predicciones sobre datos desactualizados — bug detectado el
+    # 8-may-2026 con Talleres/Belgrano y otros 10 partidos AR/PT/EPL.
     df = pd.read_sql("""
-        SELECT *
-        FROM upcoming_matches
-        WHERE match_date::timestamp BETWEEN NOW() + INTERVAL '1 hour'
-                     AND NOW() + INTERVAL '3 days'
+        SELECT * FROM (
+            SELECT DISTINCT ON (home_team_norm, away_team_norm, sport_key) *
+            FROM upcoming_matches
+            WHERE match_date::timestamp BETWEEN NOW() + INTERVAL '1 hour'
+                         AND NOW() + INTERVAL '3 days'
+            ORDER BY home_team_norm, away_team_norm, sport_key,
+                     updated_at DESC NULLS LAST
+        ) t
         ORDER BY match_date
     """, engine)
 

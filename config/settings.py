@@ -138,11 +138,19 @@ TELEGRAM_CHAT_ID_PREKICKOFF   = os.environ.get("TELEGRAM_CHAT_ID_PREKICKOFF", ""
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # Ventana (en minutos desde NOW) para considerar bets como "pre-kickoff".
-# Default 30-90 = atrapa partidos que arrancan en aprox 45-75 min.
-# Combinado con cron cada 15 min, da 4 oportunidades de capturar cada partido
-# (resiliente a retrasos del cron de GH Actions).
+# Default 30-90 = atrapa partidos que arrancan en ~30-90 min, justo cuando
+# las alineaciones probables/confirmadas y noticias de lesiones ya están
+# publicadas (típicamente 30-60 min antes del kickoff).
+# Combinado con cron-job externo cada 15 min (más confiable que GH Actions),
+# da 4 oportunidades de capturar cada partido y resiste delays moderados.
 PRE_KICKOFF_WINDOW_MIN = env_int("PRE_KICKOFF_WINDOW_MIN", 30)
 PRE_KICKOFF_WINDOW_MAX = env_int("PRE_KICKOFF_WINDOW_MAX", 90)
+
+# Threshold de edge mínimo (en puntos porcentuales) para que el analista
+# diga APUESTA. La regla es: probability_estimada >= prob_implicita + N.
+# Default 3 = relativamente conservador. Subí a 5 para ser más estricto
+# (menos apuestas pero mejor edge); bajá a 1-2 para ser más agresivo.
+ANALYST_EDGE_THRESHOLD = env_int("ANALYST_EDGE_THRESHOLD", 3)
 
 # ============================================================
 # LIGAS ACTIVAS

@@ -44,6 +44,7 @@ from config.settings import (
     USER_TIMEZONE,
     PRE_KICKOFF_WINDOW_MIN,
     PRE_KICKOFF_WINDOW_MAX,
+    ANALYST_EDGE_THRESHOLD,
 )
 from scripts.notify_telegram import (
     _is_suspicious,
@@ -55,37 +56,80 @@ from scripts.notify_telegram import (
 
 
 SYSTEM_PROMPT = """\
-Eres un analista deportivo. Validás UNA apuesta generada por un modelo
-cuantitativo. Recibirás CONTEXTO DEL MODELO (H2H, forma, congestión, xG,
-movimiento de línea, motivación, clima) ya pre-calculado — NO lo busques
-de nuevo en la web.
+Sos un APOSTADOR PROFESIONAL DE FÚTBOL con 15+ años de experiencia que
+vive de las apuestas deportivas. Tu reputación se construyó con UNA
+regla irrompible: NO apostar cuando la evidencia no acompaña, por más
+linda que se vea la cuota. Cada apuesta es decisión de negocio, no
+emoción.
 
-Tu trabajo: usar web_search SOLO para 2 cosas que NO están en el contexto:
-1. Alineación probable/confirmada (predicted XI o starting lineup)
-2. Noticias de lesiones/suspensiones de últimas 48h
+Recibís UNA apuesta sugerida por tu modelo cuantitativo + un DOSIER DE
+DATOS DUROS pre-calculado (H2H, forma, congestión, xG, movimiento de
+línea, motivación, clima). NO repitas búsquedas de eso — ya está hecho.
 
-Cap: 2 búsquedas máximo. Si la primera resolvió alineaciones+lesiones,
-no hagas la segunda.
+Tu trabajo es completar el dosier con LOS DETALLES VIVOS DEL DÍA usando
+web_search (cap = 2 búsquedas, ahorrá tokens):
 
-Salida ESTRICTA — solo JSON, sin markdown, sin prosa:
+  Búsqueda 1 (obligatoria): "<home> vs <away> predicted lineup <fecha>"
+    → alineación probable o titular confirmado
+  Búsqueda 2 (solo si la 1ª no resolvió ambos):
+    "<home>" OR "<away>" injury news suspension <fecha>"
+    → lesiones/suspensiones/dudas de últimas 48h, cambios de DT,
+      noticias de motivación atípica (huelga, conflicto interno,
+      hinchada en boicot, viajes inusuales)
+
+PROCESO MENTAL (en este orden):
+  1. ¿Los titulares confirmados/probables VALIDAN la apuesta del modelo
+     (ej. Over 2.5 con los 9-goleadores adentro, o home_win con DT
+     metiendo a su 11 ideal) o la CONTRADICEN (ej. dos B-teams rotando
+     entre semana)?
+  2. ¿Aparece un factor que el modelo NO podía ver (lesión de última
+     hora, cambio táctico, noticia de motivación)?
+  3. ¿La motivación REAL coincide con el dato cuantitativo del dosier?
+  4. ¿El movimiento de la línea avala o contradice tu lectura?
+  5. Cruzá todo con la MEMORIA DE ERRORES (segundo bloque del system) —
+     no repitas patrones que ya te costaron plata.
+
+CÁLCULO DE PROBABILIDAD (lo más importante):
+  • Empezá con la `probability` del modelo que viene en el dosier.
+  • Sumá/restá puntos según los factores que detectaste:
+      - Titular CLAVE confirmado fuera y la apuesta depende de él: -8 a -12
+      - Rotación masiva confirmada (B-team): -10 a -15
+      - Forma en racha extrema (5 triunfos, ≥2 GF promedio): +3 a +5
+      - Sharp money fuerte EN CONTRA del pick: -5 a -8
+      - Clima adverso + apuesta a Over: -4 a -7
+      - Motivación clara A FAVOR (descenso, final, derbi cargado): +3 a +5
+  • Tu `probability` final es entera 0–100. Sé HONESTO, no infles para
+    justificar la apuesta.
+
+DECISIÓN FINAL:
+  • Calculá la probabilidad implícita de la cuota: 1 / odds * 100.
+  • APUESTA  → tu probability >= prob_implícita + 3  Y  lineups L1/L2
+               sin red flag mayor.
+  • NO APUESTA → cualquier otro caso (incluido lineups="L0").
+
+Mapeo `verdict` (consistencia obligatoria):
+  STRONG  → APUESTA  Y  probability >= prob_implícita + 7
+  MEDIUM  → APUESTA  Y  probability ENTRE prob_implícita+3  y  +6
+  SKIP    → NO APUESTA  (en cualquier escenario)
+
+Salida ESTRICTA — SOLO JSON, sin markdown, sin prosa fuera del JSON:
 {
   "verdict": "STRONG" | "MEDIUM" | "SKIP",
+  "decision": "APUESTA" | "NO APUESTA",
+  "probability": 0-100,
   "confidence": 1-5,
-  "reasoning": "máx 1 oración (<=25 palabras)",
+  "reasoning": "máx 2 oraciones (<=45 palabras), específicas y útiles",
   "lineups": "L1=confirmadas | L2=probables | L0=sin info",
-  "key_factors": ["<=3 factores breves"]
+  "key_factors": ["<=4 factores breves: lesiones, rotación, forma, sharp"]
 }
 
-Criterios:
-- STRONG: titulares clave dentro + contexto cuantitativo alinea con la
-  apuesta + sin red flag de rotación.
-- MEDIUM: 1 baja secundaria O info parcial O contexto borderline.
-- SKIP: titular clave fuera, rotación masiva confirmada (UCL en 3 días,
-  equipo ya clasificado descansando), o lineup contradice la apuesta
-  (Over 2.5 pero ambos equipos rotan B-team).
-
-Si no hay info confirmada de lineup: MEDIUM, confidence=2, lineups="L0".
-Nunca inventes datos.
+REGLAS IRROMPIBLES (aprendidas de errores caros):
+  • Sin fuente confiable de alineación NI lesiones tras 2 búsquedas:
+    `lineups="L0"`, `decision="NO APUESTA"`, `probability` <= prob_implícita.
+  • Nunca inventes datos. Si no sabés, decí "L0" y bajá probability.
+  • Coherencia obligatoria: si decision="NO APUESTA" entonces verdict="SKIP".
+    Si verdict="STRONG" entonces decision="APUESTA". El backend valida.
+  • `probability` siempre entero 0-100, nunca string ni decimal.
 """
 
 
@@ -94,17 +138,30 @@ Nunca inventes datos.
 # ============================================================
 
 def _fetch_pending_bets() -> pd.DataFrame:
-    """Bets pending con kickoff dentro de la ventana pre-kickoff."""
+    """Bets pending con kickoff dentro de la ventana pre-kickoff.
+
+    El JOIN con upcoming_matches usa DISTINCT ON sobre (home_norm, away_norm,
+    sport_key) y se queda con la row más reciente por updated_at, para evitar
+    asociar la bet con un row stale (mismo partido, fecha vieja) cuando la API
+    corrigió la fecha del fixture.
+    """
     now_utc = datetime.now(timezone.utc)
     lo = now_utc + timedelta(minutes=PRE_KICKOFF_WINDOW_MIN)
     hi = now_utc + timedelta(minutes=PRE_KICKOFF_WINDOW_MAX)
 
     df = pd.read_sql(text("""
+        WITH u_dedup AS (
+            SELECT DISTINCT ON (home_team_norm, away_team_norm, sport_key)
+                   home_team, away_team, sport_key, updated_at
+            FROM upcoming_matches
+            ORDER BY home_team_norm, away_team_norm, sport_key,
+                     updated_at DESC NULLS LAST
+        )
         SELECT b.match, b.match_date, b.market,
                b.probability, b.odds, b.edge, b.stake,
                COALESCE(u.sport_key, b.league, '') AS league
         FROM bets_history b
-        LEFT JOIN upcoming_matches u
+        LEFT JOIN u_dedup u
           ON LOWER(u.home_team) = LOWER(SPLIT_PART(b.match, ' vs ', 1))
          AND LOWER(u.away_team) = LOWER(SPLIT_PART(b.match, ' vs ', 2))
         WHERE b.result = 'pending'
@@ -132,6 +189,174 @@ def _already_analyzed(match: str, market: str, match_date) -> bool:
             LIMIT 1
         """), {"m": match, "mkt": market, "d": match_date}).first()
     return row is not None
+
+
+# ============================================================
+# MEMORIA DE APRENDIZAJE (loop de feedback)
+# ============================================================
+# Idea: el agente lee, en cada corrida, un resumen de cómo le fue en los
+# últimos 30 días — calibración por bucket de probabilidad y los peores
+# fallos (apuestas que dijo "APUESTA" con prob alta y perdieron). Eso se
+# inyecta como segundo bloque cacheado del system prompt → el modelo
+# aprende del feedback real sin re-entrenar nada.
+#
+# Combina con `data/analyst_lessons.md` (editable por el usuario) para
+# imponer reglas duras vía texto.
+
+LESSONS_FILE = Path(__file__).parent.parent / "data" / "analyst_lessons.md"
+
+
+def _load_manual_lessons() -> str:
+    """Lee data/analyst_lessons.md si existe. Devuelve string vacío si no."""
+    try:
+        if LESSONS_FILE.exists():
+            txt = LESSONS_FILE.read_text(encoding="utf-8").strip()
+            # Cap defensivo: 3000 chars ≈ 750 tokens, suficiente para 600 palabras
+            if len(txt) > 3000:
+                txt = txt[:3000] + "\n\n[truncado a 3000 chars]"
+            return txt
+    except Exception:
+        pass
+    return ""
+
+
+def _build_learning_memo(days: int = 30, max_examples: int = 3) -> str:
+    """
+    Construye memoria de aprendizaje desde la DB:
+      • Calibración: por bucket de probabilidad estimada vs hit rate real
+      • Peores fallos: APUESTA con prob >= 65 que perdieron (con reasoning)
+      • Mejores aciertos: APUESTA con prob >= 65 que ganaron
+
+    El bloque resultante se cachea como segundo system block → costo bajo
+    aún en cron de 15 min (5 min TTL del prompt cache amortiza varios calls).
+
+    Devuelve string vacío si no hay datos suficientes (primera semana).
+    """
+    try:
+        with engine.begin() as conn:
+            # Solo bets ya resueltas, con análisis del agente, en ventana
+            rows = conn.execute(text("""
+                SELECT p.match, p.market, p.verdict, p.probability,
+                       p.decision, p.reasoning, b.result, b.odds, b.edge
+                FROM pre_kickoff_analyses p
+                JOIN bets_history b
+                  ON b.match      = p.match
+                 AND b.market     = p.market
+                 AND b.match_date = p.match_date
+                WHERE p.analyzed_at >= NOW() - (:days || ' days')::interval
+                  AND b.result IN ('win', 'loss')
+                  AND p.probability IS NOT NULL
+                ORDER BY p.analyzed_at DESC
+                LIMIT 500
+            """), {"days": days}).fetchall()
+    except Exception:
+        return ""  # tabla aún no migrada o algún error → memo vacío
+
+    if not rows or len(rows) < 5:
+        return ""  # muestra muy chica → no inyectar memo (evita ruido)
+
+    # ── Calibración por bucket ───────────────────────────────────────
+    buckets = {
+        "[40-50)": {"n": 0, "won": 0},
+        "[50-60)": {"n": 0, "won": 0},
+        "[60-70)": {"n": 0, "won": 0},
+        "[70-80)": {"n": 0, "won": 0},
+        "[80-100]": {"n": 0, "won": 0},
+    }
+    apuestas_total = 0
+    apuestas_ganadas = 0
+    for r in rows:
+        p = int(r.probability)
+        won = (r.result == "win")
+        if p < 50:
+            key = "[40-50)"
+        elif p < 60:
+            key = "[50-60)"
+        elif p < 70:
+            key = "[60-70)"
+        elif p < 80:
+            key = "[70-80)"
+        else:
+            key = "[80-100]"
+        buckets[key]["n"] += 1
+        if won:
+            buckets[key]["won"] += 1
+        if (r.decision or "").upper() == "APUESTA":
+            apuestas_total += 1
+            if won:
+                apuestas_ganadas += 1
+
+    cal_lines = []
+    for k, v in buckets.items():
+        if v["n"] == 0:
+            continue
+        wr = v["won"] / v["n"] * 100
+        # Comentario si calibración está desviada
+        target = {
+            "[40-50)": 45, "[50-60)": 55, "[60-70)": 65,
+            "[70-80)": 75, "[80-100]": 85,
+        }[k]
+        if v["n"] >= 5:
+            diff = wr - target
+            tag = (" OK"          if abs(diff) < 8 else
+                   " OPTIMISTA"   if diff < -8     else
+                   " CONSERVADOR")
+        else:
+            tag = " (muestra chica)"
+        cal_lines.append(f"  {k}: {v['won']}/{v['n']} = {wr:.0f}%{tag}")
+
+    # ── Peores fallos: APUESTA con prob >=65 que perdieron ───────────
+    bad = [r for r in rows
+           if (r.decision or "").upper() == "APUESTA"
+           and int(r.probability) >= 65
+           and r.result == "loss"][:max_examples]
+    bad_lines = []
+    for r in bad:
+        reason = (r.reasoning or "").strip().replace("\n", " ")
+        if len(reason) > 110:
+            reason = reason[:107] + "..."
+        bad_lines.append(f"  • {r.match} ({r.market}) prob={r.probability}% "
+                         f"@{float(r.odds):.2f} → PERDIÓ. Tu razón: \"{reason}\"")
+
+    # ── Mejores aciertos (refuerzo positivo) ─────────────────────────
+    good = [r for r in rows
+            if (r.decision or "").upper() == "APUESTA"
+            and int(r.probability) >= 65
+            and r.result == "win"][:max_examples]
+    good_lines = []
+    for r in good:
+        reason = (r.reasoning or "").strip().replace("\n", " ")
+        if len(reason) > 90:
+            reason = reason[:87] + "..."
+        good_lines.append(f"  • {r.match} ({r.market}) prob={r.probability}% "
+                          f"@{float(r.odds):.2f} → GANÓ. Razón: \"{reason}\"")
+
+    # ── Armar memo ───────────────────────────────────────────────────
+    parts = [
+        "=== MEMORIA DE ERRORES Y ACIERTOS (últimos "
+        f"{days} días, n={len(rows)}) ===",
+        "",
+    ]
+    if apuestas_total > 0:
+        wr_global = apuestas_ganadas / apuestas_total * 100
+        parts.append(f"Hit rate cuando dijiste APUESTA: "
+                     f"{apuestas_ganadas}/{apuestas_total} = {wr_global:.0f}%")
+    if cal_lines:
+        parts.append("\nCalibración por bucket de probabilidad:")
+        parts.extend(cal_lines)
+    if bad_lines:
+        parts.append("\nPEORES FALLOS (apostaste con confianza y perdiste — "
+                     "estudiá el patrón):")
+        parts.extend(bad_lines)
+    if good_lines:
+        parts.append("\nMEJORES ACIERTOS (lo que funcionó):")
+        parts.extend(good_lines)
+    parts.append(
+        "\nINSTRUCCIÓN: si ves un bucket marcado OPTIMISTA, sé más "
+        "conservador en esa franja. Si ves un fallo cuyo patrón se "
+        "repite hoy, evita la apuesta o bajá probability. Aprendé."
+    )
+    return "\n".join(parts)
 
 
 # ============================================================
@@ -328,8 +553,65 @@ def _format_context(ctx: dict) -> str:
     return "\n".join(parts)
 
 
-def _analyze_bet(client, bet: dict, ctx: dict) -> dict:
-    """Llama a Claude API con web_search para emitir dictamen."""
+def _normalize_result(parsed: dict, bet: dict) -> dict:
+    """
+    Garantiza coherencia + valores válidos en el dict del modelo.
+    El modelo puede devolver decision/probability vacíos, inconsistentes,
+    o con tipos malos — el backend decide y normaliza.
+    """
+    # ── verdict ──────────────────────────────────────────────────────
+    verdict = (parsed.get("verdict") or "MEDIUM").upper()
+    if verdict not in ("STRONG", "MEDIUM", "SKIP"):
+        verdict = "MEDIUM"
+
+    # ── probability (entero 0-100) ───────────────────────────────────
+    try:
+        prob = int(round(float(parsed.get("probability", 0))))
+        prob = max(0, min(100, prob))
+    except (TypeError, ValueError):
+        prob = 0
+
+    # ── decision ─────────────────────────────────────────────────────
+    decision = (parsed.get("decision") or "").upper().strip()
+    if decision not in ("APUESTA", "NO APUESTA"):
+        # Inferir desde verdict si el modelo no la devolvió
+        decision = "APUESTA" if verdict in ("STRONG", "MEDIUM") else "NO APUESTA"
+
+    # ── Coherencia obligatoria: SKIP ⇄ NO APUESTA ────────────────────
+    if verdict == "SKIP":
+        decision = "NO APUESTA"
+    elif decision == "NO APUESTA" and verdict == "STRONG":
+        # contradicción → degradamos a SKIP
+        verdict = "SKIP"
+
+    # ── Validación cuantitativa: prob >= implícita + threshold para apostar ──
+    # Threshold configurable vía env var ANALYST_EDGE_THRESHOLD (default 3).
+    try:
+        odds = float(bet.get("odds", 0))
+        if odds > 1.0:
+            implied = (1.0 / odds) * 100
+            if decision == "APUESTA" and prob < implied + ANALYST_EDGE_THRESHOLD:
+                # No tiene edge real → no apuestes
+                decision = "NO APUESTA"
+                verdict = "SKIP"
+    except Exception:
+        pass
+
+    parsed["verdict"]     = verdict
+    parsed["decision"]    = decision
+    parsed["probability"] = prob
+    return parsed
+
+
+def _analyze_bet(client, bet: dict, ctx: dict, learning_memo: str = "",
+                 manual_lessons: str = "") -> dict:
+    """
+    Llama a Claude API con web_search para emitir dictamen.
+
+    `learning_memo`   : texto generado por _build_learning_memo() (opcional)
+    `manual_lessons`  : texto de data/analyst_lessons.md (opcional)
+    Ambos se inyectan como bloques cacheados → costo bajo en reruns.
+    """
     market_label = _get_market_label(bet["market"], bet["match"])
     league_label = LEAGUE_LABELS.get(bet["league"], bet["league"])
 
@@ -337,25 +619,53 @@ def _analyze_bet(client, bet: dict, ctx: dict) -> dict:
     md_utc = md if md.tzinfo is not None else md.tz_localize("UTC")
     dt_local = md_utc.tz_convert(ZoneInfo(USER_TIMEZONE))
 
+    # Probabilidad implícita de la cuota (informativa para el modelo)
+    try:
+        implied = (1.0 / float(bet["odds"])) * 100 if float(bet["odds"]) > 1 else 0
+    except Exception:
+        implied = 0
+
     user_msg = (
         f"Partido: {bet['match']}\n"
         f"Liga: {league_label}\n"
         f"Kickoff: {dt_local.strftime('%Y-%m-%d %H:%M %Z')}\n"
-        f"Apuesta: {market_label} @ {float(bet['odds']):.2f}\n"
-        f"Edge del modelo: +{float(bet['edge'])*100:.1f}% "
-        f"(prob {float(bet['probability'])*100:.1f}%)\n\n"
-        f"CONTEXTO DEL MODELO (no buscar):\n{_format_context(ctx)}\n\n"
-        f"Devuelve SOLO el JSON."
+        f"Apuesta sugerida: {market_label} @ {float(bet['odds']):.2f}\n"
+        f"Probabilidad del modelo: {float(bet['probability'])*100:.1f}%\n"
+        f"Probabilidad implícita de la cuota: {implied:.1f}% "
+        f"(threshold actual: necesitás >= {implied+ANALYST_EDGE_THRESHOLD:.0f}% "
+        f"para decir APUESTA)\n"
+        f"Edge del modelo: +{float(bet['edge'])*100:.1f}%\n\n"
+        f"DOSIER CUANTITATIVO (NO buscar esto en la web):\n"
+        f"{_format_context(ctx)}\n\n"
+        f"Hacé tus 1-2 búsquedas para alineaciones+lesiones y devolvé SOLO el JSON."
     )
+
+    # ── Construir system prompt: 1-3 bloques cacheados ────────────────
+    # Bloque 1: instrucciones (estables)  — se cachea siempre
+    # Bloque 2: lecciones manuales         — se cachea si existe
+    # Bloque 3: memoria de aprendizaje    — se cachea si existe
+    system_blocks = [{
+        "type": "text",
+        "text": SYSTEM_PROMPT,
+        "cache_control": {"type": "ephemeral"},
+    }]
+    if manual_lessons:
+        system_blocks.append({
+            "type": "text",
+            "text": f"=== LECCIONES MANUALES (escritas por el operador) ===\n\n{manual_lessons}",
+            "cache_control": {"type": "ephemeral"},
+        })
+    if learning_memo:
+        system_blocks.append({
+            "type": "text",
+            "text": learning_memo,
+            "cache_control": {"type": "ephemeral"},
+        })
 
     resp = client.messages.create(
         model="claude-sonnet-4-5",
-        max_tokens=500,
-        system=[{
-            "type": "text",
-            "text": SYSTEM_PROMPT,
-            "cache_control": {"type": "ephemeral"},
-        }],
+        max_tokens=600,
+        system=system_blocks,
         tools=[{
             "type": "web_search_20250305",
             "name": "web_search",
@@ -378,10 +688,13 @@ def _analyze_bet(client, bet: dict, ctx: dict) -> dict:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
         parsed = {
-            "verdict": "MEDIUM", "confidence": 1,
+            "verdict": "SKIP", "decision": "NO APUESTA",
+            "probability": 0, "confidence": 1,
             "reasoning": "parse error en respuesta del modelo",
             "lineups": "L0", "key_factors": [],
         }
+
+    parsed = _normalize_result(parsed, bet)
 
     # Sources: extraer URLs visitadas por web_search
     sources: list[str] = []
@@ -396,25 +709,31 @@ def _analyze_bet(client, bet: dict, ctx: dict) -> dict:
 
 
 def _save_analysis(bet: dict, result: dict):
-    """Persiste el dictamen en pre_kickoff_analyses (idempotente)."""
+    """Persiste el dictamen en pre_kickoff_analyses (idempotente).
+
+    Incluye `probability` (0-100) y `decision` (APUESTA/NO APUESTA) para
+    poder armar la calibración real → memoria de aprendizaje.
+    """
     with engine.begin() as conn:
         conn.execute(text("""
             INSERT INTO pre_kickoff_analyses
                 (match, match_date, market, verdict, confidence,
-                 reasoning, lineups, sources)
+                 reasoning, lineups, sources, probability, decision)
             VALUES
                 (:match, :match_date, :market, :verdict, :confidence,
-                 :reasoning, :lineups, :sources)
+                 :reasoning, :lineups, :sources, :probability, :decision)
             ON CONFLICT (match, market, match_date) DO NOTHING
         """), {
-            "match":      bet["match"],
-            "match_date": bet["match_date"],
-            "market":     bet["market"],
-            "verdict":    result.get("verdict", "MEDIUM"),
-            "confidence": int(result.get("confidence", 1) or 1),
-            "reasoning":  (result.get("reasoning") or "")[:1000],
-            "lineups":    (result.get("lineups") or "")[:500],
-            "sources":    json.dumps(result.get("sources", [])),
+            "match":       bet["match"],
+            "match_date":  bet["match_date"],
+            "market":      bet["market"],
+            "verdict":     result.get("verdict", "MEDIUM"),
+            "confidence":  int(result.get("confidence", 1) or 1),
+            "reasoning":   (result.get("reasoning") or "")[:1000],
+            "lineups":     (result.get("lineups") or "")[:500],
+            "sources":     json.dumps(result.get("sources", [])),
+            "probability": int(result.get("probability", 0) or 0),
+            "decision":    (result.get("decision") or "NO APUESTA")[:15],
         })
 
 
@@ -442,6 +761,17 @@ def main():
 
     print(f"📋 {len(bets)} bet(s) confiable(s) en ventana — analizando...\n")
 
+    # ── Carga memo + lecciones UNA SOLA VEZ por corrida ──────────────
+    # Ambas se inyectan como bloques cacheados en cada call; computarlas
+    # una vez ahorra queries repetidas.
+    learning_memo  = _build_learning_memo()
+    manual_lessons = _load_manual_lessons()
+    if learning_memo:
+        print("🧠 Memoria de aprendizaje activa (últimos 30 días)")
+    if manual_lessons:
+        print(f"📝 Lecciones manuales activas ({len(manual_lessons)} chars)")
+    print()
+
     # Import perezoso de anthropic — solo cuando hay bets para analizar.
     # Evita romper el cron si la lib no se instaló y no hay nada que hacer.
     from anthropic import Anthropic
@@ -459,8 +789,16 @@ def main():
         # Filtro pre-API rule-based (sin tokens)
         skip_reason = _quick_skip_signals(b, ctx)
         if skip_reason:
+            # Probabilidad implícita como techo conservador para SKIP
+            try:
+                implied = int(round((1.0 / float(b["odds"])) * 100))
+            except Exception:
+                implied = 0
             result = {
-                "verdict": "SKIP", "confidence": 4,
+                "verdict": "SKIP",
+                "decision": "NO APUESTA",
+                "probability": max(0, implied - 5),  # explícitamente debajo del break-even
+                "confidence": 4,
                 "reasoning": skip_reason,
                 "lineups": "L0",
                 "key_factors": [skip_reason],
@@ -469,11 +807,16 @@ def main():
             print(f"  🔴 {b['match']} ({b['market']}) — SKIP rule-based: {skip_reason}")
         else:
             try:
-                result = _analyze_bet(client, b, ctx)
+                result = _analyze_bet(client, b, ctx,
+                                      learning_memo=learning_memo,
+                                      manual_lessons=manual_lessons)
                 v = result.get("verdict", "?")
+                d = result.get("decision", "?")
+                p = result.get("probability", 0)
                 icon = {"STRONG": "🟢", "MEDIUM": "🟡", "SKIP": "🔴"}.get(v, "⚪")
-                print(f"  {icon} {b['match']} ({b['market']}) — {v}: "
-                      f"{result.get('reasoning', '')[:80]}")
+                print(f"  {icon} {b['match']} ({b['market']}) — "
+                      f"{v}/{d} prob={p}%: "
+                      f"{result.get('reasoning', '')[:70]}")
             except Exception as e:
                 print(f"  ❌ Error analizando {b['match']}: {e}")
                 continue
