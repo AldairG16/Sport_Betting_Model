@@ -811,46 +811,43 @@ def _format_match_title(match: str) -> str:
     return f"{home.title()} vs {away.title()}"
 
 
-def send_pre_kickoff_verdict(verdicts: list) -> bool:
+def _format_single_match_message(match: str, verdicts_for_match: list) -> str:
     """
-    Envia los dictámenes del pre-kickoff analyst a Telegram.
-
-    Formato (Opción 3 — minimal):
-      • STRONG / MEDIUM se muestran con detalle (1 bloque por bet)
-      • SKIP se agrupan al final en una sola sección (1 línea por bet)
-
-    Cada verdict es un dict con las claves:
-      match, match_date, market, odds, edge,
-      verdict (STRONG|MEDIUM|SKIP), confidence (1-5),
-      reasoning, lineups, key_factors, sources
+    Construye el mensaje de Telegram para UN SOLO partido. Si el modelo
+    generó varios mercados sobre el mismo partido, todos van juntos en
+    el mismo mensaje (porque son del mismo evento — agrupar tiene
+    sentido). Cada match → 1 mensaje separado.
     """
-    if not verdicts:
-        return False
-
-    actionable = [v for v in verdicts if (v.get("verdict") or "").upper() in ("STRONG", "MEDIUM")]
-    skipped    = [v for v in verdicts if (v.get("verdict") or "").upper() == "SKIP"]
-
-    # ── Filtro SKIP-only: si NO hay nada accionable, silencio total ──────
-    # El cron corre cada 15 min y muchos partidos generan solo SKIPs.
-    # Notificar "todos descartados" cada vez sería ruido. Solo escribimos
-    # cuando hay al menos 1 STRONG o MEDIUM que el usuario debería revisar.
-    if not actionable:
-        n_skip = len(skipped)
-        print(f"✓ Pre-kickoff: {n_skip} verdicts pero 0 accionables — silencio "
-              f"(no se envía mensaje)")
-        return False
-
     icon_map = {"STRONG": "🟢", "MEDIUM": "🟡", "SKIP": "🔴"}
-    lines = ["🔍 <b>PRE-KICKOFF — VEREDICTO DEL ANALISTA</b>", ""]
 
-    # ── 1) STRONG / MEDIUM con detalle ──────────────────────────────────────
-    for v in actionable:
+    # Tomamos el primer verdict para encabezado (kickoff es el mismo)
+    head = verdicts_for_match[0]
+    kickoff     = _format_kickoff_label(head.get("match_date"))
+    match_title = _format_match_title(match)
+
+    # Decidimos el icono "principal" del mensaje: si hay STRONG → verde,
+    # si solo MEDIUM → amarillo, si solo SKIP → rojo. Le sirve al usuario
+    # para escanear visualmente la inbox de Telegram.
+    verdicts_set = {(v.get("verdict") or "").upper() for v in verdicts_for_match}
+    if "STRONG" in verdicts_set:
+        head_icon = "🟢"
+    elif "MEDIUM" in verdicts_set:
+        head_icon = "🟡"
+    else:
+        head_icon = "🔴"
+
+    lines = [
+        f"{head_icon} <b>PRE-KICKOFF — {match_title}</b>",
+        f"🕐 {kickoff}",
+        "",
+    ]
+
+    # Un bloque por mercado analizado de este partido
+    for i, v in enumerate(verdicts_for_match):
         verdict      = (v.get("verdict") or "MEDIUM").upper()
         decision     = (v.get("decision") or "").upper().strip()
         icon         = icon_map.get(verdict, "⚪")
-        kickoff      = _format_kickoff_label(v.get("match_date"))
-        match_title  = _format_match_title(v.get("match", ""))
-        market_label = _get_market_label(v.get("market", ""), v.get("match", ""))
+        market_label = _get_market_label(v.get("market", ""), match)
 
         try:    confidence = int(v.get("confidence", 1) or 1)
         except (TypeError, ValueError): confidence = 1
@@ -861,20 +858,18 @@ def send_pre_kickoff_verdict(verdicts: list) -> bool:
         try:    edge_pct = float(v.get("edge", 0)) * 100
         except (TypeError, ValueError): edge_pct = 0.0
 
-        # Probabilidad estimada por el analista (entero 0-100)
         try:    prob_pct = int(v.get("probability", 0) or 0)
         except (TypeError, ValueError): prob_pct = 0
 
-        # Probabilidad implícita de la cuota (para que el usuario vea el edge)
         implied_pct = (1.0 / odds_val) * 100 if odds_val > 1 else 0.0
 
-        # Decisión final destacada
         dec_icon = "✅" if decision == "APUESTA" else "❌"
-        dec_label = decision or ("APUESTA" if verdict in ("STRONG", "MEDIUM") else "NO APUESTA")
+        dec_label = decision or ("APUESTA" if verdict in ("STRONG", "MEDIUM")
+                                  else "NO APUESTA")
 
+        if i > 0:
+            lines.append("─────────")
         lines.append(f"{icon} <b>{verdict}</b>  {stars}")
-        lines.append(f"🏟️ <b>{match_title}</b>")
-        lines.append(f"🕐 {kickoff}")
         lines.append(f"🎯 {market_label} @{odds_val:.2f}  (modelo +{edge_pct:.1f}%)")
         if prob_pct > 0:
             lines.append(f"📊 Probabilidad estimada: <b>{prob_pct}%</b>  "
@@ -885,7 +880,6 @@ def send_pre_kickoff_verdict(verdicts: list) -> bool:
         if reasoning:
             lines.append(f"💡 {reasoning}")
 
-        # Factores clave (lista breve)
         factors = v.get("key_factors") or []
         if isinstance(factors, list) and factors:
             shown = [str(f).strip() for f in factors if str(f).strip()][:4]
@@ -894,34 +888,50 @@ def send_pre_kickoff_verdict(verdicts: list) -> bool:
 
         lineups = _format_lineups_label(v.get("lineups", ""))
         lines.append(f"👥 {lineups}")
-        lines.append("")
 
-    # ── 2) SKIP agrupados (1 línea por bet) ─────────────────────────────────
-    if skipped:
-        lines.append("━━━━━━━━━━━━━━━━━━")
-        lines.append(f"❌ <b>NO APOSTAR — Descartados ({len(skipped)}):</b>")
-        for v in skipped:
-            match_title  = _format_match_title(v.get("match", ""))
-            market_label = _get_market_label(v.get("market", ""), v.get("match", ""))
-            reason       = (v.get("reasoning") or "").strip()
-            try:    prob_pct = int(v.get("probability", 0) or 0)
-            except (TypeError, ValueError): prob_pct = 0
-            # Acortar reason a ≤55 chars para mantener 1 línea
-            if len(reason) > 55:
-                reason = reason[:52] + "..."
-            prob_str = f" [{prob_pct}%]" if prob_pct > 0 else ""
-            line = f"• <b>{match_title}</b> — {market_label}{prob_str}"
-            if reason:
-                line += f" ({reason})"
-            lines.append(line)
-        lines.append("")
+    lines.append("")
+    lines.append("<i>Veredicto del analista — la apuesta sigue activa en el "
+                 "modelo y se resuelve normal al final del día.</i>")
+    return "\n".join(lines)
 
-    lines.append("<i>Veredicto del analista — las apuestas siguen activas "
-                 "en el modelo y se resuelven normal al final del día.</i>")
 
-    # Bot dedicado de pre-kickoff (con fallback al principal si no está
-    # configurado). Esto evita saturar el canal de morning/evening.
-    return send_message_prekickoff("\n".join(lines))
+def send_pre_kickoff_verdict(verdicts: list) -> bool:
+    """
+    Envía un mensaje de Telegram POR PARTIDO (no batch).
+
+    Antes: todos los verdicts iban en 1 solo mensaje grande, lo que era
+    confuso cuando 5+ partidos caían en la ventana 30-90 min al mismo
+    tiempo. Además, si todos los verdicts eran SKIP, el cron silenciaba
+    el mensaje → el usuario nunca veía el veredicto.
+
+    Ahora:
+      • Se agrupa por `match`. Cada partido → 1 mensaje separado.
+      • Si un match tiene varios markets, todos van juntos en el mismo
+        mensaje de ese partido (con divisores).
+      • Se envía SIEMPRE, incluso si todos son SKIP. El usuario quiere
+        saber el veredicto antes de cada partido, sea cual sea.
+    """
+    if not verdicts:
+        return False
+
+    # Agrupar por match preservando orden de llegada
+    by_match: dict[str, list] = {}
+    for v in verdicts:
+        m = v.get("match", "")
+        by_match.setdefault(m, []).append(v)
+
+    sent_ok = 0
+    for match, vs in by_match.items():
+        try:
+            msg = _format_single_match_message(match, vs)
+            if send_message_prekickoff(msg):
+                sent_ok += 1
+        except Exception as e:
+            print(f"⚠️  Error enviando mensaje pre-kickoff de '{match}': {e}")
+
+    if sent_ok > 0:
+        print(f"✓ Pre-kickoff: {sent_ok}/{len(by_match)} mensaje(s) enviado(s)")
+    return sent_ok > 0
 
 
 # ============================================================
