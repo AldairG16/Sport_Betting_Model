@@ -1,0 +1,53 @@
+name: Late Results Retry
+
+# Re-fetch resultados después del evening principal.
+# Motivo: el evening corre a las 21:00 MX. Partidos que terminan tarde
+# (Liga MX 20:00-22:00 MX, MLS Pacific evening, etc.) pueden no tener
+# resultado en la API aún cuando corre el evening — quedan pending
+# en el resumen incluso si ya terminaron.
+# Este workflow corre dos veces más tarde y resuelve esas bets sin tocar
+# el resumen ya enviado (es trabajo silencioso de housekeeping).
+
+on:
+  schedule:
+    # 00:00 MX (06:00 UTC)  — atrapa partidos que terminaron 22:00-23:30 MX
+    - cron: '0 6 * * *'
+    # 06:30 MX (12:30 UTC)  — atrapa partidos asiáticos del día anterior
+    #                         y corners/cards de Europa que ya sincronizó fbdata
+    - cron: '30 12 * * *'
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+    paths: [ '.github/workflows/late_results.yml' ]
+
+# Si un run anterior se está ejecutando aún, lo cancelamos.
+concurrency:
+  group: late-results
+  cancel-in-progress: false
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run results-only orchestrator
+        env:
+          DB_URL:                       ${{ secrets.DB_URL }}
+          ODDS_API_KEY:                 ${{ secrets.ODDS_API_KEY }}
+          TELEGRAM_BOT_TOKEN:           ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:             ${{ secrets.TELEGRAM_CHAT_ID }}
+          USER_TIMEZONE:                America/Mexico_City
+        run: python scripts/orchestrator.py --mode results

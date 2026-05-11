@@ -163,6 +163,22 @@ def _ensure_db_indexes():
             # Nullables → backward compatible con rows viejas.
             "ALTER TABLE pre_kickoff_analyses ADD COLUMN IF NOT EXISTS probability INT",
             "ALTER TABLE pre_kickoff_analyses ADD COLUMN IF NOT EXISTS decision VARCHAR(15)",
+            # ── Tabla analyst_heartbeat (10-may-26) ─────────────────────────
+            # Cada corrida del pre_kickoff_analyst.py escribe una row.
+            # Sirve para detectar gaps en el cron (si pasaron >2h sin row,
+            # GH Actions probablemente está throttling). Evening summary
+            # consulta esta tabla y alerta al usuario si está stale.
+            """
+            CREATE TABLE IF NOT EXISTS analyst_heartbeat (
+                id          SERIAL PRIMARY KEY,
+                ran_at      TIMESTAMP DEFAULT NOW(),
+                bets_found  INT,
+                bets_analyzed INT,
+                bets_skipped_rule INT,
+                error_msg   TEXT
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_heartbeat_ran_at ON analyst_heartbeat (ran_at DESC)",
         ]
         indexes = [
             # matches: búsquedas por equipo + fecha

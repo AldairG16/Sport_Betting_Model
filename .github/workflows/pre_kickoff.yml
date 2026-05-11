@@ -13,10 +13,19 @@ name: Pre-Kickoff Analyst
 
 on:
   schedule:
-    # Cada 15 min, todo el día. La mayoría de runs terminará en <5 seg
-    # (sin bets en ventana = exit barato). Cada partido tiene 4 chances
-    # de ser capturado dentro de la ventana 30-90 min.
-    - cron: '*/15 * * * *'
+    # Cada 15 min, todo el día — pero en minutos OFF-PEAK para evitar
+    # que GitHub Actions throttlee/dropee runs.
+    #
+    # GH Actions docs: "Scheduled events are delayed when GitHub Actions
+    # workflow runs are at a higher than usual load. High load times
+    # include the start of every hour."  Usar :00,:15,:30,:45 (lo más
+    # habitual) cae JUSTO en los picos. Movemos a :07,:22,:37,:52.
+    #
+    # Histórico (descubierto 10-may-26): con */15 el cron pasó 28h sin
+    # disparar ni una sola vez → el usuario no recibió ningún análisis
+    # ese día. Cambiando a off-peak la probabilidad de delay cae mucho.
+    # Cada partido sigue teniendo 4 chances dentro de la ventana 30-90 min.
+    - cron: '7,22,37,52 * * * *'
   workflow_dispatch:   # manual desde la UI de Actions
   push:
     branches: [ master ]

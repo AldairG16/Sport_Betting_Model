@@ -29,6 +29,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+from sqlalchemy import text
 from config.database import engine
 from config.settings import (
     TELEGRAM_BOT_TOKEN,
@@ -1260,6 +1261,13 @@ def send_evening_summary():
     # Detalle por bet
     if not df.empty:
         lines.append("")
+        # Mercados que típicamente dependen del backup fbdata.co.uk
+        # (corners + cards). Esos se resuelven cuando fbdata sube el CSV,
+        # típicamente 24-36h después del partido. Si están pending al
+        # cierre del evening, no es bug — es delay del proveedor.
+        DATA_LAG_MARKETS = ("corners_", "cards_")
+        now_utc = datetime.now(timezone.utc)
+
         for _, bet in df.iterrows():
             mkt    = _get_market_label(bet["market"])
             result = bet["result"]
@@ -1270,9 +1278,54 @@ def send_evening_summary():
                 icon = "❌"
                 pnl  = f"{float(bet['profit']):.2f}u"
             else:
-                icon = "⏳"
-                pnl  = "pendiente"
+                # Distinguir POR QUÉ sigue pending. Antes todo era "pendiente"
+                # y el usuario no podía saber si era un bug o estaba esperando.
+                kickoff = pd.to_datetime(bet["match_date"])
+                if kickoff.tzinfo is None:
+                    kickoff = kickoff.tz_localize("UTC")
+                mins_since = (now_utc - kickoff.to_pydatetime()).total_seconds() / 60
+                market_raw = str(bet.get("market", "")).lower()
+                is_lag_market = any(market_raw.startswith(p) for p in DATA_LAG_MARKETS)
+
+                if mins_since < 0:
+                    icon = "🕒"
+                    pnl  = "aún no inicia"
+                elif mins_since < 120:
+                    icon = "🕒"
+                    pnl  = "jugándose / recién acabó"
+                elif is_lag_market:
+                    icon = "⌛"
+                    pnl  = "esperando data (corners/cards)"
+                elif mins_since < 360:
+                    icon = "⌛"
+                    pnl  = "esperando data"
+                else:
+                    icon = "❓"
+                    pnl  = "revisar (sin resolver)"
             lines.append(f"{icon} {bet['match']}  <i>{mkt}</i>  {pnl}")
+
+    # ── Diagnóstico del analista: si la última heartbeat está stale,
+    # avisamos al usuario en el mismo resumen (es la primera cosa que
+    # va a leer en la noche).
+    try:
+        with engine.begin() as conn:
+            row = conn.execute(text("""
+                SELECT ran_at, EXTRACT(EPOCH FROM (NOW() - ran_at))/60 AS mins_ago
+                FROM analyst_heartbeat
+                ORDER BY ran_at DESC LIMIT 1
+            """)).first()
+        if row is None:
+            lines.append("")
+            lines.append("⚠️ <b>Analista pre-kickoff:</b> nunca corrió "
+                         "(tabla heartbeat vacía).")
+        elif float(row.mins_ago) > 120:
+            lines.append("")
+            lines.append(f"⚠️ <b>Analista pre-kickoff stale:</b> última "
+                         f"corrida hace {int(row.mins_ago)} min. "
+                         f"Revisar GH Actions / cron-job.org.")
+    except Exception:
+        # tabla no existe aún o DB error → no rompemos el resumen
+        pass
 
     msg = "\n".join(lines)
     ok  = send_message(msg)

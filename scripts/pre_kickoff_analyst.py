@@ -26,6 +26,7 @@ Uso:
 
 import json
 import sys
+import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -741,25 +742,74 @@ def _save_analysis(bet: dict, result: dict):
 # MAIN
 # ============================================================
 
+def _write_heartbeat(bets_found: int = 0, bets_analyzed: int = 0,
+                     bets_skipped_rule: int = 0, error_msg: str | None = None):
+    """
+    Escribe una row en analyst_heartbeat. Cada corrida del cron deja
+    huella, así detectamos gaps (cron throttled / disabled / crash).
+
+    NUNCA debe lanzar excepción — si la tabla no existe aún (DDL aún no
+    corrió) o la DB está caída, no queremos arruinar la corrida.
+    """
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO analyst_heartbeat
+                    (bets_found, bets_analyzed, bets_skipped_rule, error_msg)
+                VALUES
+                    (:found, :analyzed, :skipped, :err)
+            """), {
+                "found": int(bets_found),
+                "analyzed": int(bets_analyzed),
+                "skipped": int(bets_skipped_rule),
+                "err": (error_msg or "")[:500] or None,
+            })
+    except Exception as e:
+        print(f"⚠️  No se pudo escribir heartbeat: {e}")
+
+
+def _alert_telegram_crash(exc: BaseException):
+    """En caso de crash del analyst, manda alerta a Telegram para que el
+    usuario sepa INMEDIATAMENTE que el cron está fallando. Antes el script
+    moría en silencio y el usuario solo se enteraba al final del día."""
+    try:
+        from scripts.notify_telegram import send_message_prekickoff
+        tb = "".join(traceback.format_exception(exc))[:1500]
+        msg = (
+            "🚨 <b>PRE-KICKOFF ANALYST CRASH</b>\n\n"
+            f"<code>{type(exc).__name__}: {exc}</code>\n\n"
+            f"<pre>{tb}</pre>\n"
+            "<i>El cron volverá a intentar en 15 min. "
+            "Si persiste, revisa los logs.</i>"
+        )
+        send_message_prekickoff(msg)
+    except Exception as e:
+        print(f"⚠️  No se pudo enviar alerta de crash: {e}")
+
+
 def main():
     print(f"\n🔍 PRE-KICKOFF ANALYST — ventana [{PRE_KICKOFF_WINDOW_MIN}, "
           f"{PRE_KICKOFF_WINDOW_MAX}] min desde NOW UTC\n")
 
     if not ANTHROPIC_API_KEY:
         print("⚠️  ANTHROPIC_API_KEY no configurada — abortando.")
+        _write_heartbeat(error_msg="ANTHROPIC_API_KEY missing")
         return
 
     bets = _fetch_pending_bets()
     if bets.empty:
         print("✓ Sin bets pending en la ventana pre-kickoff")
+        _write_heartbeat(bets_found=0)
         return
 
     bets = _filter_confiables(bets)
     if bets.empty:
         print("✓ Sin bets CONFIABLES en la ventana (todas filtradas)")
+        _write_heartbeat(bets_found=0)
         return
 
-    print(f"📋 {len(bets)} bet(s) confiable(s) en ventana — analizando...\n")
+    bets_found_total = len(bets)
+    print(f"📋 {bets_found_total} bet(s) confiable(s) en ventana — analizando...\n")
 
     # ── Carga memo + lecciones UNA SOLA VEZ por corrida ──────────────
     # Ambas se inyectan como bloques cacheados en cada call; computarlas
@@ -778,6 +828,7 @@ def main():
     client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
     verdicts = []
+    n_skipped_rule = 0
     for _, bet in bets.iterrows():
         b = bet.to_dict()
         if _already_analyzed(b["match"], b["market"], b["match_date"]):
@@ -805,6 +856,7 @@ def main():
                 "sources": [],
             }
             print(f"  🔴 {b['match']} ({b['market']}) — SKIP rule-based: {skip_reason}")
+            n_skipped_rule += 1
         else:
             try:
                 result = _analyze_bet(client, b, ctx,
@@ -837,6 +889,28 @@ def main():
     else:
         print("\n✓ Sin nuevos análisis (todos ya analizados o sin contenido)")
 
+    # ── Heartbeat final (siempre, incluso si no se envió nada) ───────
+    _write_heartbeat(
+        bets_found=bets_found_total,
+        bets_analyzed=len(verdicts),
+        bets_skipped_rule=n_skipped_rule,
+    )
+
 
 if __name__ == "__main__":
-    main()
+    # Top-level try/except: si el script crashea por cualquier razón
+    # (DB caída, lib rota, JSON inválido), mandamos alerta a Telegram en
+    # vez de morir en silencio. Histórico: el agente pasó 28h sin correr
+    # y nadie se enteró hasta que el usuario notó la ausencia de mensajes.
+    try:
+        main()
+    except SystemExit:
+        raise
+    except BaseException as _exc:
+        traceback.print_exc()
+        try:
+            _write_heartbeat(error_msg=f"{type(_exc).__name__}: {_exc}"[:500])
+        except Exception:
+            pass
+        _alert_telegram_crash(_exc)
+        sys.exit(1)
