@@ -940,13 +940,98 @@ def main():
             print(f"⚠️  No se pudo enviar alerta sistémica: {e}")
 
 
+def debug_mode_run():
+    """Modo SANITY CHECK: agarra UNA bet pending futura ignorando la ventana
+    30-90 min, la corre por el pipeline completo, y reporta éxito o el
+    error real. Útil cuando el cron no muestra bets en ventana pero
+    queremos verificar que la integración con Claude API funciona.
+
+    Sirve para distinguir entre "el cron no encontró bets" (estado válido)
+    y "el cron encontró bets pero Claude API falla" (bug a arreglar).
+    """
+    print("\n🔧 DEBUG MODE — sanity check de una bet futura cualquiera\n")
+    if not ANTHROPIC_API_KEY:
+        print("⚠️  ANTHROPIC_API_KEY no configurada — abortando.")
+        return
+
+    df = pd.read_sql(text("""
+        SELECT b.match, b.match_date, b.market,
+               b.probability, b.odds, b.edge, b.stake,
+               COALESCE(b.league, '') AS league
+        FROM bets_history b
+        WHERE b.result = 'pending'
+          AND b.match_date > NOW()
+        ORDER BY b.match_date
+        LIMIT 1
+    """), engine)
+    if df.empty:
+        print("⚠️  No hay bets pending FUTURAS para testear. "
+              "Esperá a que la morning pipeline genere las de mañana.")
+        return
+
+    bet = df.iloc[0].to_dict()
+    print(f"📋 Bet test: {bet['match']} | {bet['market']} | "
+          f"kickoff={bet['match_date']} | odds={bet['odds']}\n")
+
+    print("→ Construyendo contexto...")
+    ctx = _build_context(bet)
+    print(f"  OK ({len(ctx)} campos)\n")
+
+    print("→ Cargando memo + lecciones...")
+    memo = _build_learning_memo()
+    lessons = _load_manual_lessons()
+    print(f"  memo={len(memo)} chars · lessons={len(lessons)} chars\n")
+
+    print("→ Llamando a Claude API + web_search... (~10-15 seg)\n")
+    from anthropic import Anthropic
+    client = Anthropic(api_key=ANTHROPIC_API_KEY)
+    try:
+        result = _analyze_bet(client, bet, ctx,
+                              learning_memo=memo, manual_lessons=lessons)
+    except BaseException as exc:
+        print("\n❌❌❌ CLAUDE API CALL FAILED — este es el bug:\n")
+        traceback.print_exc()
+        print()
+        try:
+            from scripts.notify_telegram import send_message_prekickoff
+            tb = traceback.format_exc()[:1500]
+            send_message_prekickoff(
+                "🚨 <b>DEBUG SANITY CHECK FAILED</b>\n\n"
+                f"<code>{type(exc).__name__}: {exc}</code>\n\n"
+                f"<pre>{tb}</pre>"
+            )
+        except Exception:
+            pass
+        _write_heartbeat(error_msg=f"DEBUG: {type(exc).__name__}: {exc}"[:500])
+        sys.exit(1)
+
+    print("\n✅ ÉXITO — Claude respondió:")
+    print(json.dumps({k: v for k, v in result.items() if k != "sources"},
+                     indent=2, ensure_ascii=False, default=str))
+    print(f"\nFuentes ({len(result.get('sources', []))}):")
+    for s in result.get("sources", [])[:5]:
+        print(f"  - {s}")
+    print("\n🟢 El analista FUNCIONA. El problema anterior debe ser otro "
+          "(ventana, filtros, secretos).")
+
+
 if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--debug", action="store_true",
+                    help="Sanity check: agarra 1 bet futura ignorando ventana, "
+                         "corre el pipeline completo, muestra el error si falla.")
+    args = ap.parse_args()
+
     # Top-level try/except: si el script crashea por cualquier razón
     # (DB caída, lib rota, JSON inválido), mandamos alerta a Telegram en
     # vez de morir en silencio. Histórico: el agente pasó 28h sin correr
     # y nadie se enteró hasta que el usuario notó la ausencia de mensajes.
     try:
-        main()
+        if args.debug:
+            debug_mode_run()
+        else:
+            main()
     except SystemExit:
         raise
     except BaseException as _exc:

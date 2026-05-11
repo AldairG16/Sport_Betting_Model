@@ -28,6 +28,11 @@ on:
     - cron: '7,22,37,52 * * * *'
   workflow_dispatch:   # manual desde la UI de Actions
     inputs:
+      debug_mode:
+        description: '🔧 SANITY CHECK — agarra 1 bet futura, corre Claude, reporta SUCCESS/ERROR'
+        type: boolean
+        required: false
+        default: false
       window_min:
         description: 'Override PRE_KICKOFF_WINDOW_MIN (default 30)'
         required: false
@@ -80,4 +85,10 @@ jobs:
           PRE_KICKOFF_WINDOW_MIN:          ${{ inputs.window_min || secrets.PRE_KICKOFF_WINDOW_MIN }}
           PRE_KICKOFF_WINDOW_MAX:          ${{ inputs.window_max || secrets.PRE_KICKOFF_WINDOW_MAX }}
           USER_TIMEZONE:                   America/Mexico_City
-        run: python scripts/pre_kickoff_analyst.py
+        run: |
+          if [ "${{ inputs.debug_mode }}" = "true" ]; then
+            echo "🔧 Running in DEBUG MODE (--debug flag)"
+            python scripts/pre_kickoff_analyst.py --debug
+          else
+            python scripts/pre_kickoff_analyst.py
+          fi
