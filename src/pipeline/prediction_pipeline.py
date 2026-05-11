@@ -1253,12 +1253,18 @@ def run_prediction_pipeline():
             "dc_1x":        0.06,
             "dc_x2":        0.06,
 
-            # Asian Handicap — longshot bias en dogs requiere más edge
-            "ah_home_fav":  0.05,
-            "ah_home_pk":   0.06,
-            "ah_home_dog":  0.08,
-            "ah_away_fav":  0.05,
-            "ah_away_pk":   0.06,
+            # Asian Handicap — SUBIDOS 11-may-26 tras alerta de calibración:
+            #   ah_home_fav real win rate 20% (predicho 58%, n=15, factor=0.78)
+            #   ah_away_fav real win rate 30% (predicho 64%, n=23, factor=0.77)
+            #   Investigación 90d (41 bets): avg pred 61%, real 27%, ROI -46%.
+            # El modelo sobre-estima los favoritos AH (acierta el ganador pero
+            # falla el cover del handicap). Hasta que se recalibre con más
+            # data, requerir EDGE mucho más alto. fav/pk al 12-15%, dogs OK.
+            "ah_home_fav":  0.15,
+            "ah_home_pk":   0.10,   # factor=0.82, leve bias
+            "ah_home_dog":  0.08,   # factor=1.01, calibrado
+            "ah_away_fav":  0.15,
+            "ah_away_pk":   0.06,   # factor=0.97, calibrado
             "ah_away_dog":  0.08,
             # `away_win` y `dnb_home` siguen BLOQUEADOS (líneas más abajo) —
             # no figuran aquí porque el filtro de mercado-bloqueado los corta.
@@ -1393,7 +1399,20 @@ def run_prediction_pipeline():
             _edge_real = bet.get("edge_market", bet["edge"])
 
             # 1) Threshold base por mercado (Mejora #3)
-            _min_edge = MIN_EDGE_BY_MARKET.get(mkt, MIN_EDGE)
+            # FIX 11-may-26: para mercados AH parametrizados (`ah_home_-0.5`,
+            # `ah_away_-1.0`, etc.), el lookup directo en MIN_EDGE_BY_MARKET
+            # FALLABA (el dict tiene `ah_home_fav` no `ah_home_-0.5`) y caía
+            # al default 0.05. Esto dejó pasar 41 ah_fav bets en 90d con
+            # edge=5-12% que en realidad tenían win rate 27%. Ahora hacemos
+            # fallback al grupo AH (ah_home_fav/pk/dog) antes del default.
+            _min_edge = MIN_EDGE_BY_MARKET.get(mkt)
+            if _min_edge is None:
+                from src.models.calibration_monitor import _ah_group
+                grp = _ah_group(mkt)
+                if grp is not None:
+                    _min_edge = MIN_EDGE_BY_MARKET.get(grp, MIN_EDGE)
+                else:
+                    _min_edge = MIN_EDGE
 
             # 2) Bump por liga problemática (Italia, MLS, Ligue 1)
             if _league in TOUGH_LEAGUES:
