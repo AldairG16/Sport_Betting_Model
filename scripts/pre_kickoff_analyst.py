@@ -663,17 +663,40 @@ def _analyze_bet(client, bet: dict, ctx: dict, learning_memo: str = "",
             "cache_control": {"type": "ephemeral"},
         })
 
+    # ── BUDGET GUARD: evitamos quemar créditos ────────────────────────
+    # Antes: $0.025-0.04 por bet con Sonnet + 2 web_searches.
+    # Ahora: Haiku 4.5 (~3x más barato input/output) + 1 web_search,
+    # max_tokens 400. Costo esperado: ~$0.008-0.012 por bet.
+    from src.utils.anthropic_budget import (
+        can_call, estimate_call_cost, record_call, extract_usage_from_response,
+    )
+    MODEL = "claude-haiku-4-5"
+    est_cost = estimate_call_cost(MODEL, est_input_tokens=4000,
+                                  est_output_tokens=400, web_searches=1)
+    ok, reason = can_call(engine, est_cost)
+    if not ok:
+        raise RuntimeError(f"Budget guard: {reason}")
+
     resp = client.messages.create(
-        model="claude-sonnet-4-5",
-        max_tokens=600,
+        model=MODEL,
+        max_tokens=400,                # antes 600 — JSON compacto cabe sobrado
         system=system_blocks,
         tools=[{
             "type": "web_search_20250305",
             "name": "web_search",
-            "max_uses": 2,
+            "max_uses": 1,             # antes 2 — 1 búsqueda alcanza para lineups+lesiones
         }],
         messages=[{"role": "user", "content": user_msg}],
     )
+
+    # Grabar uso REAL (no estimado) en anthropic_usage
+    u = extract_usage_from_response(resp)
+    record_call(engine,
+                input_tokens=u["input_tokens"],
+                output_tokens=u["output_tokens"],
+                model=MODEL,
+                web_searches=u["web_searches"],
+                cache_read_tokens=u["cache_read_tokens"])
 
     # Extraer último bloque de texto (después de tool_use loops)
     text_blocks = [b.text for b in resp.content if getattr(b, "type", "") == "text"]

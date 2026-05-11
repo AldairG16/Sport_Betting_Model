@@ -84,6 +84,8 @@ jobs:
           # para poder testear con ventana ampliada (window_max=99999).
           PRE_KICKOFF_WINDOW_MIN:          ${{ inputs.window_min || secrets.PRE_KICKOFF_WINDOW_MIN }}
           PRE_KICKOFF_WINDOW_MAX:          ${{ inputs.window_max || secrets.PRE_KICKOFF_WINDOW_MAX }}
+          # Tope diario de gasto en Anthropic. Si el secret no existe el módulo usa $0.30 default.
+          ANTHROPIC_DAILY_BUDGET_USD:      ${{ secrets.ANTHROPIC_DAILY_BUDGET_USD }}
           USER_TIMEZONE:                   America/Mexico_City
         run: |
           if [ "${{ inputs.debug_mode }}" = "true" ]; then

@@ -191,9 +191,24 @@ def _ask_claude_for_result(client, home: str, away: str, date_str: str,
         f"(los que no estén disponibles, null)."
     )
 
+    # ── BUDGET GUARD ─────────────────────────────────────────────────
+    # Antes: Sonnet + 3 búsquedas = $0.03-0.05/match.
+    # Ahora: Haiku 4.5 + 1 búsqueda = ~$0.008-0.012/match.
+    # 1 búsqueda alcanza casi siempre (la primera page que aparece tiene
+    # FT score + corners + cards en sitios tipo Sofascore/Flashscore).
+    from src.utils.anthropic_budget import (
+        can_call, estimate_call_cost, record_call, extract_usage_from_response,
+    )
+    MODEL = "claude-haiku-4-5"
+    est_cost = estimate_call_cost(MODEL, est_input_tokens=2500,
+                                  est_output_tokens=350, web_searches=1)
+    ok, reason = can_call(engine, est_cost)
+    if not ok:
+        raise RuntimeError(f"Budget guard: {reason}")
+
     resp = client.messages.create(
-        model="claude-sonnet-4-5",
-        max_tokens=600,
+        model=MODEL,
+        max_tokens=350,           # antes 600 — JSON schema cabe en <300
         system=[{
             "type": "text",
             "text": SYSTEM_PROMPT,
@@ -202,10 +217,18 @@ def _ask_claude_for_result(client, home: str, away: str, date_str: str,
         tools=[{
             "type": "web_search_20250305",
             "name": "web_search",
-            "max_uses": 3,
+            "max_uses": 1,        # antes 3 — 1 query bien formulada alcanza
         }],
         messages=[{"role": "user", "content": user_msg}],
     )
+
+    u = extract_usage_from_response(resp)
+    record_call(engine,
+                input_tokens=u["input_tokens"],
+                output_tokens=u["output_tokens"],
+                model=MODEL,
+                web_searches=u["web_searches"],
+                cache_read_tokens=u["cache_read_tokens"])
 
     text_blocks = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
     raw = text_blocks[-1].strip() if text_blocks else "{}"
@@ -402,8 +425,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--hours-lag", type=int, default=6,
                     help="Solo bets con kickoff > N horas (default 6)")
-    ap.add_argument("--limit", type=int, default=30,
-                    help="Máximo partidos por corrida (default 30)")
+    ap.add_argument("--limit", type=int, default=15,
+                    help="Máximo partidos por corrida (default 15 — budget-friendly)")
     args = ap.parse_args()
 
     try:
