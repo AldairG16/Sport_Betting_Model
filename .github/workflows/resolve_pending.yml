@@ -1,0 +1,52 @@
+name: Resolve Pending Bets
+
+# Agente que usa Claude + web_search para terminar de resolver bets
+# pending cuyos resultados:
+#   • Football-data.co.uk aún no subió (corners/cards europeos, lag 24-36h)
+#   • The Odds API no cubre (ligas chinas, sudamericanas menores)
+#   • Quedaron por team-name mismatch o problema de cobertura
+#
+# NO crea apuestas. NO modifica probabilidades. Solo termina de resolver.
+# Cap: 30 partidos por corrida (~$0.90 max).
+
+on:
+  schedule:
+    # 10:00 MX (16:00 UTC) — después que fbdata.co.uk sincronizó la noche
+    - cron: '0 16 * * *'
+    # 22:00 MX (04:00 UTC siguiente) — atrapa partidos asiáticos del día
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+    paths: [ '.github/workflows/resolve_pending.yml' ]
+
+concurrency:
+  group: resolve-pending
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run resolver
+        env:
+          DB_URL:                ${{ secrets.DB_URL }}
+          ANTHROPIC_API_KEY:     ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
+          USER_TIMEZONE:         America/Mexico_City
+        run: python scripts/resolve_pending_bets.py --hours-lag 6 --limit 30
