@@ -829,6 +829,9 @@ def main():
 
     verdicts = []
     n_skipped_rule = 0
+    per_bet_errors: list[str] = []   # NEW: capturamos errores por bet para
+                                       # poder verlos desde el heartbeat / DB.
+                                       # Antes se silenciaban en `except: continue`.
     for _, bet in bets.iterrows():
         b = bet.to_dict()
         if _already_analyzed(b["match"], b["market"], b["match_date"]):
@@ -870,7 +873,14 @@ def main():
                       f"{v}/{d} prob={p}%: "
                       f"{result.get('reasoning', '')[:70]}")
             except Exception as e:
-                print(f"  ❌ Error analizando {b['match']}: {e}")
+                # Capturamos TRACEBACK completo, no solo el msg corto.
+                # Antes esto era el bug silencioso: 11 bets fallaban y no
+                # quedaba huella en heartbeat ni Telegram.
+                err = f"{type(e).__name__}: {e}"
+                tb = traceback.format_exc()
+                print(f"  ❌ Error analizando {b['match']} ({b['market']}): {err}")
+                print(tb)
+                per_bet_errors.append(f"{b['match']} ({b['market']}): {err}")
                 continue
 
         try:
@@ -890,11 +900,44 @@ def main():
         print("\n✓ Sin nuevos análisis (todos ya analizados o sin contenido)")
 
     # ── Heartbeat final (siempre, incluso si no se envió nada) ───────
+    # Si hubo errores por bet, los guardamos en error_msg para que el
+    # próximo audit los pueda leer desde la DB.
+    err_summary = None
+    if per_bet_errors:
+        err_summary = " | ".join(per_bet_errors)[:500]
+        print(f"\n⚠️  {len(per_bet_errors)} error(es) per-bet:")
+        for e in per_bet_errors:
+            print(f"    - {e}")
+
     _write_heartbeat(
         bets_found=bets_found_total,
         bets_analyzed=len(verdicts),
         bets_skipped_rule=n_skipped_rule,
+        error_msg=err_summary,
     )
+
+    # ── Alerta Telegram si hay falla sistémica ───────────────────────
+    # Si TODAS las bets analizables (excluyendo rule-based) fallaron,
+    # el bug es sistémico (API caída, code regression, etc.) y el
+    # usuario debe enterarse INMEDIATAMENTE, no al final del día.
+    n_analyzable = bets_found_total - n_skipped_rule
+    if per_bet_errors and len(per_bet_errors) >= max(3, n_analyzable):
+        try:
+            from scripts.notify_telegram import send_message_prekickoff
+            uniq_errors = sorted({e.split(": ", 1)[1].split(":")[0]
+                                  if ": " in e else e
+                                  for e in per_bet_errors})[:3]
+            send_message_prekickoff(
+                "🚨 <b>ANALISTA FALLANDO EN SERIE</b>\n\n"
+                f"<code>{len(per_bet_errors)}/{n_analyzable}</code> bets "
+                f"crashearon en el último cron.\n\n"
+                f"Errores únicos:\n• "
+                + "\n• ".join(f"<code>{e[:100]}</code>" for e in uniq_errors)
+                + "\n\n<i>Probablemente bug sistémico (API key, model, "
+                  "tools). Revisar logs GH Actions.</i>"
+            )
+        except Exception as e:
+            print(f"⚠️  No se pudo enviar alerta sistémica: {e}")
 
 
 if __name__ == "__main__":

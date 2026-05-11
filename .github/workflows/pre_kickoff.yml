@@ -27,6 +27,15 @@ on:
     # Cada partido sigue teniendo 4 chances dentro de la ventana 30-90 min.
     - cron: '7,22,37,52 * * * *'
   workflow_dispatch:   # manual desde la UI de Actions
+    inputs:
+      window_min:
+        description: 'Override PRE_KICKOFF_WINDOW_MIN (default 30)'
+        required: false
+        default: ''
+      window_max:
+        description: 'Override PRE_KICKOFF_WINDOW_MAX (default 90). Para debug: 99999.'
+        required: false
+        default: ''
   push:
     branches: [ master ]
     paths: [ '.github/workflows/pre_kickoff.yml' ]
@@ -66,7 +75,9 @@ jobs:
           # Si no se configura, send_message_prekickoff cae al bot principal.
           TELEGRAM_BOT_TOKEN_PREKICKOFF:   ${{ secrets.TELEGRAM_BOT_TOKEN_PREKICKOFF }}
           TELEGRAM_CHAT_ID_PREKICKOFF:     ${{ secrets.TELEGRAM_CHAT_ID_PREKICKOFF }}
-          PRE_KICKOFF_WINDOW_MIN:          ${{ secrets.PRE_KICKOFF_WINDOW_MIN }}
-          PRE_KICKOFF_WINDOW_MAX:          ${{ secrets.PRE_KICKOFF_WINDOW_MAX }}
+          # Inputs del workflow_dispatch tienen prioridad sobre secrets,
+          # para poder testear con ventana ampliada (window_max=99999).
+          PRE_KICKOFF_WINDOW_MIN:          ${{ inputs.window_min || secrets.PRE_KICKOFF_WINDOW_MIN }}
+          PRE_KICKOFF_WINDOW_MAX:          ${{ inputs.window_max || secrets.PRE_KICKOFF_WINDOW_MAX }}
           USER_TIMEZONE:                   America/Mexico_City
         run: python scripts/pre_kickoff_analyst.py
