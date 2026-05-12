@@ -37,7 +37,14 @@ DEFAULT_PRICING = PRICING["claude-haiku-4-5"]
 WEB_SEARCH_COST_USD = 0.01
 
 # Budget diario default — conservador. Override vía env var.
-DAILY_BUDGET_USD = float(os.environ.get("ANTHROPIC_DAILY_BUDGET_USD", "0.30"))
+#
+# IMPORTANTE: NO usar `float(os.environ.get(...))` directamente. Si el secret
+# de GH Actions no está configurado, `${{ secrets.X }}` expande a "" y el
+# env var queda en string vacío — `float("")` revienta con ValueError. Eso
+# crasheaba el import del módulo y todas las bets fallaban antes de llamar
+# a la API (descubierto 12-may-26). Reusamos el helper de config.settings.
+from config.settings import env_float as _env_float
+DAILY_BUDGET_USD = _env_float("ANTHROPIC_DAILY_BUDGET_USD", 0.30)
 
 
 # ============================================================
