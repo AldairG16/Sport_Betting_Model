@@ -837,14 +837,44 @@ def _format_single_match_message(match: str, verdicts_for_match: list) -> str:
     else:
         head_icon = "🔴"
 
+    # ── Detectar el BEST PICK del partido ─────────────────────────────
+    # Si hay varios mercados, ponemos el best primero y lo destacamos.
+    # El campo `is_best` lo setea el agente en _analyze_match_group.
+    best = next((v for v in verdicts_for_match if v.get("is_best")), None)
+    others = [v for v in verdicts_for_match if not v.get("is_best")]
+    # Si no hay best explícito, ordenamos por verdict (STRONG > MEDIUM > SKIP)
+    # y probability descendiente — preserva orden razonable.
+    rank = {"STRONG": 0, "MEDIUM": 1, "SKIP": 2}
+    others.sort(key=lambda v: (rank.get((v.get("verdict") or "MEDIUM").upper(), 3),
+                                -int(v.get("probability", 0) or 0)))
+    ordered = ([best] if best else []) + others
+
+    # Compartido del partido (lineups L1/L2/L0, match_notes)
+    lineups_share = _format_lineups_label(
+        (best or verdicts_for_match[0]).get("lineups", ""))
+    match_notes = (verdicts_for_match[0].get("match_notes") or "").strip()
+
+    n_markets = len(verdicts_for_match)
     lines = [
         f"{head_icon} <b>PRE-KICKOFF — {match_title}</b>",
-        f"🕐 {kickoff}",
-        "",
+        f"🕐 {kickoff}   👥 {lineups_share}"
+        + (f"   ({n_markets} mercados)" if n_markets > 1 else ""),
     ]
+    if match_notes:
+        lines.append(f"📋 {match_notes}")
+    lines.append("")
+
+    # Si hay best_pick, destacar arriba antes del listado
+    if best and n_markets > 1:
+        best_reason = (best.get("best_reason") or "").strip()
+        best_mkt_label = _get_market_label(best.get("market", ""), match)
+        lines.append(f"⭐ <b>MEJOR APUESTA: {best_mkt_label}</b>")
+        if best_reason:
+            lines.append(f"   <i>{best_reason}</i>")
+        lines.append("")
 
     # Un bloque por mercado analizado de este partido
-    for i, v in enumerate(verdicts_for_match):
+    for i, v in enumerate(ordered):
         verdict      = (v.get("verdict") or "MEDIUM").upper()
         decision     = (v.get("decision") or "").upper().strip()
         icon         = icon_map.get(verdict, "⚪")
@@ -870,7 +900,9 @@ def _format_single_match_message(match: str, verdicts_for_match: list) -> str:
 
         if i > 0:
             lines.append("─────────")
-        lines.append(f"{icon} <b>{verdict}</b>  {stars}")
+        # Si es el best y hay >1 mercado, marcar con estrella
+        header_prefix = "⭐ " if (v.get("is_best") and n_markets > 1) else ""
+        lines.append(f"{header_prefix}{icon} <b>{verdict}</b>  {stars}")
         lines.append(f"🎯 {market_label} @{odds_val:.2f}  (modelo +{edge_pct:.1f}%)")
         if prob_pct > 0:
             lines.append(f"📊 Probabilidad estimada: <b>{prob_pct}%</b>  "
@@ -887,12 +919,9 @@ def _format_single_match_message(match: str, verdicts_for_match: list) -> str:
             if shown:
                 lines.append("🔑 " + " · ".join(shown))
 
-        lineups = _format_lineups_label(v.get("lineups", ""))
-        lines.append(f"👥 {lineups}")
-
     lines.append("")
-    lines.append("<i>Veredicto del analista — la apuesta sigue activa en el "
-                 "modelo y se resuelve normal al final del día.</i>")
+    lines.append("<i>Veredicto del analista — las apuestas siguen activas "
+                 "en el modelo y se resuelven normal al final del día.</i>")
     return "\n".join(lines)
 
 

@@ -63,74 +63,88 @@ regla irrompible: NO apostar cuando la evidencia no acompaña, por más
 linda que se vea la cuota. Cada apuesta es decisión de negocio, no
 emoción.
 
-Recibís UNA apuesta sugerida por tu modelo cuantitativo + un DOSIER DE
-DATOS DUROS pre-calculado (H2H, forma, congestión, xG, movimiento de
-línea, motivación, clima). NO repitas búsquedas de eso — ya está hecho.
+Recibís UN PARTIDO con UNO O VARIOS mercados sugeridos por tu modelo
+cuantitativo + un DOSIER DE DATOS DUROS pre-calculado (H2H, forma,
+congestión, xG, movimiento de línea, motivación, clima). NO repitas
+búsquedas de eso — ya está hecho.
 
 Tu trabajo es completar el dosier con LOS DETALLES VIVOS DEL DÍA usando
 web_search (cap = 2 búsquedas, ahorrá tokens):
 
   Búsqueda 1 (obligatoria): "<home> vs <away> predicted lineup <fecha>"
-    → alineación probable o titular confirmado
-  Búsqueda 2 (solo si la 1ª no resolvió ambos):
+    → alineación probable/confirmada para AMBOS equipos
+  Búsqueda 2 (solo si la 1ª no resolvió bien ambos):
     "<home>" OR "<away>" injury news suspension <fecha>"
-    → lesiones/suspensiones/dudas de últimas 48h, cambios de DT,
-      noticias de motivación atípica (huelga, conflicto interno,
-      hinchada en boicot, viajes inusuales)
 
-PROCESO MENTAL (en este orden):
-  1. ¿Los titulares confirmados/probables VALIDAN la apuesta del modelo
-     (ej. Over 2.5 con los 9-goleadores adentro, o home_win con DT
-     metiendo a su 11 ideal) o la CONTRADICEN (ej. dos B-teams rotando
-     entre semana)?
-  2. ¿Aparece un factor que el modelo NO podía ver (lesión de última
-     hora, cambio táctico, noticia de motivación)?
-  3. ¿La motivación REAL coincide con el dato cuantitativo del dosier?
+PROCESO MENTAL (mismo para cada mercado):
+  1. ¿Los titulares confirmados/probables VALIDAN o CONTRADICEN cada
+     mercado? Para Over 2.5: ¿hay 9-goleadores adentro? Para home_win:
+     ¿11 ideal? Para corners_over: ¿juega un equipo de presión alta?
+  2. ¿Hay lesión/suspensión que el modelo NO podía ver?
+  3. ¿La motivación REAL coincide con el dato cuantitativo?
   4. ¿El movimiento de la línea avala o contradice tu lectura?
-  5. Cruzá todo con la MEMORIA DE ERRORES (segundo bloque del system) —
-     no repitas patrones que ya te costaron plata.
+  5. Cruzá todo con la MEMORIA DE ERRORES.
 
-CÁLCULO DE PROBABILIDAD (lo más importante):
-  • Empezá con la `probability` del modelo que viene en el dosier.
-  • Sumá/restá puntos según los factores que detectaste:
-      - Titular CLAVE confirmado fuera y la apuesta depende de él: -8 a -12
-      - Rotación masiva confirmada (B-team): -10 a -15
-      - Forma en racha extrema (5 triunfos, ≥2 GF promedio): +3 a +5
-      - Sharp money fuerte EN CONTRA del pick: -5 a -8
-      - Clima adverso + apuesta a Over: -4 a -7
-      - Motivación clara A FAVOR (descenso, final, derbi cargado): +3 a +5
-  • Tu `probability` final es entera 0–100. Sé HONESTO, no infles para
-    justificar la apuesta.
+CÁLCULO DE PROBABILIDAD por cada mercado:
+  • Empezá con la `probability` del modelo (viene en el input).
+  • Sumá/restá puntos por los factores detectados:
+      - Titular CLAVE para ESE mercado afuera: -8 a -12
+      - Rotación masiva (B-team): -10 a -15
+      - Forma en racha extrema: +3 a +5
+      - Sharp money fuerte EN CONTRA: -5 a -8
+      - Clima adverso + Over: -4 a -7
+      - Motivación clara A FAVOR: +3 a +5
+  • `probability` final es entera 0–100. NO infles para justificar.
 
-DECISIÓN FINAL:
-  • Calculá la probabilidad implícita de la cuota: 1 / odds * 100.
-  • APUESTA  → tu probability >= prob_implícita + 3  Y  lineups L1/L2
-               sin red flag mayor.
-  • NO APUESTA → cualquier otro caso (incluido lineups="L0").
+DECISIÓN por cada mercado:
+  • Probabilidad implícita de la cuota: 1/odds × 100.
+  • APUESTA  → probability >= prob_implícita + 3 Y lineups L1/L2 sin red flag.
+  • NO APUESTA → cualquier otro caso.
 
-Mapeo `verdict` (consistencia obligatoria):
-  STRONG  → APUESTA  Y  probability >= prob_implícita + 7
-  MEDIUM  → APUESTA  Y  probability ENTRE prob_implícita+3  y  +6
-  SKIP    → NO APUESTA  (en cualquier escenario)
+Mapeo verdict (coherencia):
+  STRONG  → APUESTA Y probability >= prob_implícita + 7
+  MEDIUM  → APUESTA Y probability entre prob_implícita+3 y +6
+  SKIP    → NO APUESTA (siempre)
 
-Salida ESTRICTA — SOLO JSON, sin markdown, sin prosa fuera del JSON:
+BEST PICK (lo más importante de todo):
+  Al final de analizar todos los mercados, identificás cuál es el MEJOR
+  de todos. Criterios para best_pick:
+    1. Que sea APUESTA (no tiene sentido recomendar un SKIP).
+    2. Mayor (probability - prob_implícita) → mayor edge real.
+    3. En empate, gana el de mayor confidence.
+    4. Si TODOS son SKIP, best_pick = null.
+  El best_pick es UNO solo. El usuario está jugándose plata real y
+  prefiere una recomendación clara a una lista difusa.
+
+Salida ESTRICTA — solo JSON, sin markdown, sin prosa fuera del JSON:
 {
-  "verdict": "STRONG" | "MEDIUM" | "SKIP",
-  "decision": "APUESTA" | "NO APUESTA",
-  "probability": 0-100,
-  "confidence": 1-5,
-  "reasoning": "máx 2 oraciones (<=45 palabras), específicas y útiles",
   "lineups": "L1=confirmadas | L2=probables | L0=sin info",
-  "key_factors": ["<=4 factores breves: lesiones, rotación, forma, sharp"]
+  "match_notes": "máx 1 oración sobre lineups/lesiones/contexto (<=30 palabras)",
+  "verdicts": [
+    {
+      "market": "<market_key>",
+      "verdict": "STRONG" | "MEDIUM" | "SKIP",
+      "decision": "APUESTA" | "NO APUESTA",
+      "probability": 0-100,
+      "confidence": 1-5,
+      "reasoning": "máx 1 oración (<=25 palabras) específica a ESTE mercado",
+      "key_factors": ["<=3 factores breves"]
+    }
+  ],
+  "best_pick": "<market_key>" | null,
+  "best_reason": "máx 1 oración (<=30 palabras) por qué este es el mejor"
 }
 
-REGLAS IRROMPIBLES (aprendidas de errores caros):
+IMPORTANTE: devolvés UN verdict POR CADA mercado del input, en el mismo
+orden. Si te pasan 3 mercados, devolvés 3 verdicts. `best_pick` apunta a
+UNO de esos `market` keys (o null si todos son SKIP).
+
+REGLAS IRROMPIBLES:
   • Sin fuente confiable de alineación NI lesiones tras 2 búsquedas:
-    `lineups="L0"`, `decision="NO APUESTA"`, `probability` <= prob_implícita.
-  • Nunca inventes datos. Si no sabés, decí "L0" y bajá probability.
-  • Coherencia obligatoria: si decision="NO APUESTA" entonces verdict="SKIP".
-    Si verdict="STRONG" entonces decision="APUESTA". El backend valida.
-  • `probability` siempre entero 0-100, nunca string ni decimal.
+    lineups="L0", todos los verdicts → SKIP, best_pick=null.
+  • Nunca inventes datos.
+  • Coherencia: decision="NO APUESTA" ⇒ verdict="SKIP" (siempre).
+  • `probability` SIEMPRE entero 0-100, nunca decimal ni string.
 """
 
 
@@ -604,41 +618,61 @@ def _normalize_result(parsed: dict, bet: dict) -> dict:
     return parsed
 
 
-def _analyze_bet(client, bet: dict, ctx: dict, learning_memo: str = "",
-                 manual_lessons: str = "") -> dict:
+def _analyze_match_group(client, match_bets: list[dict], ctx: dict,
+                          learning_memo: str = "", manual_lessons: str = "") -> list[dict]:
     """
-    Llama a Claude API con web_search para emitir dictamen.
+    Analiza UN partido con N mercados en UNA sola llamada a Claude.
 
-    `learning_memo`   : texto generado por _build_learning_memo() (opcional)
-    `manual_lessons`  : texto de data/analyst_lessons.md (opcional)
-    Ambos se inyectan como bloques cacheados → costo bajo en reruns.
+    Devuelve una lista de results, uno por bet de `match_bets`, en el MISMO
+    orden. Cada result contiene además `is_best` (True para el mercado
+    elegido por el agente como mejor) y `best_reason` (poblado solo en el
+    is_best=True).
+
+    Beneficios vs el llamado por-bet:
+      • 1 sola llamada API por partido (3 markets → 1 call en vez de 3)
+      • El agente ve TODOS los mercados juntos → puede comparar y rankear
+      • Decisión "best_pick" más informada que decisiones aisladas
     """
-    market_label = _get_market_label(bet["market"], bet["match"])
-    league_label = LEAGUE_LABELS.get(bet["league"], bet["league"])
+    if not match_bets:
+        return []
 
-    md = pd.to_datetime(bet["match_date"])
+    match = match_bets[0]["match"]
+    league_label = LEAGUE_LABELS.get(match_bets[0].get("league", ""),
+                                      match_bets[0].get("league", ""))
+
+    md = pd.to_datetime(match_bets[0]["match_date"])
     md_utc = md if md.tzinfo is not None else md.tz_localize("UTC")
     dt_local = md_utc.tz_convert(ZoneInfo(USER_TIMEZONE))
 
-    # Probabilidad implícita de la cuota (informativa para el modelo)
-    try:
-        implied = (1.0 / float(bet["odds"])) * 100 if float(bet["odds"]) > 1 else 0
-    except Exception:
-        implied = 0
+    # Listado de mercados con sus stats
+    market_lines = []
+    for i, bet in enumerate(match_bets, 1):
+        market_label = _get_market_label(bet["market"], match)
+        try:    odds = float(bet["odds"])
+        except: odds = 0.0
+        try:    prob = float(bet["probability"]) * 100
+        except: prob = 0.0
+        try:    edge = float(bet["edge"]) * 100
+        except: edge = 0.0
+        implied = (1.0 / odds) * 100 if odds > 1 else 0
+        market_lines.append(
+            f"  {i}. market=\"{bet['market']}\"  → {market_label}\n"
+            f"     odds={odds:.2f}  prob_modelo={prob:.1f}%  "
+            f"edge=+{edge:.1f}%  prob_implícita={implied:.1f}%\n"
+            f"     (threshold mínimo para APUESTA: prob >= "
+            f"{implied+ANALYST_EDGE_THRESHOLD:.0f}%)"
+        )
 
     user_msg = (
-        f"Partido: {bet['match']}\n"
+        f"Partido: {match}\n"
         f"Liga: {league_label}\n"
-        f"Kickoff: {dt_local.strftime('%Y-%m-%d %H:%M %Z')}\n"
-        f"Apuesta sugerida: {market_label} @ {float(bet['odds']):.2f}\n"
-        f"Probabilidad del modelo: {float(bet['probability'])*100:.1f}%\n"
-        f"Probabilidad implícita de la cuota: {implied:.1f}% "
-        f"(threshold actual: necesitás >= {implied+ANALYST_EDGE_THRESHOLD:.0f}% "
-        f"para decir APUESTA)\n"
-        f"Edge del modelo: +{float(bet['edge'])*100:.1f}%\n\n"
+        f"Kickoff: {dt_local.strftime('%Y-%m-%d %H:%M %Z')}\n\n"
+        f"MERCADOS A EVALUAR ({len(match_bets)}):\n"
+        + "\n".join(market_lines) + "\n\n"
         f"DOSIER CUANTITATIVO (NO buscar esto en la web):\n"
         f"{_format_context(ctx)}\n\n"
-        f"Hacé tus 1-2 búsquedas para alineaciones+lesiones y devolvé SOLO el JSON."
+        f"Devolvé UN JSON con {len(match_bets)} verdicts (uno por mercado, "
+        f"mismo orden y mismas `market` keys que el input) + best_pick."
     )
 
     # ── Construir system prompt: 1-3 bloques cacheados ────────────────
@@ -663,33 +697,56 @@ def _analyze_bet(client, bet: dict, ctx: dict, learning_memo: str = "",
             "cache_control": {"type": "ephemeral"},
         })
 
-    # ── BUDGET GUARD: evitamos quemar créditos ────────────────────────
-    # Antes: $0.025-0.04 por bet con Sonnet + 2 web_searches.
-    # Ahora: Haiku 4.5 (~3x más barato input/output) + 1 web_search,
-    # max_tokens 400. Costo esperado: ~$0.008-0.012 por bet.
+    # ── Build system prompt blocks (cacheados) ─────────────────────────
+    system_blocks = [{
+        "type": "text",
+        "text": SYSTEM_PROMPT,
+        "cache_control": {"type": "ephemeral"},
+    }]
+    if manual_lessons:
+        system_blocks.append({
+            "type": "text",
+            "text": f"=== LECCIONES MANUALES ===\n\n{manual_lessons}",
+            "cache_control": {"type": "ephemeral"},
+        })
+    if learning_memo:
+        system_blocks.append({
+            "type": "text",
+            "text": learning_memo,
+            "cache_control": {"type": "ephemeral"},
+        })
+
+    # ── BUDGET GUARD ──────────────────────────────────────────────────
+    # Antes per-bet: 3 markets del Atlético = 3 calls × $0.016 = $0.048.
+    # Ahora per-match: 1 call con N markets = ~$0.018-0.025 → 50-60% ahorro
+    # adicional sobre los partidos multi-mercado.
     from src.utils.anthropic_budget import (
         can_call, estimate_call_cost, record_call, extract_usage_from_response,
     )
     MODEL = "claude-haiku-4-5"
-    est_cost = estimate_call_cost(MODEL, est_input_tokens=4000,
-                                  est_output_tokens=400, web_searches=1)
+    n_markets = len(match_bets)
+    est_input  = 4000 + 250 * n_markets      # más tokens para N mercados
+    est_output = 250  + 150 * n_markets
+    est_cost = estimate_call_cost(MODEL, est_input_tokens=est_input,
+                                  est_output_tokens=est_output, web_searches=1)
     ok, reason = can_call(engine, est_cost)
     if not ok:
         raise RuntimeError(f"Budget guard: {reason}")
 
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=400,                # antes 600 — JSON compacto cabe sobrado
+        max_tokens=300 + 200 * n_markets,    # escalable según N mercados
         system=system_blocks,
         tools=[{
             "type": "web_search_20250305",
             "name": "web_search",
-            "max_uses": 1,             # antes 2 — 1 búsqueda alcanza para lineups+lesiones
+            "max_uses": 2,                   # subido de 1→2: el agente ahora
+                                              # debe cubrir N mercados, justifica
+                                              # 1 búsqueda extra de respaldo
         }],
         messages=[{"role": "user", "content": user_msg}],
     )
 
-    # Grabar uso REAL (no estimado) en anthropic_usage
     u = extract_usage_from_response(resp)
     record_call(engine,
                 input_tokens=u["input_tokens"],
@@ -698,11 +755,10 @@ def _analyze_bet(client, bet: dict, ctx: dict, learning_memo: str = "",
                 web_searches=u["web_searches"],
                 cache_read_tokens=u["cache_read_tokens"])
 
-    # Extraer último bloque de texto (después de tool_use loops)
+    # Extraer último bloque de texto
     text_blocks = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
     raw = text_blocks[-1].strip() if text_blocks else "{}"
     if raw.startswith("```"):
-        # Cleanup defensivo si Claude devolvió ```json ... ```
         raw = raw.split("```")[1]
         if raw.lower().startswith("json"):
             raw = raw[4:]
@@ -711,16 +767,22 @@ def _analyze_bet(client, bet: dict, ctx: dict, learning_memo: str = "",
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
+        # Si falla parse, devolvemos SKIP para todos los markets — failsafe
         parsed = {
-            "verdict": "SKIP", "decision": "NO APUESTA",
-            "probability": 0, "confidence": 1,
-            "reasoning": "parse error en respuesta del modelo",
-            "lineups": "L0", "key_factors": [],
+            "lineups": "L0",
+            "match_notes": "parse error en respuesta del modelo",
+            "verdicts": [{
+                "market": b["market"],
+                "verdict": "SKIP", "decision": "NO APUESTA",
+                "probability": 0, "confidence": 1,
+                "reasoning": "parse error",
+                "key_factors": [],
+            } for b in match_bets],
+            "best_pick": None,
+            "best_reason": "",
         }
 
-    parsed = _normalize_result(parsed, bet)
-
-    # Sources: extraer URLs visitadas por web_search
+    # ── Sources globales del partido (compartidas) ────────────────────
     sources: list[str] = []
     for block in resp.content:
         if getattr(block, "type", "") == "web_search_tool_result":
@@ -728,8 +790,46 @@ def _analyze_bet(client, bet: dict, ctx: dict, learning_memo: str = "",
                 url = getattr(r, "url", None)
                 if url:
                     sources.append(url)
-    parsed["sources"] = sources
-    return parsed
+
+    # ── Match verdicts → input bets (por market key) ──────────────────
+    verdicts_by_market = {v.get("market"): v
+                          for v in (parsed.get("verdicts") or [])
+                          if isinstance(v, dict) and v.get("market")}
+    best_pick = parsed.get("best_pick")
+    best_reason = (parsed.get("best_reason") or "")[:200]
+    lineups_global = parsed.get("lineups", "L0")
+    match_notes = (parsed.get("match_notes") or "")[:300]
+
+    results = []
+    for bet in match_bets:
+        mk = bet["market"]
+        v = verdicts_by_market.get(mk)
+        if v is None:
+            # El agente no devolvió este mercado → SKIP defensivo
+            v = {
+                "verdict": "SKIP", "decision": "NO APUESTA",
+                "probability": 0, "confidence": 1,
+                "reasoning": "El agente no incluyó este mercado en la respuesta",
+                "key_factors": [],
+            }
+        # Compartir lineups y sources entre todos los mercados del partido
+        v["lineups"] = v.get("lineups") or lineups_global
+        v["sources"] = sources
+        v["match_notes"] = match_notes
+        # Marcar el best pick
+        is_best = (best_pick == mk)
+        v["is_best"] = is_best
+        v["best_reason"] = best_reason if is_best else ""
+        # Normalizar coherencia
+        v = _normalize_result(v, bet)
+        # Si después de normalize quedó SKIP pero era best_pick, des-marcar
+        # (el best_pick debe ser apostable; backend safety)
+        if is_best and v.get("decision") != "APUESTA":
+            v["is_best"] = False
+            v["best_reason"] = ""
+        results.append(v)
+
+    return results
 
 
 def _save_analysis(bet: dict, result: dict):
@@ -852,66 +952,97 @@ def main():
 
     verdicts = []
     n_skipped_rule = 0
-    per_bet_errors: list[str] = []   # NEW: capturamos errores por bet para
-                                       # poder verlos desde el heartbeat / DB.
-                                       # Antes se silenciaban en `except: continue`.
-    for _, bet in bets.iterrows():
-        b = bet.to_dict()
-        if _already_analyzed(b["match"], b["market"], b["match_date"]):
-            print(f"  · {b['match']} ({b['market']}) — ya analizada, skip")
+    per_bet_errors: list[str] = []
+
+    # ── Agrupar por partido para hacer 1 sola call por match ─────────
+    # Antes: por cada market = 1 call. Atlético (3 markets) = 3 calls.
+    # Ahora: por cada match = 1 call con N markets → ahorro 50-60% en
+    # partidos multi-mercado + ranking de "best pick" más informado.
+    grouped = bets.groupby(["match", "match_date"], sort=False)
+
+    for (match_key, match_date_key), group in grouped:
+        all_bets = group.to_dict("records")
+
+        # Filtrar bets ya analizadas previamente
+        fresh_bets = [b for b in all_bets
+                      if not _already_analyzed(b["match"], b["market"],
+                                                b["match_date"])]
+        if not fresh_bets:
+            print(f"  · {match_key} — todos los mercados ya analizados, skip")
             continue
 
-        ctx = _build_context(b)
+        # Contexto cuantitativo (es el mismo para todos los mercados del partido)
+        try:
+            ctx = _build_context(fresh_bets[0])
+        except Exception as e:
+            err = f"_build_context: {type(e).__name__}: {e}"
+            print(f"  ❌ {match_key}: {err}")
+            per_bet_errors.append(f"{match_key}: {err}")
+            continue
 
-        # Filtro pre-API rule-based (sin tokens)
-        skip_reason = _quick_skip_signals(b, ctx)
-        if skip_reason:
-            # Probabilidad implícita como techo conservador para SKIP
+        # ── Separar rule-based SKIPs (gratis) de los que van al LLM ──
+        rule_results: list[tuple[dict, dict]] = []   # (bet, result)
+        llm_bets: list[dict] = []
+        for b in fresh_bets:
+            reason = _quick_skip_signals(b, ctx)
+            if reason:
+                try:
+                    implied = int(round((1.0 / float(b["odds"])) * 100))
+                except Exception:
+                    implied = 0
+                rule_results.append((b, {
+                    "verdict": "SKIP",
+                    "decision": "NO APUESTA",
+                    "probability": max(0, implied - 5),
+                    "confidence": 4,
+                    "reasoning": reason,
+                    "lineups": "L0",
+                    "key_factors": [reason],
+                    "sources": [],
+                    "is_best": False,
+                    "best_reason": "",
+                }))
+                n_skipped_rule += 1
+                print(f"  🔴 {b['match']} ({b['market']}) — "
+                      f"SKIP rule-based: {reason}")
+            else:
+                llm_bets.append(b)
+
+        # ── 1 sola llamada LLM con TODOS los markets del partido ─────
+        llm_results: list[tuple[dict, dict]] = []
+        if llm_bets:
             try:
-                implied = int(round((1.0 / float(b["odds"])) * 100))
-            except Exception:
-                implied = 0
-            result = {
-                "verdict": "SKIP",
-                "decision": "NO APUESTA",
-                "probability": max(0, implied - 5),  # explícitamente debajo del break-even
-                "confidence": 4,
-                "reasoning": skip_reason,
-                "lineups": "L0",
-                "key_factors": [skip_reason],
-                "sources": [],
-            }
-            print(f"  🔴 {b['match']} ({b['market']}) — SKIP rule-based: {skip_reason}")
-            n_skipped_rule += 1
-        else:
-            try:
-                result = _analyze_bet(client, b, ctx,
-                                      learning_memo=learning_memo,
-                                      manual_lessons=manual_lessons)
-                v = result.get("verdict", "?")
-                d = result.get("decision", "?")
-                p = result.get("probability", 0)
-                icon = {"STRONG": "🟢", "MEDIUM": "🟡", "SKIP": "🔴"}.get(v, "⚪")
-                print(f"  {icon} {b['match']} ({b['market']}) — "
-                      f"{v}/{d} prob={p}%: "
-                      f"{result.get('reasoning', '')[:70]}")
+                results_list = _analyze_match_group(
+                    client, llm_bets, ctx,
+                    learning_memo=learning_memo,
+                    manual_lessons=manual_lessons,
+                )
+                # results_list está en el MISMO orden que llm_bets
+                for b, result in zip(llm_bets, results_list):
+                    v = result.get("verdict", "?")
+                    d = result.get("decision", "?")
+                    p = result.get("probability", 0)
+                    icon = {"STRONG": "🟢", "MEDIUM": "🟡", "SKIP": "🔴"}.get(v, "⚪")
+                    best_tag = " ⭐BEST" if result.get("is_best") else ""
+                    print(f"  {icon} {b['match']} ({b['market']}) — "
+                          f"{v}/{d} prob={p}%{best_tag}: "
+                          f"{result.get('reasoning', '')[:60]}")
+                    llm_results.append((b, result))
             except Exception as e:
-                # Capturamos TRACEBACK completo, no solo el msg corto.
-                # Antes esto era el bug silencioso: 11 bets fallaban y no
-                # quedaba huella en heartbeat ni Telegram.
                 err = f"{type(e).__name__}: {e}"
                 tb = traceback.format_exc()
-                print(f"  ❌ Error analizando {b['match']} ({b['market']}): {err}")
+                print(f"  ❌ Error analizando match {match_key}: {err}")
                 print(tb)
-                per_bet_errors.append(f"{b['match']} ({b['market']}): {err}")
+                per_bet_errors.append(f"{match_key} (group): {err}")
                 continue
 
-        try:
-            _save_analysis(b, result)
-        except Exception as e:
-            print(f"  ⚠️  No se pudo guardar análisis de {b['match']}: {e}")
-
-        verdicts.append({**b, **result})
+        # ── Guardar y appender al output ─────────────────────────────
+        for b, result in rule_results + llm_results:
+            try:
+                _save_analysis(b, result)
+            except Exception as e:
+                print(f"  ⚠️  No se pudo guardar análisis de {b['match']}: {e}")
+            verdicts.append({**b, **result})
 
     if verdicts:
         try:

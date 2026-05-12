@@ -138,13 +138,15 @@ TELEGRAM_CHAT_ID_PREKICKOFF   = os.environ.get("TELEGRAM_CHAT_ID_PREKICKOFF", ""
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # Ventana (en minutos desde NOW) para considerar bets como "pre-kickoff".
-# Default 30-90 = atrapa partidos que arrancan en ~30-90 min, justo cuando
-# las alineaciones probables/confirmadas y noticias de lesiones ya están
-# publicadas (típicamente 30-60 min antes del kickoff).
-# Combinado con cron-job externo cada 15 min (más confiable que GH Actions),
-# da 4 oportunidades de capturar cada partido y resiste delays moderados.
+# Bajado 12-may-26 de 30-90 → 30-60: con WINDOW_MAX=90 el analista podía
+# correr 89 minutos antes del kickoff (caso real Atlético 12-may), cuando
+# las alineaciones todavía no están publicadas → análisis pobre. Bajando
+# el máximo a 60 forzamos que el análisis caiga en la ventana real donde
+# las probable XI ya están confirmadas (30-60 min antes del kickoff).
+# Con cron cada 15 min en off-peak (:07/:22/:37/:52), cada partido sigue
+# teniendo 2-3 chances dentro de [30, 60] → cobertura suficiente.
 PRE_KICKOFF_WINDOW_MIN = env_int("PRE_KICKOFF_WINDOW_MIN", 30)
-PRE_KICKOFF_WINDOW_MAX = env_int("PRE_KICKOFF_WINDOW_MAX", 90)
+PRE_KICKOFF_WINDOW_MAX = env_int("PRE_KICKOFF_WINDOW_MAX", 60)
 
 # Threshold de edge mínimo (en puntos porcentuales) para que el analista
 # diga APUESTA. La regla es: probability_estimada >= prob_implicita + N.
