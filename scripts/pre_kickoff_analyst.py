@@ -196,7 +196,11 @@ def _filter_confiables(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _already_analyzed(match: str, market: str, match_date) -> bool:
-    """Evita reanalizar el mismo match+market (cron corre cada 30 min)."""
+    """Evita reanalizar el mismo match+market (cron corre cada 15 min).
+
+    Kept for callers que necesiten consulta puntual. Para el loop principal
+    usar `_load_analyzed_set()` que hace 1 sola query por corrida.
+    """
     with engine.begin() as conn:
         row = conn.execute(text("""
             SELECT 1 FROM pre_kickoff_analyses
@@ -204,6 +208,28 @@ def _already_analyzed(match: str, market: str, match_date) -> bool:
             LIMIT 1
         """), {"m": match, "mkt": market, "d": match_date}).first()
     return row is not None
+
+
+def _load_analyzed_set(bets_df: pd.DataFrame) -> set:
+    """
+    Devuelve un set de tuplas (match, market, match_date) que ya tienen
+    análisis en pre_kickoff_analyses. Una sola query, en lugar de N
+    roundtrips al chequear bet por bet.
+    """
+    if bets_df is None or bets_df.empty:
+        return set()
+    lo = bets_df["match_date"].min()
+    hi = bets_df["match_date"].max()
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT match, market, match_date
+                FROM pre_kickoff_analyses
+                WHERE match_date BETWEEN :lo AND :hi
+            """), {"lo": lo, "hi": hi}).fetchall()
+        return {(r.match, r.market, r.match_date) for r in rows}
+    except Exception:
+        return set()
 
 
 # ============================================================
@@ -568,6 +594,41 @@ def _format_context(ctx: dict) -> str:
     return "\n".join(parts)
 
 
+def _safe_float(x, default: float = 0.0) -> float:
+    """float() tolerante a None / string vacío / valores no numéricos."""
+    try:
+        return float(x) if x is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _make_skip_result(bet: dict, reason: str, *,
+                      confidence: int = 1,
+                      probability: int | None = None,
+                      lineups: str = "L0") -> dict:
+    """
+    Factory de result dict con verdict=SKIP. Lo usan tanto los SKIPs
+    rule-based como los fallbacks de parse-error y "agente omitió mercado".
+    Si `probability` es None, usa max(0, implícita-5) como techo conservador.
+    """
+    if probability is None:
+        odds = _safe_float(bet.get("odds"))
+        implied = int(round((1.0 / odds) * 100)) if odds > 1 else 0
+        probability = max(0, implied - 5)
+    return {
+        "verdict":     "SKIP",
+        "decision":    "NO APUESTA",
+        "probability": probability,
+        "confidence":  confidence,
+        "reasoning":   reason,
+        "lineups":     lineups,
+        "key_factors": [reason] if reason else [],
+        "sources":     [],
+        "is_best":     False,
+        "best_reason": "",
+    }
+
+
 def _normalize_result(parsed: dict, bet: dict) -> dict:
     """
     Garantiza coherencia + valores válidos en el dict del modelo.
@@ -648,12 +709,9 @@ def _analyze_match_group(client, match_bets: list[dict], ctx: dict,
     market_lines = []
     for i, bet in enumerate(match_bets, 1):
         market_label = _get_market_label(bet["market"], match)
-        try:    odds = float(bet["odds"])
-        except: odds = 0.0
-        try:    prob = float(bet["probability"]) * 100
-        except: prob = 0.0
-        try:    edge = float(bet["edge"]) * 100
-        except: edge = 0.0
+        odds = _safe_float(bet.get("odds"))
+        prob = _safe_float(bet.get("probability")) * 100
+        edge = _safe_float(bet.get("edge")) * 100
         implied = (1.0 / odds) * 100 if odds > 1 else 0
         market_lines.append(
             f"  {i}. market=\"{bet['market']}\"  → {market_label}\n"
@@ -675,30 +733,8 @@ def _analyze_match_group(client, match_bets: list[dict], ctx: dict,
         f"mismo orden y mismas `market` keys que el input) + best_pick."
     )
 
-    # ── Construir system prompt: 1-3 bloques cacheados ────────────────
-    # Bloque 1: instrucciones (estables)  — se cachea siempre
-    # Bloque 2: lecciones manuales         — se cachea si existe
-    # Bloque 3: memoria de aprendizaje    — se cachea si existe
-    system_blocks = [{
-        "type": "text",
-        "text": SYSTEM_PROMPT,
-        "cache_control": {"type": "ephemeral"},
-    }]
-    if manual_lessons:
-        system_blocks.append({
-            "type": "text",
-            "text": f"=== LECCIONES MANUALES (escritas por el operador) ===\n\n{manual_lessons}",
-            "cache_control": {"type": "ephemeral"},
-        })
-    if learning_memo:
-        system_blocks.append({
-            "type": "text",
-            "text": learning_memo,
-            "cache_control": {"type": "ephemeral"},
-        })
-
-    # ── Build system prompt blocks (cacheados) ─────────────────────────
-    system_blocks = [{
+    # ── System prompt: 1-3 bloques cacheados (instrucciones, lecciones, memo) ──
+    system_blocks: list[dict] = [{
         "type": "text",
         "text": SYSTEM_PROMPT,
         "cache_control": {"type": "ephemeral"},
@@ -716,10 +752,6 @@ def _analyze_match_group(client, match_bets: list[dict], ctx: dict,
             "cache_control": {"type": "ephemeral"},
         })
 
-    # ── BUDGET GUARD ──────────────────────────────────────────────────
-    # Antes per-bet: 3 markets del Atlético = 3 calls × $0.016 = $0.048.
-    # Ahora per-match: 1 call con N markets = ~$0.018-0.025 → 50-60% ahorro
-    # adicional sobre los partidos multi-mercado.
     from src.utils.anthropic_budget import (
         can_call, estimate_call_cost, record_call, extract_usage_from_response,
     )
@@ -735,14 +767,12 @@ def _analyze_match_group(client, match_bets: list[dict], ctx: dict,
 
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=300 + 200 * n_markets,    # escalable según N mercados
+        max_tokens=300 + 200 * n_markets,
         system=system_blocks,
         tools=[{
             "type": "web_search_20250305",
             "name": "web_search",
-            "max_uses": 2,                   # subido de 1→2: el agente ahora
-                                              # debe cubrir N mercados, justifica
-                                              # 1 búsqueda extra de respaldo
+            "max_uses": 2,
         }],
         messages=[{"role": "user", "content": user_msg}],
     )
@@ -767,17 +797,13 @@ def _analyze_match_group(client, match_bets: list[dict], ctx: dict,
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        # Si falla parse, devolvemos SKIP para todos los markets — failsafe
         parsed = {
             "lineups": "L0",
             "match_notes": "parse error en respuesta del modelo",
-            "verdicts": [{
-                "market": b["market"],
-                "verdict": "SKIP", "decision": "NO APUESTA",
-                "probability": 0, "confidence": 1,
-                "reasoning": "parse error",
-                "key_factors": [],
-            } for b in match_bets],
+            "verdicts": [
+                {**_make_skip_result(b, "parse error", probability=0), "market": b["market"]}
+                for b in match_bets
+            ],
             "best_pick": None,
             "best_reason": "",
         }
@@ -806,12 +832,11 @@ def _analyze_match_group(client, match_bets: list[dict], ctx: dict,
         v = verdicts_by_market.get(mk)
         if v is None:
             # El agente no devolvió este mercado → SKIP defensivo
-            v = {
-                "verdict": "SKIP", "decision": "NO APUESTA",
-                "probability": 0, "confidence": 1,
-                "reasoning": "El agente no incluyó este mercado en la respuesta",
-                "key_factors": [],
-            }
+            v = _make_skip_result(
+                bet,
+                "El agente no incluyó este mercado en la respuesta",
+                probability=0,
+            )
         # Compartir lineups y sources entre todos los mercados del partido
         v["lineups"] = v.get("lineups") or lineups_global
         v["sources"] = sources
@@ -934,9 +959,11 @@ def main():
     bets_found_total = len(bets)
     print(f"📋 {bets_found_total} bet(s) confiable(s) en ventana — analizando...\n")
 
+    # 1 sola query a pre_kickoff_analyses para todas las bets de esta corrida
+    # (evita N+1 al chequear `_already_analyzed` por cada bet).
+    analyzed_set = _load_analyzed_set(bets)
+
     # ── Carga memo + lecciones UNA SOLA VEZ por corrida ──────────────
-    # Ambas se inyectan como bloques cacheados en cada call; computarlas
-    # una vez ahorra queries repetidas.
     learning_memo  = _build_learning_memo()
     manual_lessons = _load_manual_lessons()
     if learning_memo:
@@ -954,19 +981,16 @@ def main():
     n_skipped_rule = 0
     per_bet_errors: list[str] = []
 
-    # ── Agrupar por partido para hacer 1 sola call por match ─────────
-    # Antes: por cada market = 1 call. Atlético (3 markets) = 3 calls.
-    # Ahora: por cada match = 1 call con N markets → ahorro 50-60% en
-    # partidos multi-mercado + ranking de "best pick" más informado.
+    # 1 call por partido (no por bet): el agente compara los markets del
+    # mismo match y elige best_pick — más informado y más barato.
     grouped = bets.groupby(["match", "match_date"], sort=False)
 
     for (match_key, match_date_key), group in grouped:
         all_bets = group.to_dict("records")
 
-        # Filtrar bets ya analizadas previamente
+        # Filtrar bets ya analizadas (lookup en set pre-cargado)
         fresh_bets = [b for b in all_bets
-                      if not _already_analyzed(b["match"], b["market"],
-                                                b["match_date"])]
+                      if (b["match"], b["market"], b["match_date"]) not in analyzed_set]
         if not fresh_bets:
             print(f"  · {match_key} — todos los mercados ya analizados, skip")
             continue
@@ -986,22 +1010,7 @@ def main():
         for b in fresh_bets:
             reason = _quick_skip_signals(b, ctx)
             if reason:
-                try:
-                    implied = int(round((1.0 / float(b["odds"])) * 100))
-                except Exception:
-                    implied = 0
-                rule_results.append((b, {
-                    "verdict": "SKIP",
-                    "decision": "NO APUESTA",
-                    "probability": max(0, implied - 5),
-                    "confidence": 4,
-                    "reasoning": reason,
-                    "lineups": "L0",
-                    "key_factors": [reason],
-                    "sources": [],
-                    "is_best": False,
-                    "best_reason": "",
-                }))
+                rule_results.append((b, _make_skip_result(b, reason, confidence=4)))
                 n_skipped_rule += 1
                 print(f"  🔴 {b['match']} ({b['market']}) — "
                       f"SKIP rule-based: {reason}")
@@ -1140,8 +1149,11 @@ def debug_mode_run():
     from anthropic import Anthropic
     client = Anthropic(api_key=ANTHROPIC_API_KEY)
     try:
-        result = _analyze_bet(client, bet, ctx,
-                              learning_memo=memo, manual_lessons=lessons)
+        # debug_mode_run usa 1 sola bet; pasamos como lista de 1 a
+        # _analyze_match_group (la única función de análisis disponible).
+        results = _analyze_match_group(client, [bet], ctx,
+                                        learning_memo=memo, manual_lessons=lessons)
+        result = results[0] if results else {}
     except BaseException as exc:
         print("\n❌❌❌ CLAUDE API CALL FAILED — este es el bug:\n")
         traceback.print_exc()
