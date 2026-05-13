@@ -5,6 +5,31 @@ from src.utils.team_normalizer import normalize_team
 from src.models.bankroll_manager import update_bankroll, ensure_bankroll_schema
 
 
+# ============================================================
+# MARKET → REQUIRED MATCH FIELDS
+# ============================================================
+# Mapeo usado por el re-check de bets 'unresolved'. Sin esto el re-check
+# sólo validaba que home_goals/away_goals existieran y re-marcaba a
+# 'pending' incluso si los campos específicos del market seguían NULL —
+# generando un loop pending↔unresolved que disparaba llamadas a Claude
+# en cada cron de resolve_pending. Validar el campo correcto rompe el loop.
+
+def _market_required_match_fields(market: str) -> tuple[str, ...]:
+    m = (market or "").lower()
+    if m.startswith("corners_"):
+        return ("home_corners", "away_corners")
+    if m.startswith("cards_"):
+        return ("home_yellow", "away_yellow")
+    if m.startswith("h1_"):
+        return ("home_goals_ht", "away_goals_ht")
+    if m.startswith("h2_"):
+        return ("home_goals_h2", "away_goals_h2")
+    if m.startswith("shots_"):
+        return ("home_shots_target", "away_shots_target")
+    # Mercados de goles (1X2, O/U, BTTS, AH, DC, DNB) → goles finales
+    return ("home_goals", "away_goals")
+
+
 # =========================
 # SAVE BETS
 # =========================
@@ -445,6 +470,11 @@ def update_bet_results():
     """, engine)
     if not unresolved_df.empty:
         recheck_count = 0
+        # Traemos TODAS las columnas que algún market puede necesitar en
+        # una sola query — antes traíamos sólo home_goals/away_goals y
+        # re-marcábamos como pending aunque los campos específicos
+        # (corners/cards/HT/shots) siguieran NULL, causando bouncing
+        # pending↔unresolved que disparaba Claude en cada cron.
         with engine.begin() as conn:
             for _, row in unresolved_df.iterrows():
                 try:
@@ -455,9 +485,10 @@ def update_bet_results():
                     home = normalize_team(home)
                     away = normalize_team(away)
                     match_date = pd.to_datetime(row["match_date"])
+                    required = _market_required_match_fields(row["market"])
                     # Fix: rango ±1 día (antes ±3 días tomaba partido incorrecto)
-                    result_df = pd.read_sql(text("""
-                        SELECT home_goals, away_goals
+                    result_df = pd.read_sql(text(f"""
+                        SELECT {", ".join(required)}
                         FROM matches
                         WHERE LOWER(home_team) = :home
                         AND LOWER(away_team) = :away
@@ -471,24 +502,32 @@ def update_bet_results():
                         "date_to":    (match_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
                         "exact_date": match_date.strftime("%Y-%m-%d"),
                     })
-                    if not result_df.empty:
-                        # Validar que los goles existan (si son NULL, dejar unresolved)
-                        _hg = result_df.iloc[0]["home_goals"]
-                        _ag = result_df.iloc[0]["away_goals"]
-                        if _hg is None or _ag is None or pd.isna(_hg) or pd.isna(_ag):
-                            continue
-                        # Resultado encontrado → re-insertar como pending para que se resuelva
-                        conn.execute(text("""
-                            UPDATE bets_history
-                            SET result = 'pending'
-                            WHERE id = :id
-                        """), {"id": int(row["id"])})
-                        recheck_count += 1
+                    if result_df.empty:
+                        continue
+                    # Validar que TODOS los campos requeridos por este market
+                    # estén presentes — no sólo goles. Sin esto un bet de
+                    # corners se re-marcaba como pending cuando home_goals
+                    # existían pero home_corners era NULL, generando el
+                    # loop infinito que costaba tokens.
+                    match_row = result_df.iloc[0]
+                    fields_ready = all(
+                        match_row[f] is not None and not pd.isna(match_row[f])
+                        for f in required
+                    )
+                    if not fields_ready:
+                        continue
+                    # Datos completos para ESTE market → re-pending para reevaluar
+                    conn.execute(text("""
+                        UPDATE bets_history
+                        SET result = 'pending'
+                        WHERE id = :id
+                    """), {"id": int(row["id"])})
+                    recheck_count += 1
                 except Exception as e:
                     # Fix: logging para no perder errores silenciosamente
                     print(f"⚠️  Recheck error ({row.get('match', '?')}): {e}")
         if recheck_count > 0:
-            print(f"🔄 {recheck_count} bets 'unresolved' re-marcadas como 'pending' (resultado encontrado)")
+            print(f"🔄 {recheck_count} bets 'unresolved' re-marcadas como 'pending' (datos market-specific ya completos)")
 
     # ── Timeout escalado (2 etapas) ─────────────────────────────────────
     # Etapa 1: pending → unresolved después de 3 días sin resultado en DB.

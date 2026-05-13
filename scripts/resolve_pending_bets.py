@@ -331,9 +331,19 @@ def _upsert_match_row(home_raw: str, away_raw: str, date_str: str,
 # MAIN
 # ============================================================
 
-def main(hours_lag: int = 6, limit_matches: int = 30):
+def main(hours_lag: int = 6, limit_matches: int = 30,
+         silent_telegram: bool = False):
+    """
+    Args:
+        hours_lag: solo procesa bets con kickoff > N horas
+        limit_matches: máximo de partidos por corrida (acota costo)
+        silent_telegram: si True, suprime el mensaje final de Telegram
+            (usado por el evening chain — el resumen ya cubre la info,
+            evita 2 notificaciones back-to-back).
+    """
     print(f"\n🔎 RESOLVE PENDING BETS — lag={hours_lag}h, "
-          f"max={limit_matches} partidos por corrida\n")
+          f"max={limit_matches} partidos por corrida"
+          f"{' (silent)' if silent_telegram else ''}\n")
 
     if not ANTHROPIC_API_KEY:
         print("⚠️  ANTHROPIC_API_KEY no configurada — abortando.")
@@ -341,7 +351,7 @@ def main(hours_lag: int = 6, limit_matches: int = 30):
 
     df = _fetch_pending_grouped(hours_lag=hours_lag, limit_matches=limit_matches)
     if df.empty:
-        print("✓ Sin bets pending > 6h. Nada que resolver.")
+        print(f"✓ Sin bets pending > {hours_lag}h. Nada que resolver.")
         return
 
     print(f"📋 {len(df)} partido(s) único(s) con bets pending\n")
@@ -406,7 +416,10 @@ def main(hours_lag: int = 6, limit_matches: int = 30):
     from src.models.save_bets import update_bet_results
     update_bet_results()
 
-    # ── Notificar a Telegram (silencio si nada cambió) ──────────────
+    # ── Notificar a Telegram (silencio si nada cambió o si chained) ──
+    if silent_telegram:
+        print("📭 silent_telegram=True — sin notificación (chained run)")
+        return
     try:
         from scripts.notify_telegram import send_message
         send_message(

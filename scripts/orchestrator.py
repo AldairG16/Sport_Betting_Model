@@ -393,6 +393,29 @@ def run_morning(logger: Logger, force_fetch: bool = False):
         _alert_step_failed("Predictions")
 
 
+def step_resolve_pending():
+    """Resolver bets pending con Claude API (corners/cards/HT/ligas sin
+    cobertura) ANTES de mandar el resumen evening.
+
+    Sin esto, el resumen a las 21:00 MX mostraba corners/cards pendientes
+    porque football-data.co.uk lagueaba 24-36h y el cron de resolve_pending
+    no corría hasta las 22:00 MX (1h después del resumen).
+
+    Budget-safe: si ANTHROPIC_DAILY_BUDGET_USD ya está agotado, `can_call`
+    en resolve_pending_bets levanta RuntimeError, el loop captura y
+    continúa silenciosamente. hours_lag=3 y limit=10 acotan el costo a
+    ~$0.12 max por corrida.
+    """
+    try:
+        from scripts.resolve_pending_bets import main as resolve_main
+        # silent_telegram=True: el resumen evening que va inmediatamente
+        # después ya cubre estado de las bets — evitamos doble notificación.
+        resolve_main(hours_lag=3, limit_matches=10, silent_telegram=True)
+    except Exception as e:
+        # Nunca tiramos el evening pipeline por esto — es housekeeping.
+        print(f"⚠️  resolve_pending (chained) error non-fatal: {e}")
+
+
 def step_notify_evening():
     from scripts.notify_telegram import send_evening_summary
     send_evening_summary()
@@ -419,6 +442,9 @@ def run_evening(logger: Logger):
     run_step(logger, "Fetch results",     step_fetch_results)
     run_step(logger, "Fetch results (fbdata backup)", step_fetch_results_backup)
     run_step(logger, "Results",           step_results)
+    # Resolver bets pending (corners/cards/HT) ANTES del resumen, así el
+    # usuario no ve "esperando data" en la noche para partidos ya jugados.
+    run_step(logger, "Resolve pending (Claude)", step_resolve_pending)
     run_step(logger, "CLV update",        step_clv)
     run_step(logger, "Backtest",          step_backtest)
     run_step(logger, "Telegram evening",  step_notify_evening)
@@ -541,10 +567,15 @@ def step_refresh_clv_cache():
 
 
 def run_results_only(logger: Logger):
-    run_step(logger, "Fetch results", step_fetch_results)
-    run_step(logger, "Results",       step_results)
-    run_step(logger, "CLV update",    step_clv)
-    run_step(logger, "Backtest",      step_backtest)
+    # Incluye fbdata backup: el late_results.yml a las 06:30 MX existe
+    # justamente para atrapar corners/cards de Europa que ya sincronizó
+    # fbdata. Sin esta línea ese cron descargaba goles via The Odds API
+    # pero nunca tocaba fbdata → corners/cards se quedaban unresolved.
+    run_step(logger, "Fetch results",                  step_fetch_results)
+    run_step(logger, "Fetch results (fbdata backup)",  step_fetch_results_backup)
+    run_step(logger, "Results",                        step_results)
+    run_step(logger, "CLV update",                     step_clv)
+    run_step(logger, "Backtest",                       step_backtest)
 
 
 # ============================================================
