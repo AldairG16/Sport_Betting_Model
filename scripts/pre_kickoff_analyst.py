@@ -602,6 +602,80 @@ def _safe_float(x, default: float = 0.0) -> float:
         return default
 
 
+def _extract_json_from_response(raw: str) -> dict | None:
+    """
+    Extrae el primer objeto JSON balanceado de la respuesta del modelo.
+
+    Antes parseábamos con `json.loads(raw)` previo strip de ``` fences solo
+    si raw EMPEZABA con ```. Eso fallaba cuando Claude prefijaba con prosa
+    ("Tras analizar...:") o con fences en medio del texto — provocaba
+    fallback silencioso a SKIP "parse error" que se persistía en DB y
+    bloqueaba reintentos vía `_already_analyzed`.
+
+    Estrategia (en orden, devuelve la primera que parsee):
+      1. Strip de ```/```json fences anywhere + json.loads
+      2. Buscar el primer `{` y caminar hasta su `}` balanceado
+         (respetando strings escapados); parsear ese substring
+      3. Buscar TODOS los `{...}` candidatos por substring del más largo
+         al más corto y devolver el primero que parsee
+
+    Devuelve dict o None si nada parseó.
+    """
+    if not raw:
+        return None
+
+    # Estrategia 1: fences anywhere
+    candidate = raw.strip()
+    if "```" in candidate:
+        # Tomar el contenido entre el primer y último ```
+        parts = candidate.split("```")
+        if len(parts) >= 3:
+            inner = parts[1]
+            if inner.lower().lstrip().startswith("json"):
+                inner = inner.split("\n", 1)[1] if "\n" in inner else inner[4:]
+            candidate = inner.strip()
+    try:
+        result = json.loads(candidate)
+        if isinstance(result, dict):
+            return result
+    except json.JSONDecodeError:
+        pass
+
+    # Estrategia 2: walk brace-balanced desde el primer '{'
+    start = raw.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(raw)):
+        c = raw[i]
+        if escape:
+            escape = False
+            continue
+        if c == "\\":
+            escape = True
+            continue
+        if c == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    result = json.loads(raw[start:i + 1])
+                    if isinstance(result, dict):
+                        return result
+                except json.JSONDecodeError:
+                    break
+
+    return None
+
+
 def _make_skip_result(bet: dict, reason: str, *,
                       confidence: int = 1,
                       probability: int | None = None,
@@ -785,28 +859,26 @@ def _analyze_match_group(client, match_bets: list[dict], ctx: dict,
                 web_searches=u["web_searches"],
                 cache_read_tokens=u["cache_read_tokens"])
 
-    # Extraer último bloque de texto
+    # Concatenar TODOS los text blocks (no solo el último) — a veces Claude
+    # interleavea texto entre tool_use blocks y el JSON termina en cualquiera
+    # de ellos. _extract_json_from_response busca el primer objeto balanceado.
     text_blocks = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
-    raw = text_blocks[-1].strip() if text_blocks else "{}"
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.lower().startswith("json"):
-            raw = raw[4:]
-        raw = raw.strip()
+    raw_joined = "\n".join(text_blocks).strip() if text_blocks else ""
 
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        parsed = {
-            "lineups": "L0",
-            "match_notes": "parse error en respuesta del modelo",
-            "verdicts": [
-                {**_make_skip_result(b, "parse error", probability=0), "market": b["market"]}
-                for b in match_bets
-            ],
-            "best_pick": None,
-            "best_reason": "",
-        }
+    parsed = _extract_json_from_response(raw_joined)
+    if parsed is None:
+        # Logear el raw para debugging (visible en GH Actions logs y stdout).
+        # NO guardamos un fallback en pre_kickoff_analyses — si guardáramos,
+        # `_already_analyzed` bloquearía reintentos del próximo cron y el
+        # usuario vería "parse error" para siempre. Mejor lanzar para que
+        # el caller (main loop) lo capture en per_bet_errors y el próximo
+        # cron (15 min después) lo reintente.
+        snippet = (raw_joined or "<empty>")[:500].replace("\n", " ")
+        print(f"  ❌ parse error en {match} — raw[:500]: {snippet}")
+        raise ValueError(
+            f"JSON parse falló tras estrategias robustas. "
+            f"raw_len={len(raw_joined)} preview={snippet[:120]!r}"
+        )
 
     # ── Sources globales del partido (compartidas) ────────────────────
     sources: list[str] = []
