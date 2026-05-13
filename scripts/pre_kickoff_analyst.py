@@ -116,6 +116,14 @@ BEST PICK (lo más importante de todo):
   El best_pick es UNO solo. El usuario está jugándose plata real y
   prefiere una recomendación clara a una lista difusa.
 
+IMPORTANTE — GESTIÓN DE TOKENS:
+  • Antes del JSON, NO escribas prosa explicativa larga. Como mucho UNA
+    línea declarando la búsqueda que vas a hacer. Tu trabajo está en el JSON.
+  • Después de cada web_search, NO resumas lo que encontraste en prosa.
+    Pasá directo al JSON con la conclusión integrada en `reasoning`.
+  • SIEMPRE termina la respuesta con el JSON completo y cerrado. Nunca
+    te quedes sin output a mitad del JSON.
+
 Salida ESTRICTA — solo JSON, sin markdown, sin prosa fuera del JSON:
 {
   "lineups": "L1=confirmadas | L2=probables | L0=sin info",
@@ -839,9 +847,18 @@ def _analyze_match_group(client, match_bets: list[dict], ctx: dict,
     if not ok:
         raise RuntimeError(f"Budget guard: {reason}")
 
+    # max_tokens: con web_search Claude habla bastante ANTES del JSON
+    # ("voy a buscar...", "encontré...", "ahora analizo..."). En 2026-05-13
+    # vimos crashes donde Claude usaba ~1800 chars en prosa y se quedaba sin
+    # presupuesto para escribir el JSON (stop_reason="max_tokens"). Subimos
+    # el cap para que SIEMPRE quepa el JSON aunque haga 2 web_searches.
+    #   • 1 market : 1500 tok (era 500) — ~500 prosa + 1000 JSON
+    #   • 3 markets: 2100 tok (era 900) — ~700 prosa + 1400 JSON
+    # Costo extra ~$0.005/call. Worth it: silenciar el analista es peor
+    # que pagar $0.04/día extra.
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=300 + 200 * n_markets,
+        max_tokens=1200 + 300 * n_markets,
         system=system_blocks,
         tools=[{
             "type": "web_search_20250305",
@@ -867,17 +884,22 @@ def _analyze_match_group(client, match_bets: list[dict], ctx: dict,
 
     parsed = _extract_json_from_response(raw_joined)
     if parsed is None:
-        # Logear el raw para debugging (visible en GH Actions logs y stdout).
+        # Logear stop_reason + raw para diagnosticar. Si stop_reason es
+        # "max_tokens" el problema es de cap (subir max_tokens), si es
+        # "end_turn" el modelo decidió no devolver JSON (problema de
+        # prompt o contenido). Sin esto era ciego.
         # NO guardamos un fallback en pre_kickoff_analyses — si guardáramos,
         # `_already_analyzed` bloquearía reintentos del próximo cron y el
         # usuario vería "parse error" para siempre. Mejor lanzar para que
         # el caller (main loop) lo capture en per_bet_errors y el próximo
         # cron (15 min después) lo reintente.
+        stop_reason = getattr(resp, "stop_reason", "?")
         snippet = (raw_joined or "<empty>")[:500].replace("\n", " ")
-        print(f"  ❌ parse error en {match} — raw[:500]: {snippet}")
+        print(f"  ❌ parse error en {match} — stop={stop_reason} "
+              f"raw_len={len(raw_joined)} raw[:500]: {snippet}")
         raise ValueError(
-            f"JSON parse falló tras estrategias robustas. "
-            f"raw_len={len(raw_joined)} preview={snippet[:120]!r}"
+            f"JSON parse falló (stop={stop_reason}, "
+            f"raw_len={len(raw_joined)}) preview={snippet[:100]!r}"
         )
 
     # ── Sources globales del partido (compartidas) ────────────────────
