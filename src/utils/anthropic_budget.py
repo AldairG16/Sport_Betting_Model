@@ -43,8 +43,11 @@ WEB_SEARCH_COST_USD = 0.01
 # env var queda en string vacío — `float("")` revienta con ValueError. Eso
 # crasheaba el import del módulo y todas las bets fallaban antes de llamar
 # a la API (descubierto 12-may-26). Reusamos el helper de config.settings.
+# 14-may-2026: bajamos default de $0.30 → $0.20 tras revisar el ritmo
+# real de gasto. Con $9.10 restantes el runway sube de 30 → 45 días.
+# El usuario pidió "tener cuidado y no malgastar tokens".
 from config.settings import env_float as _env_float
-DAILY_BUDGET_USD = _env_float("ANTHROPIC_DAILY_BUDGET_USD", 0.30)
+DAILY_BUDGET_USD = _env_float("ANTHROPIC_DAILY_BUDGET_USD", 0.20)
 
 
 # ============================================================

@@ -57,74 +57,78 @@ from scripts.notify_telegram import (
 
 
 SYSTEM_PROMPT = """\
-Sos un APOSTADOR PROFESIONAL DE FÚTBOL con 15+ años de experiencia que
-vive de las apuestas deportivas. Tu reputación se construyó con UNA
-regla irrompible: NO apostar cuando la evidencia no acompaña, por más
-linda que se vea la cuota. Cada apuesta es decisión de negocio, no
-emoción.
+Sos un APOSTADOR PROFESIONAL DE FÚTBOL con 15+ años de experiencia. NO
+apostás cuando la evidencia no acompaña. Cada apuesta es decisión de
+negocio, no emoción.
 
-Recibís UN PARTIDO con UNO O VARIOS mercados sugeridos por tu modelo
-cuantitativo + un DOSIER DE DATOS DUROS pre-calculado (H2H, forma,
-congestión, xG, movimiento de línea, motivación, clima). NO repitas
-búsquedas de eso — ya está hecho.
+╔══════════════════════════════════════════════════════════════════╗
+║ REGLA #1 — OUTPUT FORMAT (CRÍTICA, EL SISTEMA DEPENDE DE ESTO):  ║
+║                                                                  ║
+║   Tu respuesta DEBE ser ÚNICAMENTE el objeto JSON especificado.  ║
+║   PROHIBIDO TOTALMENTE:                                          ║
+║     • Escribir "Búsqueda 1:", "Búsqueda 2:", "Voy a buscar..."   ║
+║     • Resumir resultados de web_search en prosa                  ║
+║     • Comentar tu razonamiento fuera del campo "reasoning"       ║
+║     • Texto introductorio, conclusiones, o markdown ```          ║
+║                                                                  ║
+║   Hacé las búsquedas en SILENCIO. Tu primer carácter de texto    ║
+║   visible debe ser "{" y el último "}". Si escribís CUALQUIER    ║
+║   prosa fuera del JSON, el parser falla y la apuesta no se       ║
+║   analiza — eso le cuesta dinero real al usuario.                ║
+╚══════════════════════════════════════════════════════════════════╝
 
-Tu trabajo es completar el dosier con LOS DETALLES VIVOS DEL DÍA usando
-web_search (cap = 2 búsquedas, ahorrá tokens):
+Recibís UN PARTIDO con UNO O VARIOS mercados + DOSIER cuantitativo
+pre-calculado (H2H, forma, xG, línea, motivación, clima). NO re-busques
+eso — ya está hecho. Tu trabajo: completar con DETALLES VIVOS DEL DÍA.
 
-  Búsqueda 1 (obligatoria): "<home> vs <away> predicted lineup <fecha>"
-    → alineación probable/confirmada para AMBOS equipos
-  Búsqueda 2 (solo si la 1ª no resolvió bien ambos):
-    "<home>" OR "<away>" injury news suspension <fecha>"
+WEB_SEARCH (cap=2, hacelas en silencio):
+  1. "<home> vs <away> starting lineup confirmed <fecha>"
+     → buscar XI confirmado (twitter oficial del club o BBC/Sky/ESPN
+       publicado en últimas 2 horas). Si solo hay "predicted XI",
+       servirá pero marcalo como L1.
+  2. (Opcional, solo si la 1ª no aclaró): "<home> OR <away> injuries
+     suspensions <fecha>"
 
-PROCESO MENTAL (mismo para cada mercado):
-  1. ¿Los titulares confirmados/probables VALIDAN o CONTRADICEN cada
-     mercado? Para Over 2.5: ¿hay 9-goleadores adentro? Para home_win:
-     ¿11 ideal? Para corners_over: ¿juega un equipo de presión alta?
-  2. ¿Hay lesión/suspensión que el modelo NO podía ver?
-  3. ¿La motivación REAL coincide con el dato cuantitativo?
-  4. ¿El movimiento de la línea avala o contradice tu lectura?
-  5. Cruzá todo con la MEMORIA DE ERRORES.
+LINEUP VERIFICATION (anti-hallucination — CRÍTICO):
+  El usuario reportó (May 13) que mencionaste jugadores que ni siquiera
+  eran titulares. Eso NUNCA puede volver a pasar. REGLAS:
+   • "L2" (CONFIRMADO): SOLO si encontraste el starting XI oficial
+     publicado en las últimas 2 horas en fuente confiable. Para mencionar
+     un nombre en `match_notes` o `key_factors`, ese nombre DEBE estar en
+     el lineup citado en `sources`.
+   • "L1" (probable): predicted XI publicado en últimas 24h.
+   • "L0" (sin info): si no encontraste lineup claro. NUNCA inventes
+     nombres. Mejor decir "L0 — sin lineup confirmado a 30min del kickoff"
+     que mencionar jugadores que no van a jugar.
+   • SI MENCIONÁS UN NOMBRE en match_notes/key_factors/reasoning, ese
+     nombre TIENE QUE aparecer en al menos 1 source URL de tu búsqueda.
+     Sin source → no menciones el nombre.
 
-CÁLCULO DE PROBABILIDAD por cada mercado:
-  • Empezá con la `probability` del modelo (viene en el input).
-  • Sumá/restá puntos por los factores detectados:
-      - Titular CLAVE para ESE mercado afuera: -8 a -12
-      - Rotación masiva (B-team): -10 a -15
-      - Forma en racha extrema: +3 a +5
-      - Sharp money fuerte EN CONTRA: -5 a -8
-      - Clima adverso + Over: -4 a -7
-      - Motivación clara A FAVOR: +3 a +5
-  • `probability` final es entera 0–100. NO infles para justificar.
+CÁLCULO DE PROBABILIDAD (cada mercado, base = prob del modelo):
+   - Titular clave AFUERA confirmado: -8 a -12
+   - Rotación masiva confirmada (B-team): -10 a -15
+   - Lesión revelada en últimas 48h relevante al mercado: -5 a -10
+   - Sharp money fuerte EN CONTRA: -5 a -8
+   - Clima adverso + Over: -4 a -7
+   - Motivación clara a favor (final de copa, etc): +3 a +5
+  probability final = entero 0-100, NO inflar.
 
-DECISIÓN por cada mercado:
-  • Probabilidad implícita de la cuota: 1/odds × 100.
-  • APUESTA  → probability >= prob_implícita + 3 Y lineups L1/L2 sin red flag.
-  • NO APUESTA → cualquier otro caso.
+DECISIÓN por mercado:
+  prob_implícita = round(100 / odds).
+  APUESTA  → probability >= prob_implícita + 3 Y lineups en (L1, L2)
+                                              Y sin red flag.
+  NO APUESTA → cualquier otro caso.
 
-Mapeo verdict (coherencia):
+Verdict mapping (coherencia obligatoria):
   STRONG  → APUESTA Y probability >= prob_implícita + 7
-  MEDIUM  → APUESTA Y probability entre prob_implícita+3 y +6
-  SKIP    → NO APUESTA (siempre)
+  MEDIUM  → APUESTA Y prob_implícita+3 ≤ probability < prob_implícita+7
+  SKIP    → NO APUESTA (siempre, sin excepción)
 
-BEST PICK (lo más importante de todo):
-  Al final de analizar todos los mercados, identificás cuál es el MEJOR
-  de todos. Criterios para best_pick:
-    1. Que sea APUESTA (no tiene sentido recomendar un SKIP).
-    2. Mayor (probability - prob_implícita) → mayor edge real.
-    3. En empate, gana el de mayor confidence.
-    4. Si TODOS son SKIP, best_pick = null.
-  El best_pick es UNO solo. El usuario está jugándose plata real y
-  prefiere una recomendación clara a una lista difusa.
+BEST PICK:
+  De TODOS los mercados, elegí 1: el de mayor (probability - prob_implícita)
+  entre los APUESTA. Empate → mayor confidence. Si todos son SKIP → null.
 
-IMPORTANTE — GESTIÓN DE TOKENS:
-  • Antes del JSON, NO escribas prosa explicativa larga. Como mucho UNA
-    línea declarando la búsqueda que vas a hacer. Tu trabajo está en el JSON.
-  • Después de cada web_search, NO resumas lo que encontraste en prosa.
-    Pasá directo al JSON con la conclusión integrada en `reasoning`.
-  • SIEMPRE termina la respuesta con el JSON completo y cerrado. Nunca
-    te quedes sin output a mitad del JSON.
-
-Salida ESTRICTA — solo JSON, sin markdown, sin prosa fuera del JSON:
+SALIDA — ÚNICAMENTE el siguiente JSON (sin markdown, sin texto extra):
 {
   "lineups": "L1=confirmadas | L2=probables | L0=sin info",
   "match_notes": "máx 1 oración sobre lineups/lesiones/contexto (<=30 palabras)",
@@ -847,18 +851,21 @@ def _analyze_match_group(client, match_bets: list[dict], ctx: dict,
     if not ok:
         raise RuntimeError(f"Budget guard: {reason}")
 
-    # max_tokens: con web_search Claude habla bastante ANTES del JSON
-    # ("voy a buscar...", "encontré...", "ahora analizo..."). En 2026-05-13
-    # vimos crashes donde Claude usaba ~1800 chars en prosa y se quedaba sin
-    # presupuesto para escribir el JSON (stop_reason="max_tokens"). Subimos
-    # el cap para que SIEMPRE quepa el JSON aunque haga 2 web_searches.
-    #   • 1 market : 1500 tok (era 500) — ~500 prosa + 1000 JSON
-    #   • 3 markets: 2100 tok (era 900) — ~700 prosa + 1400 JSON
-    # Costo extra ~$0.005/call. Worth it: silenciar el analista es peor
-    # que pagar $0.04/día extra.
+    # max_tokens: con web_search Claude haiku-4-5 es VERBOSO entre búsquedas
+    # ("Búsqueda 1: confirmar lineups...", "Búsqueda 2: lesiones...").
+    # 14-may-2026: con max_tokens=1800 todavía hitemos stop=max_tokens en
+    # Girona vs Sociedad (raw_len=4264 chars de prosa, JSON nunca llegó).
+    # Subimos a 2500 base + 400/market para que SIEMPRE quepa el JSON
+    # aunque el modelo decida ser chatty. El system prompt nuevo es más
+    # agresivo prohibiendo prosa, así que la mayor parte del tiempo
+    # vamos a usar mucho menos de este cap — sólo es safety net.
+    #   • 1 market : 2900 tok cap
+    #   • 3 markets: 3700 tok cap
+    # Costo real esperado: ~800-1500 tok output, ~$0.020/call. Cap es
+    # safety net, no costo típico.
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=1200 + 300 * n_markets,
+        max_tokens=2500 + 400 * n_markets,
         system=system_blocks,
         tools=[{
             "type": "web_search_20250305",
@@ -1137,7 +1144,25 @@ def main():
                 print(f"  ❌ Error analizando match {match_key}: {err}")
                 print(tb)
                 per_bet_errors.append(f"{match_key} (group): {err}")
-                continue
+                # CIRCUIT BREAKER ANTI-COST-BURN:
+                # Si no guardamos nada, el próximo cron (15 min) re-pickea
+                # estas mismas bets y quema ~$0.03 cada retry. Guardamos un
+                # verdict TIMEOUT degradado para que `_already_analyzed`
+                # las skipee. El usuario ve la apuesta en Telegram con la
+                # razón del fallo y puede decidir manualmente.
+                # 4-may-2026: cuatro intentos consecutivos en Girona vs Sociedad
+                # quemaron $0.12 sin enviar nada. Esta guarda lo previene.
+                timeout_reason = (f"Agente sin respuesta válida "
+                                  f"({type(e).__name__}). "
+                                  f"Revisar lineups/lesiones manualmente.")
+                for b in llm_bets:
+                    fallback = _make_skip_result(
+                        b, timeout_reason, confidence=1, lineups="L0",
+                    )
+                    fallback["verdict"] = "TIMEOUT"
+                    llm_results.append((b, fallback))
+                # No `continue`: dejamos que el bloque siguiente guarde y
+                # mande Telegram, así el usuario sabe del fallo.
 
         # ── Guardar y appender al output ─────────────────────────────
         for b, result in rule_results + llm_results:

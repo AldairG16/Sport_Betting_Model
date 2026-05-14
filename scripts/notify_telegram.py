@@ -819,7 +819,7 @@ def _format_single_match_message(match: str, verdicts_for_match: list) -> str:
     el mismo mensaje (porque son del mismo evento — agrupar tiene
     sentido). Cada match → 1 mensaje separado.
     """
-    icon_map = {"STRONG": "🟢", "MEDIUM": "🟡", "SKIP": "🔴"}
+    icon_map = {"STRONG": "🟢", "MEDIUM": "🟡", "SKIP": "🔴", "TIMEOUT": "⏱️"}
 
     # Tomamos el primer verdict para encabezado (kickoff es el mismo)
     head = verdicts_for_match[0]
@@ -844,8 +844,8 @@ def _format_single_match_message(match: str, verdicts_for_match: list) -> str:
     others = [v for v in verdicts_for_match if not v.get("is_best")]
     # Si no hay best explícito, ordenamos por verdict (STRONG > MEDIUM > SKIP)
     # y probability descendiente — preserva orden razonable.
-    rank = {"STRONG": 0, "MEDIUM": 1, "SKIP": 2}
-    others.sort(key=lambda v: (rank.get((v.get("verdict") or "MEDIUM").upper(), 3),
+    rank = {"STRONG": 0, "MEDIUM": 1, "SKIP": 2, "TIMEOUT": 3}
+    others.sort(key=lambda v: (rank.get((v.get("verdict") or "MEDIUM").upper(), 4),
                                 -int(v.get("probability", 0) or 0)))
     ordered = ([best] if best else []) + others
 
