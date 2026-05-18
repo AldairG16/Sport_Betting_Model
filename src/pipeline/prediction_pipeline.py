@@ -1377,7 +1377,27 @@ def run_prediction_pipeline():
                 continue
 
             # ── Mercados desactivados individualmente ────────────────
-            if mkt == "dnb_home":
+            # Kill-switch basado en auditoría 17-may-2026 sobre 746 bets
+            # resueltas. Markets con n>=10 y ROI negativo persistente:
+            #   away_win:      -32% ROI (n=53)
+            #   btts:          -21% ROI (n=38)
+            #   under25:       -37% ROI (n=29)
+            #   dnb_home:      -20% ROI (n=16) — bloqueado original
+            #   ah_home_+0.0:  -65% ROI (n=13) — pk no calibrado
+            # Resultado proyectado: ROI global pasa de -7% a aprox +2%
+            # eliminando ~140 bets perdedoras sin tocar las ganadoras.
+            # Si en 30 días aparece data nueva que recalibra alguno,
+            # revivir con threshold alto y monitorear.
+            _BLOCKED_MARKETS = {
+                "dnb_home",
+                "away_win",
+                "btts",
+                "under25",
+            }
+            if mkt in _BLOCKED_MARKETS:
+                continue
+            # AH pk (handicap +0.0 / 0.0): bloqueado por -65% ROI persistente
+            if mkt.startswith("ah_") and ("+0.0" in mkt or mkt.endswith("_0.0")):
                 continue
 
             # ── Mejora 4: Sweet spots de odds por mercado ────────────
