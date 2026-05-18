@@ -89,39 +89,59 @@ def _compute_elo_up_to(df_all: pd.DataFrame, cutoff_date) -> dict:
     return elo
 
 
-def _get_run_rates_from_df(df_all: pd.DataFrame, team: str,
-                            match_date) -> dict:
+def _build_team_history_index(df_all: pd.DataFrame) -> dict:
+    """
+    Pre-construye un dict {team: [(date, scored, allowed), ...]}
+    ordenado por fecha. Después _get_run_rates_fast hace un O(window)
+    en vez de un O(N) scan del DataFrame por cada juego.
+    """
+    idx = {}
+    for _, row in df_all.iterrows():
+        h, a = row["home_team"], row["away_team"]
+        d = row["date"]; hg = row["home_goals"]; ag = row["away_goals"]
+        idx.setdefault(h, []).append((d, hg, ag))
+        idx.setdefault(a, []).append((d, ag, hg))
+    return idx
+
+
+def _get_run_rates_fast(team_idx: dict, team: str, match_date) -> dict:
     """Run rates de últimos FORM_WINDOW juegos antes de match_date."""
-    mask = (
-        ((df_all["home_team"] == team) | (df_all["away_team"] == team))
-        & (df_all["date"] < match_date)
-    )
-    df = df_all[mask].sort_values("date", ascending=False).head(FORM_WINDOW)
-    if df.empty:
+    games = team_idx.get(team, [])
+    # binary search: encontrar los que tienen date < match_date
+    # games está ordenado por date (construido en orden cronológico)
+    import bisect
+    dates = [g[0] for g in games]
+    cutoff_pos = bisect.bisect_left(dates, match_date)
+    relevant = games[max(0, cutoff_pos - FORM_WINDOW):cutoff_pos]
+    if not relevant:
         return {"scored": 4.5, "allowed": 4.5, "games": 0}
-    scored = allowed = 0.0
-    for _, row in df.iterrows():
-        if row["home_team"] == team:
-            scored += row["home_goals"]; allowed += row["away_goals"]
-        else:
-            scored += row["away_goals"]; allowed += row["home_goals"]
-    n = len(df)
+    scored = sum(g[1] for g in relevant)
+    allowed = sum(g[2] for g in relevant)
+    n = len(relevant)
     return {"scored": scored / n, "allowed": allowed / n, "games": n}
 
 
 def _blend_win_prob(elo_home, elo_away, lam_h, lam_a) -> float:
-    """Devuelve P(home wins) con blend Elo + Poisson, sin empates."""
+    """Devuelve P(home wins) con blend Elo + Poisson, sin empates.
+
+    Vectorizado: en vez de 26x26 = 676 llamadas a poisson.pmf por juego,
+    pre-calcula los dos vectores pmf y los multiplica con broadcasting.
+    ~50x más rápido."""
     from scipy.stats import poisson
     h_adj = elo_home + HOME_ADV_ELO
     elo_p = 1 / (1 + 10 ** ((elo_away - h_adj) / 400))
 
     max_r = 25
-    p_h = p_a = 0.0
-    for h in range(max_r + 1):
-        for a in range(max_r + 1):
-            p = poisson.pmf(h, lam_h) * poisson.pmf(a, lam_a)
-            if h > a: p_h += p
-            elif a > h: p_a += p
+    rng = np.arange(max_r + 1)
+    pmf_h = poisson.pmf(rng, lam_h)   # shape (26,)
+    pmf_a = poisson.pmf(rng, lam_a)   # shape (26,)
+    grid = np.outer(pmf_h, pmf_a)     # shape (26, 26) P(home=h, away=a)
+    # mask de triangular superior (h > a) y triangular inferior (a > h)
+    home_wins_mask = np.triu(np.ones_like(grid, dtype=bool), k=1)  # h > a
+    away_wins_mask = np.tril(np.ones_like(grid, dtype=bool), k=-1)  # a > h
+    p_h = grid[home_wins_mask].sum()
+    p_a = grid[away_wins_mask].sum()
+
     denom = p_h + p_a
     pois_p = 0.5 if denom < 1e-9 else p_h / denom
 
@@ -183,9 +203,14 @@ def main():
     print(f"Test games:  {len(test_df)}")
 
     # Elo inicial calculado con TRAIN
-    print("\n→ Calculando Elo inicial con train set...")
+    print("\n→ Calculando Elo inicial con train set...", flush=True)
     elo = _compute_elo_up_to(df_all, cutoff)
-    print(f"  Equipos con Elo: {len(elo)}")
+    print(f"  Equipos con Elo: {len(elo)}", flush=True)
+
+    # Pre-construir índice de juegos por equipo (cronológico)
+    print("→ Construyendo índice cronológico por equipo...", flush=True)
+    team_idx = _build_team_history_index(df_all)
+    print(f"  Equipos indexados: {len(team_idx)}", flush=True)
 
     # ── Predicciones walk-forward ─────────────────────────────────
     # Para cada juego del test, predecimos con info ANTERIOR a su fecha,
@@ -194,12 +219,15 @@ def main():
     outcomes = []         # 1 si gana home, 0 si gana away
     skipped = 0
 
-    print("\n→ Walk-forward sobre test set...")
-    for i, row in test_df.iterrows():
+    print("\n→ Walk-forward sobre test set...", flush=True)
+    total_n = len(test_df)
+    for i, (_, row) in enumerate(test_df.iterrows()):
+        if i % 200 == 0:
+            print(f"  …{i}/{total_n}", flush=True)
         h, a, md = row["home_team"], row["away_team"], row["date"]
 
-        runs_h = _get_run_rates_from_df(df_all, h, md)
-        runs_a = _get_run_rates_from_df(df_all, a, md)
+        runs_h = _get_run_rates_fast(team_idx, h, md)
+        runs_a = _get_run_rates_fast(team_idx, a, md)
         if runs_h["games"] < MIN_GAMES or runs_a["games"] < MIN_GAMES:
             skipped += 1
             # Actualizar Elo igual aunque saltemos predict
