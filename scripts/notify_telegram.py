@@ -1204,7 +1204,16 @@ def send_evening_summary():
 
     from zoneinfo import ZoneInfo
     from config.settings import USER_TIMEZONE
-    today    = datetime.now(ZoneInfo(USER_TIMEZONE)).date()
+    now_local = datetime.now(ZoneInfo(USER_TIMEZONE))
+    # 18-may-2026: el cron del evening se movió de 21:00 MX → 07:30 MX
+    # (después de que fbdata.co.uk sube córners/tarjetas). Cuando corre
+    # de mañana, el resumen debe ser de AYER, no de hoy. Heurística simple:
+    # si la hora local es antes del mediodía, asumimos que estamos
+    # recapeando el día anterior.
+    if now_local.hour < 12:
+        today = (now_local - timedelta(days=1)).date()
+    else:
+        today = now_local.date()
     date_str = today.strftime("%d/%m/%Y")
 
     try:
