@@ -183,15 +183,27 @@ MIN_BETS_BY_LEAGUE = 25       # mínimo TOTAL de bets en la liga (todos mercados
 # CARGA / GUARDADO
 # ─────────────────────────────────────────────────────────────
 
+_CAL_CACHE: dict | None = None
+_CAL_CACHE_MTIME: float = 0.0
+
+
 def load_calibration_factors() -> dict:
     """
     Carga los factores de calibración guardados.
     Si el archivo no existe, retorna factores neutros (1.0).
+    Usa caché en memoria invalidada por mtime para evitar lecturas de disco
+    repetidas (apply_calibration lo llama N_markets × N_partidos por ejecución).
     """
+    global _CAL_CACHE, _CAL_CACHE_MTIME
     if CALIBRATION_FILE.exists():
         try:
+            mtime = CALIBRATION_FILE.stat().st_mtime
+            if _CAL_CACHE is not None and mtime == _CAL_CACHE_MTIME:
+                return _CAL_CACHE
             with open(CALIBRATION_FILE, "r") as f:
-                return json.load(f)
+                _CAL_CACHE = json.load(f)
+            _CAL_CACHE_MTIME = mtime
+            return _CAL_CACHE
         except Exception:
             pass
 

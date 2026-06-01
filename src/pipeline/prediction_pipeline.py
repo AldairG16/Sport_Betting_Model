@@ -102,18 +102,21 @@ from src.models.shots_model import predict_shots, shots_to_confidence_signal
 from src.models.cards_model import predict_cards
 
 from src.features.fixture_congestion import get_fixture_congestion
-from src.features.motivation_factor import get_motivation_factor
+from src.features.motivation_factor import get_motivation_factor, is_unreliable_match
 from src.models.asian_handicap_model import prob_ah, get_dnb_probs
 from src.features.weather_impact import get_weather_multiplier
-from src.models.monte_carlo_simulatior import simulate_match, mc_confidence_vs_analytical
+from src.models.monte_carlo_simulator import simulate_match, mc_confidence_vs_analytical
 from src.models.bankroll_manager import get_current_bankroll, ensure_bankroll_schema
 from src.models.calibration_monitor import (
     load_calibration_factors,
     get_calibration_factor,
     apply_calibration,
     MIN_BETS_FOR_CALIBRATION,
+    _ah_group,
 )
 from src.models.dc_mle_fitter import get_dc_lambdas, is_params_fresh, DC_MLE_WEIGHT
+from config.settings import PAPER_ONLY_LEAGUES
+from collections import Counter
 
 
 # Torneos donde la mayoría de partidos se juegan en sede neutral.
@@ -129,6 +132,107 @@ NEUTRAL_VENUE_LEAGUES = {
     "soccer_afc_asian_cup",
 }
 from src.features.league_calibration import get_over25_rate, OVER25_SHRINK
+
+# ─────────────────────────────────────────────────────────────
+# CONSTANTES DE PIPELINE (módulo-level para no recrearlas en cada llamada)
+# ─────────────────────────────────────────────────────────────
+
+GLOBAL_CALIBRATION      = 0.85     # corrección global de sobreconfianza (walk-forward 332 bets)
+CIRCUIT_BREAKER_THRESHOLD = 10.0   # bankroll mínimo para generar apuestas
+MIN_EDGE                = 0.05     # edge_market mínimo default
+MAX_ODDS                = 3.80     # elimina longshots
+MAX_BETS_PER_MATCH      = 2
+MAX_RELIABLE_EDGE       = 0.499
+MAX_PROB_RATIO          = 2.0
+MIDWEEK_DAYS            = frozenset({0, 1, 2})  # Lun/Mar/Mié
+
+CORNERS_DEFAULT_ODDS = 1.80
+CARDS_DEFAULT_ODDS   = 1.80
+SHOTS_DEFAULT_ODDS   = 1.80
+OVER15_ODDS  = 1.35
+UNDER15_ODDS = 3.20
+OVER35_ODDS  = 2.20
+UNDER35_ODDS = 1.65
+
+# Edge mínimo por mercado (backtest 120d, 585 bets — conservador, no el óptimo absoluto)
+MIN_EDGE_BY_MARKET = {
+    "home_win":     0.05,
+    "over25":       0.05,
+    "under25":      0.04,
+    "draw":         0.08,
+    "btts":         0.06,
+    "btts_no":      0.10,
+    "dnb_away":     0.08,
+    "dc_1x":        0.06,
+    "dc_x2":        0.06,
+    "ah_home_fav":  0.15,
+    "ah_home_pk":   0.10,
+    "ah_home_dog":  0.08,
+    "ah_away_fav":  0.15,
+    "ah_away_pk":   0.06,
+    "ah_away_dog":  0.08,
+}
+
+# Ligas problemáticas: exigir más edge
+TOUGH_LEAGUES = {
+    "soccer_italy_serie_a",
+    "soccer_usa_mls",
+    "soccer_france_ligue_one",
+}
+
+# Ligas bloqueadas: ROI negativo consistente
+BLOCKED_LEAGUES = {
+    "soccer_fifa_world_cup_qualifiers_europe",
+    "soccer_uefa_europa_league",
+    "soccer_netherlands_eredivisie",
+    "soccer_conmebol_copa_libertadores",
+    "soccer_uefa_champs_league",
+    "soccer_japan_j_league",
+    "soccer_turkey_super_league",
+    "soccer_norway_eliteserien",
+}
+
+# Grupos mutuamente excluyentes por partido
+_EXCLUSIVE_GROUPS = {
+    "home_win":  "1x2",
+    "draw":      "1x2",
+    "away_win":  "1x2",
+    "dnb_home":  "1x2",
+    "dnb_away":  "1x2",
+    "dc_1x":     "dc",
+    "dc_x2":     "dc",
+    "dc_12":     "dc",
+    "over25":    "goals_total",
+    "under25":   "goals_total",
+    "over_1.5":  "goals_15",
+    "under_1.5": "goals_15",
+    "over_3.5":  "goals_35",
+    "under_3.5": "goals_35",
+    "btts":      "btts",
+    "btts_no":   "btts",
+    "h1_home":   "h1_1x2",
+    "h1_draw":   "h1_1x2",
+    "h1_away":   "h1_1x2",
+    "h2_home":   "h2_1x2",
+    "h2_draw":   "h2_1x2",
+    "h2_away":   "h2_1x2",
+}
+
+# Mercados con odds fijas (edge irreal sin odds reales del mercado)
+_DISABLED_MARKETS = {
+    "over_1.5", "under_1.5",
+    "over_3.5", "under_3.5",
+    "shots_over_5.5", "shots_under_5.5",
+    "dc_12",
+}
+
+# Mercados bloqueados por ROI negativo persistente (auditoría 17-may-2026, 746 bets)
+_BLOCKED_MARKETS = {
+    "dnb_home",
+    "away_win",
+    "btts",
+    "under25",
+}
 
 # =========================
 # SAFE HELPERS (CRÍTICO)
@@ -188,7 +292,6 @@ def run_prediction_pipeline():
     print(f"💰 Bankroll actual: {current_bankroll:.2f} unidades")
 
     # ── Circuit Breaker: si el bankroll es < 10u, detener apuestas ────────
-    CIRCUIT_BREAKER_THRESHOLD = 10.0
     if current_bankroll < CIRCUIT_BREAKER_THRESHOLD:
         print(f"🚨 CIRCUIT BREAKER ACTIVADO: bankroll ({current_bankroll:.2f}u) "
               f"< umbral ({CIRCUIT_BREAKER_THRESHOLD}u)")
@@ -603,11 +706,11 @@ def run_prediction_pipeline():
         _ah_line = None
         _ah_home_odds = None
         _ah_away_odds = None
-        _raw_ah_line = row.get("ah_line") if hasattr(row, "get") else getattr(row, "ah_line", None)
+        _raw_ah_line = row.get("ah_line")
         if _raw_ah_line is not None and not pd.isna(_raw_ah_line):
             _ah_line = float(_raw_ah_line)
-            _ah_home_odds = safe_odds(row.get("ah_home_odds") if hasattr(row, "get") else getattr(row, "ah_home_odds", None))
-            _ah_away_odds = safe_odds(row.get("ah_away_odds") if hasattr(row, "get") else getattr(row, "ah_away_odds", None))
+            _ah_home_odds = safe_odds(row.get("ah_home_odds"))
+            _ah_away_odds = safe_odds(row.get("ah_away_odds"))
 
         # AH model probs (solo si tenemos línea y odds del mercado)
         _p_ah_home = _p_ah_away = None
@@ -618,8 +721,8 @@ def run_prediction_pipeline():
         _dnb = get_dnb_probs(lambda_home, lambda_away)
 
         # DNB odds: preferir las de API (draw_no_bet), fallback a derivadas de h2h
-        _dnb_home_api = safe_odds(row.get("dnb_home_odds") if hasattr(row, "get") else getattr(row, "dnb_home_odds", None))
-        _dnb_away_api = safe_odds(row.get("dnb_away_odds") if hasattr(row, "get") else getattr(row, "dnb_away_odds", None))
+        _dnb_home_api = safe_odds(row.get("dnb_home_odds"))
+        _dnb_away_api = safe_odds(row.get("dnb_away_odds"))
 
         _dnb_home_odds = _dnb_away_odds = None
         if _dnb_home_api and _dnb_away_api:
@@ -638,25 +741,25 @@ def run_prediction_pipeline():
                     _dnb_away_odds = round(_imp_sum / _imp_a, 3)
 
         # ── Double Chance odds de API ────────────────────────────────────
-        _dc_1x_odds = safe_odds(row.get("dc_1x_odds") if hasattr(row, "get") else getattr(row, "dc_1x_odds", None))
-        _dc_x2_odds = safe_odds(row.get("dc_x2_odds") if hasattr(row, "get") else getattr(row, "dc_x2_odds", None))
-        _dc_12_odds = safe_odds(row.get("dc_12_odds") if hasattr(row, "get") else getattr(row, "dc_12_odds", None))
+        _dc_1x_odds = safe_odds(row.get("dc_1x_odds"))
+        _dc_x2_odds = safe_odds(row.get("dc_x2_odds"))
+        _dc_12_odds = safe_odds(row.get("dc_12_odds"))
 
         # ── Half-time odds de API ─────────────────────────────────────────
-        _h1_home_odds = safe_odds(row.get("h1_home_odds") if hasattr(row, "get") else getattr(row, "h1_home_odds", None))
-        _h1_draw_odds = safe_odds(row.get("h1_draw_odds") if hasattr(row, "get") else getattr(row, "h1_draw_odds", None))
-        _h1_away_odds = safe_odds(row.get("h1_away_odds") if hasattr(row, "get") else getattr(row, "h1_away_odds", None))
-        _h2_home_odds = safe_odds(row.get("h2_home_odds") if hasattr(row, "get") else getattr(row, "h2_home_odds", None))
-        _h2_draw_odds = safe_odds(row.get("h2_draw_odds") if hasattr(row, "get") else getattr(row, "h2_draw_odds", None))
-        _h2_away_odds = safe_odds(row.get("h2_away_odds") if hasattr(row, "get") else getattr(row, "h2_away_odds", None))
+        _h1_home_odds = safe_odds(row.get("h1_home_odds"))
+        _h1_draw_odds = safe_odds(row.get("h1_draw_odds"))
+        _h1_away_odds = safe_odds(row.get("h1_away_odds"))
+        _h2_home_odds = safe_odds(row.get("h2_home_odds"))
+        _h2_draw_odds = safe_odds(row.get("h2_draw_odds"))
+        _h2_away_odds = safe_odds(row.get("h2_away_odds"))
 
         # ── Corners / Cards odds de API ───────────────────────────────────
-        _corners_over_api  = safe_odds(row.get("corners_over_odds")  if hasattr(row, "get") else getattr(row, "corners_over_odds", None))
-        _corners_under_api = safe_odds(row.get("corners_under_odds") if hasattr(row, "get") else getattr(row, "corners_under_odds", None))
-        _corners_line_api  = row.get("corners_line") if hasattr(row, "get") else getattr(row, "corners_line", None)
-        _cards_over_api    = safe_odds(row.get("cards_over_odds")   if hasattr(row, "get") else getattr(row, "cards_over_odds", None))
-        _cards_under_api   = safe_odds(row.get("cards_under_odds")  if hasattr(row, "get") else getattr(row, "cards_under_odds", None))
-        _cards_line_api    = row.get("cards_line") if hasattr(row, "get") else getattr(row, "cards_line", None)
+        _corners_over_api  = safe_odds(row.get("corners_over_odds") )
+        _corners_under_api = safe_odds(row.get("corners_under_odds"))
+        _corners_line_api  = row.get("corners_line")
+        _cards_over_api    = safe_odds(row.get("cards_over_odds")  )
+        _cards_under_api   = safe_odds(row.get("cards_under_odds") )
+        _cards_line_api    = row.get("cards_line")
 
         # =========================
         # 1X2 — DIXON-COLES
@@ -758,16 +861,14 @@ def run_prediction_pipeline():
         model_probs: dict = {}
 
         if _h1_home_odds or _h1_draw_odds or _h1_away_odds:
-            from src.models.dixon_coles_model import match_outcomes as _mo
-            h1h, h1d, h1a = _mo(lh_h1, la_h1)
+            h1h, h1d, h1a = match_outcomes(lh_h1, la_h1)
             h1_total = h1h + h1d + h1a
             model_probs["h1_home"] = clamp_prob(h1h / h1_total)
             model_probs["h1_draw"] = clamp_prob(h1d / h1_total)
             model_probs["h1_away"] = clamp_prob(h1a / h1_total)
 
         if _h2_home_odds or _h2_draw_odds or _h2_away_odds:
-            from src.models.dixon_coles_model import match_outcomes as _mo2
-            h2h, h2d, h2a = _mo2(lh_h2, la_h2)
+            h2h, h2d, h2a = match_outcomes(lh_h2, la_h2)
             h2_total = h2h + h2d + h2a
             model_probs["h2_home"] = clamp_prob(h2h / h2_total)
             model_probs["h2_draw"] = clamp_prob(h2d / h2_total)
@@ -780,7 +881,7 @@ def run_prediction_pipeline():
         # Eredivisie (62%) ≠ Ligue 1 (48%) ≠ Argentina (38%).
         # Blend: 80% Poisson + 20% tasa histórica de liga.
 
-        league_key    = row.get("sport_key") if hasattr(row, "get") else getattr(row, "sport_key", "")
+        league_key    = row.get("sport_key", "")
         league_over25 = get_over25_rate(league_key)
 
         poisson_probs["over25"] = (
@@ -813,14 +914,12 @@ def run_prediction_pipeline():
         # =========================
         # CORNERS COMO MERCADO
         # =========================
-        CORNERS_DEFAULT_ODDS = 1.80
-        CARDS_DEFAULT_ODDS   = 1.80
 
         # Gate de cobertura: si la liga no tiene >= 50% de partidos con
         # córners/tarjetas en los últimos 30 días, NO generamos bets para
         # ese mercado — quedarían 'unresolved' indefinidamente y ensuciarían
         # la calibración + el bankroll en paper.
-        _league_for_gate = row.get("sport_key") if hasattr(row, "get") else getattr(row, "sport_key", "")
+        _league_for_gate = row.get("sport_key", "")
 
         if corners_prediction and _has_coverage(_league_for_gate, "corners"):
             # Usar la línea de la API si está disponible, fallback 9.5
@@ -838,19 +937,10 @@ def run_prediction_pipeline():
         # =========================
         # OVER 1.5 / OVER 3.5 GOLES
         # =========================
-        # totals_extended() ya los calcula — solo necesitamos cuotas de referencia.
-        # Odds fijas: promedio real de mercado europeo.
-        OVER15_ODDS  = 1.35   # ~74% implied — en la mayoría de partidos se marca
-        UNDER15_ODDS = 3.20   # ~31% implied
-        OVER35_ODDS  = 2.20   # ~45% implied — partido de muchos goles
-        UNDER35_ODDS = 1.65   # ~61% implied
-        # totals_probs ya está en model_probs via update(totals_probs)
-        # Solo necesitamos agregar las odds de referencia al dict de odds más abajo
 
         # =========================
         # TOTAL TIROS AL ARCO
         # =========================
-        SHOTS_DEFAULT_ODDS = 1.80
         if shots_prediction:
             model_probs["shots_over_5.5"]  = clamp_prob(shots_prediction["over55"])
             model_probs["shots_under_5.5"] = clamp_prob(shots_prediction["under55"])
@@ -1060,17 +1150,8 @@ def run_prediction_pipeline():
         # CALIBRACIÓN DE PROBABILIDADES
         # =========================
         # Mejora 3: Corrección global de sobrecalibración.
-        # Walk-forward backtest (332 bets) demuestra que el modelo
-        # sobreestima en TODOS los rangos:
-        #   Pred 55% → Real 39% (-16pp)
-        #   Pred 74% → Real 60% (-15pp)
-        # Factor global: prob_corregida = prob * 0.85
-        # Después aplica factores por mercado si hay suficientes datos.
-        GLOBAL_CALIBRATION = 0.85
-
         # Liga del partido — usado para calibración específica (Mundial/Euro/etc.)
-        _row_league = row.get("league", row.get("sport_key", "")) if hasattr(row, "get") \
-                      else getattr(row, "league", "") or getattr(row, "sport_key", "")
+        _row_league = row.get("league", row.get("sport_key", ""))
 
         for market in list(probabilities.keys()):
             # Paso 1: corrección global de sobreconfianza
@@ -1129,9 +1210,9 @@ def run_prediction_pipeline():
         # soft line: nuestra mejor odd >> consenso (+10%) = edge potencial extra
         # pocos bookmakers (<3)  = mercado poco líquido = más caution
 
-        spread_pct      = row.get("h2h_spread_pct")   if hasattr(row, "get") else getattr(row, "h2h_spread_pct", None)
-        bk_count        = row.get("bookmaker_count")   if hasattr(row, "get") else getattr(row, "bookmaker_count", None)
-        cons_home       = row.get("consensus_home_odds") if hasattr(row, "get") else getattr(row, "consensus_home_odds", None)
+        spread_pct      = row.get("h2h_spread_pct")  
+        bk_count        = row.get("bookmaker_count")  
+        cons_home       = row.get("consensus_home_odds")
         best_home_odd   = safe_odds(row.home_odds)
 
         consensus_conf_adj = 1.0
@@ -1227,68 +1308,6 @@ def run_prediction_pipeline():
         # Antes filtrábamos `bet["edge"] < 0.10` que con odds 5.0 dejaba
         # pasar bets con solo 5% de edge real → bucket 15-20% edge tenía
         # -23.7% ROI (overfit). Ahora filtramos sobre edge_market real.
-        MIN_EDGE = 0.05        # default — usado si el mercado no está en MIN_EDGE_BY_MARKET
-        MAX_ODDS = 3.80        # elimina longshots que no pegan
-
-        # MEJORA #3 (Sprint 2 — 06-may-26): MIN_EDGE adaptativo por mercado.
-        # Valores derivados del backtest 120d sobre 585 bets — para cada mercado
-        # se barrió el threshold 0.03..0.15 y se eligió un punto conservador
-        # (no el óptimo absoluto, para evitar overfit con muestras chicas).
-        # Mercados sin entrada caen al MIN_EDGE global (0.05).
-        MIN_EDGE_BY_MARKET = {
-            # Mercados grandes (n≥100) — mantenemos cerca del 5% global para
-            # no recortar +EV ya validado en producción. El A/B sobre 386 bets
-            # muestra que subir estos a 0.06 recorta ~6 bets ganadoras.
-            "home_win":     0.05,
-            "over25":       0.05,
-            "under25":      0.04,   # backtest: +EV a edge bajo (n=25)
-
-            # Mercados pequeños/ruidosos — exigir mayor edge
-            "draw":         0.08,   # n=15 — alta varianza
-            "btts":         0.06,   # bias estructural BTTS sobreestimado
-            "btts_no":      0.10,   # backtest -42% ROI a 5% → solo alto edge
-            "dnb_away":     0.08,   # backtest: positivo solo en edge alto
-
-            # Doble oportunidad (cuotas bajas — necesitan más edge para +EV)
-            "dc_1x":        0.06,
-            "dc_x2":        0.06,
-
-            # Asian Handicap — SUBIDOS 11-may-26 tras alerta de calibración:
-            #   ah_home_fav real win rate 20% (predicho 58%, n=15, factor=0.78)
-            #   ah_away_fav real win rate 30% (predicho 64%, n=23, factor=0.77)
-            #   Investigación 90d (41 bets): avg pred 61%, real 27%, ROI -46%.
-            # El modelo sobre-estima los favoritos AH (acierta el ganador pero
-            # falla el cover del handicap). Hasta que se recalibre con más
-            # data, requerir EDGE mucho más alto. fav/pk al 12-15%, dogs OK.
-            "ah_home_fav":  0.15,
-            "ah_home_pk":   0.10,   # factor=0.82, leve bias
-            "ah_home_dog":  0.08,   # factor=1.01, calibrado
-            "ah_away_fav":  0.15,
-            "ah_away_pk":   0.06,   # factor=0.97, calibrado
-            "ah_away_dog":  0.08,
-            # `away_win` y `dnb_home` siguen BLOQUEADOS (líneas más abajo) —
-            # no figuran aquí porque el filtro de mercado-bloqueado los corta.
-        }
-
-        # Ligas problemáticas: exigir más edge
-        TOUGH_LEAGUES = {
-            "soccer_italy_serie_a",
-            "soccer_usa_mls",
-            "soccer_france_ligue_one",
-        }
-        # Ligas bloqueadas: ROI negativo consistente en walk-forward backtest
-        # + bloqueos NUEVOS por desempeño en producción (60d rolling, 04-may-26)
-        BLOCKED_LEAGUES = {
-            "soccer_fifa_world_cup_qualifiers_europe",  # -44.6% ROI, datos basura
-            "soccer_uefa_europa_league",                # -64.5% ROI
-            "soccer_netherlands_eredivisie",             # -50.3% ROI
-            "soccer_conmebol_copa_libertadores",         # -100% ROI (2 bets, 0 wins)
-            "soccer_uefa_champs_league",                 # -100% ROI (1 bet, 0 wins)
-            # ── Bloqueos por producción (model-auditor RED, 04-may-26) ──
-            "soccer_japan_j_league",                     # -12.46u, 17% WR (24 bets/60d) — peor liga del modelo
-            "soccer_turkey_super_league",                # -1.05u, 25% WR (12 bets/60d) — mercado se hizo eficiente
-            "soccer_norway_eliteserien",                 # solo 32 partidos historicos — sample insuficiente para apostar
-        }
         _league = row.get("league", row.get("sport_key", ""))
         if _league in BLOCKED_LEAGUES:
             continue
@@ -1297,7 +1316,6 @@ def run_prediction_pipeline():
         # Dead rubber (ambos en zona media, fin de temporada) o asimetría
         # extrema de motivación → resultado impredecible. Saltar.
         try:
-            from src.features.motivation_factor import is_unreliable_match
             _unreliable, _why = is_unreliable_match(
                 row.get("home_team",""), row.get("away_team",""), _league
             )
@@ -1316,49 +1334,8 @@ def run_prediction_pipeline():
             # Si la fecha no parsea, no aplicamos penalización midweek.
             # Loguear permite detectar formatos raros en upcoming_matches.
             print(f"⚠️  No se pudo parsear match_date={date!r} para weekday: {e}")
-        MIDWEEK_DAYS = {0, 1, 2}     # Lunes, Martes, Miércoles
         _midweek = _match_dow in MIDWEEK_DAYS if _match_dow is not None else False
 
-        # =========================
-        # GRUPOS MUTUAMENTE EXCLUYENTES
-        # =========================
-        # Si apostamos home_win, NO podemos apostar away_win ni draw.
-        # Si apostamos over25, NO podemos apostar under25.
-        # Esto previene apuestas contradictorias en el mismo partido.
-        _EXCLUSIVE_GROUPS = {
-            "home_win":  "1x2",
-            "draw":      "1x2",
-            "away_win":  "1x2",
-            "dnb_home":  "1x2",    # misma dirección que home_win
-            "dnb_away":  "1x2",    # misma dirección que away_win
-            "dc_1x":     "dc",
-            "dc_x2":     "dc",
-            "dc_12":     "dc",
-            "over25":    "goals_total",
-            "under25":   "goals_total",
-            "over_1.5":  "goals_15",
-            "under_1.5": "goals_15",
-            "over_3.5":  "goals_35",
-            "under_3.5": "goals_35",
-            "btts":      "btts",
-            "btts_no":   "btts",
-            "h1_home":   "h1_1x2",
-            "h1_draw":   "h1_1x2",
-            "h1_away":   "h1_1x2",
-            "h2_home":   "h2_1x2",
-            "h2_draw":   "h2_1x2",
-            "h2_away":   "h2_1x2",
-        }
-
-        # Mercados con odds fijas → desactivados (edges inflados sin odds reales)
-        _DISABLED_MARKETS = {
-            "over_1.5", "under_1.5",     # odds fija 1.35/3.20 — edge irreal
-            "over_3.5", "under_3.5",     # odds fija 2.20/1.65 — edge irreal
-            "shots_over_5.5", "shots_under_5.5",  # odds fija 1.80
-            "dc_12",                     # "cualquiera gana" a ~1.20 — nunca tiene edge
-        }
-
-        MAX_BETS_PER_MATCH = 2     # máximo 2 bets por partido
         match_bets_count = 0
         groups_used = set()
 
@@ -1376,24 +1353,6 @@ def run_prediction_pipeline():
             if mkt == "away_win":
                 continue
 
-            # ── Mercados desactivados individualmente ────────────────
-            # Kill-switch basado en auditoría 17-may-2026 sobre 746 bets
-            # resueltas. Markets con n>=10 y ROI negativo persistente:
-            #   away_win:      -32% ROI (n=53)
-            #   btts:          -21% ROI (n=38)
-            #   under25:       -37% ROI (n=29)
-            #   dnb_home:      -20% ROI (n=16) — bloqueado original
-            #   ah_home_+0.0:  -65% ROI (n=13) — pk no calibrado
-            # Resultado proyectado: ROI global pasa de -7% a aprox +2%
-            # eliminando ~140 bets perdedoras sin tocar las ganadoras.
-            # Si en 30 días aparece data nueva que recalibra alguno,
-            # revivir con threshold alto y monitorear.
-            _BLOCKED_MARKETS = {
-                "dnb_home",
-                "away_win",
-                "btts",
-                "under25",
-            }
             if mkt in _BLOCKED_MARKETS:
                 continue
             # AH pk (handicap +0.0 / 0.0): bloqueado por -65% ROI persistente
@@ -1427,7 +1386,6 @@ def run_prediction_pipeline():
             # fallback al grupo AH (ah_home_fav/pk/dog) antes del default.
             _min_edge = MIN_EDGE_BY_MARKET.get(mkt)
             if _min_edge is None:
-                from src.models.calibration_monitor import _ah_group
                 grp = _ah_group(mkt)
                 if grp is not None:
                     _min_edge = MIN_EDGE_BY_MARKET.get(grp, MIN_EDGE)
@@ -1536,7 +1494,6 @@ def run_prediction_pipeline():
     #
     # Factor:  1 apuesta → 100%  |  2 apuestas → 71% c/u  |  3 → 58% c/u
 
-    from collections import Counter
     match_counts = Counter(b["match"] for b in all_bets)
     corr_adjusted = 0
     for b in all_bets:
@@ -1560,8 +1517,6 @@ def run_prediction_pipeline():
     # o donde la prob del modelo es > 2x la probabilidad implícita del mercado.
     # Estas bets casi siempre pierden porque no hay datos reales detrás.
 
-    MAX_RELIABLE_EDGE = 0.499
-    MAX_PROB_RATIO    = 2.0
     suspicious_removed = 0
     clean_bets = []
     for b in all_bets:
@@ -1638,8 +1593,6 @@ def run_prediction_pipeline():
     # huella es data/paper_trades.jsonl. Esto garantiza que durante el
     # periodo de validación del Mundial 2026 el modelo pueda predecir sin
     # contaminar bankroll, ROI ni CLV.
-    from config.settings import PAPER_ONLY_LEAGUES
-
     real_bets  = []
     paper_bets = []
     for b in all_bets:

@@ -114,6 +114,40 @@ def update_bet_results():
         print("No bets to update")
         return
 
+    # ── Pre-carga de resultados (elimina N+1 queries) ─────────────────────
+    # En vez de hacer 1-5 pd.read_sql() por bet, traemos TODOS los partidos
+    # relevantes en UNA sola query y resolvemos en memoria.
+    _min_date = (df["match_date"].min() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    _max_date = (df["match_date"].max() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    _all_matches = pd.read_sql(text("""
+        SELECT LOWER(home_team) AS home_team_l,
+               LOWER(away_team) AS away_team_l,
+               date,
+               home_goals, away_goals,
+               home_corners, away_corners,
+               home_yellow, away_yellow,
+               home_goals_ht, away_goals_ht,
+               home_goals_h2, away_goals_h2,
+               home_shots_target, away_shots_target
+        FROM matches
+        WHERE date BETWEEN :d_from AND :d_to
+    """), engine, params={"d_from": _min_date, "d_to": _max_date})
+
+    def _lookup_match(home_l: str, away_l: str, match_date) -> pd.Series | None:
+        """Devuelve la fila de matches más cercana a match_date (±1 día)."""
+        md = pd.to_datetime(match_date)
+        cands = _all_matches[
+            (_all_matches["home_team_l"] == home_l) &
+            (_all_matches["away_team_l"] == away_l)
+        ].copy()
+        if cands.empty:
+            return None
+        cands["_dist"] = (pd.to_datetime(cands["date"]) - md).abs()
+        cands = cands[cands["_dist"] <= pd.Timedelta(days=1)]
+        if cands.empty:
+            return None
+        return cands.sort_values("_dist").iloc[0]
+
     updated = 0
 
     with engine.begin() as conn:
@@ -140,31 +174,14 @@ def update_bet_results():
                 # =========================
                 # FETCH RESULT (NORMALIZED)
                 # =========================
-                # Fix: rango ±1 día (antes ±3d/+1d causaba tomar el partido
-                # EQUIVOCADO en ligas con fixture congestion — ej. Premier
-                # League juega sábado Y miércoles la misma semana).
                 match_date = pd.to_datetime(row["match_date"])
-                result_df = pd.read_sql(text("""
-                    SELECT home_goals, away_goals
-                    FROM matches
-                    WHERE LOWER(home_team) = :home
-                    AND LOWER(away_team) = :away
-                    AND date BETWEEN :date_from AND :date_to
-                    ORDER BY ABS(EXTRACT(EPOCH FROM (date::timestamp - CAST(:exact_date AS timestamp)))) ASC
-                    LIMIT 1
-                """), engine, params={
-                    "home":       home.lower(),
-                    "away":       away.lower(),
-                    "date_from":  (match_date - pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-                    "date_to":    (match_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-                    "exact_date": match_date.strftime("%Y-%m-%d"),
-                })
+                _mrow = _lookup_match(home.lower(), away.lower(), match_date)
 
-                if result_df.empty:
+                if _mrow is None:
                     continue
 
-                hg = result_df.iloc[0]["home_goals"]
-                ag = result_df.iloc[0]["away_goals"]
+                hg = _mrow["home_goals"]
+                ag = _mrow["away_goals"]
 
                 # Fix: validar NULL antes de comparar (antes causaba TypeError
                 # silencioso → bet quedaba "pending" indefinidamente → profit
@@ -222,34 +239,18 @@ def update_bet_results():
                     outcome = "win"
 
                 elif market.startswith("shots_over_") or market.startswith("shots_under_"):
-                    match_date = pd.to_datetime(row["match_date"])
-                    shots_df = pd.read_sql(text("""
-                        SELECT home_shots_target, away_shots_target
-                        FROM matches
-                        WHERE LOWER(home_team) = :home
-                        AND LOWER(away_team) = :away
-                        AND date BETWEEN :date_from AND :date_to
-                        ORDER BY date DESC
-                        LIMIT 1
-                    """), engine, params={
-                        "home":      home.lower(),
-                        "away":      away.lower(),
-                        "date_from": (match_date - pd.Timedelta(days=3)).strftime("%Y-%m-%d"),
-                        "date_to":   (match_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-                    })
-                    if not shots_df.empty:
-                        hs = shots_df.iloc[0]["home_shots_target"]
-                        as_ = shots_df.iloc[0]["away_shots_target"]
-                        if hs is not None and as_ is not None:
-                            total_shots = float(hs) + float(as_)
-                            line = float(market.split("_")[-1])
-                            if market.startswith("shots_over_"):
-                                outcome = "win" if total_shots > line else "loss"
-                            else:
-                                outcome = "win" if total_shots <= line else "loss"
+                    hs = _mrow.get("home_shots_target") if _mrow is not None else None
+                    as_ = _mrow.get("away_shots_target") if _mrow is not None else None
+                    if hs is not None and as_ is not None:
+                        total_shots = float(hs) + float(as_)
+                        line = float(market.split("_")[-1])
+                        if market.startswith("shots_over_"):
+                            outcome = "win" if total_shots > line else "loss"
                         else:
-                            outcome = "unresolved"
-                            profit  = 0.0
+                            outcome = "win" if total_shots <= line else "loss"
+                    else:
+                        outcome = "unresolved"
+                        profit  = 0.0
 
                 elif market == "dnb_home":
                     if hg > ag:
@@ -321,55 +322,22 @@ def update_bet_results():
                         # que fallar silenciosamente
 
                 elif market.startswith("cards_over_") or market.startswith("cards_under_"):
-                    match_date = pd.to_datetime(row["match_date"])
-                    cards_df = pd.read_sql(text("""
-                        SELECT home_yellow, away_yellow
-                        FROM matches
-                        WHERE LOWER(home_team) = :home
-                        AND LOWER(away_team) = :away
-                        AND date BETWEEN :date_from AND :date_to
-                        ORDER BY date DESC
-                        LIMIT 1
-                    """), engine, params={
-                        "home":      home.lower(),
-                        "away":      away.lower(),
-                        "date_from": (match_date - pd.Timedelta(days=3)).strftime("%Y-%m-%d"),
-                        "date_to":   (match_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-                    })
-                    if not cards_df.empty:
-                        hy = cards_df.iloc[0]["home_yellow"]
-                        ay = cards_df.iloc[0]["away_yellow"]
-                        if hy is not None and ay is not None:
-                            total_cards = float(hy) + float(ay)
-                            line = float(market.split("_")[-1])
-                            if market.startswith("cards_over_"):
-                                outcome = "win" if total_cards > line else "loss"
-                            else:
-                                outcome = "win" if total_cards <= line else "loss"
+                    hy = _mrow.get("home_yellow") if _mrow is not None else None
+                    ay = _mrow.get("away_yellow") if _mrow is not None else None
+                    if hy is not None and ay is not None:
+                        total_cards = float(hy) + float(ay)
+                        line = float(market.split("_")[-1])
+                        if market.startswith("cards_over_"):
+                            outcome = "win" if total_cards > line else "loss"
                         else:
-                            outcome = "unresolved"
-                            profit  = 0.0
+                            outcome = "win" if total_cards <= line else "loss"
+                    else:
+                        outcome = "unresolved"
+                        profit  = 0.0
 
                 elif market in ("h1_home", "h1_draw", "h1_away",
                                 "h2_home", "h2_draw", "h2_away"):
-                    # Requiere columnas de goles por tiempo en la tabla matches
-                    match_date = pd.to_datetime(row["match_date"])
-                    ht_df = pd.read_sql(text("""
-                        SELECT home_goals_ht, away_goals_ht,
-                               home_goals_h2, away_goals_h2
-                        FROM matches
-                        WHERE LOWER(home_team) = :home
-                        AND LOWER(away_team) = :away
-                        AND date BETWEEN :date_from AND :date_to
-                        ORDER BY date DESC
-                        LIMIT 1
-                    """), engine, params={
-                        "home":      home.lower(),
-                        "away":      away.lower(),
-                        "date_from": (match_date - pd.Timedelta(days=3)).strftime("%Y-%m-%d"),
-                        "date_to":   (match_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-                    })
-                    if ht_df.empty:
+                    if _mrow is None:
                         outcome = "unresolved"
                         profit  = 0.0
                     else:
@@ -377,8 +345,8 @@ def update_bet_results():
                         side = "_".join(market.split("_")[1:])  # "home", "draw", "away"
                         col_h = "home_goals_ht" if half == "h1" else "home_goals_h2"
                         col_a = "away_goals_ht" if half == "h1" else "away_goals_h2"
-                        gh = ht_df.iloc[0][col_h]
-                        ga = ht_df.iloc[0][col_a]
+                        gh = _mrow.get(col_h)
+                        ga = _mrow.get(col_a)
                         if gh is None or ga is None or pd.isna(gh) or pd.isna(ga):
                             outcome = "unresolved"
                             profit  = 0.0
@@ -392,35 +360,18 @@ def update_bet_results():
                                 outcome = "win"
 
                 elif market.startswith("corners_over_") or market.startswith("corners_under_"):
-                    # Resolver bets de córners usando home_corners + away_corners de matches
-                    match_date = pd.to_datetime(row["match_date"])
-                    corners_df = pd.read_sql(text("""
-                        SELECT home_corners, away_corners
-                        FROM matches
-                        WHERE LOWER(home_team) = :home
-                        AND LOWER(away_team) = :away
-                        AND date BETWEEN :date_from AND :date_to
-                        ORDER BY date DESC
-                        LIMIT 1
-                    """), engine, params={
-                        "home":      home.lower(),
-                        "away":      away.lower(),
-                        "date_from": (match_date - pd.Timedelta(days=3)).strftime("%Y-%m-%d"),
-                        "date_to":   (match_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-                    })
-                    if not corners_df.empty:
-                        hc = corners_df.iloc[0]["home_corners"]
-                        ac = corners_df.iloc[0]["away_corners"]
-                        if hc is not None and ac is not None:
-                            total_corners = float(hc) + float(ac)
-                            line = float(market.split("_")[-1])
-                            if market.startswith("corners_over_"):
-                                outcome = "win" if total_corners > line else "loss"
-                            else:
-                                outcome = "win" if total_corners <= line else "loss"
+                    hc = _mrow.get("home_corners") if _mrow is not None else None
+                    ac = _mrow.get("away_corners") if _mrow is not None else None
+                    if hc is not None and ac is not None:
+                        total_corners = float(hc) + float(ac)
+                        line = float(market.split("_")[-1])
+                        if market.startswith("corners_over_"):
+                            outcome = "win" if total_corners > line else "loss"
                         else:
-                            outcome = "unresolved"
-                            profit  = 0.0
+                            outcome = "win" if total_corners <= line else "loss"
+                    else:
+                        outcome = "unresolved"
+                        profit  = 0.0
 
                 if outcome == "win":
                     profit = stake * (odds - 1)
@@ -486,32 +437,16 @@ def update_bet_results():
                     away = normalize_team(away)
                     match_date = pd.to_datetime(row["match_date"])
                     required = _market_required_match_fields(row["market"])
-                    # Fix: rango ±1 día (antes ±3 días tomaba partido incorrecto)
-                    result_df = pd.read_sql(text(f"""
-                        SELECT {", ".join(required)}
-                        FROM matches
-                        WHERE LOWER(home_team) = :home
-                        AND LOWER(away_team) = :away
-                        AND date BETWEEN :date_from AND :date_to
-                        ORDER BY ABS(EXTRACT(EPOCH FROM (date::timestamp - CAST(:exact_date AS timestamp)))) ASC
-                        LIMIT 1
-                    """), engine, params={
-                        "home":       home.lower(),
-                        "away":       away.lower(),
-                        "date_from":  (match_date - pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-                        "date_to":    (match_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-                        "exact_date": match_date.strftime("%Y-%m-%d"),
-                    })
-                    if result_df.empty:
+                    _ur_row = _lookup_match(home.lower(), away.lower(), match_date)
+                    if _ur_row is None:
                         continue
                     # Validar que TODOS los campos requeridos por este market
                     # estén presentes — no sólo goles. Sin esto un bet de
                     # corners se re-marcaba como pending cuando home_goals
                     # existían pero home_corners era NULL, generando el
                     # loop infinito que costaba tokens.
-                    match_row = result_df.iloc[0]
                     fields_ready = all(
-                        match_row[f] is not None and not pd.isna(match_row[f])
+                        _ur_row.get(f) is not None and not pd.isna(_ur_row.get(f))
                         for f in required
                     )
                     if not fields_ready:
