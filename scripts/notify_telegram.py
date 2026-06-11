@@ -743,12 +743,21 @@ def send_tomorrow_preview():
         print(f"❌ Error leyendo bets de mañana: {e}")
         return
 
+    paper_section = _format_paper_bets_section(tomorrow)
+
     if bets.empty:
         print("Sin bets para mañana")
-        msg = (
-            f"🌙 <b>PICKS DE MAÑANA — {tomorrow.strftime('%d/%m/%Y')}</b>\n\n"
-            "Sin value bets detectadas para mañana."
-        )
+        if paper_section:
+            msg = (
+                f"🌙 <b>PICKS DE MAÑANA — {tomorrow.strftime('%d/%m/%Y')}</b>\n\n"
+                "Sin value bets confiables para apostar mañana."
+                f"\n{paper_section}"
+            )
+        else:
+            msg = (
+                f"🌙 <b>PICKS DE MAÑANA — {tomorrow.strftime('%d/%m/%Y')}</b>\n\n"
+                "Sin value bets detectadas para mañana."
+            )
         send_message(msg)
         _set_last_picks_shown(0)
         return
@@ -759,11 +768,15 @@ def send_tomorrow_preview():
         "<i>Prepara tus apuestas esta noche</i>"
     )
     msg, n_sent = _build_bets_by_league(bets, header)
+    if paper_section:
+        msg = msg + "\n" + paper_section
     ok  = send_message(msg)
 
     if ok:
         _set_last_picks_shown(n_sent)
         print(f"✅ Preview de mañana enviado ({n_sent} bets mostradas de {len(bets)} totales)")
+        if paper_section:
+            print("📝 Sección [PAPER] añadida al preview (Mundial / paper-only).")
     else:
         print("❌ No se pudo enviar preview a Telegram")
 

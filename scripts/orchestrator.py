@@ -109,11 +109,14 @@ def _check_world_cup_activation():
     Modifica la lista en memoria — no cambia settings.py en disco.
     Envía notificación Telegram la primera vez que se activa.
     """
-    from datetime import date
+    from datetime import date, timedelta
     WORLD_CUP_START = date(2026, 6, 11)
     WORLD_CUP_KEY   = "soccer_fifa_world_cup"
 
-    if date.today() < WORLD_CUP_START:
+    # Activar UN DÍA ANTES para que el pipeline evening del 10-jun
+    # pueda fetchear odds y generar paper-picks del día 1 del Mundial,
+    # que llegan al usuario en el preview nocturno de "picks de mañana".
+    if date.today() < WORLD_CUP_START - timedelta(days=1):
         return   # aún no es momento
 
     import config.settings as _settings
