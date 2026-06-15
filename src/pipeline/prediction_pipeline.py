@@ -155,6 +155,8 @@ OVER35_ODDS  = 2.20
 UNDER35_ODDS = 1.65
 
 # Edge mínimo por mercado (backtest 120d, 585 bets — conservador, no el óptimo absoluto)
+# ah_home_fav subido 0.15→0.20 (15-jun-2026): 6 bets en 90d con 0 wins (-100% ROI)
+# pese al threshold previo de 0.15 — el modelo sobreestima favoritos AH consistentemente.
 MIN_EDGE_BY_MARKET = {
     "home_win":     0.05,
     "over25":       0.05,
@@ -165,10 +167,10 @@ MIN_EDGE_BY_MARKET = {
     "dnb_away":     0.08,
     "dc_1x":        0.06,
     "dc_x2":        0.06,
-    "ah_home_fav":  0.15,
+    "ah_home_fav":  0.20,
     "ah_home_pk":   0.10,
     "ah_home_dog":  0.08,
-    "ah_away_fav":  0.15,
+    "ah_away_fav":  0.20,
     "ah_away_pk":   0.06,
     "ah_away_dog":  0.08,
 }
@@ -180,7 +182,11 @@ TOUGH_LEAGUES = {
     "soccer_france_ligue_one",
 }
 
-# Ligas bloqueadas: ROI negativo consistente
+# Ligas bloqueadas: ROI negativo consistente en walk-forward + producción
+# Auditoría 15-jun-2026 sobre 830 bets reales (90d):
+#   soccer_efl_champ:          67 bets, -31.9% ROI, -10.34u → BLOQUEADA
+#   soccer_epl:                43 bets, -44.6% ROI,  -8.69u → BLOQUEADA
+#   soccer_greece_super_league:13 bets, -49.2% ROI,  -4.17u → BLOQUEADA
 BLOCKED_LEAGUES = {
     "soccer_fifa_world_cup_qualifiers_europe",
     "soccer_uefa_europa_league",
@@ -190,6 +196,9 @@ BLOCKED_LEAGUES = {
     "soccer_japan_j_league",
     "soccer_turkey_super_league",
     "soccer_norway_eliteserien",
+    "soccer_efl_champ",
+    "soccer_epl",
+    "soccer_greece_super_league",
 }
 
 # Grupos mutuamente excluyentes por partido
@@ -1355,8 +1364,12 @@ def run_prediction_pipeline():
 
             if mkt in _BLOCKED_MARKETS:
                 continue
-            # AH pk (handicap +0.0 / 0.0): bloqueado por -65% ROI persistente
+            # AH pk (+0.0 / 0.0): bloqueado por -65% ROI persistente
             if mkt.startswith("ah_") and ("+0.0" in mkt or mkt.endswith("_0.0")):
+                continue
+            # corners_over: 30 bets, -20.2% ROI (15-jun-2026) — modelo sobreestima córners
+            # cards_over:    7 bets, -84.7% ROI — sin edge real en mercado de tarjetas
+            if mkt.startswith("corners_over_") or mkt.startswith("cards_over_"):
                 continue
 
             # ── Mejora 4: Sweet spots de odds por mercado ────────────
