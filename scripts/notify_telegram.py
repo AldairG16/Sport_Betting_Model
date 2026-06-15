@@ -504,12 +504,17 @@ def format_bets_message(bets: pd.DataFrame) -> tuple:
 PAPER_LOG_PATH = Path(__file__).resolve().parents[1] / "data" / "paper_trades.jsonl"
 
 
-def _read_paper_trades_for_date(target_date) -> list:
+def _read_paper_trades_for_date(target_date, days_ahead: int = 0) -> list:
     """
     Lee data/paper_trades.jsonl y filtra entradas cuyo match_date (UTC) caiga
-    en `target_date` (interpretado en USER_TIMEZONE).
+    entre `target_date` y `target_date + days_ahead` (en USER_TIMEZONE).
+
+    days_ahead=0  → solo el día exacto (comportamiento original)
+    days_ahead=2  → target_date + los 2 días siguientes (útil para picks de Mundial
+                    que se generan 1-3 días antes del partido)
     Devuelve lista de dicts (puede ser vacía).
     """
+    from datetime import timedelta
     if not PAPER_LOG_PATH.exists():
         return []
 
@@ -528,7 +533,9 @@ def _read_paper_trades_for_date(target_date) -> list:
         print(f"⚠️  No se pudo leer paper trades log: {e}")
         return []
 
-    # Filtrar por fecha local del usuario
+    date_to = target_date + timedelta(days=days_ahead)
+
+    # Filtrar por rango de fechas locales del usuario
     out = []
     seen = set()      # (match, market) — evita duplicados de reruns del pipeline
     tz = ZoneInfo(USER_TIMEZONE)
@@ -543,7 +550,7 @@ def _read_paper_trades_for_date(target_date) -> list:
             local_date = dt.astimezone(tz).date()
         except Exception:
             continue
-        if local_date != target_date:
+        if not (target_date <= local_date <= date_to):
             continue
         key = (r.get("match", ""), r.get("market", ""))
         if key in seen:
@@ -556,12 +563,13 @@ def _read_paper_trades_for_date(target_date) -> list:
     return out
 
 
-def _format_paper_bets_section(target_date) -> str:
+def _format_paper_bets_section(target_date, days_ahead: int = 0) -> str:
     """
-    Construye un bloque Telegram con las apuestas paper-trading del día.
+    Construye un bloque Telegram con las apuestas paper-trading.
+    days_ahead=0 → solo el día exacto; days_ahead=2 → rango de 3 días.
     Devuelve "" si no hay paper trades.
     """
-    paper_rows = _read_paper_trades_for_date(target_date)
+    paper_rows = _read_paper_trades_for_date(target_date, days_ahead=days_ahead)
     if not paper_rows:
         return ""
 
@@ -672,7 +680,9 @@ def notify_best_bets():
     # Paper-trading section (Mundial 2026, etc.) — se agrega aunque NO haya
     # confiables reales. Usuario debe ver predicciones del Mundial aunque
     # estén desactivadas para apuesta real.
-    paper_section = _format_paper_bets_section(today)
+    # days_ahead=2: muestra paper picks de hoy + mañana + pasado (ventana de predicción)
+    # Necesario para el Mundial — los picks se generan 1-3 días antes del partido.
+    paper_section = _format_paper_bets_section(today, days_ahead=2)
 
     if bets.empty:
         print("⚠️  Sin value bets para hoy")
