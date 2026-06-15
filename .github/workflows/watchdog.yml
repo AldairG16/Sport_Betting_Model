@@ -1,0 +1,37 @@
+name: Watchdog — Pipeline Health Monitor
+
+# Corre cada 6 horas en minutos off-peak para evitar throttling de GH Actions.
+# Si el morning (12:00 UTC) o evening (13:30 UTC) no corrieron, el watchdog
+# de las 18:00 UTC lo detecta y manda alerta a Telegram.
+#
+# Regla: silencio = salud. Solo envía mensaje cuando algo está mal.
+
+on:
+  schedule:
+    - cron: '17 0,6,12,18 * * *'   # 00:17 / 06:17 / 12:17 / 18:17 UTC
+  workflow_dispatch:                 # permite lanzar manualmente para testear
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run watchdog
+        env:
+          DB_URL:               ${{ secrets.DB_URL }}
+          TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:     ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/watchdog.py
