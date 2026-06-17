@@ -1161,10 +1161,15 @@ def run_prediction_pipeline():
         # Mejora 3: Corrección global de sobrecalibración.
         # Liga del partido — usado para calibración específica (Mundial/Euro/etc.)
         _row_league = row.get("league", row.get("sport_key", ""))
+        _is_paper_match = _row_league in PAPER_ONLY_LEAGUES
 
         for market in list(probabilities.keys()):
-            # Paso 1: corrección global de sobreconfianza
-            probabilities[market] = probabilities[market] * GLOBAL_CALIBRATION
+            # Paso 1: corrección global de sobreconfianza.
+            # Para ligas paper-only (Mundial, etc.) NO aplicamos el descuento:
+            # está calibrado sobre datos de clubes europeos, no selecciones nacionales.
+            # El downside de sobre-calibración en papel es cero.
+            if not _is_paper_match:
+                probabilities[market] = probabilities[market] * GLOBAL_CALIBRATION
 
             # Paso 2: calibración por mercado.
             # MEJORA #5 — apply_calibration usa isotonic regression (curva
@@ -1318,6 +1323,7 @@ def run_prediction_pipeline():
         # pasar bets con solo 5% de edge real → bucket 15-20% edge tenía
         # -23.7% ROI (overfit). Ahora filtramos sobre edge_market real.
         _league = row.get("league", row.get("sport_key", ""))
+        _is_paper = _league in PAPER_ONLY_LEAGUES
         if _league in BLOCKED_LEAGUES:
             continue
 
@@ -1358,18 +1364,22 @@ def run_prediction_pipeline():
             if mkt in _DISABLED_MARKETS:
                 continue
 
-            # ── Mejora 1: Bloquear away_win (27% WR, -36.5% ROI) ────
-            if mkt == "away_win":
-                continue
-
-            if mkt in _BLOCKED_MARKETS:
-                continue
-            # AH pk (+0.0 / 0.0): bloqueado por -65% ROI persistente
+            # ── Mercados bloqueados por ROI negativo en clubes ────────
+            # Para paper-only (Mundial): estos bloqueos se basan en datos de
+            # clubes europeos y no aplican a selecciones nacionales en sede neutral.
+            if not _is_paper:
+                if mkt == "away_win":
+                    continue
+                if mkt in _BLOCKED_MARKETS:
+                    continue
+                if mkt.startswith("corners_over_") or mkt.startswith("cards_over_"):
+                    continue
+            else:
+                # En paper: solo bloquear mercados sin odds reales
+                if mkt in _DISABLED_MARKETS:
+                    continue
+            # AH pk (+0.0): bloqueado siempre, paper o no
             if mkt.startswith("ah_") and ("+0.0" in mkt or mkt.endswith("_0.0")):
-                continue
-            # corners_over: 30 bets, -20.2% ROI (15-jun-2026) — modelo sobreestima córners
-            # cards_over:    7 bets, -84.7% ROI — sin edge real en mercado de tarjetas
-            if mkt.startswith("corners_over_") or mkt.startswith("cards_over_"):
                 continue
 
             # ── Mejora 4: Sweet spots de odds por mercado ────────────
@@ -1409,13 +1419,17 @@ def run_prediction_pipeline():
             if _league in TOUGH_LEAGUES:
                 _min_edge = max(_min_edge, 0.07)
 
-            # 3) Bump por partido entre semana Lun-Mié (datos menos fiables)
-            if _midweek:
+            # 3) Bump midweek — no aplica a paper (WC juega cualquier día)
+            if _midweek and not _is_paper:
                 _min_edge *= 1.4
 
             if _edge_real < _min_edge:
                 continue
-            if bet["odds"] > MAX_ODDS:
+
+            # MAX_ODDS: en paper usamos 6.0 para capturar underdogs del Mundial
+            # (ej. France @5.35 sería bloqueada con el límite de clubes de 3.80)
+            _max_odds = 6.0 if _is_paper else MAX_ODDS
+            if bet["odds"] > _max_odds:
                 continue
 
             # ── Filtro de contradicción ───────────────────────────────
