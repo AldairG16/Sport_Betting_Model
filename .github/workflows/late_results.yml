@@ -17,7 +17,7 @@ on:
     - cron: '30 12 * * *'
   workflow_dispatch:
   push:
-    branches: [ master ]
+    branches: [ main ]
     paths: [ '.github/workflows/late_results.yml' ]
 
 # Si un run anterior se está ejecutando aún, lo cancelamos.

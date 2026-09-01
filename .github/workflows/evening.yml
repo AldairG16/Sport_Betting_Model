@@ -12,7 +12,7 @@ on:
     - cron: '30 13 * * *'
   workflow_dispatch:
   push:
-    branches: [ master ]
+    branches: [ main ]
     paths: [ '.github/workflows/evening.yml' ]
 
 jobs:

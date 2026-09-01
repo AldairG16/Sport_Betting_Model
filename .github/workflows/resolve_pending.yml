@@ -17,7 +17,7 @@ on:
     - cron: '0 4 * * *'
   workflow_dispatch:
   push:
-    branches: [ master ]
+    branches: [ main ]
     paths: [ '.github/workflows/resolve_pending.yml' ]
 
 concurrency:
