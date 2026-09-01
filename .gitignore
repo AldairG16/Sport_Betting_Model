@@ -2,6 +2,8 @@
 .env
 *.env.*
 credentials*.json
+# Plantilla sin valores — si debe viajar en el repo (`*.env.*` la atrapaba)
+!.env.example
 
 # ── Python ────────────────────────────────────────────
 __pycache__/
