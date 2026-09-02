@@ -1,0 +1,12 @@
+# ── Timezone support ──────────────────────────────────
+tzdata==2025.2
+python-dateutil==2.9.0.post0
+
+# ── Static audit (parsing de workflows) ───────────────
+# tools/audit/workflows.py lee .github/workflows/*.yml con yaml.safe_load.
+# Todos los workflows instalan con `pip install -r requirements.txt`, asi que
+# el pin tiene que vivir aqui o la auditoria semanal revienta en CI.
+PyYAML==6.0.3
+
+# ── Testing ────────────────────────────────────────────
+pytest==9.0.3
