@@ -1,0 +1,8 @@
+{
+  "frozen": true,
+  "input_sha256": "c4a46c340bf3a1f0224d05d9ae003b680af6d54831240c26da0be06b0502e685",
+  "output_sha256": "d33b2a2ce22a70b46f1ec7c0a841fbc2404969617af6fae8d4238af2bd91cf4b",
+  "created": "2026-09-02",
+  "hash_normalization": "CRLF->LF antes de hashear (core.autocrlf=true en Windows)",
+  "note": "Fixture dorado CONGELADO de forma permanente. NO regenerar: es la linea base que demuestra que una remediacion no cambio ninguna apuesta. Si un cambio de codigo mueve estos stakes, el test debe fallar y el cambio revisarse -- no se actualiza el fixture. Generado corriendo src.pipeline.bet_decision.decide_bets sobre golden_input.json con ah_group y frozen_kelly_stake de scripts/capture_golden_fixture.py."
+}

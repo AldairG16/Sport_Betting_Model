@@ -1,0 +1,50 @@
+[
+  {
+    "match": "Ajax vs PSV",
+    "market": "home_win",
+    "side": "home",
+    "stake": 1.99
+  },
+  {
+    "match": "Arsenal vs Chelsea",
+    "market": "ah_home_-0.5",
+    "side": "home",
+    "stake": 2.74
+  },
+  {
+    "match": "Arsenal vs Chelsea",
+    "market": "home_win",
+    "side": "home",
+    "stake": 1.63
+  },
+  {
+    "match": "Arsenal vs Chelsea",
+    "market": "over25",
+    "side": "over",
+    "stake": 1.89
+  },
+  {
+    "match": "Bayern vs Dortmund",
+    "market": "ah_away_+1.0",
+    "side": "away",
+    "stake": 1.61
+  },
+  {
+    "match": "Milan vs Inter",
+    "market": "ah_home_0.0",
+    "side": "home",
+    "stake": 2.21
+  },
+  {
+    "match": "Milan vs Inter",
+    "market": "away_win",
+    "side": "away",
+    "stake": 1.31
+  },
+  {
+    "match": "Milan vs Inter",
+    "market": "under25",
+    "side": "under",
+    "stake": 1.63
+  }
+]

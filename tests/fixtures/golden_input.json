@@ -1,0 +1,119 @@
+{
+  "_comment": "FIXTURE DORADO CONGELADO -- NO REGENERAR. Ver tests/fixtures/golden_manifest.json. Slate construido a mano para ejercitar: 1X2, over/under, BTTS, y dos llaves AH parametrizadas (ah_home_-0.5 -> ah_home_fav, ah_away_+1.0 -> ah_away_dog, ah_home_0.0 -> ah_home_pk). Dos bets estan por debajo de su umbral y DEBEN ser descartados (btts_yes y draw). max_total_pct fuerza el tope de exposicion total: la suma de stakes supera el maximo y el escalado se aplica a todos.",
+  "bankroll": 100.0,
+  "min_edge_default": 0.03,
+  "max_total_pct": 0.15,
+  "min_edge_by_market": {
+    "home_win": 0.04,
+    "away_win": 0.04,
+    "draw": 0.06,
+    "over25": 0.03,
+    "under25": 0.03,
+    "btts_yes": 0.05,
+    "ah_home_fav": 0.05,
+    "ah_home_pk": 0.035,
+    "ah_away_dog": 0.04
+  },
+  "scored": [
+    {
+      "match": "Arsenal vs Chelsea",
+      "market": "home_win",
+      "side": "home",
+      "odds": 2.1,
+      "prob": 0.52,
+      "edge": 0.092,
+      "edge_market": 0.04381,
+      "league": "soccer_epl"
+    },
+    {
+      "match": "Arsenal vs Chelsea",
+      "market": "over25",
+      "side": "over",
+      "odds": 1.95,
+      "prob": 0.56,
+      "edge": 0.092,
+      "edge_market": 0.047179,
+      "league": "soccer_epl"
+    },
+    {
+      "match": "Arsenal vs Chelsea",
+      "market": "ah_home_-0.5",
+      "side": "home",
+      "odds": 2.0,
+      "prob": 0.57,
+      "edge": 0.14,
+      "edge_market": 0.07,
+      "league": "soccer_epl"
+    },
+    {
+      "match": "Bayern vs Dortmund",
+      "market": "btts_yes",
+      "side": "yes",
+      "odds": 1.8,
+      "prob": 0.6,
+      "edge": 0.08,
+      "edge_market": 0.044444,
+      "league": "soccer_germany_bundesliga"
+    },
+    {
+      "match": "Bayern vs Dortmund",
+      "market": "draw",
+      "side": "draw",
+      "odds": 3.6,
+      "prob": 0.3,
+      "edge": 0.08,
+      "edge_market": 0.022222,
+      "league": "soccer_germany_bundesliga"
+    },
+    {
+      "match": "Bayern vs Dortmund",
+      "market": "ah_away_+1.0",
+      "side": "away",
+      "odds": 2.05,
+      "prob": 0.53,
+      "edge": 0.0865,
+      "edge_market": 0.042195,
+      "league": "soccer_germany_bundesliga"
+    },
+    {
+      "match": "Milan vs Inter",
+      "market": "under25",
+      "side": "under",
+      "odds": 2.2,
+      "prob": 0.5,
+      "edge": 0.1,
+      "edge_market": 0.045455,
+      "league": "soccer_italy_serie_a"
+    },
+    {
+      "match": "Milan vs Inter",
+      "market": "away_win",
+      "side": "away",
+      "odds": 2.5,
+      "prob": 0.44,
+      "edge": 0.1,
+      "edge_market": 0.04,
+      "league": "soccer_italy_serie_a"
+    },
+    {
+      "match": "Milan vs Inter",
+      "market": "ah_home_0.0",
+      "side": "home",
+      "odds": 1.9,
+      "prob": 0.58,
+      "edge": 0.102,
+      "edge_market": 0.053684,
+      "league": "soccer_italy_serie_a"
+    },
+    {
+      "match": "Ajax vs PSV",
+      "market": "home_win",
+      "side": "home",
+      "odds": 1.7,
+      "prob": 0.63,
+      "edge": 0.071,
+      "edge_market": 0.041765,
+      "league": "soccer_netherlands_eredivisie"
+    }
+  ]
+}
