@@ -467,29 +467,40 @@ def _hallazgos_sin_create(
 
 
 def _hallazgos_no_aditivos(cambios: list[SchemaChange]) -> list[Finding]:
-    """Alteraciones destructivas que exigen aprobacion explicita."""
-    hallazgos: list[Finding] = []
+    """Alteraciones destructivas que exigen aprobacion explicita.
 
+    Se agrupa por (tabla, operacion) y no por sitio: el ID de un hallazgo se
+    deriva de la evidencia sin rutas ni lineas, asi que dos sitios con el mismo
+    par colisionarian en un unico ID. Un `DROP COLUMN` repetido en dos archivos
+    es ademas un solo problema de esquema, listado con todos sus sitios.
+    """
+    agrupados: dict[tuple[str, str], list[SchemaChange]] = {}
     for cambio in cambios:
         if cambio.additive:
             continue
+        agrupados.setdefault((cambio.table, cambio.operation), []).append(cambio)
+
+    hallazgos: list[Finding] = []
+    for (tabla, operacion), sitios in sorted(agrupados.items()):
+        # Orden estable: el artefacto debe ser byte-identico entre corridas.
+        sitios = sorted(sitios, key=lambda c: (c.path, c.line))
+        plural = "" if len(sitios) == 1 else f" en {len(sitios)} sitios"
         hallazgos.append(
             Finding(
                 category=Category.SCHEMA_DRIFT,
-                severity=_SEVERIDAD_NO_ADITIVA.get(
-                    cambio.operation, Severity.S2
-                ),
+                severity=_SEVERIDAD_NO_ADITIVA.get(operacion, Severity.S2),
                 evidence=[
                     Evidence(
                         path=cambio.path,
                         line=cambio.line,
-                        key=f"{cambio.table}#{cambio.operation}",
+                        key=f"{tabla}#{operacion}",
                         quote=cambio.statement,
                     )
+                    for cambio in sitios
                 ],
                 impact=(
-                    f"Alteracion no aditiva ({cambio.operation}) sobre "
-                    f"`{cambio.table}`. Contra las ~79K filas historicas puede "
+                    f"Alteracion no aditiva ({operacion}) sobre "
+                    f"`{tabla}`{plural}. Contra las ~79K filas historicas puede "
                     "perder datos o romper lectores en caliente, y no es "
                     "reversible con un simple rollback del commit."
                 ),
