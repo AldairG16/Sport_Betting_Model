@@ -45,7 +45,13 @@ from tools.audit.rank import rank, risk_key, top_risks
 from tools.audit.registry import CheckSpec, all_checks
 from tools.audit.report import write_json, write_markdown
 
-__all__ = ["CHECKS_GATE", "build_run", "commit_sha", "main"]
+__all__ = [
+    "CHECKS_GATE",
+    "GateInvalido",
+    "build_run",
+    "commit_sha",
+    "main",
+]
 
 # El subconjunto barato del gate de CI. Son los dos defectos que un pull
 # request puede introducir y que rompen produccion de inmediato: un import
@@ -154,19 +160,35 @@ def _run_id(findings: list[Finding], sha: str) -> str:
 # Ejecucion
 # ---------------------------------------------------------------------------
 
+class GateInvalido(LookupError):
+    """El gate nombra checkers que el registro no conoce."""
+
+
 def _seleccionar(solo: tuple[str, ...] | None) -> list[CheckSpec]:
     """Checkers a ejecutar, siempre a partir del registro.
 
     Cuando `solo` esta definido se filtra el registro por nombre; no se
-    construye una lista aparte. Asi un checker del gate que se renombre
-    desaparece de forma ruidosa (queda vacio y el conteo lo delata) en vez
-    de que el gate siga apuntando a un fantasma.
+    construye una lista aparte. Pero filtrar no basta: si alguien renombra
+    un checker del gate, el filtro simplemente no lo encuentra, el gate
+    corre con un checker menos y CI sigue saliendo verde. Un gate que
+    encoje en silencio es peor que no tener gate, porque el equipo cree
+    estar protegido. Por eso un nombre del gate sin checker registrado es
+    un error duro: el build se cae aqui, no meses despues en produccion.
     """
     especificaciones = all_checks()
     if solo is None:
         return especificaciones
+
     permitidos = set(solo)
-    return [spec for spec in especificaciones if spec.name in permitidos]
+    seleccion = [spec for spec in especificaciones if spec.name in permitidos]
+
+    faltantes = sorted(permitidos - {spec.name for spec in especificaciones})
+    if faltantes:
+        raise GateInvalido(
+            "el gate nombra checkers que no existen en el registro: "
+            + ", ".join(faltantes)
+        )
+    return seleccion
 
 
 def build_run(
@@ -351,7 +373,16 @@ def main(argv: list[str] | None = None) -> int:
     load_all()
 
     if args.ci:
-        corrida = build_run(raiz, solo=CHECKS_GATE, timestamp=args.timestamp)
+        try:
+            corrida = build_run(
+                raiz, solo=CHECKS_GATE, timestamp=args.timestamp
+            )
+        except GateInvalido as error:
+            # Preferimos tumbar el build antes que correr un gate incompleto:
+            # un verde falso es la unica salida peor que un rojo.
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 2
+
         elapsed = time.perf_counter() - inicio
         violaciones = sorted(
             (f for f in corrida.findings if f.status == "open"),
@@ -365,7 +396,12 @@ def main(argv: list[str] | None = None) -> int:
                 f"({elapsed:.2f}s). Build bloqueado."
             )
             return 1
-        print(f"Gate de CI limpio ({elapsed:.2f}s).")
+        # Se nombra el subconjunto que corrio: un "limpio" sin decir que se
+        # reviso es indistinguible de un gate que no reviso nada.
+        print(
+            f"Gate de CI limpio ({elapsed:.2f}s) — "
+            f"{len(CHECKS_GATE)} checkers: {', '.join(CHECKS_GATE)}."
+        )
         return 0
 
     corrida = build_run(raiz, timestamp=args.timestamp)
