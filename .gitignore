@@ -41,3 +41,9 @@ orchestrator.lock
 
 # ── Claude Code workspace (personal) ─────────────────
 .claude/
+
+# ── Estado de Code Atelier (no pertenece al repo) ────
+# .pm-state/ es estado del process manager; blueprints/ son el spec,
+# plan y tasks que genera la herramienta al construir la rama `main`.
+.pm-state/
+blueprints/
