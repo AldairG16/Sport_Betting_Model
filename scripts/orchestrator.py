@@ -105,19 +105,32 @@ def _release_lock():
 
 def _check_world_cup_activation():
     """
-    Auto-activa soccer_fifa_world_cup en SPORT_KEYS si la fecha >= 2026-06-11.
+    Activa soccer_fifa_world_cup en SPORT_KEYS solo MIENTRAS dura el torneo.
     Modifica la lista en memoria — no cambia settings.py en disco.
     Envía notificación Telegram la primera vez que se activa.
     """
     from datetime import date, timedelta
     WORLD_CUP_START = date(2026, 6, 11)
+    WORLD_CUP_END   = date(2026, 7, 19)   # final del Mundial 2026
     WORLD_CUP_KEY   = "soccer_fifa_world_cup"
+
+    hoy = date.today()
 
     # Activar UN DÍA ANTES para que el pipeline evening del 10-jun
     # pueda fetchear odds y generar paper-picks del día 1 del Mundial,
     # que llegan al usuario en el preview nocturno de "picks de mañana".
-    if date.today() < WORLD_CUP_START - timedelta(days=1):
+    if hoy < WORLD_CUP_START - timedelta(days=1):
         return   # aún no es momento
+
+    # Y DESACTIVAR al terminar. Esta guarda faltaba: la version original solo
+    # tenia fecha de inicio, asi que desde el 10-jun-26 cada corrida seguia
+    # metiendo la key en SPORT_KEYS. `update_upcoming_matches` itera
+    # SPORT_KEYS y pide odds por liga (`log_credits` contabiliza una por
+    # sport), de modo que tras la final del 19-jul se siguieron gastando
+    # creditos de The Odds API pidiendo cuotas de un torneo terminado.
+    # Margen de un dia para que el evening del dia de la final resuelva.
+    if hoy > WORLD_CUP_END + timedelta(days=1):
+        return   # el torneo termino
 
     import config.settings as _settings
     if WORLD_CUP_KEY not in _settings.SPORT_KEYS:
