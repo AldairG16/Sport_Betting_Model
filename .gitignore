@@ -1,0 +1,53 @@
+# ── Secrets (NUNCA commitear) ─────────────────────────
+.env
+*.env.*
+credentials*.json
+# Plantilla sin valores — si debe viajar en el repo (`*.env.*` la atrapaba,
+# porque el `*` inicial casa con cadena vacia).
+!.env.example
+
+# ── Python ────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.pkl
+.pytest_cache/
+
+# ── Salida del auditor (se regenera con `python -m tools.audit`) ──
+# El directorio se conserva via audits/.gitkeep; sus artefactos no.
+audits/latest.json
+audits/latest.md
+
+# ── Estado del process manager (auto-generado) ───────
+.pm-state/
+
+# ── Data (pesado, se regenera) ────────────────────────
+data/raw/*.csv
+data/api_cache.json
+data/dc_params.json
+
+# ── Logs ──────────────────────────────────────────────
+logs/
+*.log
+
+# ── IDE / OS ──────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ── DB backups ────────────────────────────────────────
+data/*.dump
+data/*.sql
+
+# ── Orchestrator lock ─────────────────────────────────
+orchestrator.lock
+
+# ── Claude Code workspace (personal) ─────────────────
+.claude/
