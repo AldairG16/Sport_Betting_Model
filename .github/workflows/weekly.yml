@@ -1,13 +1,19 @@
 name: Weekly Pipeline
 
+# Sin `schedule:` ni `push:` A PROPOSITO mientras esta rama este incompleta.
+#
+# GitHub solo ejecuta `schedule` desde la rama por defecto, que es `main`. Un
+# `- cron: '0 13 * * 1'` aqui haria que cada lunes 13:00 UTC se corriera
+# `orchestrator.py --mode weekly` contra la base de PRODUCCION desde este
+# arbol, al que todavia le faltan `scripts/clv_audit.py` y los archivos de
+# `data/`. Lo mismo vale para el `push:` con `paths: [weekly.yml]`: editar
+# este archivo bastaria para lanzar esa corrida.
+#
+# El weekly de produccion se sigue disparando desde `master`, que si tiene el
+# arbol completo. Restaurar ambos triggers cuando esta rama pueda correr el
+# pipeline entera — el `schedule` era `0 13 * * 1`.
 on:
-  schedule:
-    # Lunes 07:00 AM Mexico City (UTC-6) = 13:00 UTC
-    - cron: '0 13 * * 1'
   workflow_dispatch:
-  push:
-    branches: [ main ]
-    paths: [ '.github/workflows/weekly.yml' ]
 
 jobs:
   weekly:
