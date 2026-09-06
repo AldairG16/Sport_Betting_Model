@@ -9,12 +9,13 @@ name: Late Results Retry
 # el resumen ya enviado (es trabajo silencioso de housekeeping).
 
 on:
-  schedule:
-    # 00:00 MX (06:00 UTC)  — atrapa partidos que terminaron 22:00-23:30 MX
-    - cron: '0 6 * * *'
-    # 06:30 MX (12:30 UTC)  — atrapa partidos asiáticos del día anterior
-    #                         y corners/cards de Europa que ya sincronizó fbdata
-    - cron: '30 12 * * *'
+  # Sin `schedule:` A PROPOSITO. Las corridas de produccion las dispara un
+  # agente externo por `workflow_dispatch` contra `master` (todos los runs
+  # historicos son workflow_dispatch, ninguno schedule). Al pasar `master` a
+  # rama por defecto, un bloque `schedule:` aqui haria que GitHub disparara
+  # ADEMAS por su cuenta: dos corridas del mismo slate, el doble de creditos
+  # de API y dos pasadas escribiendo apuestas.
+  # Para volver a los crons de GitHub hay que apagar antes ese dispatcher.
   workflow_dispatch:
   push:
     branches: [ master ]

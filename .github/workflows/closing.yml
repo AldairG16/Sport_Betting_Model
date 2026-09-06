@@ -1,9 +1,13 @@
 name: Closing Odds Pipeline
 
 on:
-  schedule:
-    # 12:00 PM Mexico City (UTC-6) = 18:00 UTC
-    - cron: '0 18 * * *'
+  # Sin `schedule:` A PROPOSITO. Las corridas de produccion las dispara un
+  # agente externo por `workflow_dispatch` contra `master` (todos los runs
+  # historicos son workflow_dispatch, ninguno schedule). Al pasar `master` a
+  # rama por defecto, un bloque `schedule:` aqui haria que GitHub disparara
+  # ADEMAS por su cuenta: dos corridas del mismo slate, el doble de creditos
+  # de API y dos pasadas escribiendo apuestas.
+  # Para volver a los crons de GitHub hay que apagar antes ese dispatcher.
   workflow_dispatch:
   push:
     branches: [ master ]

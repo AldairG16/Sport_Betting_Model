@@ -1,15 +1,13 @@
 name: Evening Pipeline
 
 on:
-  schedule:
-    # 07:30 AM Mexico City (UTC-6) = 13:30 UTC.
-    # Movido del 21:00 MX original (18-may-2026) porque football-data.co.uk
-    # sube córners/tarjetas con 24-36h de lag → el evening previo cerraba
-    # con 8-10 bets pending "esperando data". A las 07:30 MX fbdata ya
-    # actualizó (corre ~06:00 UTC) y resolve_pending (06:30 MX) ya pasó,
-    # así el resumen llega COMPLETO con wins/losses resueltos.
-    # Trade-off: te enterás del ROI del día anterior 10h más tarde.
-    - cron: '30 13 * * *'
+  # Sin `schedule:` A PROPOSITO. Las corridas de produccion las dispara un
+  # agente externo por `workflow_dispatch` contra `master` (todos los runs
+  # historicos son workflow_dispatch, ninguno schedule). Al pasar `master` a
+  # rama por defecto, un bloque `schedule:` aqui haria que GitHub disparara
+  # ADEMAS por su cuenta: dos corridas del mismo slate, el doble de creditos
+  # de API y dos pasadas escribiendo apuestas.
+  # Para volver a los crons de GitHub hay que apagar antes ese dispatcher.
   workflow_dispatch:
   push:
     branches: [ master ]

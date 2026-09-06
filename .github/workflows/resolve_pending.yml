@@ -10,11 +10,13 @@ name: Resolve Pending Bets
 # Cap: 30 partidos por corrida (~$0.90 max).
 
 on:
-  schedule:
-    # 10:00 MX (16:00 UTC) — después que fbdata.co.uk sincronizó la noche
-    - cron: '0 16 * * *'
-    # 22:00 MX (04:00 UTC siguiente) — atrapa partidos asiáticos del día
-    - cron: '0 4 * * *'
+  # Sin `schedule:` A PROPOSITO. Las corridas de produccion las dispara un
+  # agente externo por `workflow_dispatch` contra `master` (todos los runs
+  # historicos son workflow_dispatch, ninguno schedule). Al pasar `master` a
+  # rama por defecto, un bloque `schedule:` aqui haria que GitHub disparara
+  # ADEMAS por su cuenta: dos corridas del mismo slate, el doble de creditos
+  # de API y dos pasadas escribiendo apuestas.
+  # Para volver a los crons de GitHub hay que apagar antes ese dispatcher.
   workflow_dispatch:
   push:
     branches: [ master ]
