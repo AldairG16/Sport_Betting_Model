@@ -67,6 +67,13 @@ __all__ = [
 # entorno", que es lo que tiene que vivir en `config/settings.py`.
 LECTORES_ENV = frozenset({"env_int", "env_float", "env_str", "env_bool"})
 
+# Casts que envuelven una lectura de entorno sin cambiar su naturaleza:
+# `int(os.environ.get("X", "50"))` sigue siendo una lectura de `X`. Sin
+# esto, `lectura_de_entorno` ve el `int(...)` exterior, no reconoce el
+# nombre y devuelve None sin mirar los argumentos, dejando la constante
+# invisible para el checker.
+_CASTS_TRANSPARENTES = frozenset({"int", "float", "str", "bool"})
+
 # Ruta canonica de la fuente unica de verdad, siempre en formato posix.
 RUTA_SETTINGS = "config/settings.py"
 
@@ -280,7 +287,9 @@ def lectura_de_entorno(nodo: ast.AST) -> tuple[str | None, str | None] | None:
 
     Cubre los accesores mandatados (`env_int`/`env_float`/`env_str`), la
     variante booleana, y la lectura cruda `os.environ.get` / `os.getenv` /
-    `os.environ["X"]`.
+    `os.environ["X"]`. Un cast transparente que envuelva cualquiera de esos
+    (`int(os.environ.get("X", "50"))`) se atraviesa y se reporta la lectura
+    interna: el cast no cambia que la constante depende del entorno.
     """
     if isinstance(nodo, ast.Subscript):
         objetivo = _nombre_llamado(nodo.value)
@@ -293,6 +302,13 @@ def lectura_de_entorno(nodo: ast.AST) -> tuple[str | None, str | None] | None:
 
     llamado = _nombre_llamado(nodo.func)
     corto = llamado.rsplit(".", 1)[-1]
+
+    # Un cast transparente se atraviesa: lo que importa es lo que envuelve.
+    # Se exige exactamente un argumento posicional y ningun keyword para que
+    # `int(x, base=16)` —que no es una lectura de entorno— siga rechazandose.
+    if corto in _CASTS_TRANSPARENTES and len(nodo.args) == 1 and not nodo.keywords:
+        return lectura_de_entorno(nodo.args[0])
+
     if corto not in LECTORES_ENV and llamado not in (
         "os.environ.get",
         "os.getenv",
