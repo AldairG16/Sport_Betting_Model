@@ -9,13 +9,25 @@ name: Late Results Retry
 # el resumen ya enviado (es trabajo silencioso de housekeeping).
 
 on:
-  # Sin `schedule:` A PROPOSITO. Las corridas de produccion las dispara un
-  # agente externo por `workflow_dispatch` contra `master` (todos los runs
-  # historicos son workflow_dispatch, ninguno schedule). Al pasar `master` a
-  # rama por defecto, un bloque `schedule:` aqui haria que GitHub disparara
-  # ADEMAS por su cuenta: dos corridas del mismo slate, el doble de creditos
-  # de API y dos pasadas escribiendo apuestas.
-  # Para volver a los crons de GitHub hay que apagar antes ese dispatcher.
+  # Segunda excepcion al criterio de 7508a0f, por el mismo motivo que el
+  # watchdog: el agente externo dispara morning, closing, evening y weekly,
+  # pero NO este workflow — solo corrio una vez, el 11-may-26. Un cron aqui
+  # no duplica ninguna corrida, enciende la que faltaba.
+  #
+  # COSTE, que no es cero: `--mode results` empieza por
+  # scripts/fetch_results.py, que pide el endpoint /scores de The Odds API a
+  # razon de 1 credito por liga. Con 15 ligas activas son hasta 15 creditos
+  # por corrida, 30 al dia entre las dos. No hay guarda de creditos en esa
+  # ruta: fetch_results los cuenta pero no se detiene por umbral, a
+  # diferencia de update_upcoming_matches.
+  #
+  # A cambio, `step_fetch_results_backup` lee football-data.co.uk, que es
+  # gratis, y es justo la fuente que trae corners y tarjetas 24-36 h tarde.
+  # Sin esta corrida esas bets dependen de que el evening del dia siguiente
+  # las alcance.
+  schedule:
+    - cron: '0 6 * * *'     # 00:00 MX — atrapa partidos que acabaron tarde
+    - cron: '30 12 * * *'   # 06:30 MX — ya sincronizo el CSV de fbdata
   workflow_dispatch:
   push:
     branches: [ master ]
