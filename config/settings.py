@@ -154,6 +154,19 @@ PRE_KICKOFF_WINDOW_MAX = env_int("PRE_KICKOFF_WINDOW_MAX", 60)
 # (menos apuestas pero mejor edge); bajá a 1-2 para ser más agresivo.
 ANALYST_EDGE_THRESHOLD = env_int("ANALYST_EDGE_THRESHOLD", 3)
 
+# ¿Está el loop del analista pre-kickoff en servicio?
+#
+# Ponerlo en "false" cuando `pre_kickoff.yml` se desactiva a proposito (por
+# ejemplo para no gastar tokens de Anthropic). El watchdog usa este flag para
+# NO alertar por un heartbeat viejo que es consecuencia de esa decision: un
+# monitor que grita en cada corrida se acaba ignorando, y entonces deja de
+# avisar cuando el fallo es real.
+#
+# No apaga el analista — `pre_kickoff.yml` manda sobre eso. Solo declara la
+# intencion, para que la vigilancia sepa distinguir "apagado a proposito" de
+# "se rompio el cron".
+PRE_KICKOFF_ANALYST_ENABLED = env_str("PRE_KICKOFF_ANALYST_ENABLED", "true").lower() == "true"
+
 # ============================================================
 # LIGAS ACTIVAS
 # ============================================================

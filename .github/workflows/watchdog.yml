@@ -39,4 +39,8 @@ jobs:
           DB_URL:               ${{ secrets.DB_URL }}
           TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:     ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Variable del repo (no secret): declara si el loop del analista esta
+          # en servicio. En "false" el watchdog omite el chequeo de heartbeat
+          # en vez de alertar por un silencio que es deliberado.
+          PRE_KICKOFF_ANALYST_ENABLED: ${{ vars.PRE_KICKOFF_ANALYST_ENABLED }}
         run: python scripts/watchdog.py

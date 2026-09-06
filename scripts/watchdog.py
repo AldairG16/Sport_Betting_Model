@@ -133,28 +133,41 @@ def run_watchdog():
         issues.append(f"⚠️ No se pudo verificar bets atascadas: {e}")
 
     # ── CHECK 4: analyst_heartbeat — gap largo en horas de partido ───────────
-    # Solo alerta si el gap es >3h Y estamos en horario de partidos (12-02 UTC).
+    # Solo alerta si el gap es >3h Y estamos en horario de partidos (12-02 UTC),
+    # y solo si el analista se supone EN SERVICIO. Con `pre_kickoff.yml`
+    # desactivado a proposito el heartbeat envejece para siempre, y alertar por
+    # ello en cada corrida convierte al watchdog en ruido de fondo: se aprende a
+    # ignorarlo, y entonces no avisa el dia que el fallo es real.
     try:
-        hb = pd.read_sql(
-            "SELECT MAX(ran_at) AS last_ran FROM analyst_heartbeat",
-            engine,
-        )
-        last_ran = hb.iloc[0]["last_ran"] if not hb.empty else None
-        hb_age_h = _hours_ago(last_ran)
-        hour_utc = now_utc.hour
-        in_match_window = 12 <= hour_utc or hour_utc <= 2
-        print(f"  Analyst heartbeat: {hb_age_h:.1f}h atrás (match window={in_match_window})")
+        from config.settings import PRE_KICKOFF_ANALYST_ENABLED
+    except Exception:
+        PRE_KICKOFF_ANALYST_ENABLED = True   # ante la duda, vigilar
 
-        if hb_age_h > 3 and in_match_window:
-            issues.append(
-                f"🟡 <b>ANALISTA PRE-KICKOFF SIN CORRER</b>\n"
-                f"Último heartbeat hace {hb_age_h:.0f}h en horario de partidos.\n"
-                f"→ Verifica pre_kickoff.yml en GH Actions."
+    if not PRE_KICKOFF_ANALYST_ENABLED:
+        print("  ⏸️  Analyst heartbeat: chequeo omitido "
+              "(PRE_KICKOFF_ANALYST_ENABLED=false)")
+    else:
+        try:
+            hb = pd.read_sql(
+                "SELECT MAX(ran_at) AS last_ran FROM analyst_heartbeat",
+                engine,
             )
-        else:
-            print("  ✅ Analyst heartbeat OK")
-    except Exception as e:
-        print(f"  ⚠️ No se pudo leer analyst_heartbeat (tabla puede no existir): {e}")
+            last_ran = hb.iloc[0]["last_ran"] if not hb.empty else None
+            hb_age_h = _hours_ago(last_ran)
+            hour_utc = now_utc.hour
+            in_match_window = 12 <= hour_utc or hour_utc <= 2
+            print(f"  Analyst heartbeat: {hb_age_h:.1f}h atrás (match window={in_match_window})")
+
+            if hb_age_h > 3 and in_match_window:
+                issues.append(
+                    f"🟡 <b>ANALISTA PRE-KICKOFF SIN CORRER</b>\n"
+                    f"Último heartbeat hace {hb_age_h:.0f}h en horario de partidos.\n"
+                    f"→ Verifica pre_kickoff.yml en GH Actions."
+                )
+            else:
+                print("  ✅ Analyst heartbeat OK")
+        except Exception as e:
+            print(f"  ⚠️ No se pudo leer analyst_heartbeat (tabla puede no existir): {e}")
 
     # ── Resultado ─────────────────────────────────────────────────────────────
     if not issues:
