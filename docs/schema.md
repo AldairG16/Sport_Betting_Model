@@ -211,3 +211,58 @@ solo se observa la lectura del watchdog.
 - `scripts/watchdog.py:145` — `SELECT MAX(ran_at) AS last_ran FROM
   analyst_heartbeat`; la lectura que gobierna la alerta de gap.
 - Creación implícita: **no hay sitio DDL** en este árbol.
+
+---
+
+## `pre_kickoff_analyses`
+
+Dictamen del pre-kickoff analyst: una fila por `(match, market, match_date)`.
+Es un canal **informativo paralelo** — el analista nunca toca `bets_history`,
+así que una fila aquí no crea, mueve ni resuelve ninguna apuesta. Sirve para
+dos cosas: mandar el veredicto a Telegram y, con `probability` y `decision`,
+alimentar el memo de aprendizaje que se construye cruzando esta tabla con
+`bets_history` de los últimos 30 días.
+
+A diferencia de las tres tablas anteriores, esta **sí tiene DDL en el árbol**:
+es la única que se crea explícitamente en el código presente. El `UNIQUE(match,
+market, match_date)` la hace idempotente — el cron corre cada 15 min y puede
+volver a analizar el mismo partido varias veces dentro de la ventana de
+kickoff sin duplicar el dictamen.
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `id` | SERIAL | Clave primaria. |
+| `match` | TEXT | Partido analizado. `NOT NULL`. |
+| `match_date` | TIMESTAMP | Kickoff. Parte de la clave de unicidad. `NOT NULL`. |
+| `market` | VARCHAR(50) | Mercado dictaminado. Parte de la clave de unicidad. `NOT NULL`. |
+| `verdict` | VARCHAR(20) | Dictamen del analista. `NOT NULL`. |
+| `confidence` | INT | Confianza declarada. `NOT NULL`. |
+| `reasoning` | TEXT | Razonamiento en prosa. |
+| `lineups` | TEXT | Alineaciones consideradas. |
+| `sources` | JSONB | Fuentes citadas por la búsqueda web. |
+| `analyzed_at` | TIMESTAMP | `DEFAULT NOW()`. |
+| `probability` | INT | Probabilidad estimada (0-100). Migración aditiva del 09-may-26, nullable → las filas anteriores la tienen vacía. |
+| `decision` | VARCHAR(15) | `APUESTA` / `NO APUESTA`. Migración aditiva del 09-may-26, nullable por el mismo motivo. |
+
+### Índices y restricciones
+
+- **`UNIQUE(match, market, match_date)`** — declarada dentro del `CREATE
+  TABLE`. Es la que hace segura la re-ejecución del analista.
+- **`idx_prekickoff_match_date`** sobre `match_date` — soporta la consulta por
+  ventana de kickoff, que es el único patrón de lectura del analista.
+
+Las dos columnas añadidas usan `ADD COLUMN IF NOT EXISTS`, así que la
+migración es idempotente y no rompe filas viejas: ambas son nullable a
+propósito.
+
+**Definida en**
+
+- `scripts/orchestrator.py:150` — `CREATE TABLE IF NOT EXISTS
+  pre_kickoff_analyses`; el DDL canónico, con el `UNIQUE(match, market,
+  match_date)` en su última línea.
+- `scripts/orchestrator.py:164` — `CREATE INDEX IF NOT EXISTS
+  idx_prekickoff_match_date`.
+- `scripts/orchestrator.py:169` — `ALTER TABLE … ADD COLUMN IF NOT EXISTS
+  probability INT`.
+- `scripts/orchestrator.py:170` — `ALTER TABLE … ADD COLUMN IF NOT EXISTS
+  decision VARCHAR(15)`.
