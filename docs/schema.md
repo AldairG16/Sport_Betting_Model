@@ -176,18 +176,28 @@ Columnas conocidas por el uso en este árbol:
 | `result` | TEXT | `pending` mientras no se resuelve; luego el desenlace. |
 | `match_date` | TIMESTAMP | Kickoff. Base del criterio de «bet atascada» (>5 días en `pending`). |
 
-### Sin DDL en este árbol
+### Sin `CREATE TABLE` en este árbol
 
-No hay `CREATE TABLE` ni `ALTER TABLE` para `bets_history` en el código
-presente: igual que `upcoming_matches`, es una tabla de creación implícita por
-`to_sql`, y su escritura vive en el módulo de guardado de apuestas, fuera de
-este árbol. Aquí solo se observa su lectura.
+No hay `CREATE TABLE` ni `ALTER TABLE` para `bets_history`: igual que
+`upcoming_matches` y `matches`, es una tabla de creación implícita, y ningún
+DDL del repositorio declara sus columnas. Sí hay, en cambio, tres `CREATE
+INDEX` y el módulo completo que la escribe.
 
 **Definida en**
 
+- `src/models/save_bets.py:62` — `INSERT INTO bets_history (...)`; la
+  escritura que define de facto el conjunto de columnas.
+- `src/models/save_bets.py:384` — `UPDATE bets_history`; el paso que voltea
+  `pending` a `win` / `loss` / `unresolved`.
+- `scripts/orchestrator.py:194` — `CREATE INDEX IF NOT EXISTS
+  idx_bets_result` sobre `result`.
+- `scripts/orchestrator.py:195` — `CREATE INDEX IF NOT EXISTS
+  idx_bets_match_date` sobre `match_date`.
+- `scripts/orchestrator.py:196` — `CREATE INDEX IF NOT EXISTS
+  idx_bets_league` sobre `league`.
 - `scripts/watchdog.py:120` — `SELECT COUNT(*) FROM bets_history WHERE
   result = 'pending'`; el chequeo de salud que detecta bets bloqueadas.
-- Creación implícita: **no hay sitio DDL** en este árbol.
+- Creación implícita: **no hay sitio `CREATE TABLE`** en este árbol.
 
 ---
 
@@ -201,16 +211,21 @@ de dispararse». Es la tabla que hace observable un fallo silencioso.
 |---|---|---|
 | `ran_at` | TIMESTAMP | Momento de la corrida. El watchdog alerta si el `MAX(ran_at)` tiene más de 3 h **y** estamos en horario de partidos. |
 
-### Sin DDL en este árbol
+### Índices y restricciones
 
-El analyst y su escritura del heartbeat viven fuera del código presente; aquí
-solo se observa la lectura del watchdog.
+- `idx_heartbeat_ran_at` sobre `(ran_at DESC)` — sirve exactamente la consulta
+  del watchdog, que solo pide el `MAX(ran_at)`.
 
 **Definida en**
 
+- `scripts/orchestrator.py:177` — `CREATE TABLE IF NOT EXISTS
+  analyst_heartbeat`; el DDL canónico.
+- `scripts/orchestrator.py:186` — `CREATE INDEX IF NOT EXISTS
+  idx_heartbeat_ran_at`.
+- `scripts/pre_kickoff_analyst.py:1054` — `INSERT INTO analyst_heartbeat`; la
+  escritura, una por corrida del cron.
 - `scripts/watchdog.py:145` — `SELECT MAX(ran_at) AS last_ran FROM
   analyst_heartbeat`; la lectura que gobierna la alerta de gap.
-- Creación implícita: **no hay sitio DDL** en este árbol.
 
 ---
 
@@ -266,3 +281,176 @@ propósito.
   probability INT`.
 - `scripts/orchestrator.py:170` — `ALTER TABLE … ADD COLUMN IF NOT EXISTS
   decision VARCHAR(15)`.
+
+---
+
+## `matches`
+
+Historial de partidos jugados: la base de entrenamiento del modelo. De aquí
+salen la fuerza de cada equipo, el ELO, la forma reciente y el H2H. Es la
+tabla que los cargadores históricos llenan y la que el ciclo de resultados
+completa cuando un partido termina.
+
+Igual que `upcoming_matches`, se **crea implícitamente** — no hay `CREATE
+TABLE` para ella en ningún punto del árbol. Nace del primer `INSERT` de los
+cargadores y a partir de ahí solo se extiende por `ALTER TABLE ... ADD COLUMN
+IF NOT EXISTS`.
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `date` | DATE | Fecha del partido. Parte de la clave del `ON CONFLICT`. |
+| `league` | TEXT | Liga en formato `sport_key`. |
+| `season` | TEXT | Temporada de la que procede la fila. |
+| `home_team` / `away_team` | TEXT | Nombres **ya normalizados** (minúsculas). Parte de la clave del `ON CONFLICT`. |
+| `home_goals` / `away_goals` | INT | Marcador final. |
+| `home_shots` / `away_shots` | INT | Tiros totales. |
+| `home_shots_target` / `away_shots_target` | INT | Tiros a puerta; alimentan el proxy de xG. |
+| `home_corners` / `away_corners` | INT | Córners; base del modelo de córners. |
+| `home_yellow` / `away_yellow` / `home_red` / `away_red` | INT | Tarjetas. Añadidas por migración aditiva, nullable. |
+
+### Índices y restricciones
+
+- **Unicidad sobre `(date, home_team, away_team)`** — el `INSERT ... ON
+  CONFLICT (date, home_team, away_team) DO NOTHING` la da por hecha, así que
+  exige un índice único que **ningún DDL del árbol declara**: existe solo en
+  la base viva. Es lo que hace idempotentes a los cargadores históricos.
+- `idx_matches_home_date`, `idx_matches_away_date` sobre `(equipo, date)` —
+  sirven las consultas de forma reciente y H2H, que siempre filtran por equipo
+  y ordenan por fecha.
+- `idx_matches_league` sobre `league`.
+
+### Gotcha: los nombres tienen que venir normalizados
+
+`home_team` y `away_team` guardan la forma normalizada. Un cargador que
+inserte el nombre crudo de una API crea una fila que ninguna consulta
+posterior encuentra, y las bets de ese partido se quedan en `pending` para
+siempre. Por eso todo cargador pasa por `normalize_team()` antes del `INSERT`.
+
+**Definida en**
+
+- `scripts/load_historical_data.py:19` — `ALTER TABLE matches ADD COLUMN IF
+  NOT EXISTS {col} INT` sobre las cuatro columnas de tarjetas; la única
+  migración de esquema de la tabla.
+- `scripts/load_historical_data.py:191` — el `INSERT INTO matches (...)` que
+  define de facto el conjunto de columnas, con su `ON CONFLICT`.
+- `scripts/orchestrator.py:190` — `CREATE INDEX IF NOT EXISTS
+  idx_matches_home_date`.
+- `scripts/orchestrator.py:191` — `CREATE INDEX IF NOT EXISTS
+  idx_matches_away_date`.
+- `scripts/orchestrator.py:192` — `CREATE INDEX IF NOT EXISTS
+  idx_matches_league`.
+- Creación implícita: **no hay sitio `CREATE TABLE`** en este árbol.
+
+---
+
+## `bankroll`
+
+Estado del capital, **en una sola fila**. El dimensionado de Kelly lee de aquí
+cuánto hay antes de calcular el tamaño de cada apuesta, así que una fila de
+más aquí es un error de contabilidad, no de estilo.
+
+Se crea explícitamente y, si la tabla queda vacía, se siembra con
+`INITIAL_BANKROLL` de `config/settings.py`. Esa siembra ocurre **una sola
+vez**: el `COUNT(*)` la protege de re-inicializarse en cada arranque, que
+borraría el historial de ganancias al volver al capital inicial.
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `id` | SERIAL | Clave primaria. |
+| `initial_bankroll` | FLOAT | Capital de partida. `NOT NULL`. |
+| `current_bankroll` | FLOAT | Capital vigente; el que usa Kelly. `NOT NULL`. |
+| `peak_bankroll` | FLOAT | Máximo histórico. Base del cálculo de drawdown. `NOT NULL`. |
+| `total_deposited` | FLOAT | Suma de aportaciones. `NOT NULL`. |
+| `last_updated` | TIMESTAMP | `DEFAULT NOW()`. |
+
+**Definida en**
+
+- `src/models/bankroll_manager.py:47` — `CREATE TABLE IF NOT EXISTS bankroll`.
+
+---
+
+## `bankroll_history`
+
+Log de movimientos del capital: una fila por evento que mueve el saldo. Es la
+tabla que permite reconstruir cómo se llegó al `current_bankroll` de arriba;
+sin ella, el estado sería un número sin procedencia.
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `id` | SERIAL | Clave primaria. |
+| `date` | TIMESTAMP | `DEFAULT NOW()`. |
+| `event` | TEXT | Qué movió el saldo. |
+| `amount` | FLOAT | Importe del movimiento, con signo. |
+| `balance` | FLOAT | Saldo resultante. Redundante a propósito: congela el estado tras el movimiento. |
+| `notes` | TEXT | Nota libre. |
+
+**Definida en**
+
+- `src/models/bankroll_manager.py:59` — `CREATE TABLE IF NOT EXISTS
+  bankroll_history`.
+
+---
+
+## `match_events`
+
+Eventos por partido descargados de `goalscorers.csv`: goleadores, tarjetas y
+córners. Complementa a `matches` con el detalle que los CSV de resultados no
+traen, y alimenta los modelos de tarjetas y córners.
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `id` | SERIAL | Clave primaria. |
+| `date` | DATE | Fecha del partido. Parte de la clave de unicidad. `NOT NULL`. |
+| `home_team` / `away_team` | TEXT | Equipos. Parte de la clave de unicidad. `NOT NULL`. |
+| `league` | TEXT | Liga. |
+| `home_scorers` / `away_scorers` | TEXT | Goleadores. |
+| `home_yellow` / `away_yellow` | INT | Amarillas. `DEFAULT 0`. |
+| `home_red` / `away_red` | INT | Rojas. `DEFAULT 0`. |
+| `home_corners` / `away_corners` | INT | Córners. Nullable: el CSV no siempre los trae. |
+| `penalty_in_match` | BOOLEAN | `DEFAULT FALSE`. |
+
+### Índices y restricciones
+
+- **`UNIQUE(date, home_team, away_team)`** — declarada dentro del `CREATE
+  TABLE`. Hace idempotente la recolección: volver a descargar el CSV no
+  duplica eventos.
+
+**Definida en**
+
+- `scripts/collect_match_events.py:40` — `CREATE TABLE IF NOT EXISTS
+  match_events`, con el `UNIQUE` en su última línea.
+
+---
+
+## `anthropic_usage`
+
+Contabilidad diaria del gasto en la API de Anthropic, **una fila por día**.
+Es la tabla que sostiene el guard de presupuesto: antes de cada llamada del
+analista se consulta cuánto se lleva gastado hoy y se compara con
+`ANTHROPIC_DAILY_BUDGET_USD`.
+
+`day` es la clave primaria, así que el upsert diario es idempotente por
+construcción.
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `day` | DATE | Clave primaria. Un día, una fila. |
+| `calls` | INT | Llamadas del día. `DEFAULT 0`. |
+| `input_tokens` | BIGINT | Tokens de entrada. `DEFAULT 0`. |
+| `output_tokens` | BIGINT | Tokens de salida. `DEFAULT 0`. |
+| `cache_read_tokens` | BIGINT | Tokens leídos de caché. `DEFAULT 0`. |
+| `web_searches` | INT | Búsquedas web (se facturan aparte). `DEFAULT 0`. |
+| `cost_usd` | NUMERIC(10,5) | Coste acumulado del día. `DEFAULT 0`. |
+
+### El DDL falla en silencio a propósito
+
+`_ensure_table()` envuelve el `CREATE TABLE` en un `try/except Exception: pass`
+con el comentario «no bloqueamos por DDL», y `get_daily_spent_usd()` devuelve
+`0.0` ante cualquier excepción. La consecuencia hay que tenerla presente: si
+la tabla no se puede crear, **el guard de presupuesto lee 0.0 y deja pasar
+todas las llamadas** en vez de frenarlas. Es un fallo abierto, no cerrado.
+
+**Definida en**
+
+- `src/utils/anthropic_budget.py:65` — `CREATE TABLE IF NOT EXISTS
+  anthropic_usage`, dentro del `_ensure_table()` perezoso.
