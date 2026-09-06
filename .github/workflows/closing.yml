@@ -6,7 +6,7 @@ on:
     - cron: '0 18 * * *'
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ master ]
     paths: [ '.github/workflows/closing.yml' ]
 
 jobs:

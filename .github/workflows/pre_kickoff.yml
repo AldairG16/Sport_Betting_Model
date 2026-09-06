@@ -42,7 +42,7 @@ on:
         required: false
         default: ''
   push:
-    branches: [ main ]
+    branches: [ master ]
     paths: [ '.github/workflows/pre_kickoff.yml' ]
 
 # Si un run anterior se está ejecutando aún, lo cancelamos para evitar

@@ -10,7 +10,7 @@ on:
     - cron: '0 12 * * *'
   workflow_dispatch:   # permite lanzar manualmente desde GitHub
   push:
-    branches: [ main ]
+    branches: [ master ]
     paths: [ '.github/workflows/morning.yml' ]
 
 jobs:
