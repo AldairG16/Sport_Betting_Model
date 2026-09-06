@@ -7,13 +7,18 @@ name: Watchdog — Pipeline Health Monitor
 # Regla: silencio = salud. Solo envía mensaje cuando algo está mal.
 
 on:
-  # Sin `schedule:` A PROPOSITO. Las corridas de produccion las dispara un
-  # agente externo por `workflow_dispatch` contra `master` (todos los runs
-  # historicos son workflow_dispatch, ninguno schedule). Al pasar `master` a
-  # rama por defecto, un bloque `schedule:` aqui haria que GitHub disparara
-  # ADEMAS por su cuenta: dos corridas del mismo slate, el doble de creditos
-  # de API y dos pasadas escribiendo apuestas.
-  # Para volver a los crons de GitHub hay que apagar antes ese dispatcher.
+  # EXCEPCION deliberada: este es el unico workflow que conserva `schedule:`.
+  #
+  # Los demas lo perdieron porque el agente externo ya los dispara por
+  # `workflow_dispatch`, y un cron encima duplicaria cada corrida. Al watchdog
+  # NO lo dispara nadie: nunca corrio ni una vez. Asi que aqui el cron no
+  # duplica nada, solo enciende la vigilancia que faltaba.
+  #
+  # Es seguro por lo que hace: solo lee (SELECT sobre upcoming_matches,
+  # bets_history y analyst_heartbeat), no escribe en la base, no gasta
+  # creditos de The Odds API y no llama a Anthropic. Silencio = salud.
+  schedule:
+    - cron: '17 0,6,12,18 * * *'   # 00:17 / 06:17 / 12:17 / 18:17 UTC
   workflow_dispatch:                 # permite lanzar manualmente para testear
 
 jobs:
