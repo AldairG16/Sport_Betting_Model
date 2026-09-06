@@ -81,20 +81,29 @@ python scripts/orchestrator.py --mode weekly
 python scripts/orchestrator.py --mode morning --force-fetch
 ```
 
-### Schedule recomendado (Windows Task Scheduler)
+### Schedule (GitHub Actions)
 
-| Hora | Modo | Descripción |
-|------|------|-------------|
-| 06:00 AM diario | `morning` | Fetch odds + predicciones + Telegram |
-| 12:00 PM diario | `closing` | Captura odds de cierre |
-| 23:00 PM diario | `evening` | Resultados + CLV + preview mañana |
-| Lunes 07:00 AM | `weekly` | Recarga histórica + calibración |
+La automatización vive en `.github/workflows/`, **no** en la máquina local:
 
-Para configurar el scheduler automáticamente:
+| Cron (UTC) | Workflow | Modo | Descripción |
+|------------|----------|------|-------------|
+| `0 12 * * *` | `morning.yml` | `morning` | Fetch odds + predicciones + Telegram |
+| `0 18 * * *` | `closing.yml` | `closing` | Captura odds de cierre |
+| `30 13 * * *` | `evening.yml` | `evening` | Resultados + CLV + preview mañana |
+| `0 13 * * 1` | `weekly.yml` | `weekly` | Recarga histórica + calibración |
 
-```powershell
-powershell -ExecutionPolicy Bypass -File setup_scheduler.ps1
-```
+Las credenciales son *repository secrets*, no un `.env` local — ver
+`.env.example` para la lista completa de variables.
+
+Para lanzar uno a mano: Actions → el workflow → «Run workflow», o
+`scripts/_trigger_workflow.ps1`, que hace el `workflow_dispatch` por API.
+
+> Los scripts de Windows Task Scheduler (`setup_scheduler.ps1`,
+> `register_tasks.ps1`, `fix_tasks.ps1`, `setup_scheduler.bat`) se retiraron:
+> apuntaban a una ruta de OneDrive que ya no existe y, si se arreglaran,
+> abrirían una **segunda vía de ejecución** en paralelo a Actions — doble
+> corrida, doble gasto de API y riesgo de apuestas duplicadas. Siguen en el
+> historial de git si hicieran falta.
 
 ---
 
