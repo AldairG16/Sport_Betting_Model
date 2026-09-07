@@ -6,10 +6,10 @@ Sistema automatizado de predicción de apuestas deportivas basado en modelos est
 
 - **Modelo**: Dixon-Coles + Ensemble (Poisson, ELO, xG, H2H, forma reciente)
 - **Mercados**: 1X2, Over/Under, BTTS, Asian Handicap, DNB, Doble Oportunidad, Córners, Tiros, Tarjetas
-- **Ligas**: 20 ligas activas (Europa, Asia, América)
+- **Ligas**: 15 ligas activas (Europa, Asia, América) — la lista viva está en `SPORT_KEYS` de `config/settings.py`
 - **DB**: PostgreSQL + SQLAlchemy
 - **Alertas**: Telegram Bot
-- **Automatización**: Windows Task Scheduler
+- **Automatización**: GitHub Actions (`workflow_dispatch`; ver [`docs/OPERACION.md`](docs/OPERACION.md))
 
 ---
 
@@ -243,7 +243,7 @@ bets porque solo lee de `bets_history`.
 1. **GitHub Settings** → Secrets and variables → Actions → New repository secret
    - **Name**: `WORLD_CUP_BETTING_ENABLED`
    - **Value**: `true`
-2. Re-ejecutar el workflow `daily.yml` (manual `workflow_dispatch` o esperar al cron).
+2. Re-ejecutar `morning.yml` desde Actions → «Run workflow» (no hay cron de GitHub para ese workflow; ver `docs/OPERACION.md` §2).
 3. Verificar en Telegram que las apuestas del Mundial ya **no** llevan tag `[PAPER]`.
 
 **Desactivar de emergencia** (si el modelo empieza a perder feo en el Mundial):
