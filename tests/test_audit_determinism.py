@@ -157,9 +157,18 @@ def _run_sintetica(findings):
 # ---------------------------------------------------------------------------
 
 def test_dos_corridas_seguidas_producen_el_mismo_json_byte_a_byte(tmp_path):
-    """Sobre un arbol sin cambios el artefacto no se mueve ni un byte."""
+    """Sobre un arbol sin cambios el artefacto no se mueve ni un byte.
+
+    El destino vive DENTRO de la raiz auditada (`raiz/audits`), igual que el
+    default de produccion. Con la salida colgada afuera el test pasaba sin
+    ejercitar el caso que de verdad importa: la segunda corrida recorre un
+    arbol que YA contiene el reporte de la primera. Si ese reporte se lee
+    como codigo fuente, la segunda corrida encuentra hallazgos que solo
+    existen porque hubo una auditoria antes, y el artefacto cambia sin que
+    el repo haya cambiado.
+    """
     raiz = _arbol(tmp_path)
-    destino = tmp_path / "audits"
+    destino = raiz / "audits"
 
     _correr(raiz, destino)
     primera = (destino / "latest.json").read_bytes()
@@ -174,9 +183,15 @@ def test_dos_corridas_seguidas_producen_el_mismo_json_byte_a_byte(tmp_path):
 
 
 def test_dos_corridas_seguidas_producen_el_mismo_markdown(tmp_path):
-    """El reporte legible tampoco puede bailar entre corridas."""
+    """El reporte legible tampoco puede bailar entre corridas.
+
+    Tambien con el destino dentro de la raiz. `latest.md` es el mas
+    peligroso de los dos artefactos para la realimentacion: cita rutas,
+    nombres de variables y fragmentos de codigo en prosa, asi que es el que
+    mas se parece a codigo fuente cuando la corrida siguiente lo recorre.
+    """
     raiz = _arbol(tmp_path)
-    destino = tmp_path / "audits"
+    destino = raiz / "audits"
 
     _correr(raiz, destino)
     primero = (destino / "latest.md").read_bytes()
