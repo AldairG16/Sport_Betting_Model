@@ -17,11 +17,15 @@ Regenera, SOLO BAJO DEMANDA DEL OPERADOR, un payload con el mismo contrato que
 SOLO LECTURA: este script unicamente ejecuta SELECT. No escribe en la base y no
 consulta `bets_history` en absoluto.
 
-Este modulo tambien es el hogar UNICO de las dos funciones deterministas que la
-cadena de decision necesita como parametros (`ah_group` y `frozen_kelly_stake`).
-El harness dorado (tests/test_golden_decision.py) las importa de aqui: si
-vivieran duplicadas en el test, el fixture y el regenerador podrian divergir sin
-que nada lo notara.
+Este modulo aloja `ah_group`, el unico parametro determinista de la cadena de
+decision que no puede importarse de produccion sin arrastrar la base (vive en
+`src.models.calibration_monitor`, que importa `config.database`). El harness
+dorado (tests/test_golden_decision.py) lo importa de aqui.
+
+AQUI NO VIVE NINGUNA COPIA DE `kelly_stake`. El sizing lo hace la funcion de
+produccion `src.models.betting_engine.kelly_stake` tal cual; una segunda
+implementacion "congelada" haria que el fixture dorado midiera el codigo del
+test en vez del codigo que apuesta dinero.
 """
 
 import os
@@ -36,15 +40,6 @@ if hasattr(sys.stdout, "reconfigure"):
 import argparse
 import json
 from typing import Any
-
-
-# ============================================================
-# PARAMETROS CONGELADOS DE LA CADENA DE DECISION
-# ============================================================
-# Estos numeros forman parte del fixture: cambiarlos cambia los stakes y por lo
-# tanto rompe (correctamente) el test dorado.
-FROZEN_KELLY_FRACTION = 0.25   # Kelly fraccionario 1/4
-FROZEN_MAX_STAKE_PCT = 0.05    # tope duro por bet: 5% del bankroll
 
 
 def ah_group(market: str) -> str | None:
@@ -71,42 +66,6 @@ def ah_group(market: str) -> str | None:
     if line <= 0.25:
         return f"{side}_pk"
     return f"{side}_dog"
-
-
-def frozen_kelly_stake(
-    prob: float,
-    odds: float,
-    *,
-    bankroll: float,
-    market: str | None = None,
-    league: str | None = None,
-) -> float:
-    """Kelly fraccionario puro, congelado para el fixture dorado.
-
-    Firma identica a `src.models.betting_engine.kelly_stake` para que
-    `size_stakes` la acepte tal cual.
-
-    POR QUE NO SE USA `kelly_stake` DE PRODUCCION:
-    esa funcion no es pura -- `_adjusted_kelly_fraction` lee
-    `data/clv_cache.json`, un archivo que se regenera cada semana y que escala
-    los stakes por 1.20 o 0.60 segun el CLV reciente. Un fixture "congelado"
-    apoyado en ella cambiaria de resultado cada lunes sin que nadie tocara el
-    codigo. Aqui se fija el componente determinista (la formula de Kelly) y se
-    deja fuera el ajuste dependiente de estado externo.
-
-    f* = (prob * odds - 1) / (odds - 1), escalado por FROZEN_KELLY_FRACTION y
-    topado a FROZEN_MAX_STAKE_PCT del bankroll. Edge negativo -> stake 0.
-    """
-    if bankroll <= 0 or odds <= 1:
-        return 0.0
-
-    full_kelly = (prob * odds - 1) / (odds - 1)
-    if full_kelly <= 0:
-        return 0.0
-
-    stake = bankroll * full_kelly * FROZEN_KELLY_FRACTION
-    stake = min(stake, bankroll * FROZEN_MAX_STAKE_PCT)
-    return round(stake, 2)
 
 
 # ============================================================
@@ -143,7 +102,7 @@ def capture_scored(days: int) -> list[dict[str, Any]]:
     El import de `config.database` es diferido a proposito: `config/settings.py`
     levanta RuntimeError en tiempo de import cuando DB_URL no esta definida, y
     este modulo tiene que poder importarse sin base (el harness dorado lo
-    importa para reusar `ah_group` y `frozen_kelly_stake`).
+    importa para reusar `ah_group`).
     """
     from sqlalchemy import text  # noqa: PLC0415 -- diferido, ver docstring
 

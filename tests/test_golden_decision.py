@@ -9,9 +9,17 @@ medio repositorio. La pregunta que el operador necesita responder antes de
 mergear nada es una sola: "¿alguna de esas remediaciones cambio una apuesta?".
 
 Este test la responde de forma mecanica. Reproduce un slate congelado a traves
-de `src.pipeline.bet_decision.decide_bets` -- LA MISMA funcion que llama
-produccion, no una copia -- y exige que las tuplas
-(match, market, side, stake) sean identicas a la linea base commiteada.
+de `src.pipeline.bet_decision.decide_bets` con el sizing de
+`src.models.betting_engine.kelly_stake` -- LAS MISMAS funciones que llama
+produccion, no copias -- y exige que las tuplas (match, market, side, stake)
+sean identicas a la linea base commiteada.
+
+NO HAY UNA SEGUNDA KELLY. Un `frozen_kelly_stake` paralelo haria que este
+harness midiera el codigo del test: se podria cambiar la fraccion de Kelly, el
+tope por bet o la penalizacion por odds altas en produccion y el fixture no se
+moveria un centavo. El unico factor no determinista de `kelly_stake` -- el
+cache de CLV que el ciclo weekly regenera -- se fija en vacio, sin sustituir la
+funcion (ver `_clv_cache_neutral`).
 
 ⚠️  SI ESTE TEST FALLA, EL FIXTURE NO SE ACTUALIZA.
     Fallar significa que el codigo cambio una decision de apuesta. Eso se
@@ -23,7 +31,9 @@ No requiere base de datos, red, ni claves: todo lo que necesita esta en
 tests/fixtures/.
 """
 
+import contextlib
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -66,25 +76,77 @@ def _normalized_sha256(path):
     return hashlib.sha256(raw).hexdigest()
 
 
+def _production_kelly():
+    """Devuelve LA funcion de sizing que usa `run_prediction_pipeline()`.
+
+    No es una copia congelada. Hasta la remediacion R002 este harness inyectaba
+    `frozen_kelly_stake` (una reimplementacion que vivia en
+    scripts/capture_golden_fixture.py) y por lo tanto demostraba una propiedad
+    del test, no del codigo que apuesta dinero: se podia cambiar la fraccion de
+    Kelly, el tope por bet o la penalizacion por odds altas en produccion sin
+    que el fixture dorado se moviera.
+
+    `src.models.betting_engine` se importa sin base de datos: no toca
+    `config.settings` en tiempo de import y su unico acceso a `config.database`
+    esta diferido dentro del cuerpo de `refresh_clv_cache()`.
+    """
+    from src.models.betting_engine import kelly_stake
+
+    return kelly_stake
+
+
+@contextlib.contextmanager
+def _clv_cache_neutral():
+    """Fija el cache de CLV en vacio mientras corre el replay.
+
+    `kelly_stake` NO es pura: cuando recibe `market` delega en
+    `_adjusted_kelly_fraction`, que lee `data/clv_cache.json` -- un archivo que
+    el ciclo weekly regenera y que escala los stakes por 1.20 o por 0.60 segun
+    el CLV reciente. Sin fijarlo, un fixture "congelado" cambiaria de resultado
+    cada lunes sin que nadie tocara una linea de codigo, y el harness no podria
+    correr identico en Windows local y en ubuntu-latest (donde `data/` ni
+    siquiera existe).
+
+    Fijarlo en vacio deja exactamente el componente determinista del sizing
+    (Kelly fraccionario, penalizacion por odds altas, tope por bet) y neutraliza
+    el unico factor que depende de estado externo. La funcion que corre sigue
+    siendo la de produccion: NO se sustituye, solo se le quita la entrada
+    variable. El estado previo se restaura siempre para no contaminar otros
+    tests de la misma sesion.
+    """
+    from src.models import betting_engine
+
+    prev_cache = betting_engine._clv_cache_mem
+    prev_loaded_at = betting_engine._clv_cache_loaded_at
+    betting_engine._clv_cache_mem = {}
+    betting_engine._clv_cache_loaded_at = time.time()
+    try:
+        yield
+    finally:
+        betting_engine._clv_cache_mem = prev_cache
+        betting_engine._clv_cache_loaded_at = prev_loaded_at
+
+
 def _replay():
     """Corre el fixture congelado por la cadena de decision de produccion.
 
     Devuelve las tuplas de decision proyectadas y ordenadas de forma estable.
     """
-    from scripts.capture_golden_fixture import ah_group, frozen_kelly_stake
+    from scripts.capture_golden_fixture import ah_group
     from src.pipeline.bet_decision import decide_bets
 
     payload = _load("golden_input.json")
 
-    bets = decide_bets(
-        payload["scored"],
-        bankroll=payload["bankroll"],
-        min_edge_by_market=payload["min_edge_by_market"],
-        min_edge_default=payload["min_edge_default"],
-        ah_group=ah_group,
-        kelly_fn=frozen_kelly_stake,
-        max_total_pct=payload["max_total_pct"],
-    )
+    with _clv_cache_neutral():
+        bets = decide_bets(
+            payload["scored"],
+            bankroll=payload["bankroll"],
+            min_edge_by_market=payload["min_edge_by_market"],
+            min_edge_default=payload["min_edge_default"],
+            ah_group=ah_group,
+            kelly_fn=_production_kelly(),
+            max_total_pct=payload["max_total_pct"],
+        )
 
     return sorted(
         ({k: b[k] for k in _DECISION_KEYS} for b in bets),
@@ -172,6 +234,98 @@ def test_las_llaves_ah_resuelven_a_un_grupo_de_calibracion():
         assert ah_group(market) is not None, (
             f"{market} no resuelve a un grupo AH: caeria al min_edge_default "
             "y dejaria pasar bets por debajo de su umbral real."
+        )
+
+
+# ============================================================
+# UNA SOLA KELLY: LA DE PRODUCCION
+# ============================================================
+
+def test_el_harness_inyecta_la_kelly_de_produccion():
+    """El objeto que recibe `decide_bets` ES `betting_engine.kelly_stake`.
+
+    Identidad de objeto, no equivalencia de resultados: si alguien vuelve a
+    introducir una reimplementacion "congelada" que hoy da los mismos numeros,
+    este assert falla igual -- que es el punto. Dos implementaciones que
+    coinciden hoy divergen el dia que alguien toca una sola de ellas, y la que
+    se toca siempre es la de produccion.
+    """
+    from src.models import betting_engine
+
+    assert _production_kelly() is betting_engine.kelly_stake, (
+        "El harness dorado debe inyectar la MISMA funcion de sizing que corre "
+        "en produccion. Una copia paralela convierte este test en una prueba "
+        "sobre el codigo del test."
+    )
+
+
+def test_no_sobrevive_ninguna_copia_de_kelly_en_el_capturador():
+    """scripts/capture_golden_fixture.py ya no define una Kelly paralela.
+
+    Ese modulo solo puede aportar `ah_group`, que no se puede importar de
+    produccion sin arrastrar `config.database`. El sizing no tiene esa excusa.
+    """
+    import scripts.capture_golden_fixture as capture
+
+    duplicadas = [
+        nombre
+        for nombre in dir(capture)
+        if "kelly" in nombre.lower()
+    ]
+    assert not duplicadas, (
+        "scripts/capture_golden_fixture.py volvio a declarar una Kelly propia "
+        f"({duplicadas}). El sizing lo hace src.models.betting_engine."
+    )
+
+
+def test_produccion_pasa_esa_misma_kelly_a_decide_bets():
+    """`run_prediction_pipeline()` pasa `kelly_fn=kelly_stake` importado de
+    `src.models.betting_engine` -- el objeto exacto que inyecta el harness.
+
+    La comprobacion es estatica (ast) a proposito: importar
+    src/pipeline/prediction_pipeline.py exige DB_URL, sqlalchemy y el resto de
+    la cadena de modelos, y este harness tiene que correr sin base ni claves
+    (es parte del gate de CI y de la auditoria semanal sin secretos). Leer el
+    wiring del arbol sintactico da la misma garantia sin ninguna de esas
+    dependencias.
+    """
+    import ast
+
+    ruta = (
+        Path(__file__).resolve().parent.parent
+        / "src" / "pipeline" / "prediction_pipeline.py"
+    )
+    arbol = ast.parse(ruta.read_text(encoding="utf-8"))
+
+    origen = {}
+    for nodo in ast.walk(arbol):
+        if isinstance(nodo, ast.ImportFrom) and nodo.module:
+            for alias in nodo.names:
+                origen[alias.asname or alias.name] = (nodo.module, alias.name)
+
+    assert origen.get("kelly_stake") == ("src.models.betting_engine", "kelly_stake"), (
+        "prediction_pipeline.py debe importar kelly_stake de "
+        f"src.models.betting_engine; encontrado: {origen.get('kelly_stake')}"
+    )
+
+    inyectadas = [
+        kw.value
+        for nodo in ast.walk(arbol)
+        if isinstance(nodo, ast.Call)
+        and getattr(nodo.func, "id", None) == "decide_bets"
+        for kw in nodo.keywords
+        if kw.arg == "kelly_fn"
+    ]
+
+    assert inyectadas, (
+        "produccion debe llamar decide_bets(kelly_fn=...): si dejara de "
+        "hacerlo, el fixture dorado ya no mediria el sizing real."
+    )
+    for valor in inyectadas:
+        assert isinstance(valor, ast.Name) and valor.id == "kelly_stake", (
+            "produccion pasa a decide_bets una funcion de sizing que no es "
+            f"betting_engine.kelly_stake ({ast.dump(valor)[:80]}). El harness "
+            "dorado dejaria de probar la cadena que apuesta dinero."
         )
 
 

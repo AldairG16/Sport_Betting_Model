@@ -1,8 +1,23 @@
 {
   "frozen": true,
   "input_sha256": "c4a46c340bf3a1f0224d05d9ae003b680af6d54831240c26da0be06b0502e685",
-  "output_sha256": "d33b2a2ce22a70b46f1ec7c0a841fbc2404969617af6fae8d4238af2bd91cf4b",
+  "output_sha256": "0dd6d28d616d4cbeae54e5a5da1ab525e18802413d8ef8089136cb275b9f7e07",
   "created": "2026-09-02",
   "hash_normalization": "CRLF->LF antes de hashear (core.autocrlf=true en Windows)",
-  "note": "Fixture dorado CONGELADO de forma permanente. NO regenerar: es la linea base que demuestra que una remediacion no cambio ninguna apuesta. Si un cambio de codigo mueve estos stakes, el test debe fallar y el cambio revisarse -- no se actualiza el fixture. Generado corriendo src.pipeline.bet_decision.decide_bets sobre golden_input.json con ah_group y frozen_kelly_stake de scripts/capture_golden_fixture.py."
+  "note": "Fixture dorado CONGELADO de forma permanente. NO regenerar: es la linea base que demuestra que una remediacion no cambio ninguna apuesta. Si un cambio de codigo mueve estos stakes, el test debe fallar y el cambio revisarse -- no se actualiza el fixture. Generado corriendo src.pipeline.bet_decision.decide_bets sobre golden_input.json con ah_group de scripts/capture_golden_fixture.py y kelly_stake de src.models.betting_engine (LA funcion de produccion), con el cache de CLV fijado en vacio.",
+  "baseline_rederived": {
+    "date": "2026-09-07",
+    "task": "R002",
+    "reason": "La linea base anterior se genero con frozen_kelly_stake, una copia de Kelly que vivia en scripts/capture_golden_fixture.py. Esa copia usaba un tope por bet del 5% del bankroll y no penalizaba odds altas, mientras que produccion (src.models.betting_engine.kelly_stake) topa en 2% y si penaliza. El fixture media el codigo del test, no el que apuesta dinero. Al inyectar la funcion de produccion la linea base se re-derivo UNA sola vez: el conjunto de apuestas (match, market, side) es identico -- las mismas 8 -- y solo cambiaron los stakes, que ahora reflejan el tope real de produccion. Desde este commit el fixture vuelve a estar congelado.",
+    "stakes_previos": {
+      "Ajax vs PSV/home_win": 1.99,
+      "Arsenal vs Chelsea/ah_home_-0.5": 2.74,
+      "Arsenal vs Chelsea/home_win": 1.63,
+      "Arsenal vs Chelsea/over25": 1.89,
+      "Bayern vs Dortmund/ah_away_+1.0": 1.61,
+      "Milan vs Inter/ah_home_0.0": 2.21,
+      "Milan vs Inter/away_win": 1.31,
+      "Milan vs Inter/under25": 1.63
+    }
+  }
 }
