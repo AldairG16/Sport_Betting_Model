@@ -8,5 +8,16 @@ python-dateutil==2.9.0.post0
 # el pin tiene que vivir aqui o la auditoria semanal revienta en CI.
 PyYAML==6.0.3
 
+# ── Modelado (lo alcanza la suite) ───────────────────────────
+# `src/models/betting_engine.py:1` importa pandas a nivel de modulo, y
+# `tests/test_golden_decision.py` inyecta `kelly_stake` desde ahi para que el
+# harness use LA MISMA funcion que produccion. Sin este pin esos 6 tests
+# revientan en CI con ModuleNotFoundError aunque pasen en local, donde el
+# interprete suele tener pandas por otra via.
+# numpy se pina explicito, y no como transitiva de pandas, para que la version
+# no derive sola entre corridas. Mismos pines que `master`.
+numpy==2.4.2
+pandas==3.0.1
+
 # ── Testing ────────────────────────────────────────────
 pytest==9.0.3
