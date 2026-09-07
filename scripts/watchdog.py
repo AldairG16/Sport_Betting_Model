@@ -51,6 +51,12 @@ def _hours_ago(dt) -> float:
     return (datetime.now(timezone.utc) - ts).total_seconds() / 3600
 
 
+# Dias sin una sola apuesta nueva antes de alertar. Holgado a proposito: el
+# modelo es selectivo y puede pasar un dia sin encontrar valor; una semana
+# significa que algo corriente arriba dejo de producir.
+DIAS_SIN_BETS_ALERTA = 7
+
+
 def run_watchdog():
     now_utc = datetime.now(timezone.utc)
     print(f"[WATCHDOG] {now_utc.strftime('%Y-%m-%d %H:%M UTC')}")
@@ -168,6 +174,71 @@ def run_watchdog():
                 print("  ✅ Analyst heartbeat OK")
         except Exception as e:
             print(f"  ⚠️ No se pudo leer analyst_heartbeat (tabla puede no existir): {e}")
+
+    # ── CHECK 5: el pipeline corre pero no produce nada ──────────────────────
+    # CHECK 2 mira MAX(updated_at) de upcoming_matches, y esa marca se mueve
+    # AUNQUE no entre un solo partido: el cleanup de update_all() borra filas
+    # viejas y toca la tabla igual. Es un check de actividad, no de producto.
+    #
+    # Eso dejo pasar el incidente del 17-jun-26: la API key de The Odds API se
+    # desactivo (401 DEACTIVATED_KEY, pago fallido) y las 15 ligas devolvieron
+    # "0 partidos procesados" durante 82 dias. Cada corrida salia verde en
+    # Actions —`run_step` captura el error del paso y sigue— y el watchdog
+    # habria dicho "pipeline corrio recientemente" todo ese tiempo.
+    #
+    # Este check mira el PRODUCTO: si no hay partidos futuros cargados, el
+    # fetch no esta trayendo nada, por muy verde que salga el workflow.
+    try:
+        fut = pd.read_sql(
+            "SELECT COUNT(*) AS n FROM upcoming_matches WHERE match_date >= NOW()",
+            engine,
+        )
+        n_fut = int(fut.iloc[0]["n"])
+        print(f"  Partidos futuros cargados: {n_fut}")
+
+        if n_fut == 0:
+            issues.append(
+                "🔴 <b>SIN PARTIDOS CARGADOS</b>\n"
+                "`upcoming_matches` no tiene un solo partido futuro.\n"
+                "El pipeline corre pero no trae datos.\n"
+                "→ Causa mas probable: la API key de The Odds API caducada, sin "
+                "credito o desactivada por pago fallido. Revisa el log de "
+                "morning.yml buscando <code>DEACTIVATED_KEY</code> o "
+                "<code>API error 401</code>."
+            )
+        else:
+            print("  ✅ Hay partidos cargados")
+    except Exception as e:
+        issues.append(f"⚠️ No se pudo verificar partidos cargados: {e}")
+
+    # ── CHECK 6: hace cuanto que no se registra una apuesta ──────────────────
+    # Complemento del anterior y mas rapido de disparar: sin cuotas no hay
+    # picks, asi que bets_history deja de crecer desde el dia uno, mientras que
+    # upcoming_matches tarda dos o tres dias en vaciarse por el cleanup.
+    #
+    # Se mide sobre match_date (el kickoff) porque el INSERT de save_bets.py no
+    # guarda timestamp de creacion. Con el modelo sano ese maximo esta en el
+    # FUTURO, porque se apuesta a partidos por jugar; cuando el pipeline deja de
+    # producir, retrocede hacia el pasado. Umbral holgado a proposito: el modelo
+    # es selectivo y puede pasar un dia sin encontrar valor, no una semana.
+    try:
+        ub = pd.read_sql("SELECT MAX(match_date) AS last_bet FROM bets_history", engine)
+        last_bet = ub.iloc[0]["last_bet"] if not ub.empty else None
+        bet_age_d = _hours_ago(last_bet) / 24
+        print(f"  Ultima apuesta registrada: {bet_age_d:.1f}d atras")
+
+        if bet_age_d > DIAS_SIN_BETS_ALERTA:
+            issues.append(
+                "🔴 <b>SIN APUESTAS NUEVAS</b>\n"
+                f"La apuesta mas reciente en `bets_history` es de hace "
+                f"{bet_age_d:.0f} dias.\n"
+                "→ O el fetch no trae cuotas, o los filtros rechazan todo. "
+                "Empieza por el log de morning.yml."
+            )
+        else:
+            print("  ✅ Se siguen registrando apuestas")
+    except Exception as e:
+        issues.append(f"⚠️ No se pudo verificar apuestas recientes: {e}")
 
     # ── Resultado ─────────────────────────────────────────────────────────────
     if not issues:
