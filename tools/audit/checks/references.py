@@ -14,6 +14,15 @@ romperia la auditoria sin secretos (FR-006).
   raices NO son una lista fija: salen de los comandos `run:` de
   `.github/workflows/*.yml` mas todo `tests/`, de modo que un workflow nuevo
   amplia el conjunto automaticamente.
+
+  La misma categoria cubre un segundo caso, mas silencioso: un modulo de
+  `src/` al que SOLO llega `tests/`. Contar la suite como raiz es correcto
+  para no acusar de muerto a lo que la suite ejerce, pero deja un punto ciego:
+  un modulo extraido y probado que produccion nunca llama pasa por vivo.
+  Ese es exactamente el estado de `src/pipeline/bet_decision.py` mientras el
+  pipeline conserve su copia en linea — la suite queda verde y no dice nada
+  sobre lo que se apuesta. Por eso el alcance se calcula DOS veces: una desde
+  los workflows (produccion) y otra desde workflows + tests.
 - `circular-dependency` — S2 si el ciclo toca un modulo alcanzable desde un
   workflow (afecta produccion), S3 si queda confinado a scripts manuales o
   de un solo uso.
@@ -40,12 +49,14 @@ from tools.audit.registry import check
 from tools.audit.workflows import read_workflows
 
 __all__ = [
+    "PRODUCTION_ROOTS",
     "check_broken_references",
     "check_cycles",
     "check_orphans",
     "dynamic_import_prefixes",
     "entry_point_modules",
     "reachable_modules",
+    "test_only_modules",
 ]
 
 
@@ -414,30 +425,146 @@ def dynamic_import_prefixes(
 # orphan-code
 # ---------------------------------------------------------------------------
 
-@check("orphan-code", Category.ORPHAN_CODE)
-def check_orphans(root: Path) -> tuple[list[Finding], int]:
-    """Modulos que ningun entry point alcanza, ni directa ni transitivamente."""
-    root = Path(root)
-    indice = build_module_index(root)
-    grafo = build_import_graph(root)
+# Arbol donde vive la logica que produccion tiene que ejecutar. Un modulo de
+# `scripts/` que ningun workflow lanza sigue siendo un entry point manual
+# legitimo (CLAUDE.md documenta varios), y `tools/` es la propia auditoria,
+# cuyo unico ejecutor legitimo es la suite. Por eso el punto ciego "solo lo
+# alcanzan los tests" se reporta unicamente bajo `src/`.
+PRODUCTION_ROOTS = ("src/",)
 
-    raices = entry_point_modules(root, indice) | _raices_de_tests(indice)
+
+def _es_codigo_de_produccion(relativa: str) -> bool:
+    """True si el archivo vive en el arbol que produccion debe ejecutar."""
+    return relativa.startswith(PRODUCTION_ROOTS)
+
+
+def _alcance(
+    root: Path,
+    indice: dict[str, Path],
+    grafo: dict[str, set[str]],
+    raices: set[str],
+) -> set[str]:
+    """Cierre transitivo de `raices`, incluyendo imports dinamicos constantes.
+
+    `import_module("src.markets.btts")` es una arista real aunque `ast` no la
+    vea como `Import`: se agrega al conjunto de raices y se recalcula, de modo
+    que el modulo no se acuse de muerto por un tecnicismo del parser.
+    """
     alcanzables = reachable_modules(grafo, raices)
-
-    # Un import dinamico con destino constante es una arista real: se agrega
-    # y se recalcula el alcance antes de acusar a nadie de estar muerto.
     _, constantes = dynamic_import_prefixes(root, indice, alcanzables)
     extra = {destino for destino in constantes if destino in indice}
     if extra:
         alcanzables = reachable_modules(grafo, raices | extra)
+    return alcanzables
+
+
+def test_only_modules(
+    root: Path,
+    indice: dict[str, Path],
+    grafo: dict[str, set[str]],
+) -> set[str]:
+    """Modulos de produccion a los que SOLO llega `tests/`.
+
+    Ni huerfanos (la suite los ejerce) ni vivos (ningun workflow los ejecuta):
+    el hueco exacto en el que cae un modulo extraido y probado que nadie
+    llego a cablear.
+    """
+    raices_produccion = entry_point_modules(root, indice)
+    raices_tests = _raices_de_tests(indice)
+
+    alcance_produccion = _alcance(root, indice, grafo, raices_produccion)
+    alcance_total = _alcance(root, indice, grafo, raices_produccion | raices_tests)
+
+    return {
+        modulo
+        for modulo in alcance_total - alcance_produccion
+        if modulo in indice and _es_codigo_de_produccion(_rel(root, indice[modulo]))
+    }
+
+
+@check("orphan-code", Category.ORPHAN_CODE)
+def check_orphans(root: Path) -> tuple[list[Finding], int]:
+    """Modulos que ningun entry point alcanza, mas los que solo alcanza la suite.
+
+    Dos alcances, no uno: contar `tests/` como raiz evita acusar de muerto a lo
+    que la suite ejerce, pero por si solo esconde el caso contrario — codigo de
+    `src/` que unicamente existe para los tests. Ambos se reportan bajo
+    `orphan-code`, con anclas distinguibles (`key='test-only'`) para que el
+    diff corrida-a-corrida no los confunda.
+    """
+    root = Path(root)
+    indice = build_module_index(root)
+    grafo = build_import_graph(root)
+
+    raices_produccion = entry_point_modules(root, indice)
+    raices = raices_produccion | _raices_de_tests(indice)
+
+    alcance_produccion = _alcance(root, indice, grafo, raices_produccion)
+    alcanzables = _alcance(root, indice, grafo, raices)
 
     prefijos, _ = dynamic_import_prefixes(root, indice, alcanzables)
+    # Para el caso test-only la pregunta es si un cargador dinamico DE
+    # PRODUCCION podria alcanzarlo; los prefijos que solo aparecen en modulos
+    # de test no absuelven a nadie.
+    prefijos_produccion, _ = dynamic_import_prefixes(
+        root, indice, alcance_produccion
+    )
 
     hallazgos: list[Finding] = []
     for modulo in sorted(indice):
-        if modulo in alcanzables:
-            continue
         relativa = _rel(root, indice[modulo])
+
+        if modulo in alcanzables:
+            if modulo in alcance_produccion:
+                continue
+            if not _es_codigo_de_produccion(relativa):
+                continue
+
+            incierto = any(
+                modulo.startswith(prefijo) for prefijo in prefijos_produccion
+            )
+            if incierto:
+                impacto = (
+                    f"`{relativa}` solo aparece importado desde `tests/`, pero "
+                    f"un cargador dinamico de produccion podria alcanzarlo: "
+                    f"hallazgo INCIERTO, no se afirma que produccion lo ignore."
+                )
+                arreglo = (
+                    "Confirmar a mano si algun `import_module` de la ruta de "
+                    "produccion lo carga; si no, cablearlo o registrar su "
+                    "disposicion en `archive/ARCHIVE.md`."
+                )
+                severidad = Severity.S4
+            else:
+                impacto = (
+                    f"`{relativa}` solo se alcanza desde `tests/`: ningun "
+                    f"workflow lo ejecuta. La suite lo prueba en verde mientras "
+                    f"produccion sigue corriendo otro codigo, asi que esos tests "
+                    f"no dicen nada sobre las apuestas que se colocan."
+                )
+                arreglo = (
+                    f"Cablear `{relativa}` desde la ruta de produccion que "
+                    f"deberia usarlo (y borrar la copia en linea que lo "
+                    f"sustituye), o registrar su disposicion en "
+                    f"`archive/ARCHIVE.md` si el enganche aun no existe."
+                )
+                # S2: no mueve dinero por si mismo, pero rompe la garantia
+                # operativa de que un test verde cubre lo que produccion corre.
+                severidad = Severity.S2
+
+            hallazgos.append(
+                Finding(
+                    category=Category.ORPHAN_CODE,
+                    severity=severidad,
+                    evidence=[Evidence(path=relativa, key="test-only")],
+                    impact=impacto,
+                    remediation=arreglo,
+                    effort="S",
+                    uncertain=incierto,
+                )
+            )
+            continue
+
         incierto = any(modulo.startswith(prefijo) for prefijo in prefijos)
         if incierto:
             impacto = (

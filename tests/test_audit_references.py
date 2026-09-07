@@ -266,7 +266,13 @@ def test_orphans_toma_las_raices_de_los_workflows_no_de_una_lista_fija(tmp_path)
 
 
 def test_orphans_cuenta_tests_como_entry_point(tmp_path):
-    """`tests/` es raiz: un modulo que solo usa la suite no es huerfano."""
+    """`tests/` es raiz: lo que la suite ejerce NO se acusa de codigo muerto.
+
+    La suite sigue siendo entry point, asi que el modulo no puede aparecer
+    como inalcanzable (el hallazgo S3 que invita a archivarlo). Lo que si
+    aparece es el hallazgo mas fino de `test-only`, con su propia ancla: son
+    dos afirmaciones distintas y el diff corrida-a-corrida no debe mezclarlas.
+    """
     from tools.audit.checks.references import check_orphans
 
     _arbol_base(tmp_path)
@@ -280,8 +286,15 @@ def test_orphans_cuenta_tests_como_entry_point(tmp_path):
     )
 
     hallazgos, _ = check_orphans(tmp_path)
+    anclados = [
+        h
+        for h in hallazgos
+        if any(ev.path == "src/utils/team_normalizer.py" for ev in h.evidence)
+    ]
 
-    assert "src/utils/team_normalizer.py" not in _rutas(hallazgos)
+    assert len(anclados) == 1
+    assert anclados[0].evidence[0].key == "test-only"
+    assert "inalcanzable" not in anclados[0].impact
 
 
 def test_orphans_marca_uncertain_cuando_el_import_es_dinamico(tmp_path):
@@ -337,6 +350,160 @@ def test_orphans_trata_el_import_dinamico_constante_como_arista_real(tmp_path):
 
     assert "src/markets/btts.py" not in rutas
     assert "src/markets/over_under.py" in rutas
+
+
+# ---------------------------------------------------------------------------
+# orphan-code: el punto ciego "solo lo alcanzan los tests"
+# ---------------------------------------------------------------------------
+
+def _con_modulo_solo_de_tests(raiz: Path) -> None:
+    """Arbol base mas un modulo de `src/` que unicamente ejerce la suite.
+
+    Reproduce el estado real del repositorio mientras R001 sigue sin aplicar:
+    `src/pipeline/bet_decision.py` existe y tiene tests, pero el pipeline de
+    produccion conserva su copia en linea y nunca lo llama.
+    """
+    _arbol_base(raiz)
+    _escribir(
+        raiz,
+        "src/pipeline/bet_decision.py",
+        "def decide_bets(candidatas):\n    return list(candidatas)\n",
+    )
+    _escribir(
+        raiz,
+        "tests/test_bet_decision.py",
+        "def test_decide():\n"
+        "    from src.pipeline.bet_decision import decide_bets\n"
+        "    assert decide_bets([]) == []\n",
+    )
+
+
+def _hallazgo_test_only(hallazgos, relativa: str):
+    """El hallazgo test-only anclado en esa ruta, o None si no se reporto."""
+    for hallazgo in hallazgos:
+        for ev in hallazgo.evidence:
+            if ev.path == relativa and ev.key == "test-only":
+                return hallazgo
+    return None
+
+
+def test_orphans_reporta_modulo_de_src_que_solo_alcanzan_los_tests(tmp_path):
+    """Un modulo de produccion probado pero nunca cableado NO pasa por vivo.
+
+    Contar `tests/` como raiz evita acusar de muerto a lo que la suite ejerce,
+    pero por si solo esconde el caso contrario: la suite queda verde mientras
+    produccion sigue corriendo otro codigo. Ese hueco es el hallazgo.
+    """
+    from tools.audit.checks.references import check_orphans
+
+    _con_modulo_solo_de_tests(tmp_path)
+
+    hallazgos, _ = check_orphans(tmp_path)
+    hallazgo = _hallazgo_test_only(hallazgos, "src/pipeline/bet_decision.py")
+
+    assert hallazgo is not None
+    assert hallazgo.category.value == "orphan-code"
+    assert hallazgo.severity.name == "S2"
+    assert hallazgo.uncertain is False
+    assert "tests/" in hallazgo.impact
+
+
+def test_orphans_deja_de_reportar_el_modulo_cuando_produccion_lo_llama(tmp_path):
+    """Cablearlo desde la ruta de produccion cierra el hallazgo.
+
+    Segunda mitad de la garantia: el checker no puede limitarse a marcar todo
+    lo que tocan los tests; tiene que apagarse en cuanto el enganche existe.
+    """
+    from tools.audit.checks.references import check_orphans
+
+    _con_modulo_solo_de_tests(tmp_path)
+
+    antes, _ = check_orphans(tmp_path)
+    assert _hallazgo_test_only(antes, "src/pipeline/bet_decision.py") is not None
+
+    # El pipeline (alcanzable desde morning.yml) ahora si lo importa.
+    _escribir(
+        tmp_path,
+        "src/pipeline/prediction_pipeline.py",
+        "from src.dashboard.betting_dashboard import render\n"
+        "from src.pipeline.bet_decision import decide_bets\n",
+    )
+
+    despues, _ = check_orphans(tmp_path)
+
+    assert _hallazgo_test_only(despues, "src/pipeline/bet_decision.py") is None
+    assert "src/pipeline/bet_decision.py" not in _rutas(despues)
+
+
+def test_test_only_modules_separa_alcance_de_produccion_del_de_la_suite(tmp_path):
+    """La primitiva devuelve exactamente los modulos del hueco, ni uno mas."""
+    from tools.audit.checks.references import test_only_modules
+    from tools.audit.graph import build_import_graph, build_module_index
+
+    _con_modulo_solo_de_tests(tmp_path)
+
+    indice = build_module_index(tmp_path)
+    grafo = build_import_graph(tmp_path)
+
+    assert test_only_modules(tmp_path, indice, grafo) == {
+        "src.pipeline.bet_decision"
+    }
+
+
+def test_test_only_no_acusa_a_scripts_ni_a_tools(tmp_path):
+    """Solo `src/` cuenta: `scripts/` y `tools/` tienen ejecutores legitimos.
+
+    Un script manual documentado en CLAUDE.md y el propio auditor no son
+    codigo que produccion deba ejecutar en cron, asi que reportarlos como
+    "solo lo alcanzan los tests" seria ruido que entierra el hallazgo real.
+    """
+    from tools.audit.checks.references import test_only_modules
+    from tools.audit.graph import build_import_graph, build_module_index
+
+    _arbol_base(tmp_path)
+    _escribir(tmp_path, "scripts/clv_audit.py", "def auditar():\n    return 1\n")
+    _escribir(tmp_path, "tools/audit/rank.py", "def rank(x):\n    return x\n")
+    _escribir(
+        tmp_path,
+        "tests/test_manuales.py",
+        "def test_manuales():\n"
+        "    from scripts.clv_audit import auditar\n"
+        "    from tools.audit.rank import rank\n"
+        "    assert rank(auditar()) == 1\n",
+    )
+
+    indice = build_module_index(tmp_path)
+    grafo = build_import_graph(tmp_path)
+
+    assert test_only_modules(tmp_path, indice, grafo) == set()
+
+
+def test_test_only_es_incierto_cuando_produccion_carga_dinamicamente(tmp_path):
+    """Un cargador dinamico de produccion degrada el hallazgo a INCIERTO.
+
+    Afirmar "produccion lo ignora" cuando un `import_module` construido puede
+    alcanzarlo es exactamente el falso positivo que lleva a borrar un modulo
+    vivo; el checker baja a S4 y lo marca `uncertain`.
+    """
+    from tools.audit.checks.references import check_orphans
+
+    _con_modulo_solo_de_tests(tmp_path)
+    _escribir(
+        tmp_path,
+        "src/pipeline/prediction_pipeline.py",
+        "import importlib\n"
+        "from src.dashboard.betting_dashboard import render\n\n\n"
+        "def cargar(nombre):\n"
+        '    return importlib.import_module(f"src.pipeline.{nombre}")\n',
+    )
+
+    hallazgos, _ = check_orphans(tmp_path)
+    hallazgo = _hallazgo_test_only(hallazgos, "src/pipeline/bet_decision.py")
+
+    assert hallazgo is not None
+    assert hallazgo.uncertain is True
+    assert hallazgo.severity.name == "S4"
+    assert "INCIERTO" in hallazgo.impact
 
 
 # ---------------------------------------------------------------------------
@@ -460,3 +627,39 @@ def test_los_checkers_del_auditor_no_se_reportan_como_huerfanos():
         if not h.uncertain
     }
     assert "tools/audit/checks/references.py" not in huerfanos
+
+
+def test_bet_decision_real_reportado_exactamente_mientras_no_lo_llame_produccion():
+    """Invariante sobre el repositorio real, valido antes y despues de R001.
+
+    `src/pipeline/bet_decision.py` es el caso que motiva la categoria: se
+    extrajo con tests propios mientras `run_prediction_pipeline` conservaba su
+    copia en linea. La asercion no fija el estado actual — fija la EQUIVALENCIA
+    entre "produccion lo alcanza" y "no se reporta", asi que sigue siendo cierta
+    cuando R001 cablee la llamada y el hallazgo tenga que desaparecer solo.
+    """
+    from tools.audit.checks.references import (
+        _alcance,
+        check_orphans,
+        entry_point_modules,
+    )
+    from tools.audit.graph import build_import_graph, build_module_index
+
+    indice = build_module_index(REPO_ROOT)
+    grafo = build_import_graph(REPO_ROOT)
+
+    assert "src.pipeline.bet_decision" in indice, (
+        "el modulo de la cadena de decision desaparecio del arbol"
+    )
+
+    alcance_produccion = _alcance(
+        REPO_ROOT, indice, grafo, entry_point_modules(REPO_ROOT, indice)
+    )
+    lo_llama_produccion = "src.pipeline.bet_decision" in alcance_produccion
+
+    hallazgos, _ = check_orphans(REPO_ROOT)
+    reportado = (
+        _hallazgo_test_only(hallazgos, "src/pipeline/bet_decision.py") is not None
+    )
+
+    assert reportado is not lo_llama_produccion
