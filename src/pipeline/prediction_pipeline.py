@@ -115,6 +115,11 @@ from src.models.calibration_monitor import (
     _ah_group,
 )
 from src.models.dc_mle_fitter import get_dc_lambdas, is_params_fresh, DC_MLE_WEIGHT
+# La cadena de decisión (edge mínimo → Kelly → topes de cartera) NO vive aquí:
+# vive en src/pipeline/bet_decision.py, que es puro y no toca DB ni red. Es la
+# misma función que replica tests/test_golden_decision.py sobre el fixture
+# congelado, así que cualquier cambio de sizing o de topes rompe ese test.
+from src.pipeline.bet_decision import apply_min_edge_filter, decide_bets
 from config.settings import PAPER_ONLY_LEAGUES
 from collections import Counter
 
@@ -145,6 +150,7 @@ MAX_BETS_PER_MATCH      = 2
 MAX_RELIABLE_EDGE       = 0.499
 MAX_PROB_RATIO          = 2.0
 MIDWEEK_DAYS            = frozenset({0, 1, 2})  # Lun/Mar/Mié
+PORTFOLIO_MAX_TOTAL_PCT = 0.15     # stake total máximo (protección de ruina)
 
 CORNERS_DEFAULT_ODDS = 1.80
 CARDS_DEFAULT_ODDS   = 1.80
@@ -283,6 +289,72 @@ def safe_odds(value):
 
 def clamp_prob(p):
     return max(0.01, min(p, 0.95))
+
+
+def _match_min_edges(league, midweek, is_paper):
+    """Umbrales de edge mínimo YA bumpeados por el contexto del partido.
+
+    El bloque inline resolvía el umbral bet por bet y DESPUÉS le aplicaba los
+    dos bumps (liga difícil, midweek). Bumpear el diccionario completo antes
+    de resolver da exactamente el mismo umbral por bet: el bump es una función
+    pura del número y la resolución sólo decide *cuál* número usar, no cómo se
+    ajusta. Hacerlo así permite delegar el filtro a `apply_min_edge_filter()`
+    — la misma función que replica el fixture dorado — en vez de mantener una
+    segunda copia del lookup AH que ya falló una vez (FIX 11-may-26).
+    """
+    def _bump(value):
+        # Bump por liga problemática (Italia, MLS, Ligue 1)
+        if league in TOUGH_LEAGUES:
+            value = max(value, 0.07)
+        # Bump midweek — no aplica a paper (el Mundial juega cualquier día)
+        if midweek and not is_paper:
+            value *= 1.4
+        return value
+
+    return {m: _bump(v) for m, v in MIN_EDGE_BY_MARKET.items()}, _bump(MIN_EDGE)
+
+
+def _print_portfolio_summary(pre_cap, final_bets, bankroll):
+    """Resumen de exposición de cartera. Sólo imprime: no decide nada.
+
+    `pre_cap` son los stakes tal como salieron del sizing (más los ajustes de
+    correlación y el filtro de sospechosas); `final_bets` son los que ya
+    pasaron por `apply_portfolio_caps()`. La concentración se calcula sobre
+    `pre_cap` porque es la que motivó la penalización, igual que en el bloque
+    inline anterior.
+    """
+    if not final_bets or bankroll <= 0:
+        return
+
+    total_stake = sum(b["stake"] for b in pre_cap)
+    final_total = sum(b["stake"] for b in final_bets)
+    max_total   = bankroll * PORTFOLIO_MAX_TOTAL_PCT
+
+    market_stakes: dict[str, float] = {}
+    for b in pre_cap:
+        market_stakes[b["market"]] = market_stakes.get(b["market"], 0) + b["stake"]
+
+    dominant_mkt  = max(market_stakes, key=market_stakes.get)
+    concentration = market_stakes[dominant_mkt] / total_stake if total_stake > 0 else 0
+
+    if final_total < total_stake:
+        print(
+            f"\n⚖️  Portfolio ajustado: stake total {total_stake:.2f}u → "
+            f"{final_total:.2f}u  "
+            f"(máx {max_total:.2f}u = 15% bankroll)"
+        )
+
+    if concentration > 0.50:
+        print(
+            f"  📊 Concentración {dominant_mkt}: {concentration*100:.0f}% del portfolio"
+        )
+
+    print(
+        f"\n💼 Portfolio: {len(final_bets)} bets | "
+        f"Stake total: {final_total:.2f}u | "
+        f"Bankroll: {bankroll:.2f}u | "
+        f"Exposición: {final_total/bankroll*100:.1f}%"
+    )
 
 
 # =========================
@@ -1351,16 +1423,19 @@ def run_prediction_pipeline():
             print(f"⚠️  No se pudo parsear match_date={date!r} para weekday: {e}")
         _midweek = _match_dow in MIDWEEK_DAYS if _match_dow is not None else False
 
-        match_bets_count = 0
-        groups_used = set()
-
+        # ── Pase 1: filtros por-bet, independientes del estado del partido ──
+        # Se separan del pase 3 para que el edge mínimo (pase 2) pueda
+        # delegarse a `apply_min_edge_filter()` sobre la lista completa.
+        # Ninguno de estos predicados mira `groups_used` ni `match_bets_count`
+        # y el orden relativo de los bets no cambia, así que el conjunto que
+        # llega al pase 3 es idéntico al del bucle único anterior.
+        candidates = []
         for bet in bets:
-            if match_bets_count >= MAX_BETS_PER_MATCH:
-                break
-
             mkt = bet["market"]
 
             # ── Mercados desactivados ─────────────────────────────────
+            # (el bucle original repetía este mismo chequeo en la rama
+            # `else` del bloque de abajo; era redundante y se eliminó)
             if mkt in _DISABLED_MARKETS:
                 continue
 
@@ -1373,10 +1448,6 @@ def run_prediction_pipeline():
                 if mkt in _BLOCKED_MARKETS:
                     continue
                 if mkt.startswith("corners_over_") or mkt.startswith("cards_over_"):
-                    continue
-            else:
-                # En paper: solo bloquear mercados sin odds reales
-                if mkt in _DISABLED_MARKETS:
                     continue
             # AH pk (+0.0): bloqueado siempre, paper o no
             if mkt.startswith("ah_") and ("+0.0" in mkt or mkt.endswith("_0.0")):
@@ -1395,36 +1466,31 @@ def run_prediction_pipeline():
             if mkt == "draw" and not (2.5 <= _odds <= 5.0):
                 continue
 
-            # ── Edge mínimo dinámico (Mejora #3 — por mercado) ──────
-            # Usar `edge_market` (prob - implied) — el verdadero edge.
-            # `edge` (= edge_ev) infla con odds altas y rompe filtros.
-            _edge_real = bet.get("edge_market", bet["edge"])
+            candidates.append(bet)
 
-            # 1) Threshold base por mercado (Mejora #3)
-            # FIX 11-may-26: para mercados AH parametrizados (`ah_home_-0.5`,
-            # `ah_away_-1.0`, etc.), el lookup directo en MIN_EDGE_BY_MARKET
-            # FALLABA (el dict tiene `ah_home_fav` no `ah_home_-0.5`) y caía
-            # al default 0.05. Esto dejó pasar 41 ah_fav bets en 90d con
-            # edge=5-12% que en realidad tenían win rate 27%. Ahora hacemos
-            # fallback al grupo AH (ah_home_fav/pk/dog) antes del default.
-            _min_edge = MIN_EDGE_BY_MARKET.get(mkt)
-            if _min_edge is None:
-                grp = _ah_group(mkt)
-                if grp is not None:
-                    _min_edge = MIN_EDGE_BY_MARKET.get(grp, MIN_EDGE)
-                else:
-                    _min_edge = MIN_EDGE
+        # ── Pase 2: edge mínimo dinámico (Mejora #3 — por mercado) ──────
+        # Delegado a `apply_min_edge_filter()`, la MISMA función que replica
+        # el fixture dorado. Ahí vive el FIX del 11-may-26: los mercados AH
+        # parametrizados (`ah_home_-0.5`) caían al default 0.05 porque el
+        # lookup directo fallaba, y dejaron pasar 41 bets con win rate 27%.
+        # Los bumps de contexto (liga difícil, midweek) se aplican a los
+        # umbrales ANTES de pasarlos — ver `_match_min_edges()`.
+        _min_edge_by_market, _min_edge_default = _match_min_edges(
+            _league, _midweek, _is_paper
+        )
+        candidates = apply_min_edge_filter(
+            candidates, _min_edge_by_market, _min_edge_default, _ah_group
+        )
 
-            # 2) Bump por liga problemática (Italia, MLS, Ligue 1)
-            if _league in TOUGH_LEAGUES:
-                _min_edge = max(_min_edge, 0.07)
+        # ── Pase 3: filtros que dependen del estado del partido ────────
+        match_bets_count = 0
+        groups_used = set()
 
-            # 3) Bump midweek — no aplica a paper (WC juega cualquier día)
-            if _midweek and not _is_paper:
-                _min_edge *= 1.4
+        for bet in candidates:
+            if match_bets_count >= MAX_BETS_PER_MATCH:
+                break
 
-            if _edge_real < _min_edge:
-                continue
+            mkt = bet["market"]
 
             # MAX_ODDS: en paper usamos 6.0 para capturar underdogs del Mundial
             # (ej. France @5.35 sería bloqueada con el límite de clubes de 3.80)
@@ -1438,15 +1504,13 @@ def run_prediction_pipeline():
             if group and group in groups_used:
                 continue
 
-            # MEJORA #14: pasar market+league para que kelly_stake module la
-            # fracción según el CLV histórico (ver _adjusted_kelly_fraction).
-            stake = kelly_stake(
-                bet["probability"], bet["odds"],
-                bankroll=current_bankroll,
-                market=mkt,
-                league=_league,
-            )
-
+            # El stake NO se calcula aquí: lo asigna `decide_bets()` después
+            # del bucle, con la misma `kelly_stake` de siempre (MEJORA #14 —
+            # recibe market+league para modular la fracción según el CLV
+            # histórico, ver `_adjusted_kelly_fraction`). Diferirlo es neutral
+            # porque `kelly_stake` sólo depende de prob/odds/bankroll/market/
+            # liga, todos ya fijos, y es lo que hace que producción y el
+            # fixture dorado corran exactamente la misma cadena de decisión.
             all_bets.append({
                 "match":       f"{home} vs {away}",
                 "match_date":  date,
@@ -1458,7 +1522,6 @@ def run_prediction_pipeline():
                 # de `edge_ev`. A partir de 04-may-26 bets_history.edge mide
                 # `prob - implied`, no `(prob*odds)-1` (que era inflado).
                 "edge":        bet.get("edge_market", bet["edge"]),
-                "stake":       stake
             })
 
             match_bets_count += 1
@@ -1486,7 +1549,103 @@ def run_prediction_pipeline():
     if all_bets:
         print("\n  Signals: DC + ELO + Form(venue) + MC + Corners + Shots + Congestion + Weather")
 
+    # =========================
+    # CADENA DE DECISIÓN  →  src/pipeline/bet_decision.py
+    # =========================
+    # Aquí se asignan los stakes y se aplican los topes de cartera. NO hay
+    # copia inline de esa lógica: producción llama a `decide_bets()`, la misma
+    # función que tests/test_golden_decision.py replica sobre el fixture
+    # congelado. Si alguien cambia el sizing o los topes, ese test falla.
+    #
+    # Límites de cartera (dentro de `apply_portfolio_caps`):
+    #   - Stake total <= 15% del bankroll (protección de ruina)
+    #   - Si un mercado pasa del 60% del stake total → penalización 0.75
+    #   - Si se viola algún límite → escalar stakes proporcionalmente
+    #
+    # Los dos pasos que van ENTRE el sizing y los topes (correlación por
+    # partido y filtro de sospechosas) dependen del slate completo y no del
+    # contrato puro del módulo, así que entran por el gancho `post_size`.
+    #
+    # El filtro de edge mínimo vuelve a correr aquí con los umbrales BASE.
+    # Es un no-op deliberado: cada bet ya pasó el pase 2 con un umbral
+    # bumpeado (>= base) sobre el mismo `edge_market`, así que ninguno cae.
+    # Se pasa igual para que producción ejecute la cadena COMPLETA y no una
+    # versión recortada de ella.
+
+    _pre_cap: list[dict] = []
+
+    def _post_size(sized: list[dict]) -> list[dict]:
+        """Ajustes entre el sizing Kelly y los topes de cartera."""
+        nonlocal _pre_cap
+
+        # =========================
+        # CORRELACIÓN POR PARTIDO
+        # =========================
+        # Cuando tenemos 2+ apuestas en el mismo partido, no son independientes:
+        # si Botafogo gana 3-0 ambas ganan juntas; si pierde 0-1 ambas pierden.
+        # Aplicamos factor 1/sqrt(n) por apuesta para reducir la sobreexposición
+        # sin eliminar las apuestas correladas (que sí tienen valor individual).
+        #
+        # Factor:  1 apuesta → 100%  |  2 apuestas → 71% c/u  |  3 → 58% c/u
+        match_counts = Counter(b["match"] for b in sized)
+        corr_adjusted = 0
+        for b in sized:
+            n = match_counts[b["match"]]
+            if n > 1:
+                factor = 1.0 / (n ** 0.5)
+                b["stake"] = round(b["stake"] * factor, 2)
+                corr_adjusted += 1
+
+        if corr_adjusted:
+            print(f"\n🔗 Correlacion ajustada: {corr_adjusted} bets en partidos con apuestas multiples")
+            for match, n in match_counts.items():
+                if n > 1:
+                    factor = round(1.0 / (n ** 0.5) * 100)
+                    print(f"   {match}  ({n} bets → {factor}% stake c/u)")
+
+        # =========================
+        # CAMBIO A: FILTRO SOSPECHOSAS
+        # =========================
+        # Elimina bets donde el edge llegó al tope artificial del modelo (0.499)
+        # o donde la prob del modelo es > 2x la probabilidad implícita del mercado.
+        # Estas bets casi siempre pierden porque no hay datos reales detrás.
+        suspicious_removed = 0
+        clean_bets = []
+        for b in sized:
+            odds           = float(b.get("odds", 0))
+            prob           = float(b.get("probability", 0))
+            edge           = float(b.get("edge", 0))
+            market_implied = 1.0 / odds if odds > 0 else 0
+            if edge >= MAX_RELIABLE_EDGE:
+                suspicious_removed += 1
+                continue
+            if market_implied > 0 and prob > MAX_PROB_RATIO * market_implied:
+                suspicious_removed += 1
+                continue
+            clean_bets.append(b)
+
+        if suspicious_removed:
+            print(f"🚫 Sospechosas eliminadas:  {suspicious_removed}")
+
+        # Snapshot pre-topes para el resumen de exposición. `apply_portfolio_caps`
+        # copia cada bet antes de escalarlo, así que estos stakes no se mutan.
+        _pre_cap = clean_bets
+        return clean_bets
+
+    all_bets = decide_bets(
+        all_bets,
+        bankroll=current_bankroll,
+        min_edge_by_market=MIN_EDGE_BY_MARKET,
+        min_edge_default=MIN_EDGE,
+        ah_group=_ah_group,
+        kelly_fn=kelly_stake,
+        max_total_pct=PORTFOLIO_MAX_TOTAL_PCT,
+        post_size=_post_size,
+    )
+
     if all_bets:
+        # Se rankea DESPUÉS de la cadena de decisión para que el listado
+        # imprima el stake final (el que se guarda), no uno intermedio.
         ranked = rank_bets(all_bets)
 
         print("\n🔥 BEST BETS\n")
@@ -1503,115 +1662,7 @@ def run_prediction_pipeline():
     # =========================
     # PORTFOLIO EXPOSURE
     # =========================
-    # Antes de guardar, verifica que el stake total no exceda límites seguros
-    # y que no haya concentración excesiva en un solo tipo de mercado.
-    #
-    # Límites:
-    #   - Stake total <= 15% del bankroll (protección de ruina)
-    #   - Un mercado no puede representar > 50% del stake total (diversificación)
-    #   - Si se viola algún límite → escalar stakes proporcionalmente
-
-    # =========================
-    # CORRELACIÓN POR PARTIDO
-    # =========================
-    # Cuando tenemos 2+ apuestas en el mismo partido, no son independientes:
-    # si Botafogo gana 3-0 ambas ganan juntas; si pierde 0-1 ambas pierden.
-    # Aplicamos factor 1/sqrt(n) por apuesta para reducir la sobreexposición
-    # sin eliminar las apuestas correladas (que sí tienen valor individual).
-    #
-    # Factor:  1 apuesta → 100%  |  2 apuestas → 71% c/u  |  3 → 58% c/u
-
-    match_counts = Counter(b["match"] for b in all_bets)
-    corr_adjusted = 0
-    for b in all_bets:
-        n = match_counts[b["match"]]
-        if n > 1:
-            factor = 1.0 / (n ** 0.5)
-            b["stake"] = round(b["stake"] * factor, 2)
-            corr_adjusted += 1
-
-    if corr_adjusted:
-        print(f"\n🔗 Correlacion ajustada: {corr_adjusted} bets en partidos con apuestas multiples")
-        for match, n in match_counts.items():
-            if n > 1:
-                factor = round(1.0 / (n ** 0.5) * 100)
-                print(f"   {match}  ({n} bets → {factor}% stake c/u)")
-
-    # =========================
-    # CAMBIO A: FILTRO SOSPECHOSAS
-    # =========================
-    # Elimina bets donde el edge llegó al tope artificial del modelo (0.499)
-    # o donde la prob del modelo es > 2x la probabilidad implícita del mercado.
-    # Estas bets casi siempre pierden porque no hay datos reales detrás.
-
-    suspicious_removed = 0
-    clean_bets = []
-    for b in all_bets:
-        odds           = float(b.get("odds", 0))
-        prob           = float(b.get("probability", 0))
-        edge           = float(b.get("edge", 0))
-        market_implied = 1.0 / odds if odds > 0 else 0
-        if edge >= MAX_RELIABLE_EDGE:
-            suspicious_removed += 1
-            continue
-        if market_implied > 0 and prob > MAX_PROB_RATIO * market_implied:
-            suspicious_removed += 1
-            continue
-        clean_bets.append(b)
-    all_bets = clean_bets
-    if suspicious_removed:
-        print(f"🚫 Sospechosas eliminadas:  {suspicious_removed}")
-
-    if all_bets and current_bankroll > 0:
-        total_stake = sum(b["stake"] for b in all_bets)
-        max_total   = current_bankroll * 0.15
-
-        # ── Concentración por mercado ─────────────────────────────────────
-        market_stakes: dict[str, float] = {}
-        for b in all_bets:
-            mkt = b["market"]
-            market_stakes[mkt] = market_stakes.get(mkt, 0) + b["stake"]
-
-        dominant_mkt   = max(market_stakes, key=market_stakes.get)
-        dominant_stake = market_stakes[dominant_mkt]
-        concentration  = dominant_stake / total_stake if total_stake > 0 else 0
-
-        # ── Calcular factor de escala ─────────────────────────────────────
-        scale = 1.0
-
-        if total_stake > max_total:
-            scale = min(scale, max_total / total_stake)
-
-        if concentration > 0.60 and total_stake > 5:
-            # Penalizar el mercado dominante para reducir concentración
-            penalty = 0.75
-            for b in all_bets:
-                if b["market"] == dominant_mkt:
-                    b["stake"] = round(b["stake"] * penalty, 2)
-            total_stake = sum(b["stake"] for b in all_bets)
-            if total_stake > max_total:
-                scale = min(scale, max_total / total_stake)
-
-        if scale < 1.0:
-            for b in all_bets:
-                b["stake"] = round(b["stake"] * scale, 2)
-            print(
-                f"\n⚖️  Portfolio ajustado: stake total {total_stake:.2f}u → "
-                f"{sum(b['stake'] for b in all_bets):.2f}u  "
-                f"(máx {max_total:.2f}u = 15% bankroll)"
-            )
-
-        if concentration > 0.50:
-            print(
-                f"  📊 Concentración {dominant_mkt}: {concentration*100:.0f}% del portfolio"
-            )
-
-        print(
-            f"\n💼 Portfolio: {len(all_bets)} bets | "
-            f"Stake total: {sum(b['stake'] for b in all_bets):.2f}u | "
-            f"Bankroll: {current_bankroll:.2f}u | "
-            f"Exposición: {sum(b['stake'] for b in all_bets)/current_bankroll*100:.1f}%"
-        )
+    _print_portfolio_summary(_pre_cap, all_bets, current_bankroll)
 
     # =========================
     # PAPER-TRADING SPLIT (Kill-Switch Mundial)

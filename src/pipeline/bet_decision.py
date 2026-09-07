@@ -14,6 +14,10 @@ Contrato de un bet (dict). Se conservan al menos estas llaves de entrada a
 salida:
     match, market, side, odds, prob, edge, edge_market, stake
 
+La probabilidad del modelo se lee de `prob` o, si no esta, de `probability`
+(el nombre que usa produccion porque es la columna de bets_history). Aceptar
+las dos evita duplicar la llave en el dict que termina en `save_bets()`.
+
 ⚠️  `edge` es `edge_ev = prob*odds - 1` (inflado por odds altas).
     `edge_market` = `prob - 1/odds` es el edge REAL.
     Todo filtro se aplica sobre `edge_market` — nunca sobre `edge`.
@@ -50,6 +54,13 @@ def _copy_bet(bet: dict[str, Any]) -> dict[str, Any]:
 def _real_edge(bet: dict[str, Any]) -> float:
     """El edge real (`edge_market`), con fallback a `edge` si no existe."""
     return bet.get("edge_market", bet["edge"])
+
+
+def _prob(bet: dict[str, Any]) -> float:
+    """La probabilidad del modelo: `prob`, o `probability` en produccion."""
+    if "prob" in bet:
+        return bet["prob"]
+    return bet["probability"]
 
 
 def apply_min_edge_filter(
@@ -107,7 +118,7 @@ def size_stakes(
     for bet in bets:
         out = _copy_bet(bet)
         out["stake"] = kelly_fn(
-            out["prob"],
+            _prob(out),
             out["odds"],
             bankroll=bankroll,
             market=out["market"],
@@ -177,15 +188,26 @@ def decide_bets(
     ah_group: Callable[[str], str | None],
     kelly_fn: Callable[..., float],
     max_total_pct: float,
+    post_size: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     """Cadena completa: filtro de edge -> sizing Kelly -> topes de portfolio.
 
-    Pura y determinista: no muta `scored` y dos llamadas con la misma entrada
-    devuelven exactamente la misma salida.
+    Pura y determinista respecto de sus argumentos: no muta `scored` y dos
+    llamadas con la misma entrada devuelven exactamente la misma salida.
+
+    `post_size` es un gancho OPCIONAL que corre entre el sizing y los topes de
+    cartera. Existe porque produccion mete dos pasos ahi (ajuste de correlacion
+    por partido y filtro de bets sospechosas) que dependen del slate completo y
+    no del contrato puro de este modulo. Sin el gancho, produccion tendria que
+    recomponer la cadena a mano y el fixture dorado dejaria de probar la misma
+    secuencia que corre de verdad. El fixture no pasa `post_size`, asi que su
+    linea base sigue midiendo filtro -> sizing -> topes sin intermediarios.
     """
     bets = apply_min_edge_filter(
         list(scored), min_edge_by_market, min_edge_default, ah_group
     )
     bets = size_stakes(bets, bankroll, kelly_fn)
+    if post_size is not None:
+        bets = post_size(bets)
     bets = apply_portfolio_caps(bets, bankroll, max_total_pct)
     return bets
