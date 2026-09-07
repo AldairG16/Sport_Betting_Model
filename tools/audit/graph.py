@@ -17,12 +17,22 @@ __all__ = [
     "EXCLUDED_DIRS",
     "build_import_graph",
     "build_module_index",
+    "clear_excluded_paths",
+    "exclude_path",
+    "excluded_paths",
     "find_cycles",
+    "is_excluded",
     "iter_python_files",
 ]
 
 # Directorios que jamas se recorren: ruido de VCS, entornos virtuales, cache
-# de bytecode y el archivo historico (que por definicion es codigo retirado).
+# de bytecode, el archivo historico (que por definicion es codigo retirado) y
+# `audits/`, donde el propio auditor publica `latest.json` y `latest.md`.
+#
+# Sin `audits` la auditoria se audita a si misma: el reporte cita rutas,
+# nombres de variables sensibles y fragmentos de codigo, asi que la corrida
+# siguiente encuentra "secretos" y "tablas" dentro de su propia salida y el
+# conteo de hallazgos crece solo porque ayer hubo hallazgos.
 EXCLUDED_DIRS = frozenset(
     {
         ".git",
@@ -30,6 +40,7 @@ EXCLUDED_DIRS = frozenset(
         "venv",
         "__pycache__",
         "archive",
+        "audits",
         ".pytest_cache",
         ".mypy_cache",
         "node_modules",
@@ -38,14 +49,67 @@ EXCLUDED_DIRS = frozenset(
     }
 )
 
+# Exclusiones registradas en tiempo de ejecucion, por RUTA absoluta y no por
+# nombre. El CLI mete aqui el `--out` cuando cae dentro de `--root`: excluir
+# por nombre serviria solo mientras el directorio se llame `audits`, y
+# `--out reportes/` volveria a envenenar la corrida siguiente.
+_EXTRA_EXCLUDED_PATHS: set[Path] = set()
+
+
+def exclude_path(ruta: Path) -> None:
+    """Excluye del recorrido un directorio concreto, por ruta absoluta."""
+    _EXTRA_EXCLUDED_PATHS.add(Path(ruta).resolve())
+
+
+def excluded_paths() -> frozenset[Path]:
+    """Rutas excluidas en tiempo de ejecucion (vista inmutable)."""
+    return frozenset(_EXTRA_EXCLUDED_PATHS)
+
+
+def clear_excluded_paths() -> None:
+    """Olvida las exclusiones de ruta. El CLI la llama al arrancar.
+
+    Sin esto dos corridas en el mismo proceso (los tests, entre otras)
+    heredarian el `--out` de la anterior y el resultado dependeria del orden
+    de ejecucion, que es justo lo contrario del determinismo que se promete.
+    """
+    _EXTRA_EXCLUDED_PATHS.clear()
+
+
+def is_excluded(root: Path, ruta: Path) -> bool:
+    """True si `ruta` cae bajo un directorio que no se debe recorrer.
+
+    Cubre las dos formas de exclusion: por nombre de directorio padre
+    (EXCLUDED_DIRS) y por ruta absoluta registrada (`exclude_path`).
+    """
+    base = Path(root)
+    destino = Path(ruta)
+
+    try:
+        relativa = destino.relative_to(base)
+    except ValueError:
+        relativa = None
+
+    if relativa is not None:
+        if any(parte in EXCLUDED_DIRS for parte in relativa.parts[:-1]):
+            return True
+        # Se reconstruye desde `base` en vez de llamar a `resolve()` por
+        # archivo: son miles de accesos a disco que no aportan nada cuando la
+        # raiz ya viene resuelta desde el CLI.
+        destino = base / relativa
+
+    return any(
+        destino == excluida or destino.is_relative_to(excluida)
+        for excluida in _EXTRA_EXCLUDED_PATHS
+    )
+
 
 def iter_python_files(root: Path) -> list[Path]:
-    """Devuelve todos los .py del arbol, ordenados, saltando EXCLUDED_DIRS."""
+    """Devuelve todos los .py del arbol, ordenados, saltando lo excluido."""
     root = Path(root)
     encontrados: list[Path] = []
     for ruta in root.rglob("*.py"):
-        partes = ruta.relative_to(root).parts
-        if any(parte in EXCLUDED_DIRS for parte in partes[:-1]):
+        if is_excluded(root, ruta):
             continue
         encontrados.append(ruta)
     # Orden estable: la salida del auditor tiene que ser byte-identica entre

@@ -30,7 +30,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.audit.graph import EXCLUDED_DIRS
+from tools.audit.graph import is_excluded
 from tools.audit.model import Category, Evidence, Finding, Severity
 from tools.audit.registry import check
 from tools.audit.sqlscan import SCANNED_SUFFIXES, DDLSite, scan_ddl
@@ -171,8 +171,7 @@ def _archivos(raiz: Path) -> list[Path]:
     for ruta in raiz.rglob("*"):
         if not ruta.is_file() or ruta.suffix not in SCANNED_SUFFIXES:
             continue
-        partes = ruta.relative_to(raiz).parts
-        if any(parte in EXCLUDED_DIRS for parte in partes[:-1]):
+        if is_excluded(raiz, ruta):
             continue
         encontrados.append(ruta)
     return sorted(encontrados, key=lambda p: p.relative_to(raiz).as_posix())

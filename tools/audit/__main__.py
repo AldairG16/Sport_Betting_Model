@@ -19,7 +19,9 @@ Tres decisiones que no son de estilo:
    (FR-006). El `commit_sha` se lee de los archivos de `.git`, sin invocar a
    `git` como subproceso.
 
-3. Lo unico que se escribe queda bajo `--out`.
+3. Lo unico que se escribe queda bajo `--out`, y ese directorio queda fuera
+   del recorrido cuando cae dentro de `--root`: el auditor no se audita a si
+   mismo ni acumula hallazgos leyendo su propio reporte anterior.
 
 `--ci` corre solo el subconjunto barato (importes que no resuelven +
 centralizacion de configuracion), no escribe artefactos — publicar un
@@ -40,6 +42,7 @@ from pathlib import Path
 
 from tools.audit.checks import load_all
 from tools.audit.diff import diff_runs, load_run, reassignments
+from tools.audit.graph import clear_excluded_paths, exclude_path
 from tools.audit.model import AuditRun, Category, Finding, Severity
 from tools.audit.rank import rank, risk_key, top_risks
 from tools.audit.registry import CheckSpec, all_checks
@@ -355,6 +358,47 @@ def _consola_utf8() -> None:
                 pass
 
 
+def _destino(raiz: Path, out: str) -> Path:
+    """Directorio de artefactos, absoluto y resuelto.
+
+    Se calcula ANTES de correr los checkers, no despues: el recorrido tiene
+    que saber que ruta no debe mirar mientras escanea, no cuando ya escribio.
+    """
+    destino = Path(out)
+    if not destino.is_absolute():
+        destino = raiz / destino
+    return destino.resolve()
+
+
+def _excluir_salida(raiz: Path, destino: Path) -> None:
+    """Saca el directorio de salida del recorrido cuando cae dentro del arbol.
+
+    Sin esto la auditoria se audita a si misma: `latest.md` cita rutas,
+    nombres de variables sensibles y fragmentos de codigo, asi que la corrida
+    siguiente encuentra hallazgos DENTRO del reporte de la anterior y el
+    inventario crece por realimentacion, no porque el repo empeore.
+
+    Es incondicional y por ruta absoluta: no depende de que el directorio se
+    llame `audits` ni de que el operador use el default.
+    """
+    # Una corrida anterior en el mismo proceso (los tests) no debe dejar su
+    # `--out` colgado; el resultado dependeria del orden de ejecucion.
+    clear_excluded_paths()
+
+    if destino == raiz:
+        # Degenerado: los artefactos caen en la raiz misma. No se puede
+        # excluir el arbol entero, asi que se avisa en vez de callar.
+        print(
+            "AVISO: --out apunta a la raiz auditada; los artefactos de esta "
+            "corrida se veran como codigo fuente en la siguiente.",
+            file=sys.stderr,
+        )
+        return
+
+    if destino.is_relative_to(raiz):
+        exclude_path(destino)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Punto de entrada. Devuelve el codigo de salida del proceso."""
     _consola_utf8()
@@ -364,6 +408,9 @@ def main(argv: list[str] | None = None) -> int:
     if not raiz.is_dir():
         print(f"ERROR: la raiz '{raiz}' no es un directorio.", file=sys.stderr)
         return 2
+
+    destino = _destino(raiz, args.out)
+    _excluir_salida(raiz, destino)
 
     inicio = time.perf_counter()
 
@@ -405,10 +452,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     corrida = build_run(raiz, timestamp=args.timestamp)
-
-    destino = Path(args.out)
-    if not destino.is_absolute():
-        destino = raiz / destino
 
     # El diff se hace contra el artefacto que ya vive en el destino, antes
     # de sobrescribirlo.

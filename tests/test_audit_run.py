@@ -374,6 +374,96 @@ def test_la_corrida_solo_escribe_bajo_el_directorio_de_salida(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 3 bis. El auditor no se audita a si mismo (R004)
+# ---------------------------------------------------------------------------
+
+def _reporte_falso() -> str:
+    """Reporte de una corrida anterior, con la pinta que tiene uno real.
+
+    El token se arma por partes a proposito: escrito entero seria un literal
+    con forma de credencial dentro de `tests/`, es decir un hallazgo del
+    propio checker de secretos sobre el repo vivo.
+    """
+    token = "sk-ant-" + "A" * 40
+    return (
+        "# Auditoria\n"
+        "\n"
+        "## credential-leakage\n"
+        "\n"
+        f"- `config/settings.py:12` — ODDS_API_KEY = {token}\n"
+        "\n"
+        "```sql\n"
+        "CREATE TABLE tabla_del_reporte (id INTEGER);\n"
+        "```\n"
+    )
+
+
+def _rutas_de_hallazgos(destino: Path) -> list:
+    """Rutas citadas por las evidencias del artefacto publicado."""
+    datos = json.loads((destino / "latest.json").read_text(encoding="utf-8"))
+    return [
+        evidencia["path"]
+        for hallazgo in datos["findings"]
+        for evidencia in hallazgo["evidence"]
+    ]
+
+
+def test_la_auditoria_no_escanea_su_propio_directorio_audits(tmp_path):
+    """`audits/` esta fuera del recorrido: el reporte no es codigo fuente.
+
+    Sin esta exclusion la corrida siguiente encuentra hallazgos DENTRO del
+    reporte de la anterior y el inventario crece por realimentacion.
+    """
+    from tools.audit.graph import EXCLUDED_DIRS
+
+    assert "audits" in EXCLUDED_DIRS
+
+    raiz = _arbol_con_defectos(tmp_path)
+    _escribir(raiz / "audits" / "latest.md", _reporte_falso())
+
+    # El destino vive FUERA de la raiz: lo unico que puede saltarse el
+    # reporte plantado es la exclusion por nombre.
+    destino = tmp_path / "salida"
+    assert _correr(raiz, destino) == 0
+
+    ofensoras = [r for r in _rutas_de_hallazgos(destino) if r.startswith("audits/")]
+    assert not ofensoras, f"el auditor se auto-audito: {sorted(set(ofensoras))}"
+
+
+def test_el_directorio_de_salida_queda_excluido_aunque_no_se_llame_audits(
+    tmp_path,
+):
+    """`--out reportes/` dentro de la raiz tampoco se lee en la corrida."""
+    raiz = _arbol_con_defectos(tmp_path)
+    destino = raiz / "reportes"
+    _escribir(destino / "latest.md", _reporte_falso())
+
+    assert _correr(raiz, destino) == 0
+
+    ofensoras = [
+        r for r in _rutas_de_hallazgos(destino) if r.startswith("reportes/")
+    ]
+    assert not ofensoras, f"el auditor leyo su propia salida: {sorted(set(ofensoras))}"
+
+
+def test_la_exclusion_de_salida_no_sobrevive_a_la_corrida_siguiente(tmp_path):
+    """Dos corridas en el mismo proceso no heredan el `--out` de la anterior.
+
+    Si la exclusion se acumulara, el resultado dependeria del orden de
+    ejecucion y el determinismo prometido seria una casualidad.
+    """
+    from tools.audit.graph import excluded_paths
+
+    raiz = _arbol_con_defectos(tmp_path)
+
+    _correr(raiz, raiz / "reportes")
+    _correr(raiz, tmp_path / "fuera")
+
+    registradas = {p.name for p in excluded_paths()}
+    assert "reportes" not in registradas, registradas
+
+
+# ---------------------------------------------------------------------------
 # 4. El gate de CI
 # ---------------------------------------------------------------------------
 
