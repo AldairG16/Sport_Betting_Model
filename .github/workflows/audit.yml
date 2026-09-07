@@ -1,0 +1,140 @@
+name: Weekly Audit
+
+# Auditoria estatica del arbol completo: 10 checkers, 10 categorias.
+#
+# A diferencia de `weekly.yml`, este workflow SI conserva su `schedule`. La
+# auditoria solo lee el arbol con `ast` y PyYAML: no abre la base, no llama a
+# ninguna API externa y no toma el lock del orchestrator. Correrla desde una
+# rama incompleta no puede costar dinero ni corromper estado — a lo sumo
+# reporta hallazgos de mas.
+#
+# Minuto 23 a proposito: GitHub descarta los crons agendados en :00/:15/:30/:45
+# cuando la cola esta saturada, que es justo cuando se pierden las corridas
+# agendadas. Lunes 06:23 UTC va bastante antes del weekly de produccion
+# (13:00 UTC) para que el reporte llegue antes de la recarga semanal.
+on:
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Sin bloque `env:` A PROPOSITO. La auditoria corre sin ninguna
+      # credencial: es su garantia central, no un descuido. Si algun dia
+      # este paso "necesita" una, lo que se rompio es la auditoria.
+      - name: Run full audit
+        run: python -m tools.audit
+
+      # Los artefactos estan en .gitignore, asi que subirlos es la unica via
+      # de entrega. `always()` para que un fallo posterior no se lleve
+      # tambien la evidencia de por que fallo.
+      - name: Upload audit artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-${{ github.run_number }}
+          path: |
+            audits/latest.json
+            audits/latest.md
+          if-no-files-found: error
+          retention-days: 90
+
+      # Un inventario que nadie ve es un inventario que no existe.
+      # Mismo contrato que scripts/watchdog.py: POST directo a la API de
+      # Telegram, parse_mode HTML, timeout de 10s y degradar a un print
+      # cuando faltan las credenciales.
+      #
+      # urllib y no `requests` a proposito: en esta rama `requests` no esta
+      # en requirements.txt, y este job instala exactamente ese archivo. Un
+      # ImportError aqui dejaria a la auditoria sin destinatario justo
+      # cuando tiene algo que decir.
+      - name: Telegram summary
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          ruta = Path("audits/latest.json")
+          if not ruta.is_file():
+              # La auditoria no llego a escribir su artefacto: eso ya lo
+              # reporta en rojo el paso anterior. Aqui no hay que resumir.
+              print("Sin audits/latest.json: no hay resumen que enviar.")
+              raise SystemExit(0)
+
+          datos = json.loads(ruta.read_text(encoding="utf-8"))
+          severidad = datos["counts"]["by_severity"]
+          s1 = severidad.get("S1", 0)
+          s2 = severidad.get("S2", 0)
+          total = datos["counts"]["total"]
+          abiertos = sum(1 for f in datos["findings"] if f["status"] == "open")
+          resueltos = sum(
+              1 for f in datos["findings"] if f["status"] == "resolved"
+          )
+
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          run_id = os.environ.get("GITHUB_RUN_ID", "")
+          enlace = f"https://github.com/{repo}/actions/runs/{run_id}"
+
+          # Solo conteos y nombres de categoria: un hallazgo puede citar la
+          # linea donde vive una credencial, y Telegram no es lugar para eso.
+          # El detalle vive en el artefacto, que ya pasa por redact.py.
+          top = sorted(
+              (par for par in datos["counts"]["by_category"].items() if par[1]),
+              key=lambda par: (-par[1], par[0]),
+          )[:3]
+          detalle = ", ".join(f"{nombre} {n}" for nombre, n in top) or "ninguna"
+
+          lineas = [
+              "<b>Auditoria semanal</b>",
+              f"S1: <b>{s1}</b> | S2: <b>{s2}</b>",
+              f"Total: {total} ({abiertos} abiertos, {resueltos} resueltos)",
+              f"Top: {detalle}",
+              f'<a href="{enlace}">Ver corrida</a>',
+          ]
+          msg = "\n".join(lineas)
+
+          token = os.environ.get("TELEGRAM_BOT_TOKEN")
+          chat = os.environ.get("TELEGRAM_CHAT_ID")
+          if not token or not chat:
+              print("Sin credenciales de Telegram; resumen por stdout:")
+              print(msg)
+              raise SystemExit(0)
+
+          cuerpo = json.dumps(
+              {"chat_id": chat, "text": msg, "parse_mode": "HTML"}
+          ).encode("utf-8")
+          peticion = urllib.request.Request(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data=cuerpo,
+              headers={"Content-Type": "application/json"},
+          )
+          try:
+              with urllib.request.urlopen(peticion, timeout=10) as respuesta:
+                  print(f"Resumen enviado: S1={s1} S2={s2} ({respuesta.status})")
+          except (urllib.error.URLError, TimeoutError) as error:
+              # No tumbamos el build: la auditoria corrio y su artefacto ya
+              # esta subido. Pero que el fallo quede en el log.
+              print(f"Telegram no acepto el resumen: {error}")
+          PY
