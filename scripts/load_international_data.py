@@ -315,6 +315,10 @@ def load_international_data(verbose: bool = True) -> int:
     # ── Insertar en DB ─────────────────────────────────────────────────────
     inserted = 0
     skipped  = 0
+    # `skipped` mezclaba "ya existia" con "el INSERT reviento". Se separan:
+    # lo primero es normal, lo segundo es perdida de datos.
+    failed   = 0
+    first_error = None
 
     with engine.begin() as conn:
         for _, row in df.iterrows():
@@ -340,12 +344,20 @@ def load_international_data(verbose: bool = True) -> int:
                     inserted += 1
                 else:
                     skipped += 1
-            except Exception as e:
-                skipped += 1
+            except Exception as exc:
+                failed += 1
+                if first_error is None:
+                    first_error = exc
 
     if verbose:
         print(f"\n   Insertados: {inserted:,} nuevos registros")
         print(f"   Ya existian: {skipped:,}")
+    if failed:
+        # Silencio = salud: solo se habla cuando algo se perdio.
+        print(
+            f"   [!] {failed:,} filas NO se insertaron: "
+            f"{type(first_error).__name__}: {first_error}"
+        )
         print(f"\n✅ Datos internacionales cargados correctamente")
 
     return inserted

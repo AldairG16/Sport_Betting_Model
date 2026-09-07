@@ -146,6 +146,9 @@ def _ensure_schema():
 def _insert_games(df: pd.DataFrame) -> tuple[int, int]:
     """Inserta juegos en la tabla matches. Retorna (insertados, omitidos)."""
     inserted = skipped = 0
+    # Un INSERT que revienta no es un duplicado: se cuenta aparte y se avisa.
+    failed = 0
+    first_error = None
     with engine.begin() as conn:
         for _, row in df.iterrows():
             try:
@@ -168,8 +171,15 @@ def _insert_games(df: pd.DataFrame) -> tuple[int, int]:
                     inserted += 1
                 else:
                     skipped += 1
-            except Exception:
-                skipped += 1
+            except Exception as exc:
+                failed += 1
+                if first_error is None:
+                    first_error = exc
+    if failed:
+        print(
+            f"   [!] {failed:,} juegos NO se insertaron: "
+            f"{type(first_error).__name__}: {first_error}"
+        )
     return inserted, skipped
 
 

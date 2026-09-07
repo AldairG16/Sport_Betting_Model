@@ -109,8 +109,13 @@ def log_credits(sport_key: str, used: str, remaining: str):
                     f"Restantes: {remaining_int}\n\n"
                     f"⛔ Pipeline abortando para proteger el balance."
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                # La fuga de creditos SI aborta (raise abajo). Lo que no
+                # puede pasar es que el aviso falle en silencio.
+                print(
+                    f"[!] Fuga de creditos detectada pero el aviso de "
+                    f"Telegram fallo: {type(exc).__name__}: {exc}"
+                )
             raise RuntimeError(
                 f"Credit burn ({burn}) exceeded MAX_CREDITS_PER_RUN ({MAX_CREDITS_PER_RUN})"
             )
@@ -126,8 +131,13 @@ def log_credits(sport_key: str, used: str, remaining: str):
                 f"⛔ Se detendrán los fetch de ligas restantes.\n"
                 f"Recarga créditos en the-odds-api.com"
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            # Auto-stop silencioso = el operador se queda sin creditos
+            # sin haber visto nunca la alerta.
+            print(
+                f"[!] Creditos criticos ({remaining_int}) pero el aviso "
+                f"de Telegram fallo: {type(exc).__name__}: {exc}"
+            )
 
 
 # ============================================================
@@ -1023,8 +1033,11 @@ def update_all(force: bool = False):
                 f"Umbral: {API_CREDITS_STOP_THRESHOLD}\n\n"
                 f"Recarga créditos en the-odds-api.com"
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            print(
+                f"[!] Pipeline abortado por creditos bajos y el aviso "
+                f"de Telegram fallo: {type(exc).__name__}: {exc}"
+            )
         return
 
     _cleanup_old_matches()   # eliminar partidos viejos antes de insertar nuevos

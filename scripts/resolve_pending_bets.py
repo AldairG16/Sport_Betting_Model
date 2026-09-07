@@ -452,6 +452,12 @@ if __name__ == "__main__":
                 "🚨 <b>RESOLVE PENDING CRASH</b>\n"
                 f"<code>{type(_exc).__name__}: {_exc}</code>"
             )
-        except Exception:
-            pass
+        except Exception as _notify_exc:
+            # El crash ya se imprimio; lo que faltaba era saber que el
+            # aviso tampoco salio. Sin esta linea el operador cree que
+            # no hubo crash porque no llego ningun Telegram.
+            print(
+                f"[!] No se pudo avisar por Telegram del crash: "
+                f"{type(_notify_exc).__name__}: {_notify_exc}"
+            )
         sys.exit(1)

@@ -22,6 +22,7 @@ __all__ = [
     "Evidence",
     "Finding",
     "Severity",
+    "Status",
 ]
 
 
@@ -38,6 +39,46 @@ class Severity(str, Enum):
     S2 = "S2"
     S3 = "S3"
     S4 = "S4"
+
+
+class Status(str, Enum):
+    """Estado de triage de un hallazgo. `open` significa SIN TRIAR.
+
+    La distincion importa: un inventario que reporta 200 de 200 abiertos no
+    dice nada sobre el repo, solo que nadie lo ha leido. Los cinco estados
+    cubren las cinco cosas que le pueden pasar a un hallazgo:
+
+    OPEN       — todavia no lo miro nadie. Es el default y es deuda de triage.
+    RESOLVED   — desaparecio de la corrida actual porque se arreglo. Lo pone
+                 `diff.py` solo; no se escribe a mano en el ledger.
+    REASSIGNED — no desaparecio: el mismo defecto cambio de ID porque su
+                 fichero se renombro o se movio. Lo pone `diff.py` solo, igual
+                 que `RESOLVED`, y la nota de `remediation` lleva al ID nuevo.
+                 Cerrarlo como `resolved` mentiria: nada se arreglo.
+    DEFERRED   — defecto REAL, revisado, que no se arregla en este ciclo. Exige
+                 una razon: sin razon es indistinguible de haberlo ignorado.
+    ACCEPTED   — revisado y cerrado como no-defecto: falso positivo del checker
+                 o comportamiento intencional. Tambien exige razon.
+
+    `REASSIGNED` no entra en `triaged()` a proposito: como `RESOLVED`, lo
+    asigna la maquina y no un humano, asi que no exige `triage_reason`.
+    Meterlo ahi haria que `diff.py` reventara al cerrar un renombre.
+
+    `DEFERRED` y `ACCEPTED` NO son sinonimos y no se deben mezclar: llamarle
+    "diferido" a un falso positivo infla para siempre la deuda aparente, y
+    llamarle "aceptado" a un defecto real lo entierra.
+    """
+
+    OPEN = "open"
+    RESOLVED = "resolved"
+    DEFERRED = "deferred"
+    ACCEPTED = "accepted"
+    REASSIGNED = "reassigned"
+
+    @classmethod
+    def triaged(cls) -> tuple["Status", ...]:
+        """Estados que un humano asigna explicitamente en el ledger."""
+        return (cls.DEFERRED, cls.ACCEPTED)
 
 
 class Category(str, Enum):
@@ -117,9 +158,12 @@ class Finding:
     impact: str
     remediation: str
     effort: str = "S"
-    status: str = "open"
+    status: str = Status.OPEN.value
     runtime_owner: str | None = None
     uncertain: bool = False
+    # Por que este hallazgo no esta `open`. Obligatorio para `deferred` y
+    # `accepted`: un estado cerrado sin razon no es triage, es un borrado.
+    triage_reason: str | None = None
 
     def __post_init__(self) -> None:
         # Aceptamos strings crudos por comodidad de los checkers, pero
@@ -127,6 +171,17 @@ class Finding:
         # a la hora de serializar el reporte.
         self.category = Category(self.category)
         self.severity = Severity(self.severity)
+        # Un estado con typo ('defered') se leeria como 'no abierto' en
+        # cualquier filtro laxo y desapareceria del inventario sin que nadie
+        # lo decidiera. Se valida aqui, no al serializar.
+        self.status = Status(self.status).value
+        if self.status in {s.value for s in Status.triaged()} and not (
+            self.triage_reason or ""
+        ).strip():
+            raise ValueError(
+                f"el hallazgo {self.category.value} en estado "
+                f"'{self.status}' no trae razon de triage"
+            )
 
     @property
     def id(self) -> str:
@@ -167,6 +222,17 @@ class AuditRun:
         counts = {sev.value: 0 for sev in Severity}
         for finding in self.findings:
             counts[Severity(finding.severity).value] += 1
+        return counts
+
+    def counts_by_status(self) -> dict[str, int]:
+        """Conteo por estado de triage, con los cuatro estados presentes.
+
+        Es la metrica que hace auditable la deuda de triage: `open` alto no
+        significa "repo roto", significa "nadie ha leido el inventario".
+        """
+        counts = {estado.value: 0 for estado in Status}
+        for finding in self.findings:
+            counts[Status(finding.status).value] += 1
         return counts
 
     def counts_by_category(self) -> dict[str, int]:

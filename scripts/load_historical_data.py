@@ -184,6 +184,10 @@ def load_historical_data():
             # Insertar con ON CONFLICT DO NOTHING para evitar duplicados
             from sqlalchemy import text as _text
             inserted = 0
+            # Contadores de fallo: un INSERT que revienta no puede quedar
+            # indistinguible de una fila duplicada (ON CONFLICT DO NOTHING).
+            failed = 0
+            first_error = None
             with engine.begin() as conn:
                 for _, row in df.iterrows():
                     try:
@@ -204,9 +208,17 @@ def load_historical_data():
                             ON CONFLICT (date, home_team, away_team) DO NOTHING
                         """), row.to_dict())
                         inserted += 1
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        failed += 1
+                        if first_error is None:
+                            first_error = exc
             print(f"✅ Procesados: {len(df)} ({inserted} nuevos)")
+            if failed:
+                # Silencio = salud: solo se habla cuando algo se perdio.
+                print(
+                    f"   ⚠️  {failed} filas NO se insertaron en {league} {s}: "
+                    f"{type(first_error).__name__}: {first_error}"
+                )
 
     print("🔥 HISTORICAL READY")
 

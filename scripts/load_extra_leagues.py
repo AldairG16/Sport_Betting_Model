@@ -138,6 +138,10 @@ def load_extra_leagues(leagues: dict = None):
 
         # Insertar con ON CONFLICT DO NOTHING
         inserted = 0
+        # Un INSERT que revienta se veia igual que un duplicado ignorado:
+        # se cuenta y se reporta al cerrar la liga.
+        failed = 0
+        first_error = None
         with engine.begin() as conn:
             for _, row in df.iterrows():
                 try:
@@ -160,11 +164,18 @@ def load_extra_leagues(leagues: dict = None):
                         "away_goals": row["away_goals"],
                     })
                     inserted += 1
-                except Exception:
-                    pass
+                except Exception as exc:
+                    failed += 1
+                    if first_error is None:
+                        first_error = exc
 
         total_new += inserted
         print(f"  {code}: {len(df)} rows procesadas, {inserted} nuevas insertadas")
+        if failed:
+            print(
+                f"    ⚠️  {failed} filas NO se insertaron en {code}: "
+                f"{type(first_error).__name__}: {first_error}"
+            )
 
     print(f"\n  TOTAL: {total_new} registros nuevos")
     print("=" * 55)
