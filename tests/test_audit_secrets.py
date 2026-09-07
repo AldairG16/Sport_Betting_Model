@@ -77,6 +77,24 @@ TELEGRAM_CHAT_ID=tu_chat_id
 ANTHROPIC_API_KEY=your_anthropic_key_here
 """
 
+# Reproduce scripts/orchestrator.py:113-115: el nombre termina en KEY pero el
+# valor es una sport key del catalogo de The Odds API.
+_MODULO_SPORT_CATALOGO = '''"""Activacion del Mundial 2026."""
+
+from datetime import date
+
+
+def _check_world_cup_activation():
+    WORLD_CUP_START = date(2026, 6, 11)
+    WORLD_CUP_END = date(2026, 7, 19)
+    WORLD_CUP_KEY = "soccer_fifa_world_cup"
+    return WORLD_CUP_KEY, WORLD_CUP_START, WORLD_CUP_END
+'''
+
+_ENV_CON_SLUG = """DEFAULT_SPORT_KEY=soccer_epl
+MARKET_KEY=over_2_5
+"""
+
 _WORKFLOW = """name: morning
 on:
   schedule:
@@ -173,6 +191,74 @@ def test_lectura_desde_el_entorno_no_se_reporta(tmp_path):
     raiz = _arbol(tmp_path, {"config/settings.py": _MODULO_LIMPIO})
 
     assert _hallazgos_de(raiz) == []
+
+
+def test_sport_key_no_se_reporta(tmp_path):
+    """`WORLD_CUP_KEY = "soccer_fifa_world_cup"` es catalogo, no credencial.
+
+    Es el falso positivo real de scripts/orchestrator.py:115: el nombre termina
+    en KEY, asi que entra por nombre, pero el valor es una sport key de The
+    Odds API. Un S1 permanente y falso en el tope del ranking vacia de
+    significado a la severidad que responde "que puede costarme dinero".
+    """
+    raiz = _arbol(tmp_path, {"scripts/orchestrator.py": _MODULO_SPORT_CATALOGO})
+
+    assert _hallazgos_de(raiz) == []
+
+
+def test_slug_fuera_de_python_tampoco_se_reporta(tmp_path):
+    """La misma exencion aplica a la deteccion por texto (.env, .yml)."""
+    raiz = _arbol(tmp_path, {"config/catalog.env": _ENV_CON_SLUG})
+
+    assert _hallazgos_de(raiz) == []
+
+
+def test_la_exencion_de_slug_no_apaga_la_deteccion(tmp_path):
+    """Excusar los slugs no puede volverse un escondite para una llave real.
+
+    Mismo nombre `*_KEY`, valor sin forma de slug: sigue siendo S1. Y un token
+    con forma reconocible se detecta aunque el nombre parezca de catalogo,
+    porque `_hits_forma` no mira el nombre de la variable.
+    """
+    raiz = _arbol(
+        tmp_path,
+        {
+            "src/utils/client.py": (
+                '"""Cliente."""\n\n'
+                f'WORLD_CUP_KEY = "{_VALOR}"\n'
+            ),
+            "src/utils/otro.py": (
+                '"""Otro cliente."""\n\n'
+                'SPORT_KEY = "sk-ant-' + "a1b2c3d4e5f6g7h8i9j0" + '"\n'
+            ),
+        },
+    )
+
+    hallazgos = _hallazgos_de(raiz)
+    nombres = {h.evidence[0].key for h in hallazgos}
+
+    assert all(h.severity.value == "S1" for h in hallazgos)
+    assert "WORLD_CUP_KEY" in nombres
+    assert "ANTHROPIC_API_KEY" in nombres
+
+
+def test_predicado_de_enum_es_estrecho():
+    """El colador acepta catalogo y rechaza cualquier cosa con forma de llave."""
+    from tools.audit.checks.secrets import es_valor_enum
+
+    assert es_valor_enum("soccer_fifa_world_cup") is True
+    assert es_valor_enum("over_2_5") is True
+    assert es_valor_enum("soccer_epl_1x2") is True
+    assert es_valor_enum("SOCCER_FIFA_WORLD_CUP") is True
+
+    # Sin separadores no hay slug que valga.
+    assert es_valor_enum(_VALOR) is False
+    # Caja mezclada: firma de token generado.
+    assert es_valor_enum("soccer_Fifa_World_Cup") is False
+    # Segmentos aleatorios aunque haya separadores.
+    assert es_valor_enum("9f3a1c7e5b_2d4f6a8c0e") is False
+    # Por encima del largo maximo no se excusa nada.
+    assert es_valor_enum("_".join(["liga"] * 12)) is False
 
 
 def test_fixture_de_la_suite_baja_a_s2_pero_no_desaparece(tmp_path):

@@ -15,7 +15,10 @@ NO se reporta lo que es una REFERENCIA al secreto y no el secreto:
 - `${{ secrets.X }}` en un workflow,
 - `os.environ[...]`, `os.getenv(...)`, `env_str("...")`,
 - placeholders de plantilla (`tu_api_key_aqui`, `your_token_here`, `<...>`,
-  `changeme`, `xxx`) tipicos de `.env.example`.
+  `changeme`, `xxx`) tipicos de `.env.example`,
+- valores con forma de slug o de enum de dominio (`soccer_fifa_world_cup`,
+  `over_2_5`): el nombre termina en `_KEY` pero el valor es una clave de
+  catalogo, no una credencial.
 
 Analisis 100% estatico: `ast` sobre los .py y expresiones regulares sobre el
 resto. Nunca importa el modulo bajo analisis (FR-006).
@@ -28,7 +31,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.audit.graph import EXCLUDED_DIRS
+from tools.audit.graph import is_excluded
 from tools.audit.model import Category, Evidence, Finding, Severity
 from tools.audit.redact import REDACTED, redact
 from tools.audit.registry import check
@@ -39,6 +42,7 @@ __all__ = [
     "check_secrets",
     "es_nombre_sensible",
     "es_placeholder",
+    "es_valor_enum",
     "scan_secrets",
 ]
 
@@ -118,6 +122,33 @@ _PLACEHOLDER_SUFIJO = re.compile(
     r"(?:_aqui|_here|_goes_here|_placeholder|_example|_dummy|_xxx)$",
     re.IGNORECASE,
 )
+
+# Valor con forma de slug o de enum de dominio: palabras legibles, caja
+# consistente y separadores. `WORLD_CUP_KEY = "soccer_fifa_world_cup"`
+# (scripts/orchestrator.py:115) es el caso canonico — el nombre termina en KEY
+# y por eso entra al detector, pero el valor es una sport key del catalogo de
+# The Odds API, no una credencial. Un S1 falso permanente en el tope del
+# ranking es peor que un hallazgo menos: vacia de significado a la severidad
+# que responde "que puede costarme dinero esta semana".
+#
+# El colador se mantiene estrecho a proposito:
+#
+# - un segmento es una palabra (`soccer`, `over25`, `u21`) o un numero corto
+#   (`2026`, `1x2`); un tramo aleatorio como `9f3a1c7e5b` NO casa,
+# - hacen falta al menos DOS segmentos, asi que un blob sin separadores nunca
+#   se excusa,
+# - la caja tiene que ser consistente (todo minusculas o todo mayusculas): la
+#   caja mezclada es la firma de un token generado,
+# - y por encima de `_LARGO_MAXIMO_ENUM` no se excusa nada, porque a partir de
+#   ahi el valor ya tiene tamano de llave real.
+#
+# Ademas esta exencion solo apaga la deteccion POR NOMBRE: `_hits_forma` sigue
+# corriendo sobre la misma linea y atrapa `sk-ant-`, `ghp_`, `AKIA` y la
+# contrasena de una URL de conexion sin mirar como se llama la variable.
+_SEGMENTO_SLUG = re.compile(
+    r"^(?:[a-z]+[0-9]{0,4}|[0-9]{1,4}(?:[a-z][0-9]{1,4})?)$"
+)
+_LARGO_MAXIMO_ENUM = 40
 
 # Formas de token reconocibles por si mismas, sin nombre de variable alrededor.
 _FORMAS_TOKEN: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -205,6 +236,23 @@ def es_placeholder(valor: str) -> bool:
     return len(set(limpio)) < 5
 
 
+def es_valor_enum(valor: str) -> bool:
+    """True si el valor es una clave de catalogo y no una credencial.
+
+    Ver el comentario de `_SEGMENTO_SLUG` para el razonamiento del colador.
+    """
+    limpio = valor.strip().strip("\"'").strip()
+    if not limpio or len(limpio) > _LARGO_MAXIMO_ENUM:
+        return False
+    # Caja mezclada (`sk-Ant-X9f`) es firma de token generado, no de enum.
+    if limpio != limpio.lower() and limpio != limpio.upper():
+        return False
+    partes = [parte for parte in re.split(r"[_.\-]", limpio.lower()) if parte]
+    if len(partes) < 2:
+        return False
+    return all(_SEGMENTO_SLUG.match(parte) for parte in partes)
+
+
 def _rel(root: Path, ruta: Path) -> str:
     """Ruta relativa en formato posix: el artefacto debe ser portable."""
     return ruta.relative_to(root).as_posix()
@@ -220,8 +268,7 @@ def _archivos(raiz: Path) -> list[Path]:
             ".env"
         ):
             continue
-        partes = ruta.relative_to(raiz).parts
-        if any(parte in EXCLUDED_DIRS for parte in partes[:-1]):
+        if is_excluded(raiz, ruta):
             continue
         encontrados.append(ruta)
     return sorted(encontrados, key=lambda p: p.relative_to(raiz).as_posix())
@@ -265,7 +312,11 @@ def _hits_python(relativa: str, fuente: str) -> list[SecretHit]:
             ):
                 nombre = str(objetivo.slice.value)
 
-            if not es_nombre_sensible(nombre) or es_placeholder(valor.value):
+            if (
+                not es_nombre_sensible(nombre)
+                or es_placeholder(valor.value)
+                or es_valor_enum(valor.value)
+            ):
                 continue
 
             hits.append(
@@ -296,7 +347,11 @@ def _hits_texto(relativa: str, texto: str) -> list[SecretHit]:
             continue
         nombre = coincidencia.group("name")
         valor = coincidencia.group("value")
-        if not es_nombre_sensible(nombre) or es_placeholder(valor):
+        if (
+            not es_nombre_sensible(nombre)
+            or es_placeholder(valor)
+            or es_valor_enum(valor)
+        ):
             continue
         hits.append(
             SecretHit(
