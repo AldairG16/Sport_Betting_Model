@@ -8,11 +8,27 @@ la auditoria toca configuracion, imports, manejo de errores y documentacion en
 medio repositorio. La pregunta que el operador necesita responder antes de
 mergear nada es una sola: "¿alguna de esas remediaciones cambio una apuesta?".
 
-Este test la responde de forma mecanica. Reproduce un slate congelado a traves
-de `src.pipeline.bet_decision.decide_bets` con el sizing de
-`src.models.betting_engine.kelly_stake` -- LAS MISMAS funciones que llama
-produccion, no copias -- y exige que las tuplas (match, market, side, stake)
-sean identicas a la linea base commiteada.
+Este test la responde de forma mecanica para la cadena de decision. Reproduce
+un slate congelado a traves de `src.pipeline.bet_decision.decide_bets` con el
+sizing de `src.models.betting_engine.kelly_stake` -- LAS MISMAS funciones que
+llama produccion, no copias -- y exige que las tuplas
+(match, market, side, stake) sean identicas a la linea base commiteada.
+
+Esa afirmacion esta VERIFICADA, no asumida: produccion importa el modulo en
+prediction_pipeline.py:122 y llama `decide_bets(..., kelly_fn=kelly_stake)` en
+prediction_pipeline.py:1635; `test_produccion_pasa_esa_misma_kelly_a_decide_bets`
+lo comprueba sobre el arbol sintactico y falla si el wiring se desvia.
+
+⚠️  ALCANCE: verde aqui significa "no cambio el filtro de edge minimo, el
+    sizing Kelly ni los topes de cartera". NO significa "no cambio ninguna
+    apuesta". Quedan fuera de esta linea base:
+      - el gancho `post_size` (correlacion por partido + filtro de
+        sospechosas): produccion lo pasa, este harness NO;
+      - los filtros por partido previos (paper/blocked markets, sweet spots de
+        odds, TOUGH_LEAGUES, midweek, MAX_ODDS, grupos exclusivos,
+        MAX_BETS_PER_MATCH), que viven en prediction_pipeline.py.
+    Tocar cualquiera de esos puntos puede mover una apuesta con este test en
+    verde; revisalos a mano.
 
 NO HAY UNA SEGUNDA KELLY. Un `frozen_kelly_stake` paralelo haria que este
 harness midiera el codigo del test: se podria cambiar la fraccion de Kelly, el

@@ -1,14 +1,33 @@
 """
 Cadena de decision determinista, pura y sin dependencias externas.
 
-Extraida de `run_prediction_pipeline()` (src/pipeline/prediction_pipeline.py,
-segmento ~1290-1600) para que la secuencia
+Extraida de `run_prediction_pipeline()` (src/pipeline/prediction_pipeline.py)
+para que la secuencia
     filtro de edge minimo -> sizing Kelly -> topes de portfolio
 pueda ejecutarse SIN base de datos, SIN settings globales y SIN red.
 
-Ese aislamiento es lo que hace demostrable que una remediacion "no cambio
-ninguna apuesta": el fixture dorado se reproduce por `decide_bets()`, la misma
-funcion que llama produccion.
+Es una EXTRACCION, no una copia: el bloque inline que hacia esto ya no existe
+en prediction_pipeline.py. Produccion importa este modulo y lo llama:
+    - prediction_pipeline.py:122   `from src.pipeline.bet_decision import ...`
+    - prediction_pipeline.py:1481  `apply_min_edge_filter(...)`  (pase 2)
+    - prediction_pipeline.py:1635  `decide_bets(..., kelly_fn=kelly_stake)`
+Por eso el fixture dorado (tests/test_golden_decision.py) corre LA MISMA
+funcion que llama produccion, y no una reimplementacion paralela. Esa igualdad
+no se deja a la buena fe: `test_produccion_pasa_esa_misma_kelly_a_decide_bets`
+la verifica leyendo el arbol sintactico de prediction_pipeline.py y falla si
+alguien desvia el wiring.
+
+ALCANCE DE ESA GARANTIA — leer antes de decir "no cambio ninguna apuesta":
+lo que el fixture dorado cubre es EXACTAMENTE la cadena de este modulo. Queda
+fuera, y por lo tanto sin proteger por esa linea base:
+  - el gancho `post_size` (correlacion por partido + filtro de sospechosas):
+    produccion lo pasa, el fixture NO. Ver la nota en `decide_bets`.
+  - todos los filtros por partido que corren ANTES (paper/blocked markets,
+    sweet spots de odds, TOUGH_LEAGUES, midweek, MAX_ODDS, grupos exclusivos
+    y MAX_BETS_PER_MATCH), que viven en prediction_pipeline.py y no aqui.
+Un cambio en cualquiera de esos puntos puede mover una apuesta con el fixture
+dorado en verde. La afirmacion defendible es "no cambio el filtro de edge, el
+sizing ni los topes de cartera", no "no cambio ninguna apuesta".
 
 Contrato de un bet (dict). Se conservan al menos estas llaves de entrada a
 salida:
@@ -135,9 +154,14 @@ def apply_portfolio_caps(
 ) -> list[dict[str, Any]]:
     """Topes de cartera: exposicion total y concentracion por mercado.
 
-    Copia verbatim del bloque de prediction_pipeline.py (~1566-1597),
-    incluyendo la posicion exacta de cada `round(x, 2)` — los stakes se
-    comparan byte a byte contra el fixture dorado.
+    Traslado verbatim del bloque que vivia inline en prediction_pipeline.py:
+    ese bloque ya NO existe alli (produccion llama a esta funcion a traves de
+    `decide_bets`). Se conserva la posicion exacta de cada `round(x, 2)` porque
+    los stakes se comparan byte a byte contra el fixture dorado; mover un
+    redondeo cambia centavos y rompe la linea base.
+
+    Lo que queda en prediction_pipeline.py (~331-349) es solo el RESUMEN de
+    exposicion que se imprime despues, sobre stakes ya topeados aqui.
     """
     capped = [_copy_bet(b) for b in bets]
     if not capped or bankroll <= 0:
