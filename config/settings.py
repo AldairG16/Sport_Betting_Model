@@ -230,6 +230,13 @@ SPORT_KEYS = [
     # ── Americas extra ──────────────────────────────────────────────
     "soccer_usa_mls",                     # -44% ROI, tough league (monitoreando)
 
+    # ── Champions League — habilitada 10-sep-26 a pedido del dueño ────
+    # Histórico: -100% ROI en walkforward de 332 bets (modelo pre-revisión).
+    # Se re-habilita junto con fixes de calibración/holdout; vigilar de
+    # cerca los primeros ~50 resultados — el CLV gate la bloqueará de
+    # nuevo automáticamente si el mercado sigue ganándole al modelo.
+    "soccer_uefa_champs_league",
+
     # ── Mundial 2026 (auto-activado el 11 de junio de 2026) ─────────
     # La función _check_world_cup_activation() en orchestrator.py lo
     # agrega automáticamente al iniciar si la fecha >= 2026-06-11.

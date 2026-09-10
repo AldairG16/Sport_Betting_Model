@@ -211,12 +211,15 @@ BLOCKED_LEAGUES = {
     "soccer_uefa_europa_league",
     "soccer_netherlands_eredivisie",
     "soccer_conmebol_copa_libertadores",
-    "soccer_uefa_champs_league",
+    # RE-HABILITADAS 10-sep-26 a pedido del dueño:
+    #   soccer_uefa_champs_league (antes -100% ROI) y soccer_epl (antes
+    #   -44.6% ROI). Vigilar: si vuelven a perder, el CLV gate y la
+    #   calibración con holdout las detectarán — re-bloquear con evidencia
+    #   fresca, no con el histórico viejo del modelo pre-revisión.
     "soccer_japan_j_league",
     "soccer_turkey_super_league",
     "soccer_norway_eliteserien",
     "soccer_efl_champ",
-    "soccer_epl",
     "soccer_greece_super_league",
 }
 
