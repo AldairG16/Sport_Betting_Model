@@ -31,3 +31,4 @@ python-dateutil==2.9.0.post0
 
 # ── Testing ────────────────────────────────────────────
 pytest==9.0.3
+hypothesis==6.168.0   # property-based tests (tests/test_property_invariants.py)

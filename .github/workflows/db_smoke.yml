@@ -1,0 +1,37 @@
+name: DB Smoke Test
+
+# Valida las queries y el esquema de la DB real (Neon) sin tocar datos:
+# corre scripts/db_smoke_test.py, que es read-only salvo DDL guards
+# idempotentes (ADD COLUMN IF NOT EXISTS). Así se verifica la integración
+# de punta a punta SIN exponer la connection string fuera de los secrets.
+
+on:
+  workflow_dispatch:     # manual — ejecútalo cuando quieras validar
+  push:
+    branches: [ master ]
+    paths:
+      - 'scripts/db_smoke_test.py'
+      - '.github/workflows/db_smoke.yml'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run DB smoke test
+        env:
+          DB_URL: ${{ secrets.DB_URL }}
+        run: python scripts/db_smoke_test.py

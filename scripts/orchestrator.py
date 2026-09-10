@@ -566,6 +566,67 @@ def step_drift_detection():
         print(f"⚠️  Drift detection falló: {e}")
 
 
+def step_clv_gate():
+    """CLV como métrica de decisión: bloquea mercados con CLV trailing
+    negativo persistente (n>=100, 120d). Escribe config/clv_blocked_markets.json
+    que el prediction_pipeline lee como kill-switch dinámico.
+    """
+    try:
+        from scripts.clv_gate import run_clv_gate
+        result = run_clv_gate(verbose=True)
+        if result.get("blocked"):
+            from scripts.notify_telegram import send_message
+            send_message(
+                f"🚦 <b>CLV GATE</b>\n\nMercados bloqueados por CLV negativo:\n"
+                + "\n".join(f"• {m}" for m in result["blocked"])
+                + "\n\nSe desbloquean solos si el CLV recupera."
+            )
+    except Exception as e:
+        # Informativo — no debe bloquear el weekly
+        print(f"⚠️  CLV gate falló: {e}")
+
+
+def step_evaluate_holdout():
+    """Evalúa el modelo sobre el holdout congelado (últimos 45d, que la
+    calibración ya NO usa para ajustar). Mide si generaliza o hay overfit.
+    Incluye el reporte de slippage (odds vistas vs colocadas).
+    """
+    try:
+        from scripts.evaluate_holdout import evaluate_holdout
+        evaluate_holdout()
+    except Exception as e:
+        print(f"⚠️  Holdout evaluation falló: {e}")
+    try:
+        from src.models.save_bets import slippage_report
+        rep = slippage_report()
+        if rep.get("status") == "ok":
+            print(f"   Slippage: n={rep['n']}  medio={rep['avg_slippage_prob']:+.4f} "
+                  f"(prob) / {rep['avg_slippage_odds_pct']:+.2f}% (odds)")
+        else:
+            print("   Slippage: sin bets con odds_placed registrado aún")
+    except Exception as e:
+        print(f"⚠️  Slippage report falló: {e}")
+
+
+def step_market_regime():
+    """Monitor de régimen del mercado: vig promedio, bookmakers por partido
+    y volatilidad de líneas. Si el mercado cambia (API, panel de books),
+    los edges se distorsionan silenciosamente — esto lo detecta.
+    """
+    try:
+        from scripts.market_regime_monitor import run_market_regime_monitor
+        result = run_market_regime_monitor(verbose=True)
+        if result.get("alerts"):
+            from scripts.notify_telegram import send_message
+            send_message(
+                "🧭 <b>CAMBIO DE RÉGIMEN DEL MERCADO</b>\n\n"
+                + "\n".join(f"• {a}" for a in result["alerts"])
+            )
+    except Exception as e:
+        # Informativo — no debe bloquear el weekly
+        print(f"⚠️  Market regime monitor falló: {e}")
+
+
 def step_refresh_clv_cache():
     """MEJORA #14 — refresca data/clv_cache.json para que kelly_stake
     use el CLV trailing al modular kelly_fraction. Llamado en weekly.
@@ -649,8 +710,11 @@ def main():
             # run_step(logger, "Load MLB data",            step_load_mlb)  # desactivado — sin creditos MLB
             run_step(logger, "Fit DC-MLE parameters",    step_fit_dc_mle)
             run_step(logger, "Calibration monitor",      step_calibration)
+            run_step(logger, "CLV gate (kill-switch)",   step_clv_gate)
+            run_step(logger, "Holdout evaluation",       step_evaluate_holdout)
             run_step(logger, "Refresh CLV cache",        step_refresh_clv_cache)   # Mejora #14
             run_step(logger, "Drift detection",          step_drift_detection)     # Mejora #15
+            run_step(logger, "Market regime monitor",    step_market_regime)
             run_step(logger, "Optimize thresholds",      step_optimize_thresholds)
             run_step(logger, "Walk-forward backtest",    step_walkforward)
             run_step(logger, "Weekly Telegram report",   step_weekly_report)
