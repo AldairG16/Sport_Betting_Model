@@ -315,9 +315,54 @@ def step_pre_kickoff_closing():
     mueve poco la aguja de CLV vs dejar que el cache TTL expire natural.
     """
     from scripts.update_upcoming_matches import update_all
-    update_all(force=False)
+
+    # ¿Hay bets pendientes que arranquen en los próximos 75 min? Si sí,
+    # FORZAR el refetch: el cache TTL (12h default) haría que el closing
+    # lea las MISMAS odds del morning. Con el closing corriendo cada hora
+    # (cron), este gate hace que solo se gaste (~45-90 créditos) en las
+    # horas donde de verdad hay kickoff próximo — el resto de las horas
+    # el cache evita cualquier llamada.
+    _force = False
+    try:
+        import pandas as pd
+        from sqlalchemy import text as _t
+        from config.database import engine as _eng
+        _n = pd.read_sql(_t("""
+            SELECT COUNT(*) AS n FROM bets_history
+            WHERE result = 'pending'
+              AND match_date BETWEEN NOW() AND NOW() + INTERVAL '75 minutes'
+        """), _eng).iloc[0]["n"]
+        _force = int(_n) > 0
+        if _force:
+            print(f"   Closing: {int(_n)} bets con kickoff en <75min → refetch FORZADO "
+                  f"(revalidación contra odds reales)")
+        else:
+            print("   Closing: ningún kickoff en <75min — sin refetch forzado")
+    except Exception as e:
+        print(f"   ⚠️  No se pudo verificar pendientes ({e}) — usando cache TTL normal")
+
+    update_all(force=_force)
     from scripts.update_closing_odds import update_closing_odds
     update_closing_odds()
+
+    # Revalidar bets del día contra las odds frescas recién descargadas:
+    # si la línea se movió en contra y el edge murió, cancelar la bet ANTES
+    # del kickoff en vez de apostar un número que ya no existe.
+    try:
+        from scripts.revalidate_pending_bets import revalidate_pending_bets
+        result = revalidate_pending_bets(verbose=True)
+        if result.get("cancelled"):
+            from scripts.notify_telegram import send_message
+            send_message(
+                f"🔁 <b>REVALIDACIÓN PRE-KICKOFF</b>\n\n"
+                f"• {result['cancelled']} bets canceladas (la línea absorbió el edge)\n"
+                f"• {result.get('kept_better_odds', 0)} actualizadas a odd mejor\n"
+                f"• {result.get('kept_edge_survives', 0)} mantenidas (el edge sobrevive)"
+            )
+    except Exception as e:
+        # La revalidación es un filtro de protección — un fallo no debe
+        # romper el closing, pero sí debe verse en el log.
+        print(f"⚠️  Revalidación pre-kickoff falló: {e}")
 
 
 def step_fetch_results():

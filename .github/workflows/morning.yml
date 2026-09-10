@@ -5,17 +5,21 @@ name: Morning Pipeline
 # Última verificación: 27-abr-26 — fix UnboundLocalError en model_probs.
 
 on:
-  # Sin `schedule:` A PROPOSITO. Las corridas de produccion las dispara un
-  # agente externo por `workflow_dispatch` contra `master` (todos los runs
-  # historicos son workflow_dispatch, ninguno schedule). Al pasar `master` a
-  # rama por defecto, un bloque `schedule:` aqui haria que GitHub disparara
-  # ADEMAS por su cuenta: dos corridas del mismo slate, el doble de creditos
-  # de API y dos pasadas escribiendo apuestas.
-  # Para volver a los crons de GitHub hay que apagar antes ese dispatcher.
+  # CRON reactivado (09-sep-26): 12:00 UTC = 06:00 America/Mexico_City
+  # (Mexico ya no cambia de horario desde 2022, UTC-6 fijo todo el ano).
+  # NOTA: si se vuelve a usar un dispatcher externo, quitar el schedule
+  # para no duplicar corridas.
+  schedule:
+    - cron: '0 12 * * *'
   workflow_dispatch:   # permite lanzar manualmente desde GitHub
   push:
     branches: [ master ]
     paths: [ '.github/workflows/morning.yml' ]
+
+# Evita runs solapados del mismo pipeline
+concurrency:
+  group: morning-pipeline
+  cancel-in-progress: false
 
 jobs:
   morning:

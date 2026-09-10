@@ -1,17 +1,27 @@
 name: Closing Odds Pipeline
 
 on:
-  # Sin `schedule:` A PROPOSITO. Las corridas de produccion las dispara un
-  # agente externo por `workflow_dispatch` contra `master` (todos los runs
-  # historicos son workflow_dispatch, ninguno schedule). Al pasar `master` a
-  # rama por defecto, un bloque `schedule:` aqui haria que GitHub disparara
-  # ADEMAS por su cuenta: dos corridas del mismo slate, el doble de creditos
-  # de API y dos pasadas escribiendo apuestas.
-  # Para volver a los crons de GitHub hay que apagar antes ese dispatcher.
+  # CRON HORARIO reactivado (09-sep-26): el closing ahora es un loop
+  # autónomo. Cada hora verifica si hay bets con kickoff en <75 min;
+  # solo en esas horas fuerza el refetch de odds (~45-90 créditos) y
+  # revalida las bets contra el mercado real. El resto de las horas el
+  # cache TTL evita llamadas. Cubre kickoffs a cualquier hora sin
+  # intervención manual.
+  # NOTA: si se vuelve a usar un dispatcher externo, quitar el schedule
+  # para no duplicar corridas.
+  schedule:
+    - cron: '5 * * * *'          # cada hora a la hora + 5 min
   workflow_dispatch:
   push:
     branches: [ master ]
     paths: [ '.github/workflows/closing.yml' ]
+
+# Evita solapamiento: si un run horario aún está corriendo, el siguiente
+# espera en cola en vez de correr en paralelo (dos runs simultáneos
+# escribirían bets duplicadas y quemarían créditos).
+concurrency:
+  group: closing-pipeline
+  cancel-in-progress: false
 
 jobs:
   closing:

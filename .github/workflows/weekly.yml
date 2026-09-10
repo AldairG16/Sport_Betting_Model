@@ -1,7 +1,12 @@
 name: Weekly Pipeline
 
 on:
-  # Sin `schedule:` A PROPOSITO. Las corridas de produccion las dispara un
+  # CRON reactivado (09-sep-26): lunes 13:00 UTC = 07:00 America/Mexico_City
+  # (hora documentada del ciclo semanal). NOTA: si se vuelve a usar un
+  # dispatcher externo, quitar el schedule para no duplicar corridas.
+  schedule:
+    - cron: '0 13 * * 1'
+  # (historico) Sin `schedule:` A PROPOSITO. Las corridas de produccion las dispara un
   # agente externo por `workflow_dispatch` contra `master` (todos los runs
   # historicos son workflow_dispatch, ninguno schedule). Al pasar `master` a
   # rama por defecto, un bloque `schedule:` aqui haria que GitHub disparara
@@ -12,6 +17,11 @@ on:
   push:
     branches: [ master ]
     paths: [ '.github/workflows/weekly.yml' ]
+
+# Evita runs solapados del mismo pipeline
+concurrency:
+  group: weekly-pipeline
+  cancel-in-progress: false
 
 jobs:
   weekly:
