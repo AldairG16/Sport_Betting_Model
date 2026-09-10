@@ -812,10 +812,15 @@ def run_prediction_pipeline():
         # ── Corners / Cards odds de API ───────────────────────────────────
         _corners_over_api  = safe_odds(row.get("corners_over_odds") )
         _corners_under_api = safe_odds(row.get("corners_under_odds"))
-        _corners_line_api  = row.get("corners_line")
+        # NOTA: en pandas un NULL llega como NaN, no None. Normalizar a None
+        # aquí evita que int(NaN) reviente el pipeline en el cálculo de la
+        # cola de Poisson (fix del crash del morning 10-sep-26).
+        _raw_cl = row.get("corners_line")
+        _corners_line_api = None if (_raw_cl is None or (isinstance(_raw_cl, float) and pd.isna(_raw_cl))) else _raw_cl
         _cards_over_api    = safe_odds(row.get("cards_over_odds")  )
         _cards_under_api   = safe_odds(row.get("cards_under_odds") )
-        _cards_line_api    = row.get("cards_line")
+        _raw_cl_c = row.get("cards_line")
+        _cards_line_api = None if (_raw_cl_c is None or (isinstance(_raw_cl_c, float) and pd.isna(_raw_cl_c))) else _raw_cl_c
 
         # =========================
         # 1X2 — DIXON-COLES

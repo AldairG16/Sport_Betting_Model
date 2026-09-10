@@ -111,7 +111,9 @@ class TestKellyInvariants:
             # Sin edge (o edge negativo) → nunca apostar
             assert stake == 0
         else:
-            assert 0 < stake <= 100.0 * 0.02 + 1e-9   # max_bet_pct = 2%
+            # Con edge: puede ser 0 por redondeo de stakes sub-centavo,
+            # pero nunca negativo ni por encima del cap (2% del bankroll)
+            assert 0 <= stake <= 100.0 * 0.02 + 1e-9
 
     @settings(max_examples=75, deadline=None)
     @given(o=odds)
