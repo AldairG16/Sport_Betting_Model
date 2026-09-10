@@ -21,6 +21,12 @@ CORNERS_WINDOW  = 20
 CORNERS_MIN     = 5      # mínimo de partidos para retornar datos útiles
 CORNERS_BASELINE = 5.0   # promedio europeo de córners por equipo (~5 por partido)
 
+# Shrinkage bayesiano: con pocos partidos el promedio es ruido (un equipo
+# con 5 partidos y 7 córners/p no es necesariamente un 40% mejor que la
+# media). Encogemos hacia el baseline como "PRIOR_N partidos fantasmas
+# con rating promedio". Con n=5: el dato pesa 5/11=45%; con n=20: 77%.
+CORNERS_PRIOR_N = 6
+
 
 def get_team_corners(team: str) -> dict | None:
     """
@@ -74,8 +80,14 @@ def get_team_corners(team: str) -> dict | None:
     weights = np.array([CORNERS_DECAY ** i for i in range(len(df))])
     weights = weights / weights.sum()
 
-    corners_for     = float(np.average(df["corners_for"],     weights=weights))
-    corners_against = float(np.average(df["corners_against"], weights=weights))
+    corners_for_raw     = float(np.average(df["corners_for"],     weights=weights))
+    corners_against_raw = float(np.average(df["corners_against"], weights=weights))
+
+    # Shrinkage hacia el baseline según sample size
+    n = len(df)
+    _shr = lambda x: (n * x + CORNERS_PRIOR_N * CORNERS_BASELINE) / (n + CORNERS_PRIOR_N)
+    corners_for     = _shr(corners_for_raw)
+    corners_against = _shr(corners_against_raw)
 
     return {
         "corners_for":     round(corners_for,     3),

@@ -392,9 +392,14 @@ def run_mlb_pipeline():
                 pass
 
         # ── Line movement filter ──────────────────────────────────────
+        # get_line_movement() consulta por match_key
+        # ("{home_norm}_{away_norm}_{YYYY-MM-DD}"), no por "Home vs Away".
+        _mk = row.get("match_key")
+        if not _mk or (isinstance(_mk, float) and pd.isna(_mk)):
+            _mk = f"{home}_{away}_{match_date}"
         try:
             from src.features.line_movement import get_line_movement
-            line_data = get_line_movement(match_str)
+            line_data = get_line_movement(_mk)
         except Exception:
             line_data = None
 

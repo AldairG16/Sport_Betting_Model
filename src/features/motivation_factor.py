@@ -155,6 +155,23 @@ def _get_current_standings(league: str, season_start: str = None) -> pd.DataFram
     return standings
 
 
+
+def _match_standings_row(standings: pd.DataFrame, team: str):
+    """
+    Busca la fila de standings del equipo. Exacto (lower) primero; si no,
+    containment por prefijo y SOLO si hay un único candidato (un prefijo de
+    8 chars puede matchear dos clubes, ej. "manchest..." → City y United).
+    Devuelve la row o None.
+    """
+    tl = team.lower().strip()
+    exact = standings[standings["team"].str.lower().str.strip() == tl]
+    if not exact.empty:
+        return exact.iloc[0]
+    cand = standings[standings["team"].str.lower().str.contains(tl[:8], na=False, regex=False)]
+    if len(cand) == 1:
+        return cand.iloc[0]
+    return None
+
 def get_motivation_factor(team: str, league: str) -> float:
     """
     Retorna un factor de ajuste de confianza para el equipo.
@@ -180,15 +197,10 @@ def get_motivation_factor(team: str, league: str) -> float:
     n_europe    = EUROPE_SPOTS.get(league, 6)
 
     # Buscar el equipo (normalización flexible)
-    team_lower = team.lower()
-    match = standings[standings["team"].str.lower().str.contains(
-        team_lower[:8], na=False, regex=False
-    )]
-
-    if match.empty:
+    row = _match_standings_row(standings, team)
+    if row is None:
         return 0.0
 
-    row      = match.iloc[0]
     position = int(row["position"])
     played   = int(row["played"])
     pts      = int(row["pts"])
@@ -266,11 +278,7 @@ def is_unreliable_match(home_team: str, away_team: str, league: str) -> tuple[bo
         return (False, "sin standings")
 
     def _row(team: str):
-        team_lower = team.lower()
-        m = standings[standings["team"].str.lower().str.contains(
-            team_lower[:8], na=False, regex=False
-        )]
-        return m.iloc[0] if not m.empty else None
+        return _match_standings_row(standings, team)
 
     rh = _row(home_team)
     ra = _row(away_team)

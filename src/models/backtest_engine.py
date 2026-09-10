@@ -31,10 +31,14 @@ from config.database import engine
 # =========================
 
 def _profit(row) -> float:
-    if row["result"] == 1:
+    # result es un string: 'win' / 'loss' / 'push' / 'half_win' / 'half_loss'
+    if row["result"] == "win":
         return round((row["odds"] - 1) * row["stake"], 4)
-    elif row["result"] == 0:
-        return round(-row["stake"], 4)
+    if row["result"] == "half_win":
+        return round((row["odds"] - 1) * row["stake"] / 2, 4)
+    if row["result"] in ("loss", "half_loss"):
+        factor = 1.0 if row["result"] == "loss" else 0.5
+        return round(-row["stake"] * factor, 4)
     return 0.0
 
 
@@ -134,7 +138,7 @@ def run_backtest(min_bets: int = 5) -> dict:
     total_profit = df["profit"].sum()
     total_staked = df["stake"].sum()
     roi          = _roi(df["profit"], df["stake"])
-    win_rate     = (df["result"] == 1).mean()
+    win_rate     = (df["result"].isin(["win", "half_win"])).mean()
     avg_odds     = df["odds"].mean()
     avg_edge     = df["edge"].mean()
     max_dd       = _max_drawdown(df["cum_profit"])
@@ -143,7 +147,7 @@ def run_backtest(min_bets: int = 5) -> dict:
     streak = 0
     max_streak = 0
     for r in df["result"]:
-        if r == 0:
+        if r in ("loss", "half_loss"):
             streak += 1
             max_streak = max(max_streak, streak)
         else:
@@ -160,7 +164,7 @@ def run_backtest(min_bets: int = 5) -> dict:
     print("  RESUMEN GENERAL")
     print("=" * 55)
     print(f"  Bets totales:       {total_bets}")
-    print(f"  Bets ganadas:       {(df['result']==1).sum()}  ({win_rate*100:.1f}%)")
+    print(f"  Bets ganadas:       {df['result'].isin(['win', 'half_win']).sum()}  ({win_rate*100:.1f}%)")
     print(f"  Total apostado:     ${total_staked:.2f}")
     print(f"  Profit total:       ${total_profit:+.2f}")
     print(f"  ROI:                {roi*100:+.2f}%")
@@ -281,7 +285,7 @@ def _print_breakdown(df: pd.DataFrame, col: str):
     grouped = df.groupby(col).apply(
         lambda g: pd.Series({
             "bets":   len(g),
-            "wins":   (g["result"] == 1).sum(),
+            "wins":   g["result"].isin(["win", "half_win"]).sum(),
             "profit": g["profit"].sum(),
             "staked": g["stake"].sum(),
             "roi":    _roi(g["profit"], g["stake"]) * 100

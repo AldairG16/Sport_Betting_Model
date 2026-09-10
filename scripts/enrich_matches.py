@@ -63,33 +63,37 @@ def get_team_stats(team):
     if team in team_cache:
         return team_cache[team]
 
-    df = pd.read_sql(text("""
-        SELECT 
-            home_team, away_team,
-            home_shots, away_shots,
-            home_shots_target, away_shots_target,
-            home_corners, away_corners,
-            date
-        FROM matches
-        ORDER BY date DESC
-        LIMIT 300
-    """), engine)
-
-    if df.empty:
-        return None
-
     shots = []
     shots_target = []
     corners = []
 
+    # 1) Partidos del equipo filtrando en SQL (los últimos 20 SUYOS, no los
+    #    300 más recientes globales — esa ventana global excluía a equipos
+    #    de ligas lentas y sesgaba la muestra).
+    _SQL_CLEAN = (
+        "trim(regexp_replace(regexp_replace(lower({col}), "
+        "'[.,\\-_]', ' ', 'g'), '\\s+', ' ', 'g'))"
+    )
+    df = pd.read_sql(
+        text(f"""
+            SELECT
+                home_team, away_team,
+                home_shots, away_shots,
+                home_shots_target, away_shots_target,
+                home_corners, away_corners,
+                date
+            FROM matches
+            WHERE {_SQL_CLEAN.format(col='home_team')} = :team
+               OR {_SQL_CLEAN.format(col='away_team')} = :team
+            ORDER BY date DESC
+            LIMIT 20
+        """),
+        engine,
+        params={"team": team},
+    )
+
     for _, row in df.iterrows():
-
         home_db = normalize_team(row.home_team).lower().strip()
-        away_db = normalize_team(row.away_team).lower().strip()
-
-        if team not in [home_db, away_db]:
-            continue
-
         if home_db == team:
             shots.append(row.home_shots)
             shots_target.append(row.home_shots_target)
@@ -99,8 +103,38 @@ def get_team_stats(team):
             shots_target.append(row.away_shots_target)
             corners.append(row.away_corners)
 
-        if len(shots) >= 20:
-            break
+    # 2) Fallback con alias (normalize_team resuelve alias que SQL no puede):
+    #    escaneo Python sobre una ventana reciente más amplia.
+    if len(shots) < 20:
+        df2 = pd.read_sql(text("""
+            SELECT
+                home_team, away_team,
+                home_shots, away_shots,
+                home_shots_target, away_shots_target,
+                home_corners, away_corners,
+                date
+            FROM matches
+            ORDER BY date DESC
+            LIMIT 2000
+        """), engine)
+        for _, row in df2.iterrows():
+            home_db = normalize_team(row.home_team).lower().strip()
+            away_db = normalize_team(row.away_team).lower().strip()
+            if team not in [home_db, away_db]:
+                continue
+            if home_db == team:
+                shots.append(row.home_shots)
+                shots_target.append(row.home_shots_target)
+                corners.append(row.home_corners)
+            else:
+                shots.append(row.away_shots)
+                shots_target.append(row.away_shots_target)
+                corners.append(row.away_corners)
+            if len(shots) >= 20:
+                break
+
+    if not shots and not shots_target and not corners:
+        return None
 
     result = {
         "shots": safe_avg(shots),

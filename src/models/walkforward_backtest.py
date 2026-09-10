@@ -95,20 +95,24 @@ def _simulate_strategy(df: pd.DataFrame, name: str, mask: pd.Series = None,
     # Profit con flat staking (1u por apuesta) para comparacion justa
     sub["flat_profit"] = sub.apply(
         lambda r: flat_stake * (r["odds"] - 1) if r["result"] == "win"
-        else (-flat_stake if r["result"] == "loss" else 0.0),
+        else (flat_stake * (r["odds"] - 1) / 2 if r["result"] == "half_win"
+        else (-flat_stake if r["result"] == "loss"
+        else (-flat_stake / 2 if r["result"] == "half_loss" else 0.0))),
         axis=1
     )
 
     # Profit con stake real (Kelly)
     sub["real_profit"] = sub.apply(
         lambda r: r["stake"] * (r["odds"] - 1) if r["result"] == "win"
-        else (-r["stake"] if r["result"] == "loss" else 0.0),
+        else (r["stake"] * (r["odds"] - 1) / 2 if r["result"] == "half_win"
+        else (-r["stake"] if r["result"] == "loss"
+        else (-r["stake"] / 2 if r["result"] == "half_loss" else 0.0))),
         axis=1
     )
 
     n = len(sub)
-    wins = (sub["result"] == "win").sum()
-    losses = (sub["result"] == "loss").sum()
+    wins = sub["result"].isin(["win", "half_win"]).sum()
+    losses = sub["result"].isin(["loss", "half_loss"]).sum()
     wr = wins / n if n > 0 else 0
 
     flat_total = sub["flat_profit"].sum()

@@ -1,6 +1,8 @@
 import sys
+import os
 import pandas as pd
 import numpy as np
+from scipy.stats import poisson as _poisson
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -78,6 +80,23 @@ from src.features.h2h_stats import get_h2h_stats
 from src.features.league_calibration import get_lambda_multipliers
 from src.utils.team_normalizer import normalize_team
 
+
+def _row_league_of(row) -> str:
+    """
+    Liga de una fila de upcoming_matches con fallback real a sport_key.
+
+    row.get("league", default) en una Series pandas solo usa el default si la
+    columna NO existe; si existe pero vale NULL devuelve NaN, que rompe
+    get_league_factors y evade los kill-switches por liga.
+    """
+    lg = row.get("league")
+    if lg is None or (isinstance(lg, float) and pd.isna(lg)) or str(lg).strip() == "":
+        sk = row.get("sport_key")
+        if sk is None or (isinstance(sk, float) and pd.isna(sk)):
+            return ""
+        return str(sk)
+    return str(lg)
+
 from src.models.dixon_coles_model import match_outcomes
 from src.models.poisson_markets import totals_and_btts, totals_extended
 from src.models.ensemble_model import ensemble_predict
@@ -91,7 +110,7 @@ from src.models.bet_filters import bet_quality_filter
 
 from src.features.market_calibration import calibrate_probability, is_strong_edge
 from src.features.market_intelligence import market_intelligence_filter, add_market_score
-from src.features.line_movement import get_line_movement, apply_line_movement_signal, line_moved_against, should_skip_low_liquidity
+from src.features.line_movement import get_line_movement, apply_line_movement_signal, line_moved_against, movement_for, should_skip_low_liquidity
 from src.dashboard.betting_dashboard import mostrar_dashboard
 
 from src.features.corners_stats import get_team_corners
@@ -242,6 +261,18 @@ _BLOCKED_MARKETS = {
     "btts",
     "under25",
 }
+
+# Kill-switch dinámico por CLV: mercados con CLV trailing negativo
+# (n >= 100, últimos 120d) escritos por scripts/clv_gate.py en el weekly.
+# Se desbloquean solos cuando el CLV recupera.
+try:
+    from scripts.clv_gate import load_clv_blocked_markets as _load_clv_blocked
+    _CLV_BLOCKED = _load_clv_blocked()
+    if _CLV_BLOCKED:
+        print(f"🚦 Mercados bloqueados por CLV gate: {sorted(_CLV_BLOCKED)}")
+except Exception:
+    _CLV_BLOCKED = set()
+_BLOCKED_MARKETS = _BLOCKED_MARKETS | _CLV_BLOCKED
 
 # =========================
 # SAFE HELPERS (CRÍTICO)
@@ -468,7 +499,7 @@ def run_prediction_pipeline():
 
         # Factores calibrados por liga (calculados de 58k+ partidos reales)
         HOME_ADVANTAGE, TEMPO = get_lambda_multipliers(
-            row.get("league", row.get("sport_key", ""))
+            _row_league_of(row)
         )
         XG_WEIGHT  = 0.40   # 40% xG proxy, 60% goals-based form
         H2H_WEIGHT = 0.15   # 15% H2H histórico sobre lambdas finales
@@ -545,7 +576,7 @@ def run_prediction_pipeline():
         # campeon asegurado / descendido → menos motivado
         # peleando descenso / título / Europa → más motivado
 
-        league_key = row.get("league", row.get("sport_key", ""))
+        league_key = _row_league_of(row)
         home_motiv = get_motivation_factor(home, league_key)
         away_motiv = get_motivation_factor(away, league_key)
 
@@ -562,11 +593,12 @@ def run_prediction_pipeline():
             print(f"  Motivacion {away}: {away_motiv:+.0%} ({label})")
 
         # =========================
-        # ELO BLEND
+        # LAMBDAS BASE
         # =========================
-
-        home_attack = (home_attack + elo.get(home, 1500) / 1500) / 2
-        away_attack = (away_attack + elo.get(away, 1500) / 1500) / 2
+        # (ELO blend eliminado 09-sep-26: promediaba una escala de goles
+        # (~0.75-2.5) con un ratio adimensional elo/1500 (~0.9-1.2) — no
+        # aportaba señal real, solo comprimía los ataques hacia la media.
+        # El ELO sí sigue usándose como señal independiente del ensemble.)
 
         lambda_home = home_attack * away_defense * HOME_ADVANTAGE * TEMPO
         lambda_away = away_attack * home_defense * TEMPO
@@ -625,6 +657,7 @@ def run_prediction_pipeline():
                 home_defense   = home_shots_stats["defense_rating"],
                 away_attack    = away_shots_stats["attack_rating"],
                 away_defense   = away_shots_stats["defense_rating"],
+                expected_goals_total = lambda_home + lambda_away,
             )
             shots_confidence_delta = shots_to_confidence_signal(shots_prediction)
             shots_used += 1
@@ -687,16 +720,30 @@ def run_prediction_pipeline():
         # Blend: 40% MLE + 60% forma actual → transición suave.
         # Si algún equipo no está en los parámetros MLE → 100% forma actual.
 
+        _mle_w = 0.0   # peso DC-MLE efectivo usado (para el decision log)
         if mle_fresh:
             # Detectar venue neutral por liga — fundamental para Mundial,
             # Euro, Copa América y otros torneos en sede única.
-            _league_for_neutral = row.get("league", row.get("sport_key", ""))
+            _league_for_neutral = _row_league_of(row)
             _is_neutral_match   = _league_for_neutral in NEUTRAL_VENUE_LEAGUES
             mle_result = get_dc_lambdas(home, away, is_neutral=_is_neutral_match)
             if mle_result is not None:
                 mle_lh, mle_la = mle_result
-                lambda_home = lambda_home * (1 - DC_MLE_WEIGHT) + mle_lh * DC_MLE_WEIGHT
-                lambda_away = lambda_away * (1 - DC_MLE_WEIGHT) + mle_la * DC_MLE_WEIGHT
+                # Peso adaptativo por volumen de datos del equipo: el MLE es
+                # más fiable que la forma simple cuando ambos equipos tienen
+                # historia suficiente; con poca data, mandar la forma actual.
+                _min_hist = min(
+                    int(home_form.get("matches", 0)),
+                    int(away_form.get("matches", 0)),
+                )
+                if _min_hist >= 30:
+                    _mle_w = 0.55
+                elif _min_hist >= 15:
+                    _mle_w = DC_MLE_WEIGHT
+                else:
+                    _mle_w = 0.25
+                lambda_home = lambda_home * (1 - _mle_w) + mle_lh * _mle_w
+                lambda_away = lambda_away * (1 - _mle_w) + mle_la * _mle_w
 
         # =========================
         # CAP GOALS
@@ -897,11 +944,11 @@ def run_prediction_pipeline():
             poisson_probs["over25"]  * (1 - OVER25_SHRINK)
             + league_over25          * OVER25_SHRINK
         )
-        poisson_probs["under25"] = 1.0 - poisson_probs["over25"]
-
-        # 🔥 sanity cap
+        # 🔥 sanity cap — ANTES de derivar under25 para que sumen exactamente 1
         poisson_probs["over25"]   = min(poisson_probs["over25"],   0.75)
         poisson_probs["btts_yes"] = min(poisson_probs["btts_yes"], 0.75)
+        poisson_probs["btts_no"]  = 1.0 - poisson_probs["btts_yes"]
+        poisson_probs["under25"]  = 1.0 - poisson_probs["over25"]
 
         totals_probs = totals_extended(lambda_home, lambda_away)
 
@@ -931,17 +978,30 @@ def run_prediction_pipeline():
         _league_for_gate = row.get("sport_key", "")
 
         if corners_prediction and _has_coverage(_league_for_gate, "corners"):
-            # Usar la línea de la API si está disponible, fallback 9.5
+            # Usar la línea de la API si está disponible, fallback 9.5.
+            # La probabilidad debe calcularse en la línea REAL de la API:
+            # over95/under95 solo valen para 9.5; para otra línea usamos la
+            # cola de Poisson con lambda_total del modelo.
             cl = float(_corners_line_api) if _corners_line_api is not None else 9.5
             over_key  = f"corners_over_{cl}"
             under_key = f"corners_under_{cl}"
-            model_probs[over_key]  = clamp_prob(corners_prediction["over95"])
-            model_probs[under_key] = clamp_prob(corners_prediction["under95"])
+            if abs(cl - 9.5) < 1e-9:
+                p_over = corners_prediction["over95"]
+            else:
+                _k = int(cl)
+                p_over = float(1 - _poisson.cdf(_k, corners_prediction["lambda_total"]))
+            model_probs[over_key]  = clamp_prob(p_over)
+            model_probs[under_key] = clamp_prob(1.0 - p_over)
 
         if cards_prediction and _has_coverage(_league_for_gate, "cards"):
             cl_c = float(_cards_line_api) if _cards_line_api is not None else 4.5
-            model_probs[f"cards_over_{cl_c}"]  = clamp_prob(cards_prediction["over45"])
-            model_probs[f"cards_under_{cl_c}"] = clamp_prob(cards_prediction["under45"])
+            if abs(cl_c - 4.5) < 1e-9:
+                p_over_c = cards_prediction["over45"]
+            else:
+                _kc = int(cl_c)
+                p_over_c = float(1 - _poisson.cdf(_kc, cards_prediction["lambda_total"]))
+            model_probs[f"cards_over_{cl_c}"]  = clamp_prob(p_over_c)
+            model_probs[f"cards_under_{cl_c}"] = clamp_prob(1.0 - p_over_c)
 
         # =========================
         # OVER 1.5 / OVER 3.5 GOLES
@@ -990,16 +1050,26 @@ def run_prediction_pipeline():
                 "away_win": ma
             })
 
-        if safe_odds(row.over25_odds):
+        # Over/Under y BTTS: quitar el margen del bookmaker (devig proporcional)
+        # para que sean comparables con las probs 1x2 (Shin) del bloque anterior.
+        if safe_odds(row.over25_odds) and safe_odds(row.under25_odds):
+            _ov_raw, _un_raw = 1 / row.over25_odds, 1 / row.under25_odds
+            _tot = _ov_raw + _un_raw
+            market_probs["over25"]  = _ov_raw / _tot
+            market_probs["under25"] = _un_raw / _tot
+        elif safe_odds(row.over25_odds):
             market_probs["over25"] = 1 / row.over25_odds
-
-        if safe_odds(row.under25_odds):
+        elif safe_odds(row.under25_odds):
             market_probs["under25"] = 1 / row.under25_odds
 
-        if safe_odds(row.btts_yes_odds):
+        if safe_odds(row.btts_yes_odds) and safe_odds(row.btts_no_odds):
+            _by_raw, _bn_raw = 1 / row.btts_yes_odds, 1 / row.btts_no_odds
+            _tot_b = _by_raw + _bn_raw
+            market_probs["btts"]    = _by_raw / _tot_b
+            market_probs["btts_no"] = _bn_raw / _tot_b
+        elif safe_odds(row.btts_yes_odds):
             market_probs["btts"] = 1 / row.btts_yes_odds
-
-        if safe_odds(row.btts_no_odds):
+        elif safe_odds(row.btts_no_odds):
             market_probs["btts_no"] = 1 / row.btts_no_odds
 
         # AH market probs (si tenemos odds del spreads market)
@@ -1160,7 +1230,7 @@ def run_prediction_pipeline():
         # =========================
         # Mejora 3: Corrección global de sobrecalibración.
         # Liga del partido — usado para calibración específica (Mundial/Euro/etc.)
-        _row_league = row.get("league", row.get("sport_key", ""))
+        _row_league = _row_league_of(row)
         _is_paper_match = _row_league in PAPER_ONLY_LEAGUES
 
         for market in list(probabilities.keys()):
@@ -1283,8 +1353,7 @@ def run_prediction_pipeline():
             # absorbido por el mercado sharp antes de que apostemos
             if line_moved_against(bet["market"], line):
                 mkt   = bet["market"]
-                delta = line.get(f"{mkt.replace('_win','')}_movement",
-                                  line.get("over25_movement", 0))
+                delta = movement_for(mkt, line)
                 print(f"  Skip linea: {home} vs {away} | {mkt} | caida {delta*100:.1f}%")
                 sharp_rejected += 1
                 continue
@@ -1322,7 +1391,7 @@ def run_prediction_pipeline():
         # Antes filtrábamos `bet["edge"] < 0.10` que con odds 5.0 dejaba
         # pasar bets con solo 5% de edge real → bucket 15-20% edge tenía
         # -23.7% ROI (overfit). Ahora filtramos sobre edge_market real.
-        _league = row.get("league", row.get("sport_key", ""))
+        _league = _row_league_of(row)
         _is_paper = _league in PAPER_ONLY_LEAGUES
         if _league in BLOCKED_LEAGUES:
             continue
@@ -1419,6 +1488,15 @@ def run_prediction_pipeline():
             if _league in TOUGH_LEAGUES:
                 _min_edge = max(_min_edge, 0.07)
 
+            # 2b) Bump por liquidez de bookmakers.
+            # Con pocas casas el consenso está mal estimado y el vig es más
+            # alto — el mismo "edge" es más ruido. <6 books → +2pt, <8 → +1pt.
+            if bk_count is not None and not _is_paper:
+                if bk_count < 6:
+                    _min_edge = max(_min_edge, _min_edge + 0.02)
+                elif bk_count < 8:
+                    _min_edge = max(_min_edge, _min_edge + 0.01)
+
             # 3) Bump midweek — no aplica a paper (WC juega cualquier día)
             if _midweek and not _is_paper:
                 _min_edge *= 1.4
@@ -1447,10 +1525,55 @@ def run_prediction_pipeline():
                 league=_league,
             )
 
+            # ── DECISION LOG ─────────────────────────────────────────────
+            # Snapshot del contexto completo en el momento de la decisión.
+            # Permite autopsia: cuando una bet pierde, saber QUÉ señales
+            # estaban activas y con qué versión de calibración/modelo se
+            # generó. Congela las odds vistas (para medir slippage después).
+            try:
+                import json as _json
+                from datetime import datetime as _dt, timezone as _tz
+                _decision_log = {
+                    "model": {
+                        "lambda_home": round(float(lambda_home), 3),
+                        "lambda_away": round(float(lambda_away), 3),
+                        "p_home": round(float(home_win), 4),
+                        "p_draw": round(float(draw), 4),
+                        "p_away": round(float(away_win), 4),
+                        "mc_agreement": float(mc_agreement),
+                        "confidence": round(float(confidence), 3),
+                        "mle_weight": _mle_w,
+                    },
+                    "signals": {
+                        "h2h_used": bool(h2h),
+                        "xg_used": bool(home_xg and away_xg),
+                        "motivation": [home_motiv, away_motiv],
+                        "rest_days": [home_cong.get("days_rest"), away_cong.get("days_rest")],
+                        "fatigued": bool(home_cong.get("is_fatigued") or away_cong.get("is_fatigued")),
+                        "weather_mult": round(float(weather_mult), 3),
+                        "corners_lambda": (corners_prediction or {}).get("lambda_total"),
+                        "cards_lambda": (cards_prediction or {}).get("lambda_total"),
+                        "form_matches": [home_form.get("matches"), away_form.get("matches")],
+                    },
+                    "market_ctx": {
+                        "bookmakers": bk_count,
+                        "spread_pct": spread_pct,
+                        "soft_line": bool(soft_line_detected),
+                    },
+                    "meta": {
+                        "generated_at": _dt.now(_tz.utc).isoformat(),
+                        "calibration_updated_at": (cal_factors or {}).get("updated_at"),
+                        "sha": os.environ.get("GITHUB_SHA", "local"),
+                    },
+                }
+                _decision_log = _json.dumps(_decision_log, ensure_ascii=False, default=str)
+            except Exception:
+                _decision_log = None
+
             all_bets.append({
                 "match":       f"{home} vs {away}",
                 "match_date":  date,
-                "league":      row.get("league", row.get("sport_key", "")),
+                "league":      _row_league_of(row),
                 "market":      bet["market"],
                 "probability": bet["probability"],
                 "odds":        bet["odds"],
@@ -1458,7 +1581,8 @@ def run_prediction_pipeline():
                 # de `edge_ev`. A partir de 04-may-26 bets_history.edge mide
                 # `prob - implied`, no `(prob*odds)-1` (que era inflado).
                 "edge":        bet.get("edge_market", bet["edge"]),
-                "stake":       stake
+                "stake":       stake,
+                "decision_log": _decision_log
             })
 
             match_bets_count += 1
@@ -1605,6 +1729,43 @@ def run_prediction_pipeline():
             print(
                 f"  📊 Concentración {dominant_mkt}: {concentration*100:.0f}% del portfolio"
             )
+
+        # ── Cap de exposición ACUMULADA por slate (fecha de partido) ──────
+        # El cap de arriba es por-run; los runs morning/evening/pre_kickoff
+        # del mismo día suman. Restamos lo ya comprometido (pending) en cada
+        # fecha y escalamos solo las bets que superan el 15% del bankroll.
+        try:
+            _pending = pd.read_sql(
+                _sql_text("""
+                    SELECT match_date::date AS d, COALESCE(SUM(stake), 0) AS s
+                    FROM bets_history
+                    WHERE result = 'pending'
+                    GROUP BY 1
+                """),
+                engine,
+            )
+            _pending_by_date = {
+                str(r["d"]): float(r["s"]) for _, r in _pending.iterrows()
+            }
+            _by_date: dict = {}
+            for b in all_bets:
+                _d = str(b.get("match_date", ""))[:10]
+                _by_date.setdefault(_d, []).append(b)
+            for _d, _bets_d in _by_date.items():
+                _allowance = current_bankroll * 0.15 - _pending_by_date.get(_d, 0.0)
+                _new_stake = sum(b["stake"] for b in _bets_d)
+                if _allowance <= 0 or _new_stake > _allowance:
+                    _scale_d = max(0.0, _allowance / _new_stake) if _new_stake > 0 else 0.0
+                    for b in _bets_d:
+                        b["stake"] = round(b["stake"] * _scale_d, 2)
+                    print(
+                        f"  🛡️  Cap slate {_d}: {_new_stake:.2f}u nuevos → "
+                        f"{sum(b['stake'] for b in _bets_d):.2f}u "
+                        f"(ya comprometido: {_pending_by_date.get(_d, 0.0):.2f}u)"
+                    )
+        except Exception as _e:
+            # Sin acceso a DB, el cap por-run de arriba sigue protegiendo
+            print(f"  ⚠️  Cap por slate omitido (sin DB): {_e}")
 
         print(
             f"\n💼 Portfolio: {len(all_bets)} bets | "

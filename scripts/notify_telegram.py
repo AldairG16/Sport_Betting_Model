@@ -1302,7 +1302,7 @@ def send_evening_summary():
     wins     = df[df["result"] == "win"]
     losses   = df[df["result"] == "loss"]
     pending  = df[df["result"] == "pending"]
-    resolved = df[df["result"].isin(["win", "loss"])]
+    resolved = df[df["result"].isin(["win", "loss", "half_win", "half_loss"])]
 
     profit_day  = float(resolved["profit"].sum()) if not resolved.empty else 0
     staked_day  = float(resolved["stake"].sum())  if not resolved.empty else 0

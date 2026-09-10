@@ -145,7 +145,18 @@ def _ah_group(market: str) -> str | None:
 # Evita que apuestas viejas (temporadas previas, modelo anterior) contaminen
 # el factor actual — si el modelo mejoró, las bets viejas sesgan hacia abajo.
 # Subido 60→90 (sprint 1 #2) para que by_league tenga más muestra por mercado.
-CALIBRATION_WINDOW_DAYS = 90
+# Subido 90→180 (09-sep-26) al introducir el holdout: los últimos
+# HOLDOUT_DAYS días se EXCLUYEN del fit (nunca se calibra con ellos y se
+# usan solo para evaluar), así que la ventana efectiva de fit es
+# 180 − 45 = 135 días.
+CALIBRATION_WINDOW_DAYS = 180
+
+# HOLDOUT CONGELADO: los últimos N días de bets NO se usan para ajustar
+# factores — quedan como muestra limpia para medir si el modelo calibrado
+# generaliza (scripts/evaluate_holdout.py). Sin esto, calibramos y
+# evaluamos sobre la misma data y las métricas siempre se ven mejor
+# que la realidad.
+CALIBRATION_HOLDOUT_DAYS = 45
 
 # MEJORA #2 (Sprint 1) — umbral RELAJADO para mercados within-league.
 # El umbral global (MIN_BETS_FOR_CALIBRATION=10) protege contra ruido en el
@@ -361,11 +372,12 @@ def compute_calibration(min_bets: int = MIN_BETS_FOR_CALIBRATION,
         df = pd.read_sql(f"""
             SELECT market, probability, result, league
             FROM bets_history
-            WHERE result IN ('win', 'loss')
+            WHERE result IN ('win', 'loss', 'half_win', 'half_loss')
               AND probability IS NOT NULL
               AND probability > 0
               AND probability < 1
               AND match_date >= NOW() - INTERVAL '{CALIBRATION_WINDOW_DAYS} days'
+              AND match_date <  NOW() - INTERVAL '{CALIBRATION_HOLDOUT_DAYS} days'
         """, engine)
     except Exception as e:
         print(f"❌ calibration_monitor: no se pudo leer bets_history: {e}")
@@ -377,7 +389,7 @@ def compute_calibration(min_bets: int = MIN_BETS_FOR_CALIBRATION,
         return _neutral_factors()
 
     # Resultado binario: 1 = win, 0 = loss
-    df["outcome"] = (df["result"] == "win").astype(int)
+    df["outcome"] = df["result"].isin(["win", "half_win"]).astype(int)
 
     # MEJORA #4 — añadir columna `market_grp` para agregar AH variantes:
     df["market_grp"] = df["market"].apply(lambda m: _ah_group(m) or m)
@@ -468,7 +480,7 @@ def compute_calibration(min_bets: int = MIN_BETS_FOR_CALIBRATION,
         )
 
     # ── Brier global ─────────────────────────────────────────────────────
-    df["outcome_int"] = (df["result"] == "win").astype(int)
+    df["outcome_int"] = df["result"].isin(["win", "half_win"]).astype(int)
     global_brier = float(np.mean((df["probability"] - df["outcome_int"]) ** 2))
     summary_lines += [
         "─" * 60,
@@ -539,7 +551,7 @@ def compute_calibration(min_bets: int = MIN_BETS_FOR_CALIBRATION,
                 continue
 
             prob    = mdf["probability"].values
-            outcome = (mdf["result"] == "win").astype(int).values
+            outcome = mdf["result"].isin(["win", "half_win"]).astype(int).values
 
             brier = float(np.mean((prob - outcome) ** 2))
             wr_pred   = float(np.mean(prob))

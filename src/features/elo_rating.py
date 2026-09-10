@@ -1,5 +1,6 @@
 import pandas as pd
 from config.database import engine
+from src.utils.team_normalizer import normalize_team
 
 
 def compute_elo():
@@ -22,8 +23,11 @@ def compute_elo():
 
     for _, row in df.iterrows():
 
-        home = row.home_team
-        away = row.away_team
+        # Claves normalizadas: los consumidores (prediction_pipeline) hacen
+        # lookup con normalize_team(); sin esto, equipos cargados con nombres
+        # crudos siempre caían en el default 1500.
+        home = normalize_team(row.home_team)
+        away = normalize_team(row.away_team)
 
         # inicializar
         elo.setdefault(home, BASE_ELO)
@@ -80,8 +84,10 @@ def compute_elo():
         # =========================
         # 🔥 DECAY (recency weighting)
         # =========================
-
-        elo[home] *= DECAY
-        elo[away] *= DECAY
+        # Decaer hacia la media (BASE_ELO), no hacia 0: antes era
+        # `elo[x] *= DECAY`, que arrastraba el rating hacia 0 por número
+        # de partidos jugados en la ventana.
+        elo[home] = BASE_ELO + (elo[home] - BASE_ELO) * DECAY
+        elo[away] = BASE_ELO + (elo[away] - BASE_ELO) * DECAY
 
     return elo

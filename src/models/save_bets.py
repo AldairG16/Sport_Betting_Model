@@ -49,11 +49,23 @@ def save_bets(bets):
 
     df = df.where(pd.notnull(df), None)
 
-    # Asegurar columna league existe
+    # Asegurar columnas nuevas existen
     with engine.begin() as conn:
         conn.execute(text("""
             ALTER TABLE bets_history
             ADD COLUMN IF NOT EXISTS league TEXT
+        """))
+        # Decision log: snapshot JSON del contexto al momento de la apuesta
+        # (lambdas, señales activas, versión de calibración, odds vistas).
+        conn.execute(text("""
+            ALTER TABLE bets_history
+            ADD COLUMN IF NOT EXISTS decision_log JSONB
+        """))
+        # Slippage: odd a la que la bet fue COLOCADA realmente (vs `odds`,
+        # la mejor odd vista al predecir). NULL mientras no se registre.
+        conn.execute(text("""
+            ALTER TABLE bets_history
+            ADD COLUMN IF NOT EXISTS odds_placed NUMERIC
         """))
 
     with engine.begin() as conn:
@@ -71,7 +83,9 @@ def save_bets(bets):
                     result,
                     profit,
                     closing_odds,
-                    clv
+                    clv,
+                    decision_log,
+                    odds_placed
                 )
                 VALUES (
                     :match,
@@ -85,12 +99,64 @@ def save_bets(bets):
                     :result,
                     :profit,
                     :closing_odds,
-                    :clv
+                    :clv,
+                    :decision_log,
+                    :odds_placed
                 )
                 ON CONFLICT (match, market, match_date) DO NOTHING
-            """), row.to_dict())
+            """), {
+                **row.to_dict(),
+                "odds_placed": row.get("odds_placed"),
+            })
 
     print(f"✅ {len(df)} bets saved to bets_history")
+
+
+def record_placed_odds(match: str, market: str, match_date, odds_placed: float) -> int:
+    """
+    Registra la odd REAL a la que se colocó una bet (slippage tracking).
+
+    `odds` guarda la mejor odd vista al generar la predicción; la odd de
+    ejecución suele ser peor (la línea se mueve). La diferencia
+    (1/odds_placed − 1/odds) es el slippage: cuánto edge teórico muere
+    en la ejecución.
+
+    Returns: número de rows actualizadas (0 si la bet no existe).
+    """
+    with engine.begin() as conn:
+        result = conn.execute(text("""
+            UPDATE bets_history
+            SET odds_placed = :odds_placed
+            WHERE match = :match
+              AND market = :market
+              AND match_date = :match_date
+        """), {
+            "match": match, "market": market,
+            "match_date": str(match_date)[:10], "odds_placed": odds_placed,
+        })
+        return result.rowcount
+
+
+def slippage_report() -> dict:
+    """
+    Slippage medio: pérdida de edge entre la odd vista (predicción) y la
+    odd colocada (ejecución). Solo opina sobre bets con odds_placed registrado.
+    """
+    df = pd.read_sql(text("""
+        SELECT odds, odds_placed
+        FROM bets_history
+        WHERE odds_placed IS NOT NULL
+          AND odds > 1 AND odds_placed > 1
+    """), engine)
+    if df.empty:
+        return {"status": "no_data", "n": 0}
+    slip = 1.0 / df["odds_placed"] - 1.0 / df["odds"]
+    return {
+        "status": "ok",
+        "n": int(len(df)),
+        "avg_slippage_prob": round(float(slip.mean()), 5),
+        "avg_slippage_odds_pct": round(float((df["odds_placed"] / df["odds"] - 1).mean()) * 100, 2),
+    }
 
 
 # =========================

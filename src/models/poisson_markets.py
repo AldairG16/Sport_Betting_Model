@@ -11,6 +11,13 @@ def poisson_matrix(home_lambda, away_lambda, max_goals=10):
 
     matrix = np.outer(home_probs, away_probs)
 
+    # Normalizar por truncación: la matriz finita pierde la masa de los
+    # marcadores >= max_goals (hasta ~1e-3 con λ alto). Sin esto, over+under
+    # suma < 1 y los overs quedan sistemáticamente subestimados.
+    total = matrix.sum()
+    if total > 0:
+        matrix = matrix / total
+
     return matrix
 
 

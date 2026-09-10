@@ -99,9 +99,18 @@ def collect_match_events(verbose: bool = True):
 
     with engine.begin() as conn:
         for (date, home, away), group in groups:
-            # Separar goles de cada equipo (excluir own goals del marcador)
-            home_rows = group[(group["team"] == home) & (group["own_goal"] == False)]
-            away_rows = group[(group["team"] == away) & (group["own_goal"] == False)]
+            # Separar goles de cada equipo.
+            # Un own goal (dataset martj42) tiene team = el equipo del jugador
+            # que la mandó a su arco, pero el gol cuenta para el RIVAL:
+            # la atribuimos al equipo contrario.
+            home_rows = pd.concat([
+                group[(group["team"] == home) & (group["own_goal"] == False)],
+                group[(group["team"] == away) & (group["own_goal"] == True)],
+            ])
+            away_rows = pd.concat([
+                group[(group["team"] == away) & (group["own_goal"] == False)],
+                group[(group["team"] == home) & (group["own_goal"] == True)],
+            ])
 
             # Construir JSON de goleadores
             def _build_scorers(rows):

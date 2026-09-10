@@ -74,7 +74,6 @@ TEAM_CODES = {
     "TOR": "Toronto Blue Jays",
     "WAS": "Washington Nationals",
     # Alias historicos
-    "CIN": "Cincinnati Reds",
     "FLO": "Miami Marlins",
     "MON": "Washington Nationals",
 }

@@ -529,7 +529,7 @@ def _quick_skip_signals(bet: dict, ctx: dict) -> str | None:
     # xG total estimado del partido
     if xg_for_home and xg_for_away:
         xg_total = (xg_for_home + xg_ag_away) / 2 + (xg_for_away + xg_ag_home) / 2
-        if market in ("over25", "btts") and 0 < xg_total < 2.0:
+        if (market == "over25" or str(market).startswith("btts")) and 0 < xg_total < 2.0:
             return f"xG combinado {xg_total:.1f} < 2.0 — incoherente con {market}"
         if market in ("under_1.5",) and xg_total > 3.0:
             return f"xG combinado {xg_total:.1f} > 3.0 — incoherente con {market}"

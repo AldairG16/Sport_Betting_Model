@@ -278,7 +278,12 @@ def refresh_clv_cache() -> dict:
     if df.empty:
         return {"by_market": {}, "updated_at": None}
 
-    df["clv"] = df["odds"] / df["closing_odds"] - 1
+    # CLV en escala de PROBABILIDAD (1/cierre − 1/apertura), la misma
+    # definición que clv_tracker escribe en la columna bets_history.clv.
+    # Antes se usaba odds/closing − 1 (escala de ratio, 2-4× mayor), lo que
+    # hacía que el umbral ±1.5% de _adjusted_kelly_fraction se disparara
+    # con demasiada frecuencia.
+    df["clv"] = 1.0 / df["closing_odds"] - 1.0 / df["odds"]
     by_market: dict = {}
     for mkt, sub in df.groupby("market"):
         per_league: dict = {}

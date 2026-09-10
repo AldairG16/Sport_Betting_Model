@@ -97,8 +97,15 @@ def log_credits(sport_key: str, used: str, remaining: str):
     with open(CREDITS_LOG, "a") as f:
         f.write(line)
 
-    remaining_int = int(remaining) if remaining.isdigit() else 9999
-    _last_known_remaining = remaining_int
+    # Si el header viene ausente/no numérico, conservar el último valor
+    # conocido en vez de asumir 9999 (eso neutralizaba el detector de fuga
+    # y el auto-stop durante todo el run).
+    if remaining.isdigit():
+        _last_known_remaining = int(remaining)
+    elif _last_known_remaining is None:
+        print(f"  ⚠️  Header x-requests-remaining inválido/ausente ({remaining!r}) — guards de créditos desactivados hasta el próximo header válido.")
+        return
+    remaining_int = _last_known_remaining
     # Capturar remaining inicial (para enforcar MAX_CREDITS_PER_RUN)
     if _initial_remaining is None:
         _initial_remaining = remaining_int
@@ -612,7 +619,12 @@ def parse_match(m: dict, sport: str) -> dict | None:
                                 h2_draw_odds = price
 
                 elif market["key"] == "alternate_totals_corners":
-                    bk_co = bk_cu = bk_cl = None
+                    # Recolectar over/under por línea y luego elegir la más
+                    # cercana al target que tenga AMBOS lados. El orden de los
+                    # outcomes en la API no está garantizado; el emparejamiento
+                    # secuencial anterior descartaba pares completos.
+                    _ov: dict = {}
+                    _un: dict = {}
                     for o in market["outcomes"]:
                         price = o.get("price")
                         point = o.get("point")
@@ -620,16 +632,17 @@ def parse_match(m: dict, sport: str) -> dict | None:
                         if price is None or point is None:
                             continue
                         if name == "over":
-                            if bk_cl is None or abs(point - CORNERS_TARGET_LINE) < abs(bk_cl - CORNERS_TARGET_LINE):
-                                bk_cl = point
-                                bk_co = price
-                        elif name == "under" and bk_cl is not None and point == bk_cl:
-                            bk_cu = price
-                    if bk_co and bk_cu and bk_cl is not None:
-                        all_corners_data.append((bk_cl, bk_co, bk_cu))
+                            _ov[point] = max(_ov.get(point, 0), price)
+                        elif name == "under":
+                            _un[point] = max(_un.get(point, 0), price)
+                    _common = [p for p in _ov if p in _un]
+                    if _common:
+                        bk_cl = min(_common, key=lambda p: abs(p - CORNERS_TARGET_LINE))
+                        all_corners_data.append((bk_cl, _ov[bk_cl], _un[bk_cl]))
 
                 elif market["key"] == "alternate_totals_cards":
-                    bk_co = bk_cu = bk_cl = None
+                    _ov_c: dict = {}
+                    _un_c: dict = {}
                     for o in market["outcomes"]:
                         price = o.get("price")
                         point = o.get("point")
@@ -637,13 +650,13 @@ def parse_match(m: dict, sport: str) -> dict | None:
                         if price is None or point is None:
                             continue
                         if name == "over":
-                            if bk_cl is None or abs(point - CARDS_TARGET_LINE) < abs(bk_cl - CARDS_TARGET_LINE):
-                                bk_cl = point
-                                bk_co = price
-                        elif name == "under" and bk_cl is not None and point == bk_cl:
-                            bk_cu = price
-                    if bk_co and bk_cu and bk_cl is not None:
-                        all_cards_data.append((bk_cl, bk_co, bk_cu))
+                            _ov_c[point] = max(_ov_c.get(point, 0), price)
+                        elif name == "under":
+                            _un_c[point] = max(_un_c.get(point, 0), price)
+                    _common_c = [p for p in _ov_c if p in _un_c]
+                    if _common_c:
+                        bk_cl_c = min(_common_c, key=lambda p: abs(p - CARDS_TARGET_LINE))
+                        all_cards_data.append((bk_cl_c, _ov_c[bk_cl_c], _un_c[bk_cl_c]))
 
             # Agregar precios a las listas solo si el bookmaker tiene h2h completo
             if bk_home and bk_away:

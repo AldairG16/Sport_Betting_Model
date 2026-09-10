@@ -37,6 +37,7 @@ def predict_shots(
     away_attack:    float,
     away_defense:   float,
     home_advantage: float = HOME_SHOT_ADVANTAGE,
+    expected_goals_total: float | None = None,
 ) -> dict:
     """
     Predice distribución de tiros al arco para un partido.
@@ -94,10 +95,16 @@ def predict_shots(
     # PRESSURE INDEX
     # ============================
     # > 1.0 → el equipo crea más tiros de lo que convierte (presión alta)
-    # Se usa como señal auxiliar para over 2.5 goles
-    expected_goals_proxy = (lambda_home + lambda_away) * 0.30
-    pressure_index = round(lambda_total / max(expected_goals_proxy, 0.1), 3)
-    result["pressure_index"] = pressure_index
+    # Se usa como señal auxiliar para over 2.5 goles.
+    # Debe comparar los SOT esperados contra los GOLES esperados del modelo
+    # (variable independiente); antes dividía lambda_total entre una copia
+    # escalada de sí misma, dando siempre ~3.333.
+    if expected_goals_total is not None and expected_goals_total > 0:
+        result["pressure_index"] = round(
+            lambda_total / max(expected_goals_total, 0.1), 3
+        )
+    else:
+        result["pressure_index"] = None
 
     return result
 

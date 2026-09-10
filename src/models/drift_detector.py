@@ -73,7 +73,7 @@ def detect_drift(by_league: bool = True) -> dict:
     df = pd.read_sql(f"""
         SELECT match_date, league, market, probability, odds, result
         FROM bets_history
-        WHERE result IN ('win','loss')
+        WHERE result IN ('win','loss','half_win','half_loss')
           AND probability BETWEEN 0.01 AND 0.99
           AND match_date >= NOW() - INTERVAL '{_REF_DAYS_FROM} days'
     """, engine)

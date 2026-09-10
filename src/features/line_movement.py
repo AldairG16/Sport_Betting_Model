@@ -203,6 +203,21 @@ def apply_line_movement_signal(
     return base_edge, base_confidence
 
 
+def movement_for(bet_market: str, line: dict) -> float:
+    """
+    Movimiento de odds (fracción) en la dirección de la apuesta, para el
+    mercado dado. 0.0 si no hay datos de movimiento de ese mercado.
+    """
+    market_to_movement = {
+        "home_win": line["home_movement"],
+        "draw":     line["draw_movement"],
+        "away_win": line["away_movement"],
+        "over25":   line["over25_movement"],
+        "under25":  -line["over25_movement"],  # under sube cuando over baja
+    }
+    return market_to_movement.get(bet_market, 0.0)
+
+
 def line_moved_against(bet_market: str, line: dict) -> bool:
     """
     Filtro DURO: True si la línea cayó más de HARD_SKIP_THRESHOLD
@@ -218,14 +233,7 @@ def line_moved_against(bet_market: str, line: dict) -> bool:
     Returns:
         True → descartar la apuesta
     """
-    market_to_movement = {
-        "home_win": line["home_movement"],
-        "draw":     line["draw_movement"],
-        "away_win": line["away_movement"],
-        "over25":   line["over25_movement"],
-        "under25":  -line["over25_movement"],  # under sube cuando over baja
-    }
-    movement = market_to_movement.get(bet_market, 0.0)
+    movement = movement_for(bet_market, line)
     # Odds cayeron en nuestra dirección más del umbral → edge absorbido
     return movement < -HARD_SKIP_THRESHOLD
 

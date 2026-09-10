@@ -133,7 +133,7 @@ def load_extra_leagues(leagues: dict = None):
         df["away_goals"] = df["away_goals"].astype(int)
 
         # Season
-        df["season"] = df.get("Season", "unknown").astype(str)
+        df["season"] = df["Season"].astype(str) if "Season" in df.columns else "unknown"
         df["league"] = sport_key
 
         # Insertar con ON CONFLICT DO NOTHING
