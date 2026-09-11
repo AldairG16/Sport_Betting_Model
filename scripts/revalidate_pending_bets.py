@@ -168,7 +168,7 @@ def revalidate_pending_bets(verbose: bool = True) -> dict:
                     SET odds = :odds,
                         decision_log = COALESCE(decision_log, '{}'::jsonb)
                                       || jsonb_build_object('revalidation',
-                                           to_jsonb(:note::jsonb))
+                                           to_jsonb(CAST(:note AS jsonb)))
                     WHERE id = :id
                 """), {"odds": fresh, "note": str(_json_dumps(note)), "id": int(bet["id"])})
                 kept_better += 1
@@ -181,7 +181,7 @@ def revalidate_pending_bets(verbose: bool = True) -> dict:
                         SET odds = :odds,
                             decision_log = COALESCE(decision_log, '{}'::jsonb)
                                           || jsonb_build_object('revalidation',
-                                               to_jsonb(:note::jsonb))
+                                               to_jsonb(CAST(:note AS jsonb)))
                         WHERE id = :id
                     """), {"odds": fresh, "note": str(_json_dumps(note)), "id": int(bet["id"])})
                     kept_edge += 1
@@ -194,7 +194,7 @@ def revalidate_pending_bets(verbose: bool = True) -> dict:
                             profit = 0.0,
                             decision_log = COALESCE(decision_log, '{}'::jsonb)
                                           || jsonb_build_object('revalidation',
-                                               to_jsonb(:note::jsonb))
+                                               to_jsonb(CAST(:note AS jsonb)))
                         WHERE id = :id
                     """), {"note": str(_json_dumps(note)), "id": int(bet["id"])})
                     cancelled += 1
