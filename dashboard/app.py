@@ -267,11 +267,13 @@ import urllib.request as _urlreq
 GH_REPO = "AldairG16/Sport_Betting_Model"
 GH_API = f"https://api.github.com/repos/{GH_REPO}"
 
+# key → (archivo YAML del workflow, nombre visible)
+# La API de dispatch requiere el ARCHIVO (closing.yml), no el nombre.
 DISPATCHABLE = {
-    "morning":  "Morning Pipeline",
-    "evening":  "Evening Pipeline",
-    "closing":  "Closing Odds Pipeline",
-    "weekly":   "Weekly Pipeline",
+    "morning":  ("morning.yml",  "Morning Pipeline"),
+    "evening":  ("evening.yml",  "Evening Pipeline"),
+    "closing":  ("closing.yml",  "Closing Odds Pipeline"),
+    "weekly":   ("weekly.yml",   "Weekly Pipeline"),
 }
 
 
@@ -319,14 +321,14 @@ def gh_dispatch(wf):
         return jsonify({"ok": False, "msg": "workflow desconocido"}), 404
     if not _os.environ.get("GH_TOKEN"):
         return jsonify({"ok": False, "msg": "Falta GH_TOKEN en .env"}), 400
-    url = f"{GH_API}/actions/workflows/{DISPATCHABLE[wf].replace(' ', '%20')}/dispatches"
+    url = f"{GH_API}/actions/workflows/{DISPATCHABLE[wf][0]}/dispatches"
     req = _urlreq.Request(
         url, headers=_gh_headers(), method="POST",
         data=_json.dumps({"ref": "master"}).encode(),
     )
     try:
         with _urlreq.urlopen(req, timeout=10):
-            return jsonify({"ok": True, "msg": f"{DISPATCHABLE[wf]} disparado"})
+            return jsonify({"ok": True, "msg": f"{DISPATCHABLE[wf][1]} disparado"})
     except _urlreq.HTTPError as e:
         return jsonify({"ok": False, "msg": f"HTTP {e.code}: {e.read().decode()[:150]}"})
     except Exception as e:
