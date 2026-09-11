@@ -282,6 +282,26 @@ def step_predict():
     run_prediction_pipeline()
 
 
+def step_goalscorer_picks():
+    """Anytime goalscorer (papel, 0 créditos): picks con fair odds para
+    los partidos de las próximas 48h usando match_events."""
+    try:
+        from scripts.goalscorer_picks import generate_goalscorer_picks
+        generate_goalscorer_picks(verbose=True)
+    except Exception as e:
+        # Papel/informativo — no debe romper el morning
+        print(f"⚠️  Goalscorer picks falló: {e}")
+
+
+def step_goalscorer_resolve():
+    """Resuelve picks de goleadores de partidos ya jugados (0 créditos)."""
+    try:
+        from scripts.goalscorer_picks import resolve_goalscorer_picks
+        resolve_goalscorer_picks(verbose=True)
+    except Exception as e:
+        print(f"⚠️  Goalscorer resolve falló: {e}")
+
+
 def step_notify():
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -448,6 +468,7 @@ def run_morning(logger: Logger, force_fetch: bool = False):
     # Si predict falló, NO mandamos "Sin value bets" — mandamos alerta.
     # Antes: el usuario veía "Sin value bets para hoy" sin saber que era un bug.
     if predict_ok:
+        run_step(logger, "Goalscorer picks", step_goalscorer_picks)
         run_step(logger, "Telegram",      step_notify)
     else:
         logger.log("⚠️  Saltando step_notify — predictions falló. Enviando alerta.")
@@ -506,6 +527,7 @@ def run_evening(logger: Logger):
     # Resolver bets pending (corners/cards/HT) ANTES del resumen, así el
     # usuario no ve "esperando data" en la noche para partidos ya jugados.
     run_step(logger, "Resolve pending (Claude)", step_resolve_pending)
+    run_step(logger, "Goalscorer resolve", step_goalscorer_resolve)
     run_step(logger, "CLV update",        step_clv)
     run_step(logger, "Backtest",          step_backtest)
     run_step(logger, "Telegram evening",  step_notify_evening)

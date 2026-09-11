@@ -199,6 +199,21 @@ def clv_scatter():
     })
 
 
+@app.route("/api/scorers")
+def scorers():
+    df = _q("""
+        SELECT match_date, match, league, player, team,
+               probability, fair_odds, odds_placed, result
+        FROM goalscorer_picks
+        WHERE match_date >= NOW() - INTERVAL '7 days'
+        ORDER BY match_date DESC
+        LIMIT 100
+    """)
+    if df.empty:
+        return jsonify({"ok": False})
+    return jsonify({"ok": True, "picks": df.fillna("").to_dict(orient="records")})
+
+
 PAGE = """<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8">
 <title>Betting Dashboard</title>
@@ -255,6 +270,11 @@ PAGE = """<!DOCTYPE html>
   </div>
   <table><thead><tr><th>Fecha</th><th>Partido</th><th>Liga</th><th>Mercado</th><th>Prob</th><th>Odd</th><th>Stake</th><th>Resultado</th><th>Profit</th><th>CLV</th></tr></thead>
   <tbody id="betsbody"><tr><td colspan="10" style="color:var(--muted)">Cargando…</td></tr></tbody></table>
+</div>
+<div class="section"><h2>⚽ Goleadores (anytime scorer · papel)</h2>
+  <table><thead><tr><th>Fecha</th><th>Partido</th><th>Jugador</th><th>Equipo</th><th>P(anota)</th><th>Fair odd</th><th>Odd real</th><th>Resultado</th></tr></thead>
+  <tbody id="scorersbody"><tr><td colspan="8" style="color:var(--muted)">Cargando…</td></tr></tbody></table>
+  <div style="color:var(--muted);font-size:.75rem;margin-top:6px">Fair odd = 1/P(modelo). Si encuentras cuota real MEJOR que la fair, hay valor — regístrala en la DB (odds_placed).</div>
 </div>
 <script>
 const money = v => (v>=0?'+':'') + Number(v).toFixed(2) + 'u';
@@ -328,7 +348,17 @@ async function loadBets(){
   }catch(e){ body.innerHTML='<tr><td colspan="10" style="color:var(--muted)">'+e.message+'</td></tr>'; }
 }
 ['fstatus','fmarket','fleague'].forEach(id=>document.getElementById(id).onchange=loadBets);
-loadKpis(); loadEquity(); loadBy(); loadClv(); loadBank(); loadBets();
+async function loadScorers(){
+  try{ const d=await jget('/api/scorers');
+    document.getElementById('scorersbody').innerHTML=d.picks.map(p=>{
+      const r=p.result||'pending';
+      const cls=(r==='win'?'win':r==='loss'?'loss':'pending');
+      const real=p.odds_placed===''?'—':p.odds_placed;
+      return `<tr><td>${String(p.match_date).slice(0,10)}</td><td>${p.match}</td><td>${p.player}</td><td>${p.team}</td><td>${(p.probability*100).toFixed(0)}%</td><td>@${p.fair_odds}</td><td>${real}</td><td><span class="pill ${cls}">${r}</span></td></tr>`;
+    }).join('');
+  }catch(e){ document.getElementById('scorersbody').innerHTML='<tr><td colspan="8" style="color:var(--muted)">'+e.message+'</td></tr>'; }
+}
+loadKpis(); loadEquity(); loadBy(); loadClv(); loadBank(); loadBets(); loadScorers();
 </script></body></html>"""
 
 
