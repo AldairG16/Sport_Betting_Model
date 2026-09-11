@@ -39,7 +39,14 @@ def _app_version() -> str:
     for c in candidates:
         try:
             if c.exists():
-                return c.read_text(encoding="utf-8").strip()
+                raw = c.read_bytes()
+                # PowerShell `echo x > file` escribe UTF-16 con BOM —
+                # limpiar bytes nulos y BOM (UTF-16 y UTF-8) para no
+                # leer una versión corrupta
+                v = raw.decode("utf-8", errors="ignore")
+                v = v.replace(chr(0), "")
+                v = v.lstrip("﻿").strip()
+                return v or "dev"
         except OSError:
             pass
     return "dev"
