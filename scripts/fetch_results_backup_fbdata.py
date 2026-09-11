@@ -100,6 +100,8 @@ def _normalize_and_clean(df: pd.DataFrame, league: str, season_start: int) -> pd
         "AY":"away_yellow",
         "HR":"home_red",
         "AR":"away_red",
+        "HTHG":"home_goals_ht",
+        "HTAG":"away_goals_ht",
     })
 
     # Parse date (football-data usa DD/MM/YYYY o DD/MM/YY)
@@ -119,7 +121,8 @@ def _normalize_and_clean(df: pd.DataFrame, league: str, season_start: int) -> pd
     # Asegurar columnas opcionales
     for col in ["home_shots","away_shots","home_shots_target","away_shots_target",
                 "home_corners","away_corners",
-                "home_yellow","away_yellow","home_red","away_red"]:
+                "home_yellow","away_yellow","home_red","away_red",
+                "home_goals_ht","away_goals_ht"]:
         if col not in df.columns:
             df[col] = None
 
@@ -131,6 +134,7 @@ def _normalize_and_clean(df: pd.DataFrame, league: str, season_start: int) -> pd
         "home_shots_target","away_shots_target",
         "home_corners","away_corners",
         "home_yellow","away_yellow","home_red","away_red",
+        "home_goals_ht","away_goals_ht",
     ]]
 
 
@@ -180,7 +184,9 @@ def _upsert_matches(df: pd.DataFrame) -> tuple[int, int]:
                         home_yellow        = COALESCE(home_yellow, :home_yellow),
                         away_yellow        = COALESCE(away_yellow, :away_yellow),
                         home_red           = COALESCE(home_red, :home_red),
-                        away_red           = COALESCE(away_red, :away_red)
+                        away_red           = COALESCE(away_red, :away_red),
+                        home_goals_ht      = COALESCE(home_goals_ht, :home_goals_ht),
+                        away_goals_ht      = COALESCE(away_goals_ht, :away_goals_ht)
                     WHERE date = :date
                       AND home_team = :home_team
                       AND away_team = :away_team

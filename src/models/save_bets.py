@@ -200,16 +200,31 @@ def update_bet_results():
     """), engine, params={"d_from": _min_date, "d_to": _max_date})
 
     def _lookup_match(home_l: str, away_l: str, match_date) -> pd.Series | None:
-        """Devuelve la fila de matches más cercana a match_date (±1 día)."""
+        """Devuelve la fila de matches más cercana a match_date (±1 día).
+
+        Matching en dos pasos: exacto en minúsculas primero; si no hay,
+        fallback por normalize_team de AMBOS lados (matches puede tener
+        el nombre crudo del CSV, ej. "Nott'm Forest" vs el "nottm forest"
+        de la API — y viceversa).
+        """
         md = pd.to_datetime(match_date)
         cands = _all_matches[
             (_all_matches["home_team_l"] == home_l) &
             (_all_matches["away_team_l"] == away_l)
         ].copy()
         if cands.empty:
+            cands = _all_matches[
+                _all_matches["home_team_l"].apply(
+                    lambda t: normalize_team(str(t)) == home_l)
+                & _all_matches["away_team_l"].apply(
+                    lambda t: normalize_team(str(t)) == away_l)
+            ].copy()
+        if cands.empty:
             return None
         cands["_dist"] = (pd.to_datetime(cands["date"]) - md).abs()
-        cands = cands[cands["_dist"] <= pd.Timedelta(days=1)]
+        # ±2 días: las fuentes (API vs CSV) a veces difieren en la fecha
+        # registrada del mismo partido (reprogramaciones, zona horaria CSV).
+        cands = cands[cands["_dist"] <= pd.Timedelta(days=2)]
         if cands.empty:
             return None
         return cands.sort_values("_dist").iloc[0]

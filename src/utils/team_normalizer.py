@@ -23,6 +23,8 @@ def clean_name(name):
     name = (
         name.replace(".", "")
         .replace(",", "")
+        .replace("'", "")      # "Nott'm Forest" → "nottm forest" (igual que la API)
+        .replace("’", "")      # apóstrofo tipográfico
         .replace("-", " ")
         .replace("_", " ")
         .strip()
