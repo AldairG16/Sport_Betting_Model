@@ -187,6 +187,12 @@ def bets():
         where.append("result = 'pending'")
     elif status == "resolved":
         where.append("result IN ('win','loss','push','half_win','half_loss')")
+    elif status == "stale":
+        where.append("result = 'stale'")
+    else:
+        # Vista default: TODO excepto stale (bets antiguas sin fuente de
+        # resultado — historial muerto que no debe estorbar el día a día)
+        where.append("result IS DISTINCT FROM 'stale'")
     if market:
         where.append("market = :market"); params["market"] = market
     if league:
@@ -405,7 +411,7 @@ PAGE = """<!DOCTYPE html>
 </div>
 <div class="section"><h2>📋 Apuestas</h2>
   <div class="controls">
-    <select id="fstatus"><option value="all">Todas</option><option value="pending">Pendientes</option><option value="resolved">Resueltas</option></select>
+    <select id="fstatus"><option value="all">Activas (pendientes + resueltas)</option><option value="pending">Solo pendientes</option><option value="resolved">Solo resueltas</option><option value="stale">Histórico muerto (stale)</option></select>
     <select id="fmarket"><option value="">Todos los mercados</option></select>
     <select id="fleague"><option value="">Todas las ligas</option></select>
   </div>
