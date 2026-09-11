@@ -255,6 +255,84 @@ def scorers():
     return jsonify({"ok": True, "picks": df.fillna("").to_dict(orient="records")})
 
 
+# ─────────────────────────────────────────────────────────────
+# PANEL DE CONTROL (GitHub Actions)
+# Requiere GH_TOKEN en .env (PAT con permiso Actions:write del repo).
+# Sin token, el panel explica cómo crearlo — nada se rompe.
+# ─────────────────────────────────────────────────────────────
+import os as _os
+import json as _json
+import urllib.request as _urlreq
+
+GH_REPO = "AldairG16/Sport_Betting_Model"
+GH_API = f"https://api.github.com/repos/{GH_REPO}"
+
+DISPATCHABLE = {
+    "morning":  "Morning Pipeline",
+    "evening":  "Evening Pipeline",
+    "closing":  "Closing Odds Pipeline",
+    "weekly":   "Weekly Pipeline",
+}
+
+
+def _gh_headers():
+    token = _os.environ.get("GH_TOKEN", "")
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "betting-dashboard",
+    }
+
+
+def _gh_call(url: str, method: str = "GET") -> dict:
+    req = _urlreq.Request(url, headers=_gh_headers(), method=method)
+    try:
+        with _urlreq.urlopen(req, timeout=10) as r:
+            body = r.read().decode()
+            return {"ok": True, "data": _json.loads(body) if body else {}}
+    except _urlreq.HTTPError as e:
+        return {"ok": False, "status": e.code, "msg": e.read().decode()[:200]}
+    except Exception as e:
+        return {"ok": False, "msg": str(e)}
+
+
+@app.route("/api/gh/status")
+def gh_status():
+    token = _os.environ.get("GH_TOKEN", "")
+    if not token:
+        return jsonify({"ok": False, "configured": False,
+                        "msg": "Falta GH_TOKEN en .env (PAT con Actions:write)"})
+    runs = _gh_call(f"{GH_API}/actions/runs?per_page=8")
+    if not runs["ok"]:
+        return jsonify({"ok": False, "configured": True,
+                        "msg": f"GitHub API: {runs.get('status')} {runs.get('msg','')}"})
+    items = [{
+        "name": r["name"], "status": r["status"], "conclusion": r["conclusion"],
+        "created": r["created_at"][:16].replace("T", " "), "url": r["html_url"],
+    } for r in runs["data"].get("workflow_runs", [])]
+    return jsonify({"ok": True, "configured": True, "runs": items})
+
+
+@app.route("/api/gh/dispatch/<wf>", methods=["POST"])
+def gh_dispatch(wf):
+    if wf not in DISPATCHABLE:
+        return jsonify({"ok": False, "msg": "workflow desconocido"}), 404
+    if not _os.environ.get("GH_TOKEN"):
+        return jsonify({"ok": False, "msg": "Falta GH_TOKEN en .env"}), 400
+    url = f"{GH_API}/actions/workflows/{DISPATCHABLE[wf].replace(' ', '%20')}/dispatches"
+    req = _urlreq.Request(
+        url, headers=_gh_headers(), method="POST",
+        data=_json.dumps({"ref": "master"}).encode(),
+    )
+    try:
+        with _urlreq.urlopen(req, timeout=10):
+            return jsonify({"ok": True, "msg": f"{DISPATCHABLE[wf]} disparado"})
+    except _urlreq.HTTPError as e:
+        return jsonify({"ok": False, "msg": f"HTTP {e.code}: {e.read().decode()[:150]}"})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)})
+
+
 PAGE = """<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8">
 <title>Betting Dashboard</title>
@@ -318,8 +396,27 @@ PAGE = """<!DOCTYPE html>
   <tbody id="scorersbody"><tr><td colspan="8" style="color:var(--muted)">Cargando…</td></tr></tbody></table>
   <div style="color:var(--muted);font-size:.75rem;margin-top:6px">Fair odd = 1/P(modelo). Si encuentras cuota real MEJOR que la fair, hay valor — regístrala en la DB (odds_placed).</div>
 </div>
+<div class="section"><h2>🎮 Panel de control (GitHub Actions)</h2>
+  <div class="controls">
+    <button onclick="dispatch('morning')">☀️ Ejecutar Morning</button>
+    <button onclick="dispatch('evening')">🌙 Ejecutar Evening</button>
+    <button onclick="dispatch('closing')">🎯 Ejecutar Closing</button>
+    <button onclick="dispatch('weekly')">📅 Ejecutar Weekly</button>
+    <button onclick="loadGh()" style="background:#2a3550">🔄 Refrescar estado</button>
+  </div>
+  <div id="ghmsg" style="font-size:.82rem;margin-bottom:10px;color:var(--muted)">Cargando…</div>
+  <table><thead><tr><th>Corrida</th><th>Estado</th><th>Resultado</th><th>Cuándo (UTC)</th><th>Link</th></tr></thead>
+  <tbody id="ghbody"><tr><td colspan="5" style="color:var(--muted)">Cargando…</td></tr></tbody></table>
+</div>
+<style>
+button { background:#14351f; color:var(--green); border:1px solid #22c55e44; border-radius:8px;
+         padding:8px 14px; cursor:pointer; font-size:.85rem; }
+button:hover { background:#1a4527; }
+</style>
 <script>
 const money = v => (v>=0?'+':'') + Number(v).toFixed(2) + 'u';
+// Fechas: la DB guarda UTC; mostrar en hora del usuario (Mexico City)
+const mxdate = s => { try { return new Date(s).toLocaleString('es-MX',{timeZone:'America/Mexico_City',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); } catch(e){ return String(s).slice(0,16); } };
 const pct = v => v==null?'—':(v>=0?'+':'') + (v*100).toFixed(1) + '%';
 function err(msg){ const e=document.getElementById('err'); e.style.display='block'; e.textContent='⚠️ '+msg; }
 async function jget(u){ const r=await fetch(u); const d=await r.json(); if(d.ok===false) throw new Error(d.msg||'sin datos'); return d; }
@@ -385,7 +482,7 @@ async function loadBets(){
       const prof=b.result==='pending'?'':money(b.profit||0);
       const cls=(r==='win'?'win':r==='loss'?'loss':r==='pending'?'pending':'push');
       const clv=b.clv===''?'—':(Number(b.clv)*100).toFixed(1)+'%';
-      return `<tr><td>${String(b.match_date).slice(0,10)}</td><td>${b.match}</td><td>${(b.league||'').replace('soccer_','')}</td><td>${b.market}</td><td>${(b.probability*100).toFixed(0)}%</td><td>${b.odds}</td><td>${b.stake}u</td><td><span class="pill ${cls}">${r}</span></td><td>${prof}</td><td>${clv}</td></tr>`;
+      return `<tr><td>${mxdate(b.match_date)}</td><td>${b.match}</td><td>${(b.league||'').replace('soccer_','')}</td><td>${b.market}</td><td>${(b.probability*100).toFixed(0)}%</td><td>${b.odds}</td><td>${b.stake}u</td><td><span class="pill ${cls}">${r}</span></td><td>${prof}</td><td>${clv}</td></tr>`;
     }).join('');
   }catch(e){ body.innerHTML='<tr><td colspan="10" style="color:var(--muted)">'+e.message+'</td></tr>'; }
 }
@@ -396,7 +493,7 @@ async function loadScorers(){
       const r=p.result||'pending';
       const cls=(r==='win'?'win':r==='loss'?'loss':'pending');
       const real=p.odds_placed===''?'—':p.odds_placed;
-      return `<tr><td>${String(p.match_date).slice(0,10)}</td><td>${p.match}</td><td>${p.player}</td><td>${p.team}</td><td>${(p.probability*100).toFixed(0)}%</td><td>@${p.fair_odds}</td><td>${real}</td><td><span class="pill ${cls}">${r}</span></td></tr>`;
+      return `<tr><td>${mxdate(p.match_date)}</td><td>${p.match}</td><td>${p.player}</td><td>${p.team}</td><td>${(p.probability*100).toFixed(0)}%</td><td>@${p.fair_odds}</td><td>${real}</td><td><span class="pill ${cls}">${r}</span></td></tr>`;
     }).join('');
   }catch(e){ document.getElementById('scorersbody').innerHTML='<tr><td colspan="8" style="color:var(--muted)">'+e.message+'</td></tr>'; }
 }
@@ -409,7 +506,30 @@ async function loadVersion(){
     }
   }catch(e){}
 }
-loadVersion(); loadKpis(); loadEquity(); loadBy(); loadClv(); loadBank(); loadBets(); loadScorers();
+async function loadGh(){
+  const msg=document.getElementById('ghmsg'), body=document.getElementById('ghbody');
+  try{
+    const d=await (await fetch('/api/gh/status')).json();
+    if(!d.configured){ msg.innerHTML='⚠️ '+d.msg+' — créalo en github.com/settings/tokens (fine-grained, permiso <b>Actions: Read and write</b> del repo) y agrégalo a tu .env como GH_TOKEN=xxx'; body.innerHTML=''; return; }
+    if(!d.ok){ msg.textContent='⚠️ '+d.msg; return; }
+    msg.textContent='Últimas corridas del sistema:';
+    body.innerHTML=d.runs.map(r=>{
+      const icon=r.status!=='completed'?'🔄':(r.conclusion==='success'?'✅':'❌');
+      return `<tr><td>${r.name}</td><td>${icon} ${r.status}</td><td>${r.conclusion||'—'}</td><td>${r.created}</td><td><a href="${r.url}" target="_blank" style="color:var(--blue)">ver</a></td></tr>`;
+    }).join('');
+  }catch(e){ msg.textContent='⚠️ '+e.message; }
+}
+async function dispatch(wf){
+  const msg=document.getElementById('ghmsg');
+  msg.textContent='Disparando '+wf+'…';
+  try{
+    const r=await fetch('/api/gh/dispatch/'+wf,{method:'POST'});
+    const d=await r.json();
+    msg.textContent = d.ok ? ('✅ '+d.msg+' — aparece abajo en segundos') : ('⚠️ '+d.msg);
+  }catch(e){ msg.textContent='⚠️ '+e.message; }
+  setTimeout(loadGh, 4000);
+}
+loadVersion(); loadKpis(); loadEquity(); loadBy(); loadClv(); loadBank(); loadBets(); loadScorers(); loadGh();
 </script></body></html>"""
 
 
