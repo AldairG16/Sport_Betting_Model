@@ -27,6 +27,9 @@ python -m PyInstaller --noconfirm --onefile --name BettingDashboard `
 Pop-Location
 if (-not (Test-Path "$dist\BettingDashboard.exe")) { throw "PyInstaller no produjo el exe" }
 
+# El exe lee VERSION para mostrar versión / detectar actualizaciones
+Copy-Item (Join-Path $root "VERSION") $dist -Force
+
 Write-Host "==> 2/3 Generando definicion WiX..." -ForegroundColor Cyan
 $version = "1.0.0"
 $guid    = "7C0A5B1E-4D2A-4F8B-9E3C-$(('{0:X12}' -f (Get-Random -Maximum 281474976710655)))"
@@ -47,6 +50,9 @@ $wxs = @"
         <Component Id="EnvExample">
           <File Id="Env" Source="$root\.env.example" Name=".env.example" />
         </Component>
+        <Component Id="VersionFile">
+          <File Id="Ver" Source="$dist\VERSION" Name="VERSION" />
+        </Component>
       </Directory>
     </StandardDirectory>
 
@@ -66,6 +72,7 @@ $wxs = @"
     <Feature Id="Main" Title="Betting Dashboard" Level="1">
       <ComponentRef Id="MainExe" />
       <ComponentRef Id="EnvExample" />
+      <ComponentRef Id="VersionFile" />
       <ComponentRef Id="StartMenuShortcut" />
     </Feature>
   </Package>

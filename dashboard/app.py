@@ -28,6 +28,47 @@ from config.database import engine  # noqa: E402
 
 app = Flask(__name__)
 
+
+def _app_version() -> str:
+    """Versión desde el archivo VERSION (junto al exe o en la raíz del repo)."""
+    import sys as _sys
+    from pathlib import Path as _P
+    candidates = [_P(__file__).parent.parent / "VERSION"]
+    if getattr(_sys, "frozen", False):
+        candidates.insert(0, _P(_sys.executable).parent / "VERSION")
+    for c in candidates:
+        try:
+            if c.exists():
+                return c.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+    return "dev"
+
+
+REPO_RELEASES_API = "https://api.github.com/repos/AldairG16/Sport_Betting_Model/releases/latest"
+
+
+@app.route("/api/version")
+def api_version():
+    import urllib.request
+    latest, url = None, None
+    try:
+        req = urllib.request.Request(REPO_RELEASES_API, headers={"User-Agent": "betting-dashboard"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            tag = __import__("json").loads(r.read()).get("tag_name", "")
+            if tag.startswith("v"):
+                latest = tag[1:]
+                url = f"https://github.com/AldairG16/Sport_Betting_Model/releases/latest"
+    except Exception:
+        pass
+    current = _app_version()
+    return jsonify({
+        "current": current,
+        "latest": latest,
+        "update_available": bool(latest and latest != current),
+        "release_url": url,
+    })
+
 RESOLVED = ("win", "loss", "push", "half_win", "half_loss")
 WIN_LIKE = ("win", "half_win")
 
@@ -246,8 +287,9 @@ PAGE = """<!DOCTYPE html>
   .section { margin-top:26px; } .section h2 { font-size:1.05rem; margin-bottom:10px; }
   #err { color:var(--red); font-size:.85rem; margin:20px 0; display:none; }
 </style></head><body>
-<h1>⚽ Sport Betting Model — Dashboard</h1>
+<h1>⚽ Sport Betting Model — Dashboard <span id="ver" style="font-size:.7rem;color:var(--muted);font-weight:400"></span></h1>
 <div class="sub" id="sub">Conectando a la base de datos…</div>
+<div id="upd" style="display:none;background:#14351f;border:1px solid #22c55e44;color:var(--green);border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:.85rem"></div>
 <div id="err"></div>
 <div class="kpis" id="kpis"></div>
 <div class="grid2">
@@ -358,7 +400,16 @@ async function loadScorers(){
     }).join('');
   }catch(e){ document.getElementById('scorersbody').innerHTML='<tr><td colspan="8" style="color:var(--muted)">'+e.message+'</td></tr>'; }
 }
-loadKpis(); loadEquity(); loadBy(); loadClv(); loadBank(); loadBets(); loadScorers();
+async function loadVersion(){
+  try{ const d=await (await fetch('/api/version')).json();
+    document.getElementById('ver').textContent='v'+d.current;
+    if(d.update_available){
+      const u=document.getElementById('upd'); u.style.display='block';
+      u.innerHTML='🔄 Nueva versión disponible: <b>v'+d.latest+'</b> (tienes v'+d.current+') — <a href="'+d.release_url+'" target="_blank" style="color:var(--green)">descargar</a>';
+    }
+  }catch(e){}
+}
+loadVersion(); loadKpis(); loadEquity(); loadBy(); loadClv(); loadBank(); loadBets(); loadScorers();
 </script></body></html>"""
 
 
