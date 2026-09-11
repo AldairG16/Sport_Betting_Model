@@ -47,3 +47,8 @@ orchestrator.lock
 # plan y tasks que genera la herramienta al construir la rama `main`.
 .pm-state/
 blueprints/
+
+# Dashboard installer artifacts (el .exe/.msi no se commitea)
+installer/build/
+installer/dist/
+installer/*.wxs

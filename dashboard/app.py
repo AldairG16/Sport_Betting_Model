@@ -1,0 +1,341 @@
+"""
+Dashboard Web Local — Sport Betting Model
+==========================================
+App Flask read-only que se conecta a la misma DB (Neon) que el pipeline
+y muestra: bankroll, apuestas (con filtros), curva de resultados, ROI por
+mercado/liga y CLV.
+
+Uso:
+    python scripts/run_dashboard.py        → http://127.0.0.1:5050
+
+ Seguridad:
+    - Solo escucha en 127.0.0.1 (nadie fuera de esta PC puede verlo).
+    - Solo SELECT: no inserta, no actualiza, no borra nada.
+    - DB_URL se lee de .env / entorno — nunca va en el código.
+"""
+
+import sys
+from pathlib import Path
+
+import pandas as pd
+from flask import Flask, jsonify, request
+from sqlalchemy import text
+
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT))
+
+from config.database import engine  # noqa: E402
+
+app = Flask(__name__)
+
+RESOLVED = ("win", "loss", "push", "half_win", "half_loss")
+WIN_LIKE = ("win", "half_win")
+
+# Multiplicador de profit por resultado (half_win/half_loss son fraccionales)
+_PROFIT_FACTOR = {
+    "win": 1.0, "half_win": 0.5,
+    "loss": -1.0, "half_loss": -0.5,
+    "push": 0.0,
+}
+
+
+def _q(sql: str, params: dict | None = None) -> pd.DataFrame:
+    try:
+        return pd.read_sql(text(sql), engine, params=params or {})
+    except Exception as e:
+        app.logger.warning(f"query falló: {e}")
+        return pd.DataFrame()
+
+
+def _profit(df: pd.DataFrame) -> pd.Series:
+    """Profit real de cada bet (half_win/half_loss fraccionados)."""
+    if df.empty:
+        return pd.Series(dtype=float)
+    factor = df["result"].map(_PROFIT_FACTOR).fillna(0.0)
+    return (df["odds"] - 1.0) * df["stake"] * factor
+
+
+@app.route("/api/kpis")
+def kpis():
+    df = _q("""
+        SELECT result, stake, odds, probability, clv, match_date
+        FROM bets_history
+        WHERE match_date >= NOW() - INTERVAL '90 days'
+    """)
+    if df.empty:
+        return jsonify({"ok": False, "msg": "Sin datos en bets_history (últimos 90d)"})
+
+    resolved = df[df["result"].isin(RESOLVED)]
+    pending = df[df["result"] == "pending"]
+    wins = resolved[resolved["result"].isin(WIN_LIKE)]
+    profit = _profit(resolved).sum()
+    staked = float(resolved["stake"].sum())
+    clv = df["clv"].dropna()
+
+    bank = _q("SELECT bankroll FROM bankroll ORDER BY updated_at DESC LIMIT 1")
+    bankroll = float(bank.iloc[0]["bankroll"]) if not bank.empty else None
+
+    # Brier solo con bets resueltas binarias (excluye push)
+    binary = resolved[resolved["result"] != "push"]
+    brier = float(((binary["probability"] - binary["result"].isin(WIN_LIKE).astype(float)) ** 2).mean()) if len(binary) else None
+
+    return jsonify({
+        "ok": True,
+        "bankroll": bankroll,
+        "bets_90d": int(len(df)),
+        "resolved": int(len(resolved)),
+        "pending": int(len(pending)),
+        "win_rate": round(len(wins) / len(resolved), 3) if len(resolved) else None,
+        "profit": round(float(profit), 2),
+        "roi": round(float(profit / staked), 3) if staked > 0 else None,
+        "brier": round(brier, 4) if brier else None,
+        "clv_avg": round(float(clv.mean()), 4) if len(clv) else None,
+        "clv_n": int(len(clv)),
+    })
+
+
+@app.route("/api/equity")
+def equity():
+    df = _q("""
+        SELECT match_date, result, stake, odds, market
+        FROM bets_history
+        WHERE result IN ('win', 'loss', 'push', 'half_win', 'half_loss')
+        ORDER BY match_date
+    """)
+    if df.empty:
+        return jsonify({"ok": False})
+    df["profit"] = _profit(df)
+    df["cum"] = df["profit"].cumsum()
+    return jsonify({
+        "ok": True,
+        "dates": df["match_date"].astype(str).str[:10].tolist(),
+        "cumulative": [round(x, 3) for x in df["cum"]],
+        "daily": [round(x, 3) for x in df.groupby(df["match_date"].astype(str).str[:10])["profit"].sum()],
+        "daily_dates": df.groupby(df["match_date"].astype(str).str[:10])["profit"].sum().index.tolist(),
+    })
+
+
+@app.route("/api/bets")
+def bets():
+    status = request.args.get("status", "all")
+    market = request.args.get("market", "")
+    league = request.args.get("league", "")
+    limit = min(int(request.args.get("limit", 100)), 500)
+
+    where, params = ["1=1"], {}
+    if status == "pending":
+        where.append("result = 'pending'")
+    elif status == "resolved":
+        where.append("result IN ('win','loss','push','half_win','half_loss')")
+    if market:
+        where.append("market = :market"); params["market"] = market
+    if league:
+        where.append("league = :league"); params["league"] = league
+
+    df = _q(f"""
+        SELECT match_date, match, league, market, probability, odds,
+               stake, result, profit, closing_odds, clv
+        FROM bets_history
+        WHERE {' AND '.join(where)}
+        ORDER BY match_date DESC
+        LIMIT {limit}
+    """, params)
+    if df.empty:
+        return jsonify({"ok": False})
+
+    return jsonify({
+        "ok": True,
+        "bets": df.fillna("").to_dict(orient="records"),
+    })
+
+
+@app.route("/api/by/<dim>")
+def by_dim(dim):
+    if dim not in ("market", "league"):
+        return jsonify({"ok": False}), 404
+    df = _q(f"""
+        SELECT {dim}, result, stake, odds
+        FROM bets_history
+        WHERE result IN ('win','loss','push','half_win','half_loss')
+          AND match_date >= NOW() - INTERVAL '180 days'
+    """)
+    if df.empty:
+        return jsonify({"ok": False})
+    df["profit"] = _profit(df)
+    g = df.groupby(dim).agg(
+        n=("profit", "size"),
+        profit=("profit", "sum"),
+        staked=("stake", "sum"),
+        wr=("result", lambda r: r.isin(WIN_LIKE).mean()),
+    )
+    g["roi"] = (g["profit"] / g["staked"] * 100).round(1)
+    g = g[g["n"] >= 3].sort_values("roi", ascending=False)
+    return jsonify({
+        "ok": True,
+        "labels": g.index.tolist(),
+        "n": g["n"].astype(int).tolist(),
+        "roi": g["roi"].tolist(),
+        "profit": g["profit"].round(2).tolist(),
+        "wr": (g["wr"] * 100).round(1).tolist(),
+    })
+
+
+@app.route("/api/clv")
+def clv_scatter():
+    df = _q("""
+        SELECT clv, result, odds, stake
+        FROM bets_history
+        WHERE clv IS NOT NULL
+          AND result IN ('win','loss','half_win','half_loss')
+        ORDER BY match_date
+    """)
+    if df.empty:
+        return jsonify({"ok": False})
+    return jsonify({
+        "ok": True,
+        "x": list(range(1, len(df) + 1)),
+        "clv": [round(float(v), 4) for v in df["clv"]],
+        "wins": df["result"].isin(WIN_LIKE).tolist(),
+    })
+
+
+PAGE = """<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<title>Betting Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root { --bg:#0f1420; --card:#1a2233; --text:#e2e8f0; --muted:#8b98ad; --green:#22c55e; --red:#ef4444; --blue:#3b82f6; }
+  * { box-sizing:border-box; margin:0; padding:0; font-family:'Segoe UI',system-ui,sans-serif; }
+  body { background:var(--bg); color:var(--text); padding:20px; }
+  h1 { font-size:1.3rem; margin-bottom:4px; }
+  .sub { color:var(--muted); font-size:.85rem; margin-bottom:18px; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:20px; }
+  .card { background:var(--card); border-radius:10px; padding:14px; }
+  .card .lbl { color:var(--muted); font-size:.75rem; text-transform:uppercase; letter-spacing:.5px; }
+  .card .val { font-size:1.5rem; font-weight:700; margin-top:4px; }
+  .pos { color:var(--green); } .neg { color:var(--red); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:20px; }
+  @media (max-width:900px){ .grid2{grid-template-columns:1fr;} }
+  .chartbox { background:var(--card); border-radius:10px; padding:14px; height:320px; position:relative; }
+  .chartbox h3 { font-size:.9rem; margin-bottom:8px; color:var(--muted); font-weight:600; }
+  table { width:100%; border-collapse:collapse; font-size:.82rem; background:var(--card); border-radius:10px; overflow:hidden; }
+  th { text-align:left; padding:8px 10px; color:var(--muted); font-weight:600; border-bottom:1px solid #2a3550; }
+  td { padding:7px 10px; border-bottom:1px solid #232d45; }
+  tr:hover td { background:#202a40; }
+  .pill { padding:2px 8px; border-radius:99px; font-size:.72rem; font-weight:600; }
+  .pill.win{background:#14351f;color:var(--green)} .pill.loss{background:#3a1a1a;color:var(--red)}
+  .pill.pending{background:#2a2a14;color:#eab308} .pill.push,.pill.half_win,.pill.half_loss{background:#1e2a3a;color:#93c5fd}
+  .controls { display:flex; gap:10px; margin:14px 0; flex-wrap:wrap; }
+  select { background:var(--card); color:var(--text); border:1px solid #2a3550; border-radius:8px; padding:6px 10px; }
+  .section { margin-top:26px; } .section h2 { font-size:1.05rem; margin-bottom:10px; }
+  #err { color:var(--red); font-size:.85rem; margin:20px 0; display:none; }
+</style></head><body>
+<h1>⚽ Sport Betting Model — Dashboard</h1>
+<div class="sub" id="sub">Conectando a la base de datos…</div>
+<div id="err"></div>
+<div class="kpis" id="kpis"></div>
+<div class="grid2">
+  <div class="chartbox"><h3>Curva de resultados (profit acumulado)</h3><canvas id="equity"></canvas></div>
+  <div class="chartbox"><h3>Profit por día</h3><canvas id="daily"></canvas></div>
+</div>
+<div class="grid2">
+  <div class="chartbox"><h3>ROI % por mercado (180d, n≥3)</h3><canvas id="bymarket"></canvas></div>
+  <div class="chartbox"><h3>ROI % por liga (180d, n≥3)</h3><canvas id="byleague"></canvas></div>
+</div>
+<div class="grid2">
+  <div class="chartbox"><h3>CLV por apuesta (verde=ganada)</h3><canvas id="clvchart"></canvas></div>
+  <div class="chartbox"><h3>Bankroll</h3><canvas id="bankchart"></canvas></div>
+</div>
+<div class="section"><h2>📋 Apuestas</h2>
+  <div class="controls">
+    <select id="fstatus"><option value="all">Todas</option><option value="pending">Pendientes</option><option value="resolved">Resueltas</option></select>
+    <select id="fmarket"><option value="">Todos los mercados</option></select>
+    <select id="fleague"><option value="">Todas las ligas</option></select>
+  </div>
+  <table><thead><tr><th>Fecha</th><th>Partido</th><th>Liga</th><th>Mercado</th><th>Prob</th><th>Odd</th><th>Stake</th><th>Resultado</th><th>Profit</th><th>CLV</th></tr></thead>
+  <tbody id="betsbody"><tr><td colspan="10" style="color:var(--muted)">Cargando…</td></tr></tbody></table>
+</div>
+<script>
+const money = v => (v>=0?'+':'') + Number(v).toFixed(2) + 'u';
+const pct = v => v==null?'—':(v>=0?'+':'') + (v*100).toFixed(1) + '%';
+function err(msg){ const e=document.getElementById('err'); e.style.display='block'; e.textContent='⚠️ '+msg; }
+async function jget(u){ const r=await fetch(u); const d=await r.json(); if(d.ok===false) throw new Error(d.msg||'sin datos'); return d; }
+
+async function loadKpis(){
+  try{
+    const d=await jget('/api/kpis');
+    const cards=[
+      ['Bankroll', d.bankroll==null?'—':d.bankroll.toFixed(1)+'u',''],
+      ['Profit 90d', money(d.profit), d.profit>=0?'pos':'neg'],
+      ['ROI 90d', pct(d.roi), d.roi>=0?'pos':'neg'],
+      ['Win rate', d.win_rate==null?'—':(d.win_rate*100).toFixed(1)+'%',''],
+      ['Bets 90d', d.bets_90d,''],
+      ['Resueltas', d.resolved,''],
+      ['Pendientes', d.pending,''],
+      ['Brier', d.brier==null?'—':d.brier.toFixed(3),''],
+      ['CLV medio (n='+d.clv_n+')', d.clv_avg==null?'—':(d.clv_avg>=0?'+':'')+(d.clv_avg*100).toFixed(2)+'%', d.clv_avg>=0?'pos':'neg'],
+    ];
+    document.getElementById('kpis').innerHTML=cards.map(c=>
+      `<div class="card"><div class="lbl">${c[0]}</div><div class="val ${c[2]}">${c[1]}</div></div>`).join('');
+    document.getElementById('sub').textContent='Datos: últimos 90 días · solo lectura · '+new Date().toLocaleString('es-MX');
+  }catch(e){ err('KPIs: '+e.message); }
+}
+function cctx(id){ return document.getElementById(id).getContext('2d'); }
+Chart.defaults.color='#8b98ad'; Chart.defaults.borderColor='#2a3550';
+async function loadEquity(){
+  try{ const d=await jget('/api/equity');
+    new Chart(cctx('equity'),{type:'line',data:{labels:d.dates,datasets:[{data:d.cumulative,borderWidth:2,pointRadius:0,borderColor:'#3b82f6',fill:true,backgroundColor:'rgba(59,130,246,.08)'}]},options:{plugins:{legend:{display:false}},scales:{x:{ticks:{maxTicksLimit:8}}}}});
+    const colors=d.daily.map(v=>v>=0?'#22c55e':'#ef4444');
+    new Chart(cctx('daily'),{type:'bar',data:{labels:d.daily_dates,datasets:[{data:d.daily,backgroundColor:colors}]},options:{plugins:{legend:{display:false}},scales:{x:{ticks:{maxTicksLimit:10}}}}});
+  }catch(e){ err('Curva: '+e.message); }
+}
+async function loadBy(){
+  for(const [dim,id] of [['market','bymarket'],['league','byleague']]){
+    try{ const d=await jget('/api/by/'+dim);
+      const colors=d.roi.map(v=>v>=0?'#22c55e':'#ef4444');
+      new Chart(cctx(id),{type:'bar',data:{labels:d.labels,datasets:[{label:'ROI %',data:d.roi,backgroundColor:colors}]},
+        options:{indexAxis:'y',plugins:{legend:{display:false},tooltip:{callbacks:{afterLabel:c=>'n='+d.n[c.dataIndex]+' · wr '+d.wr[c.dataIndex]+'%'}}},scales:{x:{ticks:{callback:v=>v+'%'}}}}});
+      if(dim==='market'){ const sel=document.getElementById('fmarket'); d.labels.forEach(l=>sel.add(new Option(l,l))); }
+      else{ const sel=document.getElementById('fleague'); d.labels.forEach(l=>sel.add(new Option(l,l))); }
+    }catch(e){ err(dim+': '+e.message); }
+  }
+}
+async function loadClv(){
+  try{ const d=await jget('/api/clv');
+    new Chart(cctx('clvchart'),{type:'scatter',data:{datasets:[
+      {label:'ganada',data:d.x.map((x,i)=>d.wins[i]?{x,y:d.clv[i]}:null).filter(Boolean),backgroundColor:'#22c55e'},
+      {label:'perdida',data:d.x.map((x,i)=>!d.wins[i]?{x,y:d.clv[i]}:null).filter(Boolean),backgroundColor:'#ef4444'}]},
+      options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>(v*100).toFixed(1)+'%'}}}}});
+  }catch(e){ document.getElementById('clvchart').canvas.parentNode.innerHTML+='<div style="color:var(--muted)">Sin datos de CLV aún</div>'; }
+}
+async function loadBank(){
+  const d=await fetch('/api/equity').then(r=>r.json()).catch(()=>({ok:false}));
+  if(!d.ok){ document.getElementById('bankchart').canvas.parentNode.innerHTML+='<div style="color:var(--muted)">Sin datos</div>'; return; }
+  new Chart(cctx('bankchart'),{type:'line',data:{labels:d.dates,datasets:[{data:d.cumulative.map(v=>100+v),borderWidth:2,pointRadius:0,borderColor:'#eab308'}]},options:{plugins:{legend:{display:false}},scales:{x:{ticks:{maxTicksLimit:6}}}}});
+}
+async function loadBets(){
+  const q=new URLSearchParams({status:document.getElementById('fstatus').value,market:document.getElementById('fmarket').value,league:document.getElementById('fleague').value,limit:150});
+  const body=document.getElementById('betsbody');
+  try{ const d=await jget('/api/bets?'+q);
+    body.innerHTML=d.bets.map(b=>{
+      const r=b.result||'pending';
+      const prof=b.result==='pending'?'':money(b.profit||0);
+      const cls=(r==='win'?'win':r==='loss'?'loss':r==='pending'?'pending':'push');
+      const clv=b.clv===''?'—':(Number(b.clv)*100).toFixed(1)+'%';
+      return `<tr><td>${String(b.match_date).slice(0,10)}</td><td>${b.match}</td><td>${(b.league||'').replace('soccer_','')}</td><td>${b.market}</td><td>${(b.probability*100).toFixed(0)}%</td><td>${b.odds}</td><td>${b.stake}u</td><td><span class="pill ${cls}">${r}</span></td><td>${prof}</td><td>${clv}</td></tr>`;
+    }).join('');
+  }catch(e){ body.innerHTML='<tr><td colspan="10" style="color:var(--muted)">'+e.message+'</td></tr>'; }
+}
+['fstatus','fmarket','fleague'].forEach(id=>document.getElementById(id).onchange=loadBets);
+loadKpis(); loadEquity(); loadBy(); loadClv(); loadBank(); loadBets();
+</script></body></html>"""
+
+
+@app.route("/")
+def index():
+    return PAGE
+
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=5050, debug=False)
