@@ -105,13 +105,24 @@ def _profit(df: pd.DataFrame) -> pd.Series:
 
 @app.route("/api/kpis")
 def kpis():
+    # Ventana preferida: 90 días. Si no hay NADA resuelto en ella (sistema
+    # recién reactivado, bets nuevas aún pendientes), caer al histórico
+    # completo para no mostrar un dashboard vacío.
     df = _q("""
         SELECT result, stake, odds, probability, clv, match_date
         FROM bets_history
         WHERE match_date >= NOW() - INTERVAL '90 days'
     """)
+    window = "90d"
+    has_resolved = (not df.empty) and df["result"].isin(RESOLVED).any()
+    if not has_resolved:
+        df = _q("""
+            SELECT result, stake, odds, probability, clv, match_date
+            FROM bets_history
+        """)
+        window = "histórico"
     if df.empty:
-        return jsonify({"ok": False, "msg": "Sin datos en bets_history (últimos 90d)"})
+        return jsonify({"ok": False, "msg": "Sin datos en bets_history"})
 
     resolved = df[df["result"].isin(RESOLVED)]
     pending = df[df["result"] == "pending"]
@@ -129,6 +140,7 @@ def kpis():
 
     return jsonify({
         "ok": True,
+        "window": window,
         "bankroll": bankroll,
         "bets_90d": int(len(df)),
         "resolved": int(len(resolved)),
@@ -446,7 +458,7 @@ async function loadKpis(){
     ];
     document.getElementById('kpis').innerHTML=cards.map(c=>
       `<div class="card"><div class="lbl">${c[0]}</div><div class="val ${c[2]}">${c[1]}</div></div>`).join('');
-    document.getElementById('sub').textContent='Datos: últimos 90 días · solo lectura · '+new Date().toLocaleString('es-MX');
+    document.getElementById('sub').textContent='Datos: '+(d.window||'90d')+' · solo lectura · '+new Date().toLocaleString('es-MX');
   }catch(e){ err('KPIs: '+e.message); }
 }
 function cctx(id){ return document.getElementById(id).getContext('2d'); }
