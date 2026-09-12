@@ -25,6 +25,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 from config.database import engine  # noqa: E402
+from dashboard.display import league_name, team_name, market_name, match_name, result_label  # noqa: E402
 
 app = Flask(__name__)
 
@@ -209,6 +210,10 @@ def bets():
     if df.empty:
         return jsonify({"ok": False})
 
+    for col, fn in (("match", match_name), ("league", league_name), ("market", market_name)):
+        if col in df.columns:
+            df[col] = df[col].apply(lambda v: fn(v) if v else v)
+    df["result"] = df["result"].apply(lambda r: result_label(r) if r else r)
     return jsonify({
         "ok": True,
         "bets": df.fillna("").to_dict(orient="records"),
@@ -236,9 +241,10 @@ def by_dim(dim):
     )
     g["roi"] = (g["profit"] / g["staked"] * 100).round(1)
     g = g[g["n"] >= 3].sort_values("roi", ascending=False)
+    label_fn = league_name if dim == "league" else market_name
     return jsonify({
         "ok": True,
-        "labels": g.index.tolist(),
+        "labels": [label_fn(x) for x in g.index],
         "n": g["n"].astype(int).tolist(),
         "roi": g["roi"].tolist(),
         "profit": g["profit"].round(2).tolist(),
@@ -277,6 +283,12 @@ def scorers():
     """)
     if df.empty:
         return jsonify({"ok": False})
+    if "league" in df.columns:
+        df["league"] = df["league"].apply(lambda v: league_name(v) if v else v)
+    if "match" in df.columns:
+        df["match"] = df["match"].apply(lambda v: match_name(v) if v else v)
+    if "result" in df.columns:
+        df["result"] = df["result"].apply(lambda r: result_label(r) if r else r)
     return jsonify({"ok": True, "picks": df.fillna("").to_dict(orient="records")})
 
 
