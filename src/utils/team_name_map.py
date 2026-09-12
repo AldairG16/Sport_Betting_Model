@@ -1,6 +1,6 @@
 TEAM_NAME_MAP = {
     "leeds": "leeds united",
-    "manchester city": "man city",
+    "man city": "manchester city",
 
 
     # =========================
