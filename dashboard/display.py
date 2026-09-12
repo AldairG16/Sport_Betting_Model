@@ -165,6 +165,7 @@ def result_label(r: str) -> str:
     return {
         "win": "Ganada", "loss": "Perdida", "push": "Nula",
         "half_win": "Media ganada", "half_loss": "Media perdida",
-        "pending": "Pendiente", "stale": "Sin dato",
-        "unresolved": "Sin dato",
+        "pending": "Pendiente",
+        "unresolved": "Esperando datos",
+        "stale": "Sin fuente",
     }.get(r or "", r or "")
