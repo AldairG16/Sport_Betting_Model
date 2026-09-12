@@ -681,6 +681,18 @@ def step_evaluate_holdout():
         print(f"⚠️  Slippage report falló: {e}")
 
 
+def step_sanity_audit():
+    """Auditor de sanidad: duplicados, xG, calibración rodante, bets dobles,
+    resolución estancada, integridad. Alerta Telegram solo si falla algo."""
+    try:
+        from scripts.weekly_sanity_audit import run_sanity_audit
+        result = run_sanity_audit(verbose=True)
+        if result.get("alerts"):
+            logger = None  # el mensaje ya lo manda el auditor
+    except Exception as e:
+        print(f"⚠️  Sanity audit falló: {e}")
+
+
 def step_market_regime():
     """Monitor de régimen del mercado: vig promedio, bookmakers por partido
     y volatilidad de líneas. Si el mercado cambia (API, panel de books),
@@ -788,6 +800,7 @@ def main():
             run_step(logger, "Refresh CLV cache",        step_refresh_clv_cache)   # Mejora #14
             run_step(logger, "Drift detection",          step_drift_detection)     # Mejora #15
             run_step(logger, "Market regime monitor",    step_market_regime)
+            run_step(logger, "Sanity audit",             step_sanity_audit)
             run_step(logger, "Optimize thresholds",      step_optimize_thresholds)
             run_step(logger, "Walk-forward backtest",    step_walkforward)
             run_step(logger, "Weekly Telegram report",   step_weekly_report)
