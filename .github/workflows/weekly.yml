@@ -5,7 +5,7 @@ on:
   # (hora documentada del ciclo semanal). NOTA: si se vuelve a usar un
   # dispatcher externo, quitar el schedule para no duplicar corridas.
   schedule:
-    - cron: '0 13 * * 1'
+    - cron: '9 13 * * 1'
   # (historico) Sin `schedule:` A PROPOSITO. Las corridas de produccion las dispara un
   # agente externo por `workflow_dispatch` contra `master` (todos los runs
   # historicos son workflow_dispatch, ninguno schedule). Al pasar `master` a

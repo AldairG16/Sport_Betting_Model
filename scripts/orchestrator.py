@@ -500,7 +500,13 @@ def step_resolve_pending():
 
 def step_notify_evening():
     from scripts.notify_telegram import send_evening_summary
-    send_evening_summary()
+    # Fecha objetivo anclada al HORARIO PROGRAMADO del cron (21:00 MX =
+    # 03:00 UTC): corremos (ahora_utc - 6h).date(). Si GitHub retrasa el
+    # run varias horas, la fecha resumida NO cambia — elimina el desfase
+    # "resumen de un día, preview de otro".
+    from datetime import datetime, timedelta, timezone as _tz
+    target_day = (datetime.now(_tz.utc) - timedelta(hours=6)).date()
+    send_evening_summary(target_date=target_day)
 
 
 def step_notify_tomorrow():
@@ -540,12 +546,12 @@ def run_evening(logger: Logger):
     predict_ok = run_step(logger, "Predictions (mañana)", step_predict)
     # run_step(logger, "MLB Predictions (mañana)",  step_mlb_predict)  # desactivado — sin creditos MLB
 
-    # Mismo guard que run_morning: si predict truena, no enviamos un preview
-    # vacío que confunda al usuario — enviamos alerta.
-    if predict_ok:
-        run_step(logger, "Preview mañana",        step_notify_tomorrow)
-    else:
-        logger.log("⚠️  Saltando preview mañana — predictions falló. Enviando alerta.")
+    # El preview separado de mañana se ELIMINÓ (12-sep): duplicaba las
+    # mismas apuestas que el morning enviaría a las 6 AM y era de los
+    # mensajes más voluminosos del día. Ahora el resumen nocturno incluye
+    # un avance compacto de mañana, y los detalles llegan con las odds
+    # frescas del morning.
+    if not predict_ok:
         _alert_step_failed("Predictions (mañana)")
 
 
@@ -843,15 +849,19 @@ def main():
                 else:
                     picks_label = "Picks de hoy"
 
-                send_health_check(
-                    mode=args.mode,
-                    picks_today=picks_today,
-                    pending_total=pending_total,
-                    elapsed_seconds=elapsed,
-                    steps_ok=logger.steps_ok,
-                    steps_total=logger.steps_total,
-                    picks_label=picks_label,
-                )
+                # Health check SOLO si algo falló (12-sep): el "Pipeline OK"
+                # diario era ruido — el usuario ya recibe los picks (morning)
+                # y el resumen (evening) como confirmación de que corrió.
+                if logger.steps_ok < logger.steps_total:
+                    send_health_check(
+                        mode=args.mode,
+                        picks_today=picks_today,
+                        pending_total=pending_total,
+                        elapsed_seconds=elapsed,
+                        steps_ok=logger.steps_ok,
+                        steps_total=logger.steps_total,
+                        picks_label=picks_label,
+                    )
             except Exception:
                 pass  # nunca bloquear el finally por el health check
 

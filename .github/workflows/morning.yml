@@ -10,7 +10,7 @@ on:
   # NOTA: si se vuelve a usar un dispatcher externo, quitar el schedule
   # para no duplicar corridas.
   schedule:
-    - cron: '0 12 * * *'
+    - cron: '13 12 * * *'
   workflow_dispatch:   # permite lanzar manualmente desde GitHub
   push:
     branches: [ master ]

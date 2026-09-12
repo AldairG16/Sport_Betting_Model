@@ -213,6 +213,9 @@ def bets():
     for col, fn in (("match", match_name), ("league", league_name), ("market", market_name)):
         if col in df.columns:
             df[col] = df[col].apply(lambda v: fn(v) if v else v)
+    # result_key crudo para las clases CSS (pill verde/roja); result ya
+    # traducido ("Ganada"/"Perdida") para el texto visible
+    df["result_key"] = df["result"]
     df["result"] = df["result"].apply(lambda r: result_label(r) if r else r)
     return jsonify({
         "ok": True,
@@ -287,6 +290,7 @@ def scorers():
         df["league"] = df["league"].apply(lambda v: league_name(v) if v else v)
     if "match" in df.columns:
         df["match"] = df["match"].apply(lambda v: match_name(v) if v else v)
+    df["result_key"] = df["result"]
     if "result" in df.columns:
         df["result"] = df["result"].apply(lambda r: result_label(r) if r else r)
     return jsonify({"ok": True, "picks": df.fillna("").to_dict(orient="records")})
@@ -517,11 +521,11 @@ async function loadBets(){
   const body=document.getElementById('betsbody');
   try{ const d=await jget('/api/bets?'+q);
     body.innerHTML=d.bets.map(b=>{
-      const r=b.result||'pending';
-      const prof=b.result==='pending'?'':money(b.profit||0);
-      const cls=(r==='win'?'win':r==='loss'?'loss':r==='pending'?'pending':'push');
+      const rk=(b.result_key||b.result||'pending').toLowerCase();
+      const prof=rk==='pending'?'':money(b.profit||0);
+      const cls=(rk==='win'?'win':rk==='loss'?'loss':rk==='pending'?'pending':'push');
       const clv=b.clv===''?'—':(Number(b.clv)*100).toFixed(1)+'%';
-      return `<tr><td>${mxdate(b.match_date)}</td><td>${b.match}</td><td>${(b.league||'').replace('soccer_','')}</td><td>${b.market}</td><td>${(b.probability*100).toFixed(0)}%</td><td>${b.odds}</td><td>${b.stake}u</td><td><span class="pill ${cls}">${r}</span></td><td>${prof}</td><td>${clv}</td></tr>`;
+      return `<tr><td>${mxdate(b.match_date)}</td><td>${b.match}</td><td>${b.league||''}</td><td>${b.market}</td><td>${(b.probability*100).toFixed(0)}%</td><td>${b.odds}</td><td>${b.stake}u</td><td><span class="pill ${cls}">${b.result}</span></td><td>${prof}</td><td>${clv}</td></tr>`;
     }).join('');
   }catch(e){ body.innerHTML='<tr><td colspan="10" style="color:var(--muted)">'+e.message+'</td></tr>'; }
 }
@@ -529,10 +533,10 @@ async function loadBets(){
 async function loadScorers(){
   try{ const d=await jget('/api/scorers');
     document.getElementById('scorersbody').innerHTML=d.picks.map(p=>{
-      const r=p.result||'pending';
-      const cls=(r==='win'?'win':r==='loss'?'loss':'pending');
+      const rk=(p.result_key||p.result||'pending').toLowerCase();
+      const cls=(rk==='win'?'win':rk==='loss'?'loss':'pending');
       const real=p.odds_placed===''?'—':p.odds_placed;
-      return `<tr><td>${mxdate(p.match_date)}</td><td>${p.match}</td><td>${p.player}</td><td>${p.team}</td><td>${(p.probability*100).toFixed(0)}%</td><td>@${p.fair_odds}</td><td>${real}</td><td><span class="pill ${cls}">${r}</span></td></tr>`;
+      return `<tr><td>${mxdate(p.match_date)}</td><td>${p.match}</td><td>${p.player}</td><td>${p.team}</td><td>${(p.probability*100).toFixed(0)}%</td><td>@${p.fair_odds}</td><td>${real}</td><td><span class="pill ${cls}">${p.result}</span></td></tr>`;
     }).join('');
   }catch(e){ document.getElementById('scorersbody').innerHTML='<tr><td colspan="8" style="color:var(--muted)">'+e.message+'</td></tr>'; }
 }

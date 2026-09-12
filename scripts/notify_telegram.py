@@ -1218,25 +1218,33 @@ def send_weekly_report():
 # ============================================================
 # RESUMEN NOCTURNO
 # ============================================================
-def send_evening_summary():
+def send_evening_summary(target_date=None):
     """
-    Envia resumen de resultados del día a Telegram (ciclo 11 PM).
-    Muestra: bets de hoy ganadas/perdidas/pendientes + profit del día.
+    Envia resumen de resultados del día a Telegram (ciclo 21:00 MX).
+    Muestra: bets de hoy ganadas/perdidas/pendientes + profit del día,
+    y al final un avance compacto de las apuestas de MAÑANA.
+
+    target_date: fecha local que este run debe resumir. El orchestrator
+    la pasa anclada a la HORA PROGRAMADA del cron (no a la hora real de
+    ejecución) — así, si GitHub retrasa el run pasadas las 12 de la
+    noche, el resumen NO salta un día atrás ni el preview uno adelante
+    (bug del 12-sep: resumen decía 11/09 y preview 13/09 en el mismo
+    minuto).
     """
     print("\n📲 ENVIANDO RESUMEN NOCTURNO...\n")
 
     from zoneinfo import ZoneInfo
     from config.settings import USER_TIMEZONE
     now_local = datetime.now(ZoneInfo(USER_TIMEZONE))
-    # 18-may-2026: el cron del evening se movió de 21:00 MX → 07:30 MX
-    # (después de que fbdata.co.uk sube córners/tarjetas). Cuando corre
-    # de mañana, el resumen debe ser de AYER, no de hoy. Heurística simple:
-    # si la hora local es antes del mediodía, asumimos que estamos
-    # recapeando el día anterior.
-    if now_local.hour < 12:
-        today = (now_local - timedelta(days=1)).date()
+    if target_date is not None:
+        today = target_date
     else:
-        today = now_local.date()
+        # Fallback legacy si nadie pasa target_date (heurística antigua):
+        # si corre antes del mediodía local, recapitula el día anterior.
+        if now_local.hour < 12:
+            today = (now_local - timedelta(days=1)).date()
+        else:
+            today = now_local.date()
     date_str = today.strftime("%d/%m/%Y")
 
     try:
@@ -1387,6 +1395,28 @@ def send_evening_summary():
     except Exception:
         # tabla no existe aún o DB error → no rompemos el resumen
         pass
+
+    # ── Avance compacto de MAÑANA (reemplaza el mensaje separado de
+    # preview — antes el usuario recibía dos mensajes enormes que
+    # duplicaban la misma información) ─────────────────────────────────
+    try:
+        tomorrow = today + timedelta(days=1)
+        bets_tom = pd.read_sql(f"""
+            SELECT match, market, odds, stake, edge
+            FROM bets_history
+            WHERE {_tz_date_filter('match_date', tomorrow)}
+              AND result = 'pending'
+            ORDER BY edge DESC
+        """, engine)
+        lines.append("")
+        lines.append(f"🌙 <b>MAÑANA ({tomorrow.strftime('%d/%m')})</b>: "
+                     f"{len(bets_tom)} apuestas pendientes")
+        for _, b in bets_tom.head(3).iterrows():
+            lines.append(f"  • {b['match']} — {b['market']} @{b['odds']}")
+        if len(bets_tom) > 3:
+            lines.append(f"  … y {len(bets_tom) - 3} más (detalles en el morning)")
+    except Exception as e:
+        print(f"⚠️  Preview de mañana omitido: {e}")
 
     msg = "\n".join(lines)
     ok  = send_message(msg)
