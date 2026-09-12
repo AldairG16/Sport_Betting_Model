@@ -23,10 +23,21 @@ from src.utils.team_normalizer import normalize_team
 # CONSTANTES
 # =========================
 
-SHOT_ON_TARGET_RATE = 0.30   # Promedio real de conversión SoT → gol
-SHOT_RATE           = 0.08   # Promedio real de conversión tiro → gol
-XG_DECAY            = 0.87   # Decay exponencial (recientes pesan más)
-XG_WINDOW           = 15     # Últimos 15 partidos
+# 13-sep-26: recalibrado con datos reales. Las tasas viejas (0.30/0.08)
+# daban xG ~1.88 a un equipo PROMEDIO cuando el promedio real de la liga
+# es ~1.35-1.40 goles/equipo → +35% sistemático en ataque y defensa de
+# TODOS los equipos → lambdas inflados → overs sobrevalorados (era el
+# sesgo del 57.3% predicho vs 44.4% real). Con 0.28/0.03 el equipo
+# promedio (4.2 SoT, 12 tiros) da xG ~1.41 ✓
+SHOT_ON_TARGET_RATE = 0.28   # Conversión real SoT → gol
+SHOT_RATE           = 0.03   # Conversión real tiro no a puerta → gol (deflectes/errores)
+# 12-sep-26: 15 partidos alcanzaban 6 meses hacia atrás (mar→sep) y con
+# decay 0.87 la primavera seguía dominando — el xG de Tottenham decía 1.82
+# goles/partido con el equipo en 0 goles en 4 jornadas, y ese número
+# diluía 40% de la señal de forma actual en cada lambda. Ventana más
+# corta + decay más fuerte para que la forma reciente mande.
+XG_DECAY            = 0.80   # Decay exponencial (recientes pesan más)
+XG_WINDOW           = 10     # Últimos 10 partidos
 
 
 # =========================
