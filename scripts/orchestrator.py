@@ -500,12 +500,36 @@ def step_resolve_pending():
 
 def step_notify_evening():
     from scripts.notify_telegram import send_evening_summary
-    # Fecha objetivo anclada al HORARIO PROGRAMADO del cron (21:00 MX =
-    # 03:00 UTC): corremos (ahora_utc - 6h).date(). Si GitHub retrasa el
-    # run varias horas, la fecha resumida NO cambia — elimina el desfase
-    # "resumen de un día, preview de otro".
+    # Fecha objetivo DATA-DRIVEN: el día local más reciente con apuestas ya
+    # resueltas, acotado a [ayer, hoy]. Inmune a los retrasos de GitHub (el
+    # cron de 21:07 MX llegó a ejecutarse a las 02:13 MX del día siguiente,
+    # y el anclaje por reloj resumía el día NUEVO — todo pendiente, inútil).
     from datetime import datetime, timedelta, timezone as _tz
-    target_day = (datetime.now(_tz.utc) - timedelta(hours=6)).date()
+    from zoneinfo import ZoneInfo as _ZI
+    from config.settings import USER_TIMEZONE as _TZ
+    import pandas as pd
+    from sqlalchemy import text as _t
+    from config.database import engine as _eng
+    today_local = datetime.now(_ZI(_TZ)).date()
+    target_day = today_local - timedelta(days=1)   # default: ayer
+    try:
+        df = pd.read_sql(_t("""
+            SELECT (match_date AT TIME ZONE 'UTC'
+                    AT TIME ZONE :tz)::date AS d
+            FROM bets_history
+            WHERE result IN ('win','loss','push','half_win','half_loss')
+            ORDER BY match_date DESC LIMIT 1
+        """), _eng, params={"tz": _TZ})
+        if not df.empty:
+            d = df.iloc[0]["d"]
+            if d == today_local:
+                target_day = today_local          # ya hay resueltas hoy
+            elif d == today_local - timedelta(days=1):
+                target_day = d                    # hoy aún no resuelve nada
+            # d más viejo → default ayer
+    except Exception as e:
+        print(f"   ⚠️  No se pudo anclar por datos ({e}) — usando ayer")
+    print(f"   Resumen nocturno anclado al día local: {target_day}")
     send_evening_summary(target_date=target_day)
 
 
