@@ -1373,28 +1373,9 @@ def send_evening_summary(target_date=None):
                     pnl  = "revisar (sin resolver)"
             lines.append(f"{icon} {bet['match']}  <i>{mkt}</i>  {pnl}")
 
-    # ── Diagnóstico del analista: si la última heartbeat está stale,
-    # avisamos al usuario en el mismo resumen (es la primera cosa que
-    # va a leer en la noche).
-    try:
-        with engine.begin() as conn:
-            row = conn.execute(text("""
-                SELECT ran_at, EXTRACT(EPOCH FROM (NOW() - ran_at))/60 AS mins_ago
-                FROM analyst_heartbeat
-                ORDER BY ran_at DESC LIMIT 1
-            """)).first()
-        if row is None:
-            lines.append("")
-            lines.append("⚠️ <b>Analista pre-kickoff:</b> nunca corrió "
-                         "(tabla heartbeat vacía).")
-        elif float(row.mins_ago) > 120:
-            lines.append("")
-            lines.append(f"⚠️ <b>Analista pre-kickoff stale:</b> última "
-                         f"corrida hace {int(row.mins_ago)} min. "
-                         f"Revisar GH Actions / cron-job.org.")
-    except Exception:
-        # tabla no existe aún o DB error → no rompemos el resumen
-        pass
+    # El diagnóstico "Analista pre-kickoff stale" se retiró (13-sep-26):
+    # el analista pre-kickoff está desactivado desde mayo y su job externo
+    # fue eliminado — el aviso solo era ruido en cada resumen.
 
     # ── Avance compacto de MAÑANA (reemplaza el mensaje separado de
     # preview — antes el usuario recibía dos mensajes enormes que
