@@ -37,8 +37,16 @@ from config.database import engine
 
 
 def audit_duplicate_matches() -> tuple[str, str]:
+    """
+    AUTO-REPARADOR: detecta pares duplicados (misma fecha, mismo marcador,
+    nombres similares) y los fusiona en el acto — stats hacia la fila con
+    nombre limpio, se borra la del apóstrofe/variante. Fue alerta hasta que
+    demostró recrearse en cada recarga de datasets (13-sep-26).
+    """
     df = pd.read_sql(text("""
-        SELECT id, date, home_team, away_team, home_goals, away_goals
+        SELECT id, date, home_team, away_team, home_goals, away_goals,
+               home_corners, away_corners, home_yellow, away_yellow,
+               home_shots, away_shots, home_shots_target, away_shots_target
         FROM matches
         WHERE date >= CURRENT_DATE - 60 AND home_goals IS NOT NULL
         ORDER BY date
@@ -54,11 +62,57 @@ def audit_duplicate_matches() -> tuple[str, str]:
                 sh = difflib.SequenceMatcher(None, a["home_team"], b["home_team"]).ratio()
                 sa = difflib.SequenceMatcher(None, a["away_team"], b["away_team"]).ratio()
                 if sh > 0.62 and sa > 0.62:
-                    dups.append((a["id"], b["id"], a["home_team"], a["away_team"], str(a["date"])[:10]))
-    if len(dups) > 5:
-        sample = "; ".join(f"{h} vs {a} ({d})" for _, _, h, a, d in dups[:3])
-        return "alerta", f"{len(dups)} partidos duplicados detectados (ej: {sample})"
-    return "ok", f"{len(dups)} duplicados (umbral 5)"
+                    dups.append((a, b))
+
+    if not dups:
+        return "ok", "sin duplicados ✓"
+
+    def stats_count(r):
+        cols = ("home_corners", "away_corners", "home_yellow", "away_yellow",
+                "home_shots", "away_shots", "home_shots_target", "away_shots_target")
+        return sum(1 for c in cols if pd.notna(r[c]))
+
+    def has_apostrophe(r):
+        return "'" in r["home_team"] or "'" in r["away_team"]
+
+    to_delete = []
+    with engine.begin() as conn:
+        for a, b in dups:
+            # keep = nombre limpio; si ambos limpios, el de más stats
+            if has_apostrophe(a) and not has_apostrophe(b):
+                keep, donor = b, a
+            elif has_apostrophe(b) and not has_apostrophe(a):
+                keep, donor = a, b
+            elif stats_count(a) >= stats_count(b):
+                keep, donor = a, b
+            else:
+                keep, donor = b, a
+            # fusionar stats faltantes del donor hacia keep
+            conn.execute(text("""
+                UPDATE matches k SET
+                    home_corners      = COALESCE(k.home_corners,      :hc),
+                    away_corners      = COALESCE(k.away_corners,      :ac),
+                    home_yellow       = COALESCE(k.home_yellow,       :hy),
+                    away_yellow       = COALESCE(k.away_yellow,       :ay),
+                    home_shots        = COALESCE(k.home_shots,        :hs),
+                    away_shots        = COALESCE(k.away_shots,        :asx),
+                    home_shots_target = COALESCE(k.home_shots_target, :hst),
+                    away_shots_target = COALESCE(k.away_shots_target, :ast)
+                WHERE k.id = :kid
+            """), {"hc": donor["home_corners"], "ac": donor["away_corners"],
+                   "hy": donor["home_yellow"], "ay": donor["away_yellow"],
+                   "hs": donor["home_shots"], "asx": donor["away_shots"],
+                   "hst": donor["home_shots_target"], "ast": donor["away_shots_target"],
+                   "kid": keep["id"]})
+            to_delete.append(donor["id"])
+        if to_delete:
+            conn.execute(text("DELETE FROM matches WHERE id = ANY(:ids)"),
+                         {"ids": to_delete})
+
+    sample = "; ".join(f"{a['home_team']} vs {a['away_team']} ({str(a['date'])[:10]})"
+                       for a, b in dups[:3])
+    return "ok", (f"{len(dups)} duplicados detectados y AUTO-FUSIONADOS "
+                  f"(ej: {sample})")
 
 
 def audit_xg_sanity() -> tuple[str, str]:
