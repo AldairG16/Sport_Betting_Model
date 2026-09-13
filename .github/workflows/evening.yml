@@ -1,12 +1,6 @@
 name: Evening Pipeline
 
 on:
-  # CRON reactivado (09-sep-26): 03:00 UTC = 21:00 America/Mexico_City.
-  # Cierra el dia: resuelve resultados, cierra odds y manda el resumen.
-  # NOTA: si se vuelve a usar un dispatcher externo, quitar el schedule
-  # para no duplicar corridas.
-  schedule:
-    - cron: '7 3 * * *'
   workflow_dispatch:
   push:
     branches: [ master ]

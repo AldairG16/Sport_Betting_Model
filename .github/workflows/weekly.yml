@@ -1,11 +1,6 @@
 name: Weekly Pipeline
 
 on:
-  # CRON reactivado (09-sep-26): lunes 13:00 UTC = 07:00 America/Mexico_City
-  # (hora documentada del ciclo semanal). NOTA: si se vuelve a usar un
-  # dispatcher externo, quitar el schedule para no duplicar corridas.
-  schedule:
-    - cron: '9 13 * * 1'
   # (historico) Sin `schedule:` A PROPOSITO. Las corridas de produccion las dispara un
   # agente externo por `workflow_dispatch` contra `master` (todos los runs
   # historicos son workflow_dispatch, ninguno schedule). Al pasar `master` a

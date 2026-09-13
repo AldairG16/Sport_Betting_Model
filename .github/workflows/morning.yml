@@ -5,12 +5,6 @@ name: Morning Pipeline
 # Última verificación: 27-abr-26 — fix UnboundLocalError en model_probs.
 
 on:
-  # CRON reactivado (09-sep-26): 12:00 UTC = 06:00 America/Mexico_City
-  # (Mexico ya no cambia de horario desde 2022, UTC-6 fijo todo el ano).
-  # NOTA: si se vuelve a usar un dispatcher externo, quitar el schedule
-  # para no duplicar corridas.
-  schedule:
-    - cron: '13 12 * * *'
   workflow_dispatch:   # permite lanzar manualmente desde GitHub
   push:
     branches: [ master ]
