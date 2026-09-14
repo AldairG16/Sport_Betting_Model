@@ -63,5 +63,6 @@ jobs:
           API_CREDITS_STOP_THRESHOLD:   ${{ secrets.API_CREDITS_STOP_THRESHOLD }}
           MAX_CREDITS_PER_RUN:          ${{ secrets.MAX_CREDITS_PER_RUN }}
           MAX_ENRICHMENTS_PER_RUN:      ${{ secrets.MAX_ENRICHMENTS_PER_RUN }}
+          API_FOOTBALL_KEY:             ${{ secrets.API_FOOTBALL_KEY }}
           USER_TIMEZONE:                America/Mexico_City
         run: python scripts/orchestrator.py --mode closing
