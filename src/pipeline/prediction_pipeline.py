@@ -1311,6 +1311,29 @@ def run_prediction_pipeline():
             probabilities[market] = min(0.95, max(0.05, probabilities[market]))
 
         # =========================
+        # =========================
+        # TILDE FAVORITO-AZAR (sesgo documentado del mercado)
+        # =========================
+        # Anomalía más robusta de los mercados de apuestas: las cuotas largas
+        # están sistemáticamente sobrevaloradas (el público ama el longshot) y
+        # las cortas infravaloradas. Corregimos la probabilidad final según su
+        # propia cuota: cuotas > 2.8 → encoger; cuotas < 2.8 → levantar a la
+        # mitad de la intensidad. Nuestros datos lo confirman: away_win y
+        # líneas de underdogs acumulan las peores pérdidas del sistema.
+        _FLB_TILT = 0.12
+        _FLB_REF = 2.8
+        for market in list(probabilities.keys()):
+            o = odds.get(market)
+            if not o or o <= 1.01:
+                continue
+            if o > _FLB_REF:
+                L = min((o - _FLB_REF) / _FLB_REF, 1.0)
+                probabilities[market] *= (1 - _FLB_TILT * L)
+            else:
+                L = min((_FLB_REF - o) / _FLB_REF, 1.0)
+                probabilities[market] *= (1 + _FLB_TILT * 0.5 * L)
+            probabilities[market] = min(0.95, max(0.05, probabilities[market]))
+
         # SANITY CHECK (🔥 NUEVO)
         # =========================
 

@@ -8,9 +8,24 @@ from sqlalchemy import text
 # CONFIGURACION DE FORMA
 # =========================
 
-# Factor de decay: partido mas reciente = peso 1.0
-# El partido de hace N partidos tiene peso DECAY^N
-# DECAY=0.85 → partido hace 5 partidos vale 0.85^5 ≈ 44% del mas reciente
+# ── FILTRO DE KALMAN (14-sep-26) ─────────────────────────────────────────
+# Reemplaza el promedio con decay exponencial por un filtro de Kalman de
+# estado escalar: la fuerza de ataque/defensa del equipo es un estado
+# oculto que evoluciona como paseo aleatorio y se observa con el ruido de
+# los goles (alta varianza). Ventajas sobre el decay:
+#   - Incertidumbre recursiva: tras un periodo estable, un cambio repentino
+#     se absorbe a ritmo constante; nunca se sobre-reacciona a 1-2 partidos.
+#   - Equipos con pocos partidos se encogen hacia la media de la liga
+#     (shrinkage jerárquico rudimentario) en vez de dar ratings extremos.
+#   - Limitación documentada: no ajusta por la defensa del rival (eso lo
+#     hacen los blends del pipeline: xG, DC-MLE).
+KALMAN_Q          = 0.10   # varianza de proceso: cuánto puede cambiar la
+                           # fuerza real de un equipo por partido
+KALMAN_R          = 1.00   # varianza de observación: ruido de los goles
+KALMAN_BASELINE   = 1.35   # goles promedio de liga por equipo/partido
+                           # (estado inicial = equipo promedio)
+
+# Decay clásico — se mantiene solo para la métrica de puntos (display)
 DECAY = 0.85
 
 # Ventana de partidos a consultar
@@ -19,13 +34,32 @@ FORM_WINDOW_VENUE = 8   # solo local o solo visitante (menos partidos disponible
 FORM_MIN_VENUE   = 4    # mínimo para usar forma de venue (si no, usa combinada)
 
 
+def _kalman_filter(goals_seq: list[float]):
+    """
+    Filtro de Kalman escalar sobre una secuencia de goles en orden
+    cronológico (más viejo → más reciente).
+
+    Returns: (estimación_final, varianza_final)
+    """
+    x = KALMAN_BASELINE     # estado inicial: equipo promedio
+    p = 0.50                # varianza inicial: incertidumbre moderada
+    for g in goals_seq:
+        if g is None or (isinstance(g, float) and pd.isna(g)):
+            continue
+        p += KALMAN_Q                 # el estado puede haber cambiado
+        k = p / (p + KALMAN_R)        # ganancia de Kalman
+        x += k * (g - x)              # actualizar hacia la observación
+        p = (1 - k) * p               # la incertidumbre baja al observar
+    return x, p
+
+
 # =========================
-# FORM CON DECAY EXPONENCIAL
+# FORM CON FILTRO DE KALMAN
 # =========================
 
 def get_team_form(team, venue: str = None, cutoff_date=None):
     """
-    Calcula las métricas de forma de un equipo con decay exponencial.
+    Calcula las métricas de forma de un equipo con filtro de Kalman.
 
     Args:
         team:         nombre del equipo
@@ -36,14 +70,9 @@ def get_team_form(team, venue: str = None, cutoff_date=None):
                       CRÍTICO para backtest: evita temporal leakage al usar
                       partidos que aún no habían ocurrido al momento de la bet.
 
-    Mejoras vs versión anterior:
-      - Parámetro venue: permite separar forma local vs visitante
-      - home_attack/home_defense más precisos para el pipeline
-      - Fallback a forma combinada si hay < FORM_MIN_VENUE partidos de venue
-      - Parámetro cutoff_date: evita look-ahead bias en backtesting.
-
     Returns:
-        dict con métricas de forma o None si DB vacía
+        dict con métricas de forma o None si DB vacía. attack_rating y
+        defense_rating están en escala de GOLES POR PARTIDO (1.35 = promedio).
     """
     team = normalize_team(team)
 
@@ -85,42 +114,46 @@ def get_team_form(team, venue: str = None, cutoff_date=None):
     # =========================
 
     if not df.empty:
+        # Kalman necesita orden cronológico (más viejo → más reciente)
+        df_chrono = df.iloc[::-1]
 
-        goals_scored_w   = 0.0
-        goals_conceded_w = 0.0
-        points_w         = 0.0
-        total_weight     = 0.0
+        goals_seq, conceded_seq = [], []
+        points_w   = 0.0
+        total_weight = 0.0
 
-        for i, (_, row) in enumerate(df.iterrows()):
-
-            weight = DECAY ** i
-
+        for i, (_, row) in enumerate(df_chrono.iterrows()):
             if row.home_team.lower() == team.lower():
-                gs = row.home_goals
-                gc = row.away_goals
+                gs, gc = row.home_goals, row.away_goals
             else:
-                gs = row.away_goals
-                gc = row.home_goals
+                gs, gc = row.away_goals, row.home_goals
+            if gs is None or gc is None or pd.isna(gs) or pd.isna(gc):
+                continue
 
-            goals_scored_w   += gs * weight
-            goals_conceded_w += gc * weight
-            total_weight     += weight
+            goals_seq.append(float(gs))
+            conceded_seq.append(float(gc))
 
-            if gs > gc:
-                points_w += 3 * weight
-            elif gs == gc:
-                points_w += 1 * weight
+            # métrica de puntos con decay clásico (solo display)
+            weight = DECAY ** i
+            points_w += (3 if gs > gc else 1 if gs == gc else 0) * weight
+            total_weight += weight
 
-        matches    = len(df)
+        matches = int(len(goals_seq))
+        if matches == 0:
+            return get_team_form(team, venue=None, cutoff_date=cutoff_date) \
+                if venue else None
+
+        att, _ = _kalman_filter(goals_seq)
+        deff, _ = _kalman_filter(conceded_seq)
+
         eff_weight = total_weight if total_weight > 0 else 1.0
 
         return {
             "matches":        matches,
             "points":         round(points_w, 2),
-            "goals_scored":   round(goals_scored_w, 2),
-            "goals_conceded": round(goals_conceded_w, 2),
-            "attack_rating":  round(goals_scored_w / eff_weight, 3),
-            "defense_rating": round(goals_conceded_w / eff_weight, 3),
+            "goals_scored":   round(sum(goals_seq) / matches, 2),
+            "goals_conceded": round(sum(conceded_seq) / matches, 2),
+            "attack_rating":  round(att, 3),
+            "defense_rating": round(deff, 3),
             "is_fallback":    False,
             "venue":          venue or "combined",
         }

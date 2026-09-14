@@ -192,13 +192,54 @@ def audit_numeric_integrity() -> tuple[str, str]:
     return "ok", "integridad numérica ✓"
 
 
+
+def audit_via_negativa() -> tuple[str, str]:
+    """
+    MÉTRICA VÍA NEGATIVA: cuánto margen añaden los kill-switches.
+    Suma el profit histórico (180d) de los mercados y ligas que hoy están
+    bloqueados. Negativo = cada semana que pasa bloqueado, el sistema
+    "gana" ese dinero en apuestas evitadas. Es la estadística que ningún
+    amateur mide y la que más margen acumula sin predecir nada.
+    """
+    blocked_leagues = [
+        "soccer_fifa_world_cup_qualifiers_europe", "soccer_uefa_europa_league",
+        "soccer_netherlands_eredivisie", "soccer_conmebol_copa_libertadores",
+        "soccer_japan_j_league", "soccer_turkey_super_league",
+        "soccer_norway_eliteserien", "soccer_efl_champ",
+        "soccer_greece_super_league",
+    ]
+    blocked_markets = [
+        "dnb_home", "away_win", "btts", "under25",
+        "over_1.5", "over_3.5", "under_3.5", "shots_over_5.5",
+        "shots_under_5.5", "dc_12",
+    ]
+    marks = ",".join(f"'{m}'" for m in blocked_markets)
+    leagues = ",".join(f"'{l}'" for l in blocked_leagues)
+    df = pd.read_sql(text(f"""
+        SELECT
+          COALESCE(SUM(profit) FILTER (
+            WHERE market IN ({marks}) OR league IN ({leagues})), 0) AS evitado,
+          COUNT(*) FILTER (
+            WHERE market IN ({marks}) OR league IN ({leagues})) AS n_evitado
+        FROM bets_history
+        WHERE result IN ('win','loss','push','half_win','half_loss')
+          AND match_date >= CURRENT_DATE - 180
+    """), engine)
+    evitado = float(df.iloc[0]["evitado"] or 0)
+    n = int(df.iloc[0]["n_evitado"] or 0)
+    sign = "margen evitado" if evitado < 0 else "habria GANADO"
+    return "ok", (f"via negativa: {n} bets bloqueadas de 180d sumaban "
+                  f"{evitado:+.2f}u ({sign})")
+
+
 CHECKS = [
     ("Partidos duplicados",    audit_duplicate_matches),
     ("Sanidad del xG proxy",   audit_xg_sanity),
-    ("Calibración rodante",    audit_calibration),
+    ("Calibracion rodante",    audit_calibration),
     ("Bets dobles",            audit_double_bets),
-    ("Resolución estancada",   audit_stuck_resolution),
-    ("Integridad numérica",    audit_numeric_integrity),
+    ("Resolucion estancada",   audit_stuck_resolution),
+    ("Integridad numerica",    audit_numeric_integrity),
+    ("Via negativa",           audit_via_negativa),
 ]
 
 
