@@ -1244,7 +1244,52 @@ def run_prediction_pipeline():
         _row_league = _row_league_of(row)
         _is_paper_match = _row_league in PAPER_ONLY_LEAGUES
 
+        # =========================
+        # ANCLAJE AL MERCADO (arquitectura 14-sep-26)
+        # =========================
+        # Cambio de filosofía: la probabilidad FINAL se ancla a la cuota sin
+        # margen (el mejor predictor que existe) y el modelo estadístico
+        # aporta solo una fracción de la desviación. Antes: modelo absoluto
+        # comparado contra el mercado → sobreconfianza crónica (brecha +21%
+        # en las primeras 45 bets del modelo recalibrado). Ahora heredamos la
+        # precisión del mercado y solo añadimos la señal que el mercado no ve.
+        # Solo mercados con devig confiable (1x2 Shin, O/U y BTTS
+        # proporcionales). AH/DC/DNB/HT siguen modelo-crudo por ahora.
+        _ANCHOR_MAP = {
+            "home_win": "home_win",
+            "draw": "draw",
+            "away_win": "away_win",
+            "over25": "over25",
+            "under25": "under25",
+            "btts_yes": "btts",
+            "btts_no": "btts_no",
+        }
+        _ANCHOR_WEIGHT = 0.65   # peso del mercado; el modelo aporta el 35%
+        _anchored_markets = set()
+        if market_probs:
+            for _mkt, _mpk in _ANCHOR_MAP.items():
+                if _mkt not in probabilities:
+                    continue
+                _mp = market_probs.get(_mpk)
+                if _mp and 0.02 < _mp < 0.98:
+                    probabilities[_mkt] = (
+                        _mp * _ANCHOR_WEIGHT
+                        + probabilities[_mkt] * (1 - _ANCHOR_WEIGHT)
+                    )
+                    _anchored_markets.add(_mkt)
+        if _anchored_markets:
+            print(f"  ⚓ Anclado al mercado: {sorted(_anchored_markets)} "
+                  f"(peso mercado {_ANCHOR_WEIGHT:.0%})")
+
         for market in list(probabilities.keys()):
+            if market in _anchored_markets:
+                # Los mercados anclados YA heredan la calibración implícita
+                # del mercado: aplicar el shrink global/por-mercato aquí sería
+                # doble corrección. Solo clamp.
+                probabilities[market] = min(0.95, max(0.05, probabilities[market]))
+                continue
+
+            # Paso 1: corrección global de sobreconfianza.
             # Paso 1: corrección global de sobreconfianza.
             # Para ligas paper-only (Mundial, etc.) NO aplicamos el descuento:
             # está calibrado sobre datos de clubes europeos, no selecciones nacionales.

@@ -103,6 +103,99 @@ def _fresh_odds_for(result, market: str):
     return odds if odds > 1 else None
 
 
+
+def lineup_guard(verbose: bool = True) -> int:
+    """
+    GUARDIA DE ALINEACIONES (API-Football): para bets con kickoff en <75min,
+    verifica si el goleador de élite del equipo apostado está en el once
+    confirmado. Si falta → cancela la bet (result='stale') con la razón en
+    decision_log. Sin API key o sin alineación publicada → no-op.
+    """
+    import os
+    if not os.environ.get("API_FOOTBALL_KEY"):
+        if verbose:
+            print("   Lineup guard: sin API_FOOTBALL_KEY — omitido")
+        return 0
+    try:
+        from src.features.lineups import find_fixture, get_lineup_surnames, star_missing
+        from src.models.scorer_model import load_scorer_rates
+    except Exception as e:
+        print(f"   Lineup guard import fallo: {e}")
+        return 0
+
+    bets = pd.read_sql(text("""
+        SELECT id, match, market, match_date
+        FROM bets_history
+        WHERE result = 'pending'
+          AND match_date BETWEEN NOW() AND NOW() + INTERVAL '75 minutes'
+    """), engine)
+    if bets.empty:
+        return 0
+
+    rates = load_scorer_rates()
+    if not rates:
+        return 0
+
+    def top_scorers(team_norm: str) -> list:
+        cand = [(i["rate_raw"], p) for p, i in rates.items()
+                if i["team"] == team_norm and i["goals"] >= 5 and i["rate_raw"] >= 0.30]
+        return [p for _, p in sorted(cand, reverse=True)[:2]]
+
+    HOME_SIDES = ("home_win", "dnb_home", "dc_1x")
+    AWAY_SIDES = ("away_win", "dnb_away", "dc_x2")
+    cancelled = 0
+
+    with engine.begin() as conn:
+        for (match, md), g in bets.groupby(["match", "match_date"]):
+            try:
+                h_raw, a_raw = str(match).split(" vs ")
+            except ValueError:
+                continue
+            h_n = normalize_team(h_raw)
+            a_n = normalize_team(a_raw)
+            fid = find_fixture(pd.to_datetime(md).to_pydatetime().replace(tzinfo=None),
+                               h_raw, a_raw)
+            if not fid:
+                continue
+            lineups = get_lineup_surnames(fid)
+            if not lineups:
+                continue
+            import difflib
+            key_h = max(lineups, key=lambda k: difflib.SequenceMatcher(None, h_n, k).ratio())
+            key_a = max(lineups, key=lambda k: difflib.SequenceMatcher(None, a_n, k).ratio())
+
+            miss_home = star_missing(lineups[key_h], top_scorers(h_n))
+            miss_away = star_missing(lineups[key_a], top_scorers(a_n))
+            if not miss_home and not miss_away:
+                continue
+
+            for _, b in g.iterrows():
+                mkt = str(b["market"])
+                side, player = None, None
+                if mkt in HOME_SIDES or mkt.startswith("ah_home"):
+                    side, player = "home", miss_home
+                elif mkt in AWAY_SIDES or mkt.startswith("ah_away"):
+                    side, player = "away", miss_away
+                if not side or not player:
+                    continue
+                note = '{"lineup_guard": {"out": "' + player + '", "side": "' + side + '"}}'
+                conn.execute(text("""
+                    UPDATE bets_history
+                    SET result = 'stale',
+                        decision_log = COALESCE(decision_log, '{}'::jsonb)
+                                      || jsonb_build_object('lineup_guard',
+                                           CAST(:note AS jsonb))
+                    WHERE id = :id
+                """), {"note": note, "id": int(b["id"])})
+                cancelled += 1
+                if verbose:
+                    print(f"   Cancelada [{mkt}] {match}: {player} fuera del once")
+
+    if verbose and cancelled:
+        print(f"   Lineup guard cancelo {cancelled} bets")
+    return cancelled
+
+
 def revalidate_pending_bets(verbose: bool = True) -> dict:
     bets = pd.read_sql(text("""
         SELECT id, match, market, probability, odds
@@ -199,9 +292,17 @@ def revalidate_pending_bets(verbose: bool = True) -> dict:
                     """), {"note": str(_json_dumps(note)), "id": int(bet["id"])})
                     cancelled += 1
 
+    cancelled_ln = 0
+    # ── GUARDIA DE ALINEACIONES (después de la revalidación de odds) ──
+    try:
+        cancelled_ln = lineup_guard(verbose=verbose)
+    except Exception as e:
+        print(f"   ⚠️  Lineup guard falló: {e}")
+
     summary = {
         "status": "ok",
         "total": len(bets),
+        "lineup_cancelled": cancelled_ln,
         "kept_better_odds": kept_better,
         "kept_edge_survives": kept_edge,
         "cancelled": cancelled,
