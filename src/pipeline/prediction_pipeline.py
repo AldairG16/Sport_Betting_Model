@@ -177,7 +177,10 @@ UNDER35_ODDS = 1.65
 # ah_home_fav subido 0.15→0.20 (15-jun-2026): 6 bets en 90d con 0 wins (-100% ROI)
 # pese al threshold previo de 0.15 — el modelo sobreestima favoritos AH consistentemente.
 MIN_EDGE_BY_MARKET = {
-    "home_win":     0.05,
+    # 14-sep-26: home_win con 19 bets el fin de semana a 15.8% WR (-4.5u) —
+    # el mercado de locales es el peor del sistema acumulado. Edge mínimo
+    # sube 0.05 → 0.09 hasta que la calibración demuestre lo contrario.
+    "home_win":     0.09,
     "over25":       0.05,
     "under25":      0.04,
     "draw":         0.08,
