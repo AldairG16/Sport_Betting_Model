@@ -384,6 +384,16 @@ def step_pre_kickoff_closing():
         # romper el closing, pero sí debe verse en el log.
         print(f"⚠️  Revalidación pre-kickoff falló: {e}")
 
+    # ── CONFIRMACIONES PRE-KICKOFF (flujo de dos fases, 14-sep-26) ──────
+    # Las apuestas OFICIALES llegan aquí: ya con cuota revalidada, lineup
+    # guard pasado — el valor final que ya no cambia antes del kickoff.
+    # El morning de las 6 AM es solo preview informativo.
+    try:
+        from scripts.revalidate_pending_bets import send_kickoff_confirmations
+        send_kickoff_confirmations(verbose=True)
+    except Exception as e:
+        print(f"⚠️  Confirmaciones pre-kickoff falló: {e}")
+
 
 def step_fetch_results():
     """Descarga resultados recientes desde The Odds API e inserta en matches.

@@ -489,7 +489,12 @@ def format_bets_message(bets: pd.DataFrame) -> tuple:
     """
     now      = datetime.now(ZoneInfo(USER_TIMEZONE))
     date_str = now.strftime("%d/%m/%Y %H:%M")
-    header   = f"⚽ <b>BETTING PICKS — {date_str}</b>"
+    # 14-sep-26: el morning es PREVIEW informativo — las apuestas OFICIALES
+    # se confirman pre-kickoff (send_kickoff_confirmations en el closing),
+    # cuando la cuota ya está revalidada y las alineaciones verificadas.
+    header   = (f"📋 <b>CANDIDATOS DEL DÍA — {date_str}</b>\n"
+                "<i>ℹ️ Informativo — las apuestas OFICIALES se confirman "
+                "~1h antes de cada partido (cuota final verificada)</i>")
     return _build_bets_by_league(bets, header)
 
 

@@ -321,6 +321,76 @@ def revalidate_pending_bets(verbose: bool = True) -> dict:
     return summary
 
 
+def _format_confirmations(rows: list[dict]) -> str:
+    """
+    Mensaje agrupado de apuestas confirmadas pre-kickoff. Puro (sin DB):
+    rows = lista de dicts con match, market, odds, stake, edge, match_date.
+    """
+    from zoneinfo import ZoneInfo
+    from config.settings import USER_TIMEZONE
+    from dashboard.display import market_name, match_name
+    tz = ZoneInfo(USER_TIMEZONE)
+
+    lines = ["🎯 <b>APUESTAS CONFIRMADAS</b>",
+             "<i>Cuota final revalidada · alineaciones verificadas</i>", ""]
+    for r in rows:
+        try:
+            ko = datetime.fromisoformat(str(r["match_date"])).astimezone(tz)
+            hora = ko.strftime("%H:%M")
+        except (ValueError, TypeError):
+            hora = "?"
+        edge = float(r.get("edge") or 0)
+        lines.append(f"✅ {match_name(r['match'])}  ({hora})")
+        lines.append(f"   {market_name(r['market'])} @ {r['odds']} · "
+                     f"{r['stake']}u · edge {edge:+.0%}")
+    lines.append("")
+    lines.append("<i>Valor final — ya no cambia antes del kickoff</i>")
+    return "\n".join(lines)
+
+
+def send_kickoff_confirmations(verbose: bool = True) -> int:
+    """
+    Apuestas OFICIALES pre-kickoff: pendientes con kickoff en <90 min que
+    aún no fueron notificadas (marca 'kickoff_notified' en decision_log).
+    Ya pasaron por revalidación de cuota y lineup guard de esta corrida —
+    es el valor final. Envía UN mensaje agrupado por corrida y solo marca
+    como notificadas si el envío a Telegram tuvo éxito.
+    """
+    rows = pd.read_sql(text("""
+        SELECT id, match, market, probability, odds, stake, edge, match_date
+        FROM bets_history
+        WHERE result = 'pending'
+          AND match_date BETWEEN NOW() AND NOW() + INTERVAL '90 minutes'
+          AND NOT COALESCE(decision_log, '{}'::jsonb) ? 'kickoff_notified'
+        ORDER BY match_date
+    """), engine)
+    if rows.empty:
+        if verbose:
+            print("   Confirmaciones: nada nuevo para la ventana pre-kickoff")
+        return 0
+
+    msg = _format_confirmations(rows.to_dict("records"))
+    from scripts.notify_telegram import send_message
+    if not send_message(msg):
+        if verbose:
+            print("   ⚠️  Telegram falló — se reintentará en la próxima corrida")
+        return 0
+
+    ids = [int(r["id"]) for r in rows.to_dict("records")]
+    note = _json_dumps({"at": datetime.now(timezone.utc).isoformat()})
+    with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE bets_history
+            SET decision_log = COALESCE(decision_log, '{}'::jsonb)
+                              || jsonb_build_object('kickoff_notified',
+                                   CAST(:note AS jsonb))
+            WHERE id = ANY(:ids)
+        """), {"note": note, "ids": ids})
+    if verbose:
+        print(f"   🎯 {len(ids)} apuestas confirmadas enviadas a Telegram")
+    return len(ids)
+
+
 def _json_dumps(obj) -> str:
     import json
     return json.dumps(obj, default=str)
