@@ -82,8 +82,15 @@ def update_clv():
 
     print("\n📊 UPDATING CLV (PRO)...\n")
 
+    # 15-sep-26: la referencia correcta es la odd ORIGINAL de la apuesta,
+    # no la columna `odds` — la revalidación pre-kickoff REESCRIBE `odds`
+    # a la cuota fresca, y como closing_odds se captura de ese mismo
+    # snapshot, el CLV colapsaba a 0.0% por construcción. La odd original
+    # sobrevive en decision_log.revalidation.odds_before.
     df = pd.read_sql("""
-        SELECT id, odds, closing_odds
+        SELECT id, odds, closing_odds,
+               CAST(decision_log -> 'revalidation' ->> 'odds_before'
+                    AS NUMERIC) AS odds_original
         FROM bets_history
         WHERE closing_odds IS NOT NULL
     """, engine)
@@ -93,7 +100,10 @@ def update_clv():
         return
 
     df["clv"] = df.apply(
-        lambda row: calculate_clv(row["odds"], row["closing_odds"]),
+        lambda row: calculate_clv(
+            row["odds_original"] if row["odds_original"] else row["odds"],
+            row["closing_odds"]
+        ),
         axis=1
     )
 
