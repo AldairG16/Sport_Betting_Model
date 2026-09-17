@@ -36,10 +36,29 @@ if __name__ == "__main__":
     # Consola Windows usa cp1252 y no soporta acentos/emojis del output
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
-
-if __name__ == "__main__":
     _load_env_beside_exe()
+
+    # ── Instancia única (fix 17-sep-26) ──────────────────────────────────
+    # Si el puerto ya está atendido, otro dashboard vive: abrir el navegador
+    # hacia él y salir limpio. Antes, cada doble clic acumulaba una instancia
+    # zombi peleándose por el puerto 5050 y el programa "no abría".
+    import socket
+    _port_busy = False
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as _s:
+        _s.settimeout(1.0)
+        _port_busy = _s.connect_ex(("127.0.0.1", 5050)) == 0
+
+    if _port_busy:
+        print("  Ya hay un dashboard corriendo — abriendo navegador...")
+        import webbrowser
+        webbrowser.open("http://127.0.0.1:5050")
+        print("  (Esa otra ventana de consola es la que puedes cerrar)")
+        try:
+            input("  Presiona Enter para cerrar esta ventana...")
+        except EOFError:
+            pass
+        sys.exit(0)
+
     import webbrowser
     webbrowser.open("http://127.0.0.1:5050")
     from dashboard.app import app
