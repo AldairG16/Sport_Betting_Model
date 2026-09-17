@@ -232,6 +232,37 @@ def audit_via_negativa() -> tuple[str, str]:
                   f"{evitado:+.2f}u ({sign})")
 
 
+
+def audit_shades() -> tuple:
+    """
+    JUICIO DE LAS SENALES: CLV y ROI de las apuestas que llevan los tiltes
+    nuevos (tabla miente, FLB asimetrico, empates contextuales). Informativo
+    hasta ~50 bets; despues, flag con CLV negativo sostenido = quitar la senal.
+    """
+    df = pd.read_sql(text("""
+        SELECT
+          COUNT(*) FILTER (WHERE COALESCE(decision_log,'{}'::jsonb) ? 'shades') AS n_shades,
+          AVG(clv) FILTER (WHERE COALESCE(decision_log,'{}'::jsonb) ? 'shades'
+                           AND clv IS NOT NULL) AS clv_shades,
+          COUNT(*) FILTER (WHERE COALESCE(decision_log,'{}'::jsonb) ? 'shades'
+                           AND result IN ('win','half_win')) AS w_shades,
+          COUNT(*) FILTER (WHERE COALESCE(decision_log,'{}'::jsonb) ? 'shades'
+                           AND result IN ('win','loss','push','half_win','half_loss')) AS r_shades,
+          SUM(profit) FILTER (WHERE COALESCE(decision_log,'{}'::jsonb) ? 'shades'
+                           AND result IN ('win','loss','push','half_win','half_loss')) AS pnl
+        FROM bets_history
+        WHERE match_date >= CURRENT_DATE - 60
+    """), engine)
+    n = int(df.iloc[0]["n_shades"] or 0)
+    clv = df.iloc[0]["clv_shades"]
+    pnl = float(df.iloc[0]["pnl"] or 0)
+    if n == 0:
+        return "ok", "aun sin apuestas con senales nuevas"
+    clv_s = ", CLV {:+.2%}".format(float(clv)) if clv is not None else ""
+    return "ok", "{} bets con senales, {} resueltas, pnl {:+.2f}u{}".format(
+        n, int(df.iloc[0]["r_shades"]), pnl, clv_s)
+
+
 CHECKS = [
     ("Partidos duplicados",    audit_duplicate_matches),
     ("Sanidad del xG proxy",   audit_xg_sanity),
@@ -240,6 +271,7 @@ CHECKS = [
     ("Resolucion estancada",   audit_stuck_resolution),
     ("Integridad numerica",    audit_numeric_integrity),
     ("Via negativa",           audit_via_negativa),
+    ("Senales (shades)",       audit_shades),
 ]
 
 

@@ -142,8 +142,11 @@ def get_team_form(team, venue: str = None, cutoff_date=None):
             return get_team_form(team, venue=None, cutoff_date=cutoff_date) \
                 if venue else None
 
-        att, _ = _kalman_filter(goals_seq)
-        deff, _ = _kalman_filter(conceded_seq)
+        att, p_att = _kalman_filter(goals_seq)
+        deff, p_def = _kalman_filter(conceded_seq)
+        # Incertidumbre expuesta: la usa el pipeline para escalar stakes por
+        # confianza del modelo (Constantinou: apostar más cuando estás seguro)
+        uncertainty = round((p_att + p_def) / 2, 3)
 
         eff_weight = total_weight if total_weight > 0 else 1.0
 
@@ -154,6 +157,7 @@ def get_team_form(team, venue: str = None, cutoff_date=None):
             "goals_conceded": round(sum(conceded_seq) / matches, 2),
             "attack_rating":  round(att, 3),
             "defense_rating": round(deff, 3),
+            "uncertainty":    uncertainty,
             "is_fallback":    False,
             "venue":          venue or "combined",
         }

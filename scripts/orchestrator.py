@@ -365,6 +365,13 @@ def step_pre_kickoff_closing():
     from scripts.update_closing_odds import update_closing_odds
     update_closing_odds()
 
+    # Fotografía de cuotas post-refetch (dataset de movimientos de línea)
+    try:
+        from scripts.odds_history import capture_snapshot
+        capture_snapshot(verbose=False)
+    except Exception as e:
+        print(f"   ⚠️  odds_history: {e}")
+
     # Revalidar bets del día contra las odds frescas recién descargadas:
     # si la línea se movió en contra y el edge murió, cancelar la bet ANTES
     # del kickoff en vez de apostar un número que ya no existe.
@@ -472,6 +479,13 @@ def run_morning(logger: Logger, force_fetch: bool = False):
 
     run_step(logger, "Fetch odds",        step_fetch_odds, force_fetch)
     run_step(logger, "Enrich data",       step_enrich)
+    # Fotografía de cuotas para el dataset de movimientos de línea
+    try:
+        from scripts.odds_history import capture_snapshot
+        capture_snapshot(verbose=True)
+    except Exception as e:
+        print(f"⚠️  odds_history falló: {e}")
+
     predict_ok = run_step(logger, "Predictions", step_predict)
     # run_step(logger, "MLB Predictions",   step_mlb_predict)  # desactivado — sin creditos MLB
 

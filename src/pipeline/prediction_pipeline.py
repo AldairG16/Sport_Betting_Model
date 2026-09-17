@@ -120,6 +120,7 @@ from src.models.corners_model import predict_corners, corners_to_confidence_sign
 from src.models.shots_model import predict_shots, shots_to_confidence_signal
 from src.models.cards_model import predict_cards
 
+from src.features.table_lies import get_luck
 from src.features.fixture_congestion import get_fixture_congestion
 from src.features.motivation_factor import get_motivation_factor, is_unreliable_match
 from src.models.asian_handicap_model import prob_ah, get_dnb_probs
@@ -1322,17 +1323,76 @@ def run_prediction_pipeline():
         # líneas de underdogs acumulan las peores pérdidas del sistema.
         _FLB_TILT = 0.12
         _FLB_REF = 2.8
+        _HOME_SIDES = ("home_win", "dnb_home", "dc_1x", "h1_home", "h2_home")
+
+        def _flb_side(market: str) -> str:
+            m = str(market)
+            if m in _HOME_SIDES or m.startswith("ah_home"):
+                return "home"
+            if m in ("away_win", "dnb_away", "dc_x2", "h1_away", "h2_away") or m.startswith("ah_away"):
+                return "away"
+            return "neutral"
+
+        # 14-sep-26: asimetría por localía (CBS Business School) — el sesgo
+        # se concentra en longshots VISITANTES (sobrevalorados ×1.5) y
+        # favoritos LOCALES (infravalorados ×1.5).
         for market in list(probabilities.keys()):
             o = odds.get(market)
             if not o or o <= 1.01:
                 continue
+            _side = _flb_side(market)
             if o > _FLB_REF:
                 L = min((o - _FLB_REF) / _FLB_REF, 1.0)
-                probabilities[market] *= (1 - _FLB_TILT * L)
+                _mult = 1.5 if _side == "away" else 1.0
+                probabilities[market] *= (1 - _FLB_TILT * _mult * L)
             else:
                 L = min((_FLB_REF - o) / _FLB_REF, 1.0)
-                probabilities[market] *= (1 + _FLB_TILT * 0.5 * L)
+                _mult = 1.5 if _side == "home" else (0.75 if _side == "away" else 1.0)
+                probabilities[market] *= (1 + _FLB_TILT * _mult * L)
             probabilities[market] = min(0.95, max(0.05, probabilities[market]))
+
+        # =========================
+        # SHADE "LA TABLA MIENTE" (Flepp 2024) + EMPATES CONTEXTUALES
+        # =========================
+        # luck = puntos reales − puntos esperados por desempeño (xPts).
+        # El mercado infla a los que sobre-rinden la tabla y castiga de más
+        # a los desafortunados → ajustamos en sentido contrario y
+        # renormalizamos el trío 1X2.
+        _luck_home = get_luck(home, cutoff=date) or {}
+        _luck_away = get_luck(away, cutoff=date) or {}
+        _shades_applied = {
+            "luck_home": _luck_home.get("luck"),
+            "luck_away": _luck_away.get("luck"),
+        }
+        _sh_h = max(-0.08, min(0.08, _shades_applied["luck_home"] * 0.02 or 0))             if _luck_home else 0.0
+        _sh_a = max(-0.08, min(0.08, _shades_applied["luck_away"] * 0.02 or 0))             if _luck_away else 0.0
+        _trio = ("home_win", "draw", "away_win")
+        if any(m in probabilities for m in _trio) and (_sh_h or _sh_a):
+            _sum0 = sum(probabilities.get(m, 0) for m in _trio)
+            probabilities["home_win"] = probabilities.get("home_win", 0) * (1 - _sh_h)
+            probabilities["away_win"] = probabilities.get("away_win", 0) * (1 - _sh_a)
+            _s = sum(probabilities.get(m, 0) for m in _trio)
+            if _s > 0:
+                for m in _trio:
+                    probabilities[m] = probabilities.get(m, 0) * _sum0 / _s
+            _shades_applied["aplicado"] = round(_sh_h, 3)
+
+        # Empates contextuales: parejos + liga de pocos goles → el público
+        # infravalora el empate (sesgo recracional documentado)
+        try:
+            _ovrate = get_over25_rate(_row_league)
+        except Exception:
+            _ovrate = None
+        if (_ovrate is not None and _ovrate < 0.45
+                and abs(lambda_home - lambda_away) < 0.3
+                and "draw" in probabilities):
+            _draw_tilt = 0.06
+            _extra = probabilities["draw"] * _draw_tilt
+            probabilities["draw"] += _extra
+            _ded = _extra / 2
+            probabilities["home_win"] = max(probabilities["home_win"] - _ded, 0.02)
+            probabilities["away_win"] = max(probabilities["away_win"] - _ded, 0.02)
+            _shades_applied["draw_context"] = True
 
         # SANITY CHECK (🔥 NUEVO)
         # =========================
@@ -1604,6 +1664,14 @@ def run_prediction_pipeline():
                 league=_league,
             )
 
+            # ── STAKES POR CONFIANZA (Constantinou 2013) ────────────────
+            # El Kalman expone la incertidumbre del rating: menos partidos
+            # observados → menos confianza → stake reducido (0.61-0.73x).
+            _unc = ((home_form.get("uncertainty") or 0.27)
+                    + (away_form.get("uncertainty") or 0.27)) / 2
+            _conf = max(0.0, min(1.0, 1.0 - _unc / 0.5))
+            stake = round(stake * (0.55 + 0.45 * _conf), 2)
+
             # ── DECISION LOG ─────────────────────────────────────────────
             # Snapshot del contexto completo en el momento de la decisión.
             # Permite autopsia: cuando una bet pierde, saber QUÉ señales
@@ -1622,6 +1690,9 @@ def run_prediction_pipeline():
                         "mc_agreement": float(mc_agreement),
                         "confidence": round(float(confidence), 3),
                         "mle_weight": _mle_w,
+                        "kalman_confidence": round(_conf, 3),
+                        "shades": _shades_applied,
+                        "anchored": sorted(_anchored_markets),
                     },
                     "signals": {
                         "h2h_used": bool(h2h),
