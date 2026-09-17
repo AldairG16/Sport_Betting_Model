@@ -230,6 +230,13 @@ SPORT_KEYS = [
     # ── Americas extra ──────────────────────────────────────────────
     "soccer_usa_mls",                     # -44% ROI, tough league (monitoreando)
 
+    # ── RE-HABILITADAS 17-sep-26 (experimento controlado, modelo anclado) ─
+    # Fallaban con el modelo viejo inflado; ahora con anclaje al mercado,
+    # xG recalibrado, Kalman y guardia de alineaciones. El CLV gate por
+    # liga (n>=20, CLV<=-5%) las re-bloquea SOLAS si vuelven a fallar.
+    "soccer_turkey_super_league",
+    "soccer_norway_eliteserien",
+    "soccer_netherlands_eredivisie",
     # ── Champions League — habilitada 10-sep-26 a pedido del dueño ────
     # Histórico: -100% ROI en walkforward de 332 bets (modelo pre-revisión).
     # Se re-habilita junto con fixes de calibración/holdout; vigilar de

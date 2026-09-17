@@ -220,11 +220,12 @@ BLOCKED_LEAGUES = {
     #   -44.6% ROI). Vigilar: si vuelven a perder, el CLV gate y la
     #   calibración con holdout las detectarán — re-bloquear con evidencia
     #   fresca, no con el histórico viejo del modelo pre-revisión.
+    # RE-HABILITADAS 17-sep-26 (experimento con modelo anclado, red de
+    # seguridad: CLV gate por liga n>=20 / CLV<=-5% → auto-bloqueo):
+    #   turkey, norway, eredivisie, greece — fallas de muestra chica o
+    #   del modelo viejo inflado; el nuevo modelo las re-juzga.
     "soccer_japan_j_league",
-    "soccer_turkey_super_league",
-    "soccer_norway_eliteserien",
     "soccer_efl_champ",
-    "soccer_greece_super_league",
 }
 
 # Grupos mutuamente excluyentes por partido
@@ -262,24 +263,30 @@ _DISABLED_MARKETS = {
 }
 
 # Mercados bloqueados por ROI negativo persistente (auditoría 17-may-2026, 746 bets)
+# RE-HABILITADOS 17-sep-26: under25, away_win y btts fallaban con el xG
+# inflado; ahora bajo arquitectura anclada + tilte asimétrico. dnb_home
+# sigue bloqueado (mercado nicho, sin evidencia nueva).
 _BLOCKED_MARKETS = {
     "dnb_home",
-    "away_win",
-    "btts",
-    "under25",
 }
 
 # Kill-switch dinámico por CLV: mercados con CLV trailing negativo
 # (n >= 100, últimos 120d) escritos por scripts/clv_gate.py en el weekly.
 # Se desbloquean solos cuando el CLV recupera.
 try:
-    from scripts.clv_gate import load_clv_blocked_markets as _load_clv_blocked
+    from scripts.clv_gate import (load_clv_blocked_markets as _load_clv_blocked,
+                                  load_clv_blocked_leagues as _load_clv_leagues)
     _CLV_BLOCKED = _load_clv_blocked()
+    _CLV_LEAGUES = _load_clv_blocked_leagues()
     if _CLV_BLOCKED:
         print(f"🚦 Mercados bloqueados por CLV gate: {sorted(_CLV_BLOCKED)}")
+    if _CLV_LEAGUES:
+        print(f"🚦 Ligas bloqueadas por CLV gate: {sorted(_CLV_LEAGUES)}")
 except Exception:
     _CLV_BLOCKED = set()
+    _CLV_LEAGUES = set()
 _BLOCKED_MARKETS = _BLOCKED_MARKETS | _CLV_BLOCKED
+BLOCKED_LEAGUES = BLOCKED_LEAGUES | _CLV_LEAGUES
 
 # =========================
 # SAFE HELPERS (CRÍTICO)
