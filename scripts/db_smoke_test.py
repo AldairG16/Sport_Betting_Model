@@ -178,6 +178,14 @@ def _ddl():
     return "columnas presentes"
 
 
+@check("Tabla odds_history (acumulador de líneas)")
+def _odds_history():
+    n = pd.read_sql(text("""
+        SELECT COUNT(*) n FROM odds_history
+    """), engine)
+    return f"{int(n.iloc[0]['n'])} fotografías acumuladas"
+
+
 @check("Slippage report + backtest_engine queries")
 def _misc():
     from src.models.save_bets import slippage_report
