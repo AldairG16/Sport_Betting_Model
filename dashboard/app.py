@@ -59,16 +59,28 @@ REPO_RELEASES_API = "https://api.github.com/repos/AldairG16/Sport_Betting_Model/
 from flask import send_file, redirect as _redirect
 
 
-@app.route("/chartjs.js")
-def chartjs_local():
+@app.route("/ui_es5.js")
+def ui_es5_js():
     import sys as _sys
-    candidates = [Path(__file__).parent / "chart.umd.js"]
+    candidates = [Path(__file__).parent / "ui_es5.js"]
     if getattr(_sys, "frozen", False):
-        candidates.insert(0, Path(_sys.executable).parent / "chart.umd.js")
+        candidates.insert(0, Path(_sys.executable).parent / "ui_es5.js")
     for c in candidates:
         if c.exists():
             return send_file(c, mimetype="application/javascript")
-    return _redirect("https://cdn.jsdelivr.net/npm/chart.js@4")
+    return "/* ui_es5.js no encontrado */", 404
+
+
+@app.route("/chartjs.js")
+def chartjs_local():
+    import sys as _sys
+    candidates = [Path(__file__).parent / "chart2.min.js"]
+    if getattr(_sys, "frozen", False):
+        candidates.insert(0, Path(_sys.executable).parent / "chart2.min.js")
+    for c in candidates:
+        if c.exists():
+            return send_file(c, mimetype="application/javascript")
+    return _redirect("https://cdn.jsdelivr.net/npm/chart.js@2.9.4/dist/Chart.min.js")
 
 
 
@@ -462,7 +474,7 @@ PAGE = """<!DOCTYPE html>
   <div class="card" id="narrtext" style="font-size:.9rem;white-space:pre-wrap;line-height:1.5"></div>
   <div style="display:flex;justify-content:space-between;margin-top:6px">
     <span id="narreng" style="color:var(--muted);font-size:.72rem"></span>
-    <button onclick="genNarrative()" style="font-size:.72rem;padding:4px 10px">🧠 Generar diagnóstico ahora</button>
+    <button id="genbtn" onclick="genNarrative()" style="font-size:.72rem;padding:4px 10px">🧠 Generar diagnóstico ahora</button>
   </div>
 </div>
 <div class="grid2">
@@ -511,190 +523,7 @@ button { background:#14351f; color:var(--green); border:1px solid #22c55e44; bor
          padding:8px 14px; cursor:pointer; font-size:.85rem; }
 button:hover { background:#1a4527; }
 </style>
-<script>
-// Almacenamiento seguro: algunos navegadores embebidos bloquean localStorage
-function _storeGet(key, dflt){ try { return localStorage.getItem(key) || dflt; } catch(e){ return dflt; } }
-function _storeSet(key, val){ try { localStorage.setItem(key, val); } catch(e){} }
-// Cualquier error de JS se muestra en pantalla (nada de fallos invisibles)
-window.onerror = function(msg, src, line){
-  var el = document.getElementById('err');
-  el.style.display='block';
-  el.textContent = '⚠️ Error interno: ' + msg + ' (línea ' + line + ')';
-};
-const money = v => (v>=0?'+':'') + Number(v).toFixed(2) + 'u';
-// Fechas: la DB guarda UTC; mostrar en hora del usuario (Mexico City)
-const mxdate = s => { try { return new Date(s).toLocaleString('es-MX',{timeZone:'America/Mexico_City',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); } catch(e){ return String(s).slice(0,16); } };
-const pct = v => v==null?'—':(v>=0?'+':'') + (v*100).toFixed(1) + '%';
-function err(msg){ const e=document.getElementById('err'); e.style.display='block'; e.textContent='⚠️ '+msg; }
-async function jget(u){ const r=await fetch(u); const d=await r.json(); if(d.ok===false) throw new Error(d.msg||'sin datos'); return d; }
-
-async function loadKpis(){
-  try{
-    const d=await jget('/api/kpis');
-    const cards=[
-      ['Bankroll', d.bankroll==null?'—':d.bankroll.toFixed(1)+'u',''],
-      ['Profit 90d', money(d.profit), d.profit>=0?'pos':'neg'],
-      ['ROI 90d', pct(d.roi), d.roi>=0?'pos':'neg'],
-      ['Win rate', d.win_rate==null?'—':(d.win_rate*100).toFixed(1)+'%',''],
-      ['Bets 90d', d.bets_90d,''],
-      ['Resueltas', d.resolved,''],
-      ['Pendientes', d.pending,''],
-      ['Brier', d.brier==null?'—':d.brier.toFixed(3),''],
-      ['CLV medio (n='+d.clv_n+')', d.clv_avg==null?'—':(d.clv_avg>=0?'+':'')+(d.clv_avg*100).toFixed(2)+'%', d.clv_avg>=0?'pos':'neg'],
-    ];
-    document.getElementById('kpis').innerHTML=cards.map(c=>
-      `<div class="card"><div class="lbl">${c[0]}</div><div class="val ${c[2]}">${c[1]}</div></div>`).join('');
-    document.getElementById('sub').textContent='Datos: '+(d.window||'90d')+' · solo lectura · '+new Date().toLocaleString('es-MX');
-  }catch(e){ err('KPIs: '+e.message); }
-}
-function cctx(id){ return document.getElementById(id).getContext('2d'); }
-Chart.defaults.color='#8b98ad'; Chart.defaults.borderColor='#2a3550';
-async function loadEquity(){
-  try{ const d=await jget('/api/equity');
-    new Chart(cctx('equity'),{type:'line',data:{labels:d.dates,datasets:[{data:d.cumulative,borderWidth:2,pointRadius:0,borderColor:'#3b82f6',fill:true,backgroundColor:'rgba(59,130,246,.08)'}]},options:{plugins:{legend:{display:false}},scales:{x:{ticks:{maxTicksLimit:8}}}}});
-    const colors=d.daily.map(v=>v>=0?'#22c55e':'#ef4444');
-    new Chart(cctx('daily'),{type:'bar',data:{labels:d.daily_dates,datasets:[{data:d.daily,backgroundColor:colors}]},options:{plugins:{legend:{display:false}},scales:{x:{ticks:{maxTicksLimit:10}}}}});
-  }catch(e){ err('Curva: '+e.message); }
-}
-async function loadBy(){
-  for(const [dim,id] of [['market','bymarket'],['league','byleague']]){
-    try{ const d=await jget('/api/by/'+dim);
-      const colors=d.roi.map(v=>v>=0?'#22c55e':'#ef4444');
-      new Chart(cctx(id),{type:'bar',data:{labels:d.labels,datasets:[{label:'ROI %',data:d.roi,backgroundColor:colors}]},
-        options:{indexAxis:'y',plugins:{legend:{display:false},tooltip:{callbacks:{afterLabel:c=>'n='+d.n[c.dataIndex]+' · wr '+d.wr[c.dataIndex]+'%'}}},scales:{x:{ticks:{callback:v=>v+'%'}}}}});
-      if(dim==='market'){ const sel=document.getElementById('fmarket'); d.labels.forEach(l=>sel.add(new Option(l,l))); }
-      else{ const sel=document.getElementById('fleague'); d.labels.forEach(l=>sel.add(new Option(l,l))); }
-    }catch(e){ err(dim+': '+e.message); }
-  }
-}
-async function loadClv(){
-  try{ const d=await jget('/api/clv');
-    new Chart(cctx('clvchart'),{type:'scatter',data:{datasets:[
-      {label:'ganada',data:d.x.map((x,i)=>d.wins[i]?{x,y:d.clv[i]}:null).filter(Boolean),backgroundColor:'#22c55e'},
-      {label:'perdida',data:d.x.map((x,i)=>!d.wins[i]?{x,y:d.clv[i]}:null).filter(Boolean),backgroundColor:'#ef4444'}]},
-      options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>(v*100).toFixed(1)+'%'}}}}});
-  }catch(e){ document.getElementById('clvchart').canvas.parentNode.innerHTML+='<div style="color:var(--muted)">Sin datos de CLV aún</div>'; }
-}
-async function loadBank(){
-  const d=await fetch('/api/equity').then(r=>r.json()).catch(()=>({ok:false}));
-  if(!d.ok){ document.getElementById('bankchart').canvas.parentNode.innerHTML+='<div style="color:var(--muted)">Sin datos</div>'; return; }
-  new Chart(cctx('bankchart'),{type:'line',data:{labels:d.dates,datasets:[{data:d.cumulative.map(v=>100+v),borderWidth:2,pointRadius:0,borderColor:'#eab308'}]},options:{plugins:{legend:{display:false}},scales:{x:{ticks:{maxTicksLimit:6}}}}});
-}
-async function loadBets(){
-  const q=new URLSearchParams({status:document.getElementById('fstatus').value,market:document.getElementById('fmarket').value,league:document.getElementById('fleague').value,limit:150});
-  const body=document.getElementById('betsbody');
-  try{ const d=await jget('/api/bets?'+q);
-    _betsRaw = d.bets;
-    body.innerHTML=d.bets.map(b=>{
-      const rk=(b.result_key||b.result||'pending').toLowerCase();
-      const prof=rk==='pending'?'':money(b.profit||0);
-      const cls=(rk==='win'?'win':rk==='loss'?'loss':rk==='pending'?'pending':'push');
-      const clv=b.clv===''?'—':(Number(b.clv)*100).toFixed(1)+'%';
-      return `<tr><td>${mxdate(b.match_date)}</td><td>${b.match}</td><td>${b.league||''}</td><td>${b.market}</td><td>${(b.probability*100).toFixed(0)}%</td><td>${b.odds}</td><td>${b.stake}u</td><td><span class="pill ${cls}">${b.result}</span></td><td>${prof}</td><td>${clv}</td></tr>`;
-    }).join('');
-  }catch(e){ body.innerHTML='<tr><td colspan="10" style="color:var(--muted)">'+e.message+'</td></tr>'; }
-}
-['fstatus','fmarket','fleague'].forEach(id=>document.getElementById(id).onchange=loadBets);
-async function loadScorers(){
-  try{ const d=await jget('/api/scorers');
-    document.getElementById('scorersbody').innerHTML=d.picks.map(p=>{
-      const rk=(p.result_key||p.result||'pending').toLowerCase();
-      const cls=(rk==='win'?'win':rk==='loss'?'loss':'pending');
-      const real=p.odds_placed===''?'—':p.odds_placed;
-      return `<tr><td>${mxdate(p.match_date)}</td><td>${p.match}</td><td>${p.player}</td><td>${p.team}</td><td>${(p.probability*100).toFixed(0)}%</td><td>@${p.fair_odds}</td><td>${real}</td><td><span class="pill ${cls}">${p.result}</span></td></tr>`;
-    }).join('');
-  }catch(e){ document.getElementById('scorersbody').innerHTML='<tr><td colspan="8" style="color:var(--muted)">'+e.message+'</td></tr>'; }
-}
-async function loadVersion(){
-  try{ const d=await (await fetch('/api/version')).json();
-    document.getElementById('ver').textContent='v'+d.current;
-    if(d.update_available){
-      const u=document.getElementById('upd'); u.style.display='block';
-      u.innerHTML='🔄 Nueva versión disponible: <b>v'+d.latest+'</b> (tienes v'+d.current+') — <a href="'+d.release_url+'" target="_blank" style="color:var(--green)">descargar</a>';
-    }
-  }catch(e){}
-}
-async function loadGh(){
-  const msg=document.getElementById('ghmsg'), body=document.getElementById('ghbody');
-  try{
-    const d=await (await fetch('/api/gh/status')).json();
-    if(!d.configured){ msg.innerHTML='⚠️ '+d.msg+' — créalo en github.com/settings/tokens (fine-grained, permiso <b>Actions: Read and write</b> del repo) y agrégalo a tu .env como GH_TOKEN=xxx'; body.innerHTML=''; return; }
-    if(!d.ok){ msg.textContent='⚠️ '+d.msg; return; }
-    const hoy = new Date().toISOString().slice(0,10);
-    const falladasHoy = d.runs.filter(r => r.status==='completed' && r.conclusion==='failure' && r.created.startsWith(hoy));
-    if(falladasHoy.length){
-      const el = document.getElementById('upd');
-      el.style.display='block';
-      el.style.background='#3a1a1a'; el.style.borderColor='#ef444444'; el.style.color='var(--red)';
-      el.innerHTML = '🚨 <b>' + falladasHoy.length + ' pipeline(s) fallaron hoy</b> — ' +
-        falladasHoy.map(r => r.name).join(', ') +
-        ' — <a href="https://github.com/AldairG16/Sport_Betting_Model/actions" target="_blank" style="color:var(--red)">ver logs</a>';
-    }
-    msg.textContent='Últimas corridas del sistema:';
-    body.innerHTML=d.runs.map(r=>{
-      const icon=r.status!=='completed'?'🔄':(r.conclusion==='success'?'✅':'❌');
-      return `<tr><td>${r.name}</td><td>${icon} ${r.status}</td><td>${r.conclusion||'—'}</td><td>${r.created}</td><td><a href="${r.url}" target="_blank" style="color:var(--blue)">ver</a></td></tr>`;
-    }).join('');
-  }catch(e){ msg.textContent='⚠️ '+e.message; }
-}
-async function dispatch(wf){
-  const msg=document.getElementById('ghmsg');
-  msg.textContent='Disparando '+wf+'…';
-  try{
-    const r=await fetch('/api/gh/dispatch/'+wf,{method:'POST'});
-    const d=await r.json();
-    msg.textContent = d.ok ? ('✅ '+d.msg+' — aparece abajo en segundos') : ('⚠️ '+d.msg);
-  }catch(e){ msg.textContent='⚠️ '+e.message; }
-  setTimeout(loadGh, 4000);
-}
-// ── Auto-refresco: KPIs y tablas vivas sin recargar la página ──
-let _refreshTimer = null, _betsRaw = [];
-function setRefresh(mins){
-  if(_refreshTimer) clearInterval(_refreshTimer);
-  if(mins > 0) _refreshTimer = setInterval(()=>{ loadKpis(); loadBets(); loadScorers(); loadGh(); }, mins*60000);
-}
-async function genNarrative(){
-  const b = document.querySelector('#narrsec button');
-  b.textContent = '⏳ Generando (puede tardar ~1 min)…'; b.disabled = true;
-  try{
-    const r = await fetch('/api/narrative/generate', {method:'POST'});
-    const d = await r.json();
-    if(d.ok) await loadNarrative(); else alert(d.msg || 'No se pudo generar');
-  }catch(e){ alert('Error: '+e.message); }
-  b.textContent = '🧠 Generar diagnóstico ahora'; b.disabled = false;
-}
-async function loadNarrative(){
-  try{
-    const d = await (await fetch('/api/narrative')).json();
-    const sec = document.getElementById('narrsec');
-    if(!d.ok){ sec.style.display = 'none'; return; }
-    sec.style.display = 'block';
-    document.getElementById('narrtext').textContent = d.narrative;
-    document.getElementById('narreng').textContent = 'Generado por ' + d.engine + ' · ' + d.created;
-  }catch(e){}
-}
-function exportCSV(){
-  if(!_betsRaw.length){ alert('Sin apuestas que exportar'); return; }
-  const cols = Object.keys(_betsRaw[0]);
-  const csv = [cols.join(',')].concat(_betsRaw.map(r =>
-    cols.map(c => { const v = String(r[c] === undefined || r[c] === null ? '' : r[c]); return v.includes(',') ? '"'+v+'"' : v; }).join(',')
-  )).join('
-');
-  const blob = new Blob(['﻿' + csv], {type:'text/csv;charset=utf-8'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'apuestas_' + new Date().toISOString().slice(0,10) + '.csv';
-  a.click();
-}
-loadVersion(); loadKpis(); loadEquity(); loadBy(); loadClv(); loadBank(); loadBets(); loadScorers(); loadGh();
-loadNarrative();
-setRefresh(parseInt(_storeGet('refresh', '5'), 10));
-document.getElementById('frefresh').value = _storeGet('refresh', '5');
-document.getElementById('frefresh').onchange = e => {
-  _storeSet('refresh', e.target.value);
-  setRefresh(parseInt(e.target.value, 10));
-};
-</script></body></html>"""
+<script src="/ui_es5.js"></script></body></html>"""
 
 
 @app.route("/")
