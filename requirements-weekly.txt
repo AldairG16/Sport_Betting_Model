@@ -7,6 +7,6 @@
 # --no-deps y sus dependencias minimas a mano. CI: ubuntu, py3.11.
 -r requirements.txt
 soccerdata==1.9.1
-tls-requests
+wrapper-tls-requests
 tqdm
 Unidecode
