@@ -376,6 +376,32 @@ def gh_dispatch(wf):
         return jsonify({"ok": False, "msg": str(e)})
 
 
+@app.route("/api/narrative")
+def api_narrative():
+    df = _q("""
+        SELECT week_start, narrative, engine, created_at
+        FROM weekly_narrative ORDER BY created_at DESC LIMIT 1
+    """)
+    if df.empty:
+        return jsonify({"ok": False})
+    r = df.iloc[0]
+    return jsonify({"ok": True, "narrative": r["narrative"],
+                    "engine": r["engine"],
+                    "created": str(r["created_at"])[:16]})
+
+
+@app.route("/api/narrative/generate", methods=["POST"])
+def api_narrative_generate():
+    try:
+        from scripts.weekly_narrator import generate_weekly_narrative
+        txt = generate_weekly_narrative(verbose=False)
+        if not txt:
+            return jsonify({"ok": False, "msg": "Ollama no disponible o sin modelo de chat"})
+        return jsonify({"ok": True, "narrative": txt})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)[:200]})
+
+
 PAGE = """<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8">
 <title>Betting Dashboard</title>
@@ -404,6 +430,8 @@ PAGE = """<!DOCTYPE html>
   .pill.win{background:#14351f;color:var(--green)} .pill.loss{background:#3a1a1a;color:var(--red)}
   .pill.pending{background:#2a2a14;color:#eab308} .pill.push,.pill.half_win,.pill.half_loss{background:#1e2a3a;color:#93c5fd}
   .controls { display:flex; gap:10px; margin:14px 0; flex-wrap:wrap; }
+  .tablewrap { max-height:480px; overflow-y:auto; border-radius:10px; }
+  .tablewrap thead th { position:sticky; top:0; background:#1a2233; z-index:1; }
   select { background:var(--card); color:var(--text); border:1px solid #2a3550; border-radius:8px; padding:6px 10px; }
   .section { margin-top:26px; } .section h2 { font-size:1.05rem; margin-bottom:10px; }
   #err { color:var(--red); font-size:.85rem; margin:20px 0; display:none; }
@@ -413,6 +441,14 @@ PAGE = """<!DOCTYPE html>
 <div id="upd" style="display:none;background:#14351f;border:1px solid #22c55e44;color:var(--green);border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:.85rem"></div>
 <div id="err"></div>
 <div class="kpis" id="kpis"></div>
+<div class="section" id="narrsec" style="display:none;margin-top:0">
+  <h2>🧠 Diagnóstico IA de la semana</h2>
+  <div class="card" id="narrtext" style="font-size:.9rem;white-space:pre-wrap;line-height:1.5"></div>
+  <div style="display:flex;justify-content:space-between;margin-top:6px">
+    <span id="narreng" style="color:var(--muted);font-size:.72rem"></span>
+    <button onclick="genNarrative()" style="font-size:.72rem;padding:4px 10px">🧠 Generar diagnóstico ahora</button>
+  </div>
+</div>
 <div class="grid2">
   <div class="chartbox"><h3>Curva de resultados (profit acumulado)</h3><canvas id="equity"></canvas></div>
   <div class="chartbox"><h3>Profit por día</h3><canvas id="daily"></canvas></div>
@@ -430,13 +466,16 @@ PAGE = """<!DOCTYPE html>
     <select id="fstatus"><option value="all">Activas (pendientes + resueltas)</option><option value="pending">Solo pendientes</option><option value="resolved">Solo resueltas</option><option value="stale">Histórico muerto (stale)</option></select>
     <select id="fmarket"><option value="">Todos los mercados</option></select>
     <select id="fleague"><option value="">Todas las ligas</option></select>
+    <select id="frefresh" title="Auto-refresco de datos"><option value="0">Auto-refresco: off</option><option value="5" selected>Auto-refresco: 5 min</option><option value="15">15 min</option><option value="30">30 min</option></select>
+    <button onclick="exportCSV()" style="font-size:.75rem;padding:6px 10px">⬇️ CSV</button>
   </div>
-  <table><thead><tr><th>Fecha</th><th>Partido</th><th>Liga</th><th>Mercado</th><th>Prob</th><th>Odd</th><th>Stake</th><th>Resultado</th><th>Profit</th><th>CLV</th></tr></thead>
-  <tbody id="betsbody"><tr><td colspan="10" style="color:var(--muted)">Cargando…</td></tr></tbody></table>
+  <div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Partido</th><th>Liga</th><th>Mercado</th><th>Prob</th><th>Odd</th><th>Stake</th><th>Resultado</th><th>Profit</th><th>CLV</th></tr></thead>
+  <tbody id="betsbody"><tr><td colspan="10" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
+  <button onclick="exportCSV()" style="margin-top:8px;font-size:.75rem">⬇️ Exportar CSV</button>
 </div>
 <div class="section"><h2>⚽ Goleadores (anytime scorer · papel)</h2>
-  <table><thead><tr><th>Fecha</th><th>Partido</th><th>Jugador</th><th>Equipo</th><th>P(anota)</th><th>Fair odd</th><th>Odd real</th><th>Resultado</th></tr></thead>
-  <tbody id="scorersbody"><tr><td colspan="8" style="color:var(--muted)">Cargando…</td></tr></tbody></table>
+  <div class="tablewrap" style="max-height:300px"><table><thead><tr><th>Fecha</th><th>Partido</th><th>Jugador</th><th>Equipo</th><th>P(anota)</th><th>Fair odd</th><th>Odd real</th><th>Resultado</th></tr></thead>
+  <tbody id="scorersbody"><tr><td colspan="8" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
   <div style="color:var(--muted);font-size:.75rem;margin-top:6px">Fair odd = 1/P(modelo). Si encuentras cuota real MEJOR que la fair, hay valor — regístrala en la DB (odds_placed).</div>
 </div>
 <div class="section"><h2>🎮 Panel de control (GitHub Actions)</h2>
@@ -448,8 +487,8 @@ PAGE = """<!DOCTYPE html>
     <button onclick="loadGh()" style="background:#2a3550">🔄 Refrescar estado</button>
   </div>
   <div id="ghmsg" style="font-size:.82rem;margin-bottom:10px;color:var(--muted)">Cargando…</div>
-  <table><thead><tr><th>Corrida</th><th>Estado</th><th>Resultado</th><th>Cuándo (UTC)</th><th>Link</th></tr></thead>
-  <tbody id="ghbody"><tr><td colspan="5" style="color:var(--muted)">Cargando…</td></tr></tbody></table>
+  <div class="tablewrap" style="max-height:260px"><table><thead><tr><th>Corrida</th><th>Estado</th><th>Resultado</th><th>Cuándo (UTC)</th><th>Link</th></tr></thead>
+  <tbody id="ghbody"><tr><td colspan="5" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
 </div>
 <style>
 button { background:#14351f; color:var(--green); border:1px solid #22c55e44; border-radius:8px;
@@ -520,6 +559,7 @@ async function loadBets(){
   const q=new URLSearchParams({status:document.getElementById('fstatus').value,market:document.getElementById('fmarket').value,league:document.getElementById('fleague').value,limit:150});
   const body=document.getElementById('betsbody');
   try{ const d=await jget('/api/bets?'+q);
+    _betsRaw = d.bets;
     body.innerHTML=d.bets.map(b=>{
       const rk=(b.result_key||b.result||'pending').toLowerCase();
       const prof=rk==='pending'?'':money(b.profit||0);
@@ -555,6 +595,16 @@ async function loadGh(){
     const d=await (await fetch('/api/gh/status')).json();
     if(!d.configured){ msg.innerHTML='⚠️ '+d.msg+' — créalo en github.com/settings/tokens (fine-grained, permiso <b>Actions: Read and write</b> del repo) y agrégalo a tu .env como GH_TOKEN=xxx'; body.innerHTML=''; return; }
     if(!d.ok){ msg.textContent='⚠️ '+d.msg; return; }
+    const hoy = new Date().toISOString().slice(0,10);
+    const falladasHoy = d.runs.filter(r => r.status==='completed' && r.conclusion==='failure' && r.created.startsWith(hoy));
+    if(falladasHoy.length){
+      const el = document.getElementById('upd');
+      el.style.display='block';
+      el.style.background='#3a1a1a'; el.style.borderColor='#ef444444'; el.style.color='var(--red)';
+      el.innerHTML = '🚨 <b>' + falladasHoy.length + ' pipeline(s) fallaron hoy</b> — ' +
+        falladasHoy.map(r => r.name).join(', ') +
+        ' — <a href="https://github.com/AldairG16/Sport_Betting_Model/actions" target="_blank" style="color:var(--red)">ver logs</a>';
+    }
     msg.textContent='Últimas corridas del sistema:';
     body.innerHTML=d.runs.map(r=>{
       const icon=r.status!=='completed'?'🔄':(r.conclusion==='success'?'✅':'❌');
@@ -572,7 +622,53 @@ async function dispatch(wf){
   }catch(e){ msg.textContent='⚠️ '+e.message; }
   setTimeout(loadGh, 4000);
 }
+// ── Auto-refresco: KPIs y tablas vivas sin recargar la página ──
+let _refreshTimer = null, _betsRaw = [];
+function setRefresh(mins){
+  if(_refreshTimer) clearInterval(_refreshTimer);
+  if(mins > 0) _refreshTimer = setInterval(()=>{ loadKpis(); loadBets(); loadScorers(); loadGh(); }, mins*60000);
+}
+async function genNarrative(){
+  const b = document.querySelector('#narrsec button');
+  b.textContent = '⏳ Generando (puede tardar ~1 min)…'; b.disabled = true;
+  try{
+    const r = await fetch('/api/narrative/generate', {method:'POST'});
+    const d = await r.json();
+    if(d.ok) await loadNarrative(); else alert(d.msg || 'No se pudo generar');
+  }catch(e){ alert('Error: '+e.message); }
+  b.textContent = '🧠 Generar diagnóstico ahora'; b.disabled = false;
+}
+async function loadNarrative(){
+  try{
+    const d = await (await fetch('/api/narrative')).json();
+    const sec = document.getElementById('narrsec');
+    if(!d.ok){ sec.style.display = 'none'; return; }
+    sec.style.display = 'block';
+    document.getElementById('narrtext').textContent = d.narrative;
+    document.getElementById('narreng').textContent = 'Generado por ' + d.engine + ' · ' + d.created;
+  }catch(e){}
+}
+function exportCSV(){
+  if(!_betsRaw.length){ alert('Sin apuestas que exportar'); return; }
+  const cols = Object.keys(_betsRaw[0]);
+  const csv = [cols.join(',')].concat(_betsRaw.map(r =>
+    cols.map(c => { const v = String(r[c] ?? ''); return v.includes(',') ? '"'+v+'"' : v; }).join(',')
+  )).join('
+');
+  const blob = new Blob(['﻿' + csv], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'apuestas_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+}
 loadVersion(); loadKpis(); loadEquity(); loadBy(); loadClv(); loadBank(); loadBets(); loadScorers(); loadGh();
+loadNarrative();
+setRefresh(parseInt((localStorage.getItem('refresh') ?? '5'), 10));
+document.getElementById('frefresh').value = localStorage.getItem('refresh') || '5';
+document.getElementById('frefresh').onchange = e => {
+  localStorage.setItem('refresh', e.target.value);
+  setRefresh(parseInt(e.target.value, 10));
+};
 </script></body></html>"""
 
 

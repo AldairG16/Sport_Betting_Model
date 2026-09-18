@@ -58,6 +58,32 @@ Datos de la apuesta:
 """
 
 
+def ask(prompt: str, timeout_s: int = 90) -> str | None:
+    """
+    Consulta genérica al modelo de chat local. None si no disponible.
+    (El narrador semanal lo usa para el diagnóstico en lenguaje natural.)
+    """
+    if not ollama_available():
+        return None
+    try:
+        body = json.dumps({
+            "model": CHAT_MODEL,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.3},
+        }).encode()
+        req = urllib.request.Request(
+            f"{OLLAMA_BASE}/api/generate", data=body,
+            headers={"Content-Type": "application/json", "User-Agent": "betting-model"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout_s) as r:
+            data = json.loads(r.read())
+        out = (data.get("response") or "").strip()
+        return out or None
+    except Exception:
+        return None
+
+
 def review_bet(context: dict) -> dict | None:
     """
     Pide al modelo local una revisión de la apuesta.
