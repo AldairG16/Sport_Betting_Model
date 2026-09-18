@@ -512,6 +512,15 @@ button { background:#14351f; color:var(--green); border:1px solid #22c55e44; bor
 button:hover { background:#1a4527; }
 </style>
 <script>
+// Almacenamiento seguro: algunos navegadores embebidos bloquean localStorage
+function _storeGet(key, dflt){ try { return localStorage.getItem(key) || dflt; } catch(e){ return dflt; } }
+function _storeSet(key, val){ try { localStorage.setItem(key, val); } catch(e){} }
+// Cualquier error de JS se muestra en pantalla (nada de fallos invisibles)
+window.onerror = function(msg, src, line){
+  var el = document.getElementById('err');
+  el.style.display='block';
+  el.textContent = '⚠️ Error interno: ' + msg + ' (línea ' + line + ')';
+};
 const money = v => (v>=0?'+':'') + Number(v).toFixed(2) + 'u';
 // Fechas: la DB guarda UTC; mostrar en hora del usuario (Mexico City)
 const mxdate = s => { try { return new Date(s).toLocaleString('es-MX',{timeZone:'America/Mexico_City',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); } catch(e){ return String(s).slice(0,16); } };
@@ -668,7 +677,7 @@ function exportCSV(){
   if(!_betsRaw.length){ alert('Sin apuestas que exportar'); return; }
   const cols = Object.keys(_betsRaw[0]);
   const csv = [cols.join(',')].concat(_betsRaw.map(r =>
-    cols.map(c => { const v = String(r[c] ?? ''); return v.includes(',') ? '"'+v+'"' : v; }).join(',')
+    cols.map(c => { const v = String(r[c] === undefined || r[c] === null ? '' : r[c]); return v.includes(',') ? '"'+v+'"' : v; }).join(',')
   )).join('
 ');
   const blob = new Blob(['﻿' + csv], {type:'text/csv;charset=utf-8'});
@@ -679,10 +688,10 @@ function exportCSV(){
 }
 loadVersion(); loadKpis(); loadEquity(); loadBy(); loadClv(); loadBank(); loadBets(); loadScorers(); loadGh();
 loadNarrative();
-setRefresh(parseInt((localStorage.getItem('refresh') ?? '5'), 10));
-document.getElementById('frefresh').value = localStorage.getItem('refresh') || '5';
+setRefresh(parseInt(_storeGet('refresh', '5'), 10));
+document.getElementById('frefresh').value = _storeGet('refresh', '5');
 document.getElementById('frefresh').onchange = e => {
-  localStorage.setItem('refresh', e.target.value);
+  _storeSet('refresh', e.target.value);
   setRefresh(parseInt(e.target.value, 10));
 };
 </script></body></html>"""
