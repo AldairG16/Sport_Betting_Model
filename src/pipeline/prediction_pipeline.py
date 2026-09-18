@@ -1406,6 +1406,23 @@ def run_prediction_pipeline():
             probabilities["away_win"] = max(probabilities["away_win"] - _ded, 0.02)
             _shades_applied["draw_context"] = True
 
+        # ── GATE HT: mercados de primer/segundo tiempo solo en ligas cuya
+        # fuente de resultados publica el descanso (football-data). En el
+        # resto (MLS, Brasil, Argentina, Mexico...) quedarian "esperando
+        # datos" dias o para siempre (lecciones 13-17 sep).
+        _HT_COVERED = {
+            "soccer_epl", "soccer_efl_champ", "soccer_spain_la_liga",
+            "soccer_germany_bundesliga", "soccer_italy_serie_a",
+            "soccer_france_ligue_one", "soccer_netherlands_eredivisie",
+            "soccer_portugal_primeira_liga", "soccer_belgium_first_div",
+            "soccer_greece_super_league", "soccer_spl",
+            "soccer_turkey_super_league",
+        }
+        if _row_league_of(row) not in _HT_COVERED:
+            for _m in list(probabilities.keys()):
+                if _m.startswith(("h1_", "h2_")):
+                    del probabilities[_m]
+
         # SANITY CHECK (🔥 NUEVO)
         # =========================
 
