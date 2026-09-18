@@ -3,7 +3,7 @@
 # ============================================================
 # soccerdata trae seleniumbase (para WhoScored/Sofascore/FBref) que arrastra
 # pins incompatibles con el core e hypothesis. Nosotros solo usamos
-# Understat (tls-requests) y ClubElo (requests) → instalamos soccerdata con
+# Understat (wrapper-tls-requests) y ClubElo (requests) → instalamos soccerdata con
 # --no-deps y sus dependencias minimas a mano. CI: ubuntu, py3.11.
 -r requirements.txt
 soccerdata==1.9.1
