@@ -121,6 +121,7 @@ from src.models.shots_model import predict_shots, shots_to_confidence_signal
 from src.models.cards_model import predict_cards
 
 from src.features.table_lies import get_luck
+from src.features.soccerdata_feed import get_real_xg
 from src.features.fixture_congestion import get_fixture_congestion
 from src.features.motivation_factor import get_motivation_factor, is_unreliable_match
 from src.models.asian_handicap_model import prob_ah, get_dnb_probs
@@ -529,8 +530,12 @@ def run_prediction_pipeline():
         # Reemplaza hasta 40% del ataque/defensa basado en goals
         # con estimaciones xG más estables (menos varianza)
 
-        home_xg = get_team_xg(home)
-        away_xg = get_team_xg(away)
+        # xG REAL (Understat, semanal) tiene prioridad sobre el proxy de
+        # tiros — mismo contrato (xg_for/xg_against por partido).
+        home_xg = get_real_xg(home) or get_team_xg(home)
+        away_xg = get_real_xg(away) or get_team_xg(away)
+        _xg_source = "understat" if (home_xg and home_xg.get("source") == "understat"
+                                     and away_xg and away_xg.get("source") == "understat") else "proxy"
 
         if home_xg:
             home_attack  = home_attack  * (1 - XG_WEIGHT) + home_xg["xg_for"]     * XG_WEIGHT
@@ -1700,6 +1705,7 @@ def run_prediction_pipeline():
                         "kalman_confidence": round(_conf, 3),
                         "shades": _shades_applied,
                         "anchored": sorted(_anchored_markets),
+                        "xg_source": _xg_source,
                     },
                     "signals": {
                         "h2h_used": bool(h2h),

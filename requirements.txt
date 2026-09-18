@@ -35,3 +35,6 @@ hypothesis==6.168.0   # property-based tests (tests/test_property_invariants.py)
 
 # ── Dashboard web local (scripts/run_dashboard.py) ──────
 flask==3.1.2
+
+# ── Datos de fútbol (scraping semanal: xG real, goleadores clubes, ClubElo) ──
+soccerdata>=1.9.0

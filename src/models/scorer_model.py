@@ -107,6 +107,32 @@ def load_scorer_rates(force: bool = False) -> dict:
         _cache_ts = now
         return _rates_cache
 
+    # ── GOLEADORES DE CLUBES (Understat, cargado en el weekly) ──────────
+    # match_events solo cubre selecciones; los goles de clubes vienen de
+    # player_club_goals. Se añaden como entradas adicionales (equipo
+    # normalizado) para que los picks de clubes funcionen.
+    try:
+        club = pd.read_sql(text("""
+            SELECT player, team, goals, matches
+            FROM player_club_goals
+            WHERE updated_at >= NOW() - INTERVAL '60 days'
+        """), engine)
+        for _, r in club.iterrows():
+            p = str(r["player"]).strip().lower()
+            if not p or pd.isna(r["goals"]) or int(r["goals"]) <= 0:
+                continue
+            t = normalize_team(str(r["team"]))
+            m_player = max(int(r["matches"]) if pd.notna(r["matches"]) else 1, 1)
+            g = int(r["goals"])
+            rate = g / m_player
+            _rates_cache.setdefault(p, {
+                "team": t, "goals": g, "team_matches": max(int(team_matches.get(t, 1)), 1),
+                "rate_weighted": round(rate, 4), "rate_raw": round(rate, 4),
+                "source": "club",
+            })
+    except Exception:
+        pass  # tabla ausente o DB error → solo selecciones
+
     gl = pd.DataFrame(rows).groupby("player").agg(
         goals_w=("w", "sum"),        # goles ponderados
         goals=("w", "size"),         # goles totales

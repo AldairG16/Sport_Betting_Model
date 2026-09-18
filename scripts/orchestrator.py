@@ -660,6 +660,18 @@ def step_collect_events():
     collect_match_events(verbose=True)
 
 
+def step_soccerdata_refresh():
+    """xG real + goleadores de clubes + Club Elo vía soccerdata (scraping
+    semanal, corre en CI con Python 3.11). Guarda en Neon; el pipeline
+    solo lee."""
+    try:
+        from src.features.soccerdata_feed import refresh_understat, refresh_club_elo
+        refresh_understat(verbose=True)
+        refresh_club_elo(verbose=True)
+    except Exception as e:
+        print(f"⚠️  Soccerdata refresh falló: {e}")
+
+
 def step_fit_dc_mle():
     from src.models.dc_mle_fitter import fit_dc_parameters
     fit_dc_parameters(verbose=True)
@@ -841,6 +853,7 @@ def main():
             run_step(logger, "Collect match events",     step_collect_events)
             run_step(logger, "Load extra leagues",       step_load_extra_leagues)
             # run_step(logger, "Load MLB data",            step_load_mlb)  # desactivado — sin creditos MLB
+            run_step(logger, "Soccerdata refresh (xG real)", step_soccerdata_refresh)
             run_step(logger, "Fit DC-MLE parameters",    step_fit_dc_mle)
             run_step(logger, "Calibration monitor",      step_calibration)
             run_step(logger, "CLV gate (kill-switch)",   step_clv_gate)
