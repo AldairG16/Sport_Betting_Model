@@ -36,7 +36,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install -r requirements-weekly.txt
+          pip install soccerdata==1.9.1 --no-deps
+          pip install tls-requests tqdm Unidecode
 
       - name: Run weekly pipeline
         env:

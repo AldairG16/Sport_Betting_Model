@@ -1,11 +1,12 @@
 # ============================================================
 # requirements-weekly.txt — stack de scraping (solo weekly)
 # ============================================================
-# soccerdata (Understat/ClubElo) arrastra seleniumbase, que fija versiones
-# de requests/urllib3/certifi/sortedcontainers incompatibles con el core
-# y con hypothesis. Se instala SOLO en el weekly (CI, ubuntu, py3.11) con
-# estas versiones compatibles entre si. El core (requirements.txt) no lo
-# necesita: el pipeline nunca scrapea, lee las tablas de Neon.
+# soccerdata trae seleniumbase (para WhoScored/Sofascore/FBref) que arrastra
+# pins incompatibles con el core e hypothesis. Nosotros solo usamos
+# Understat (tls-requests) y ClubElo (requests) → instalamos soccerdata con
+# --no-deps y sus dependencias minimas a mano. CI: ubuntu, py3.11.
 -r requirements.txt
 soccerdata==1.9.1
-seleniumbase==4.48.4
+tls-requests
+tqdm
+Unidecode
