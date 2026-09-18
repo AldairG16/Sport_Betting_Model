@@ -34,7 +34,9 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-weekly.txt
 
       - name: Run weekly pipeline
         env:

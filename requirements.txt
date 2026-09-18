@@ -10,9 +10,9 @@ SQLAlchemy==2.0.44
 psycopg2-binary==2.9.11
 
 # ── HTTP / APIs ────────────────────────────────────────
-requests==2.32.5
-urllib3==2.6.3
-certifi==2026.2.25
+requests>=2.32.5
+urllib3>=2.0.0,<2.6
+certifi>=2026.4.22
 
 # ── Anthropic (Pre-Kickoff Analyst) ────────────────────
 # Usado por scripts/pre_kickoff_analyst.py — valida apuestas
@@ -37,4 +37,3 @@ hypothesis==6.168.0   # property-based tests (tests/test_property_invariants.py)
 flask==3.1.2
 
 # ── Datos de fútbol (scraping semanal: xG real, goleadores clubes, ClubElo) ──
-soccerdata>=1.9.0
