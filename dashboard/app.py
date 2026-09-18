@@ -55,6 +55,22 @@ def _app_version() -> str:
 
 REPO_RELEASES_API = "https://api.github.com/repos/AldairG16/Sport_Betting_Model/releases/latest"
 
+# ── Chart.js servido localmente (autosuficiencia: sin depender del CDN) ──
+from flask import send_file, redirect as _redirect
+
+
+@app.route("/chartjs.js")
+def chartjs_local():
+    import sys as _sys
+    candidates = [Path(__file__).parent / "chart.umd.js"]
+    if getattr(_sys, "frozen", False):
+        candidates.insert(0, Path(_sys.executable).parent / "chart.umd.js")
+    for c in candidates:
+        if c.exists():
+            return send_file(c, mimetype="application/javascript")
+    return _redirect("https://cdn.jsdelivr.net/npm/chart.js@4")
+
+
 
 @app.route("/api/version")
 def api_version():
@@ -406,7 +422,7 @@ PAGE = """<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8">
 <title>Betting Dashboard</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="/chartjs.js"></script>
 <style>
   :root { --bg:#0f1420; --card:#1a2233; --text:#e2e8f0; --muted:#8b98ad; --green:#22c55e; --red:#ef4444; --blue:#3b82f6; }
   * { box-sizing:border-box; margin:0; padding:0; font-family:'Segoe UI',system-ui,sans-serif; }
