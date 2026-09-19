@@ -215,12 +215,15 @@ def get_real_xg(team: str) -> dict | None:
     None si no hay dato fresco (<= STALE_DAYS).
     """
     team = team.strip().lower()
-    df = pd.read_sql(text("""
-        SELECT xg_for, xg_against, matches, updated_at
-        FROM team_xg_real
-        WHERE LOWER(team) = LOWER(:team)
-        ORDER BY season DESC LIMIT 1
-    """), engine, params={"team": team})
+    try:
+        df = pd.read_sql(text("""
+            SELECT xg_for, xg_against, matches, updated_at
+            FROM team_xg_real
+            WHERE LOWER(team) = LOWER(:team)
+            ORDER BY season DESC LIMIT 1
+        """), engine, params={"team": team})
+    except Exception:
+        return None
     if df.empty:
         return None
     row = df.iloc[0]
