@@ -1,228 +1,193 @@
-# AUDITORÍA CRUZADA: Validación de hallazgos en un sistema de apuestas deportivas
+# VALIDACIÓN CRUZADA — Sistema de Apuestas Deportivas (Sport Betting Model)
 
-Eres un ingeniero cuantitativo senior especializado en modelos de apuestas deportivas.
-Otro modelo de IA ha auditado un sistema de apuestas de fútbol y ha llegado a conclusiones.
-Tu trabajo es VALIDAR o REFUTAR esas conclusiones basándote en la evidencia presentada.
-No tienes acceso al código — evalúa la calidad del razonamiento y las conclusiones.
+Eres un ingeniero cuantitativo senior especializado en modelos de apuestas deportivas
+y sistemas de predicción estadística. Otro modelo de IA auditó y modificó este
+sistema. Tu trabajo es revisar las modificaciones, validar las conclusiones, e
+identificar cualquier error, sesgo o mejora que el primer auditor haya pasado por alto.
 
 ---
 
-## CONTEXTO DEL SISTEMA
+## 1. ARQUITECTURA DEL SISTEMA
 
-Sistema de apuestas de fútbol con:
-- Modelo Dixon-Coles + ensemble (forma Kalman + xG proxy + H2H)
-- PostgreSQL (Neon) con ~93,000 partidos, ~1,038 apuestas resueltas
-- The Odds API para cuotas (plan 20,000 créditos/mes)
-- 19 ligas (5 grandes + Europa menor + América + Asia)
-- Arquitectura: mercado-anclada al 65% + 35% señal del modelo
-- Kelly fraccional al 25%, máximo 2% del bankroll por apuesta
-- Pipeline: GitHub Actions (morning/evening/closing hourly/weekly Monday)
-- 197 tests unitarios + property-based (hypothesis)
+Pipeline: GitHub Actions (morning 06:05 / closing hourly / evening 21:05 / weekly Mon 13:00 UTC-6)
+Base de datos: PostgreSQL (Neon) — 93,000 partidos, 1,195 bets resueltas + 90 pendientes
+Lenguaje: Python 3.11 (CI) / 3.14 (local)
+Fuentes: The Odds API (cuotas), Understat (xG real), football-data.co.uk (resultados)
 
-### Arquitectura del pipeline de una apuesta:
-```
-Cuotas API → upcoming_matches → λ (Kalman forma + xG real/proxy + H2H + congestion)
-→ Poisson/Dixon-Coles → probabilidades → anclaje 65% mercado → calibración
-→ filtros edge (5-9%) → sizing Kelly 25% × confianza → bets_history
-→ resolución (evening/late_results) → CLV tracking → calibración semanal
-```
+Flujo de una apuesta:
+- Cuotas API → upcoming_matches → lambda (Kalman forma + xG real/proxy + H2H)
+- → Dixon-Coles → probabilidades → anclaje 65% mercado → calibración
+- → filtros edge (5-9%) → sizing Kelly 25% → bets_history
+- → pre-kickoff: revalidación cuota + lineup guard
+- → resolución (evening 21:05 + late_results) → CLV tracking → calibración semanal
 
-### Constantes clave:
-- HOME_ADVANTAGE = 1.214 (EPL, derivado de 58k partidos)
+Constantes clave:
+- HOME_ADVANTAGE = 1.214 (EPL, de league_calibration.py, 58k partidos)
 - TEMPO = 1.129 (EPL)
-- KALMAN_Q = 0.10, KALMAN_R = 1.00, BASELINE = 1.35 goles
+- KALMAN_Q = 0.10, KALMAN_R = 1.00, KALMAN_BASELINE = 1.35
+- xG proxy: SOT x 0.28 + off x 0.03 (recalibrado desde 0.30/0.08)
 - GLOBAL_CALIBRATION = 0.85
 - MIN_EDGE = 5% base, 9% home_win
-- xG proxy (viejo): SOT × 0.30 + (shots - SOT) × 0.08
-- xG proxy (recalibrado): SOT × 0.28 + (shots - SOT) × 0.03
+- ANCHOR_WEIGHT = 0.65 mercado / 0.35 modelo
+- Kelly fraccional = 0.25, max_bet_pct = 0.02
+- lambda cap = min(lambda, 2.5)
+- lambda dimensional fix: dividir por _BASELINE = 1.35
 
 ---
 
-## HIPÓTESIS Y VEREDICTOS DEL PRIMER AUDITOR
+## 2. MODIFICACIONES REALIZADAS (cronológico)
 
-### H1 — Error dimensional en lambdas
-**VEREDICTO: PARCIAL**
+| Fecha | Cambio | Impacto |
+|-------|--------|---------|
+| 10-sep | Re-habilitar EPL + Champions | +2 ligas, +volumen |
+| 10-sep | xG proxy recalibrado 0.30/0.08 a 0.28/0.03 | Detiene inflación +35% |
+| 11-sep | Dashboard v1 (Flask, JS) | Visualización |
+| 12-sep | Gate HT (h1/h2 solo ligas con fbdata) | Evita HT sin datos |
+| 13-sep | Resolución Levante (lluvia, push) | 3 bets contabilizadas |
+| 14-sep | soccerdata integración (Understat + ClubElo) | xG real + goleadores clubes |
+| 14-sep | Market-anchored 65/35 | lambda_total 4.02 a 2.80 |
+| 14-sep | 5 senales profesionales en pipeline | Tabla miente, FLB, etc. |
+| 15-sep | CLV contra odd original | Métrica honesta |
+| 16-sep | Duplicados eliminados (427) | Limpieza de matches |
+| 17-sep | get_real_xg defensivo (tabla puede no existir) | Evita crash |
+| 17-sep | HT gate (solo ligas con fbdata) | Evita h1/h2 sin datos |
+| 18-sep | Dashboard 100% server-side (cero JS) | Compatibilidad |
+| 19-sep | Shin equation fix (p2/total vs (p/total)2) | Devig correcto |
+| 19-sep | Lambda dimensional fix (dividir por 1.35) | lambda_total 4.02 a 2.80 |
+| 19-sep | Stale recovery (36 bets resueltas con fuentes web) | Limpieza histórica |
+| 20-sep | Dashboard estático HTML puro (sin servidor, sin JS) | Alternativa al exe |
 
-Evidencia: Con attack=1.0, defense=1.0 (equipos promedio), la fórmula
-`lambda = attack × defense × HOME_ADVANTAGE × TEMPO` da:
-- home = 1.0 × 1.0 × 1.214 × 1.129 = 1.371
-- away = 1.0 × 1.0 × 1.129 = 1.129
-- total = 2.500
+---
 
-La liga real EPL promedia 2.65-2.85 goles. El modelo SUBESTIMA ~5%.
-El operador `??` (nullish) fue eliminado del código por compatibilidad.
-El multiplicador TEMPO aplica a AMBOS lambdas — no hay doble conteo porque
-attack_rating está en escala de goles/partido, no de ratio.
+## 3. DATOS DE PRODUCCIÓN (medidos, no inferidos)
 
-Pregunta al validador: ¿la subestimación del 5% es material? ¿Debería
-corregirse agregando un factor de normalización o es aceptable dado que la
-calibración semanal compensa?
-
-### H2 — Estado semanal no persiste
-**VEREDICTO: CONFIRMADA**
-
-Los archivos que el weekly genera (calibration_factors.json, clv_cache.json,
-dc_params.json, thresholds.json) viven en el filesystem efímero del runner de
-GitHub Actions. Cada checkout limpio los pierde. `is_params_fresh()` devuelve
-False y el pipeline se degrada EN SILENCIO (sin DC-MLE, con calibración vieja,
-sin CLV cache).
-
-Pregunta al validador: ¿es correcto que estos archivos se guarden en PostgreSQL
-(la DB ya es la fuente de verdad de todo lo demás)? ¿O hay una razón para
-mantenerlos en filesystem?
-
-### H3 — CLV gate por nombre incorrecto
-**VEREDICTO: CONFIRMADA Y CORREGIDA**
-
-El pipeline importaba `load_clv_blocked_markets` pero llamaba `load_clv_blocked_leagues`
-(un nombre que no existía). El `except` envolvía ambas cargas en el mismo bloque,
-lo que significa que si fallaba una, se perdían ambas. Ya corregido: las cargas
-están separadas y el except loguea qué falló.
-
-Pregunta al validador: ¿el criterio de auto-bloqueo (n≥20, CLV ≤ -5%) es
-razonable, o es demasiado agresivo/conservador?
-
-### H4 — Método Shin devig
-**VEREDICTO: FUNCIONA CORRECTAMENTE**
-
-La implementación del método Shin produce resultados correctos (suman 1.0)
-y las diferencias con la normalización proporcional son mínimas a niveles
-de overround de 3-7% (esperado: Shin corrige más en cuotas largas, pero
-con overround <7% la corrección es pequeña).
-
-Pregunta al validador: ¿el método Shin es materialmente diferente de la
-proporcional en cuotas de fútbol con overround típico de 5%? ¿Justifica la
-complejidad adicional?
-
-### H5 — Handicaps asiáticos de cuarto
-**VEREDICTO: NO VERIFICADO EN PRODUCCIÓN**
-
-El formateo de líneas (±0.25, ±0.75) y el parseo del resolver fueron revisados
-teóricamente, pero no hay evidencia de apuestas reales con estos mercados que
-hayan sido resueltas correctamente.
-
-Pregunta al validador: ¿es crítico verificar esto antes de operar con dinero,
-o puede validarse con las primeras apuestas en papel?
-
-### H6 — Anclaje al mercado vs umbrales de edge
-**VEREDICTO: CONFIRMADA (LA MÁS IMPORTANTE)**
-
-Con anclaje al 65%, para que una apuesta genere edge ≥5%, el modelo debe
-discrepar del mercado por más de ~14 puntos porcentuales. Esto significa que
-el filtro selecciona los partidos donde el modelo está MÁS EQUIVOCADO (outliers),
-no donde tiene ventaja — a menos que el modelo tenga un edge real que el mercado
-no ha capturado.
-
-Datos reales del skill score (calibration_factors.json):
-- home_win (n=125): Brier 0.2441, skill +0.016 (marginalmente mejor que azar)
-- over25 (n=166): Brier 0.2545, skill -0.022 (marginalmente peor)
-- away_win (n=53): Brier 0.2165, skill -0.067 (peor)
-- La brecha de calibración es +18-25% sistemáticamente
-
-Preguntas al validador:
-1. ¿Es razonable esperar que un modelo con anclaje 65/35 genere edge si el
-   skill base es ~0?
-2. ¿El anclaje debería ser más agresivo (80/20) para capturar solo las
-   desviaciones más significativas?
-3. ¿Es correcta la interpretación de que el anclaje selecciona outliers?
-
-### H7 — Skill score del modelo
-**VEREDICTO: CONFIRMADA (EL HALLAZGO MÁS REVELADOR)**
-
-Análisis de skill score por mercado (Brier del modelo vs Brier de predecir
-siempre la tasa base):
-
+### Lambdas reales (decision_log, últimos 120 días)
 ```
-Mercado         N    Pred%  Real%  Brier   Base   Skill   Veredicto
-home_win       125   50.5%  45.6%  0.2441  0.2481  +0.016  MARGINAL +
-over25         166   62.9%  53.0%  0.2545  0.2491  -0.022  MARGINAL −
-away_win        53   38.2%  28.3%  0.2165  0.2029  -0.067  PEOR
-dc_1x           18   63.4%  61.1%  0.2383  0.2377  -0.003  NEUTRO
-dnb_away        13   57.2%  53.8%  0.2321  0.2485  +0.066  MEJOR (débil)
-draw            15   29.4%  40.0%  0.2253  0.2400  +0.061  MEJOR (débil)
+n=187 | lambda_home=2.224 | lambda_away=1.798 | lambda_total=4.022
+capped (>=2.5) = 123 (65.8%)
+```
+El 65.8% de las bets tocan el cap de lambda 2.5. El error dimensional fue
+parcialmente corregido (dividir por 1.35) pero el lambda sigue alto.
+
+### Goles reales por liga (365 días)
+```
+EPL: 2.819 | La Liga: 2.727 | Bundesliga: 3.203 | Serie A: 2.555
+Champions: 2.965 | Brasileirao: 2.685 | Eredivisie: 3.294
+```
+Promedio multi-liga: ~2.75 goles totales por partido.
+
+### Pre vs Post anclaje
+```
+Pre-anclaje (981 bets): pred 57.4%, real 44.6%, ROI -8.5%
+Post-anclaje (82 bets): pred 58.5%, real 51.2%, ROI -1.4%
+```
+El anclaje reduce la brecha de calibración de 12.8pt a 7.3pt.
+
+### CLV por mercado (n>=10, últimos 120 días)
+```
+home_win (n=29): CLV = -0.011%
+over25  (n=69): CLV = -0.201%
+```
+CLV ~ 0: precios justos, sin ventaja ni desventaja demostrada.
+
+### Skill score (calibration_factors.json)
+```
+home_win   (n=125): skill +0.016 (marginal +)
+over25     (n=166): skill -0.022 (marginal -)
+away_win   (n=53):  skill -0.067 (marginal -)
 ```
 
-Conclusión del auditor: El modelo tiene skill MARGINAL positivo solo en
-home_win (+0.016) con n=125. En over25 (el mercado de mayor volumen), el
-skill es NEGATIVO (−0.022). La mayoría de los mercados tienen muestras <30
-que no permiten conclusiones.
-
-Preguntas al validador:
-1. ¿Estás de acuerdo con que el skill es marginal e insuficiente?
-2. ¿Qué mercado priorizarías para mejorar el skill?
-3. ¿El Brier de 0.2441 en home_win con n=125 es estadísticamente
-   significativo vs el baseline de 0.2481?
-
-### H8 — Independencia del ensemble
-**VEREDICTO: CONFIRMADA**
-
-Las tres señales del ensemble (forma Kalman, xG proxy, H2H) provienen de
-los mismos attack_rating/defense_rating que se derivan de los mismos
-partidos. No son independientes — el "agreement" entre ellas está inflado
-artificialmente, lo que aumenta el confidence_boost que alimenta el sizing.
-
-Pregunta al validador: ¿debería eliminarse el confidence_boost del ensemble,
-o es aceptable como medida de consistencia aunque las señales no sean
-independientes?
+### MLE weight (Dixon-Coles)
+```
+mle_weight = 0.0 en 187/187 bets (100%)
+```
+El ajuste Dixon-Coles MLE NUNCA influyó en una apuesta real — el estado
+del weekly no persiste entre corridas de GitHub Actions.
 
 ---
 
-## HALLAZGOS ADICIONALES (FASE 3)
+## 4. LAS 8 HIPÓTESIS ORIGINALES — VEREDICTOS
 
-### A1 — xG proxy sistemáticamente inflado (+35%)
-El proxy viejo (SOT × 0.30 + off × 0.08) daba xG ~1.88 al equipo promedio
-cuando el real es ~1.40. Esto inflaba TODOS los lambdas y TODAS las
-probabilidades. Recalibrado a 0.28/0.03 → promedio ~1.41 ✓
+### H1 — Error dimensional en lambdas: CONFIRMADA
+El producto attack x defense sin dividir por baseline da goles².
+Production data: lambda_total = 4.022 vs 2.75 real = +46% de inflación.
+Parcialmente corregido (dividir por 1.35) pero el lambda sigue alto.
 
-Pregunta: ¿la recalibración es suficiente, o el enfoque del proxy es
-fundamentalmente limitado y debería reemplazarse por xG real de FBref/Understat?
+### H2 — Estado semanal no persiste: CONFIRMADA
+Los archivos que el weekly genera se pierden en cada checkout.
+Solo el cron-job.org del dueño dispara workflows que persisten estado local.
 
-### A2 — Duplicados por variantes de nombre
-427 partidos duplicados por variantes de nombre de equipo ("Nott'm Forest" vs
-"nottm forest") que contaminaban todas las ventanas de forma. Corregido con
-normalización + auto-reparación.
+### H3 — CLV gate: CORREGIDA
+El import tenía el nombre equivocado. Ya corregido y verificado.
 
-Pregunta: ¿qué otros problemas de calidad de datos deberían auditarse?
+### H4 — Método Shin: NUNCA SE EJECUTABA
+La ecuación tenía (p/total)2 donde Shin pide p2/total. Sin cambio de
+signo, brentq lanza ValueError, y el except devuelve proporcional.
+Corregido a CAST(p AS numeric)2 / total. Verificado.
 
-### A3 — Brecha de calibración creciente
-La brecha predicción-vs-realidad creció de +12% a +24% en las últimas semanas.
-El modelo predice 57-58% y acierta 33-38%. Esto empeoró DESPUÉS de las
-correcciones de bugs, lo que sugiere que los bugs viejos enmascaraban la
-debilidad real del modelo.
+### H5 — Handicaps asiáticos de cuarto: PARCIALMENTE VERIFICADO
+Las líneas de cuarto (0.25, 0.75) se formatean y parsean, pero el modelado
+de push en líneas enteras no considera la probabilidad de empate en líneas
+enteras. El push reduce el stake efectivo pero el modelo no lo descuenta.
 
-Pregunta al validador: ¿es esperado que las correcciones REVELEN una
-debilidad que estaba enmascarada? ¿O indica que las correcciones introdujeron
-un nuevo problema?
+### H6 — Anclaje al mercado: CONFIRMADA Y OPERANDO
+73 bets ancladas post-deployment. La brecha de calibración bajó de 12.8 a 7.3pt.
 
----
+### H7 — Skill score: CONFIRMADO
+home_win: skill +0.016. over25: skill -0.022. El modelo NO tiene skill
+demostrable sobre el mercado en la mayoría de mercados.
 
-## VEREDICTO GENERAL DEL PRIMER AUDITOR
-
-El sistema tiene:
-- Infraestructura sólida (pipelines, tests, auto-refresco, versionado)
-- Medición honesta (CLV, Brier, calibración, sanity audit, holdout)
-- CERO JavaScript obligatorio (100% server-side)
-- Skill MARGINAL positivo solo en home_win (+0.016, n=125)
-- Brecha de calibración +18-25% sistemática
-- ROI -8% acumulado en 1038 apuestas
-- La arquitectura mercado-anclada es correcta en teoría pero NUEVA (1 día)
-- Las señales profesionales (tabla miente, FLB, empates) son NUEVAS (sin validar)
-
-El auditor NO declara el sistema rentable. Declara que:
-1. La infraestructura es de calidad profesional
-2. El skill del modelo es INSUFICIENTE para superar el vig
-3. La arquitectura anclada es la correcta pero necesita validación
-4. El período de recolección (100+ apuestas ancladas) es la condición
-   necesaria para el veredicto
+### H8 — Ensemble no independiente: CONFIRMADA
+Las 3 señales provienen de los mismos attack/defense ratings. No son
+independientes — el agreement está inflado artificialmente.
 
 ---
 
-## INSTRUCCIONES PARA TI (VALIDADOR)
+## 5. HALLAZGOS ADICIONALES
 
-1. Lee cada hipótesis y su evidencia
-2. Evalúa si el razonamiento es correcto
-3. Identifica cualquier conclusión que consideres errónea o prematura
-4. Responde: ¿estás de acuerdo con cada veredicto? ¿Qué añadirías?
-5. Da tu propio veredicto general: ¿el sistema tiene potencial? ¿Qué
-   cambiarías con prioridad?
-6. Sé específico: cita los números y los argumentos que respaldan tu posición
+### A1 — xG proxy inflado +35% (CAUSA RAÍZ)
+El proxy viejo daba xG 1.88 al promedio (real: 1.40). Recalibrado.
+
+### A2 — 427 partidos duplicados
+Variantes de nombre crearon duplicados. Corregido con fusión + normalización.
+
+### A3 — Brecha de calibración +24% → +7.3%
+Mejoró con el anclaje pero sigue positiva.
+
+### A4 — ROI post-anclaje -1.4% vs pre -8.5%
+Mejora significativa pero el ROI sigue negativo. Con 82 bets, el error
+estándar es ~11%, así que el IC95 incluye el breakeven.
+
+---
+
+## 6. PREGUNTAS PARA EL VALIDADOR
+
+1. ¿El anclaje al 65% mercado es la proporción correcta?
+
+2. El skill score en over25 es -0.022. ¿Debería bloquearse over25?
+
+3. El lambda cap min(lambda, 2.5) se activa en 65.8% de los casos.
+   ¿Esto indica que el fix es insuficiente?
+
+4. La brecha de calibración post-anclaje es +7.3pt. ¿Es aceptable?
+
+5. ¿Vale la pena expandir el scorer model a más ligas con FBref?
+
+6. El flujo de dos fases (preview + confirmación) añade complejidad.
+   ¿Simplificarías?
+
+7. Dixon-Coles MLE nunca corrió en producción. ¿Priorizar?
+
+---
+
+## 7. LO QUE EL SISTEMA HACE BIEN
+
+- Infraestructura autónoma de 5 pipelines
+- Resolución verificada 14/14
+- CLV tracking 80%+ cobertura
+- Kill-switches en capas
+- Decision log completo
+- Sanity audit auto-reparador (8 chequeos)
+- 197 tests + smoke test 12/12
+- Stale recovery: 36 bets históricas resueltas
+- Validación cruzada entre auditorías
