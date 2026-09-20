@@ -29,14 +29,14 @@ def _shin_fair_probs(raw_probs):
         if z >= 1:
             return 1e9
         return sum(
-            (np.sqrt(z**2 + 4 * (1 - z) * (p / total)**2) - z) / (2 * (1 - z))
+            (np.sqrt(z**2 + 4 * (1 - z) * (p**2 / total)) - z) / (2 * (1 - z))
             for p in raw_probs
         ) - 1.0
 
     try:
         z = brentq(equation, 1e-9, 0.5, maxiter=200)
         fair = [
-            (np.sqrt(z**2 + 4 * (1 - z) * (p / total)**2) - z) / (2 * (1 - z))
+            (np.sqrt(z**2 + 4 * (1 - z) * (p**2 / total)) - z) / (2 * (1 - z))
             for p in raw_probs
         ]
         return fair, overround_pct
