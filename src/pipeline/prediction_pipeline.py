@@ -619,8 +619,17 @@ def run_prediction_pipeline():
         # aportaba señal real, solo comprimía los ataques hacia la media.
         # El ELO sí sigue usándose como señal independiente del ensemble.)
 
-        lambda_home = home_attack * away_defense * HOME_ADVANTAGE * TEMPO
-        lambda_away = away_attack * home_defense * TEMPO
+        # ── FIX DIMENSIONAL (19-sep-26, producción: λ_total=4.02 vs 2.7 real) ──
+        # attack_rating y defense_rating están en escala de GOLES ABSOLUTOS
+        # (Kalman baseline = 1.35). El producto attack × defense da goles².
+        # Dividir por el baseline normaliza a goles/partido.
+        # Antes (promedio): 1.35 × 1.35 × 1.371 = 2.50 → PERO con attack=2.0:
+        #   2.0 × 1.5 × 1.371 = 4.11 (absurdo, 4 goles esperados)
+        # Después: (2.0 × 1.5 / 1.35) × 1.371 = 3.05 (razonable para el mejor
+        #   ataque vs la peor defensa)
+        _BASELINE = 1.35
+        lambda_home = (home_attack * away_defense / _BASELINE) * HOME_ADVANTAGE * TEMPO
+        lambda_away = (away_attack * home_defense / _BASELINE) * TEMPO
 
         # =========================
         # H2H ADJUSTMENT
