@@ -528,9 +528,15 @@ def run_prediction_pipeline():
     # del optimizador), aplicar un -0.13 empírico podría EMPEORAR el modelo
     # en este dataset — mejor mantener Poisson cruda y dejar que la
     # calibración por mercado (Mejora #1+#2) corrija el bias residual.
+    DC_CONVERGED = False
     try:
         from src.models.dc_mle_fitter import _load_params as _load_dc_params
         _dc_params  = _load_dc_params() or {}
+        # E3/R13 (ronda 10): viaja al decision_log para separar cohortes —
+        # hoy cambiaron dos cosas a la vez (blend MLE 0→55% y BTTS pasa de
+        # Poisson cruda a tau-correction). Sin bandera, una movida de CLV de
+        # BTTS no sería atribuible.
+        DC_CONVERGED = bool(_dc_params.get("converged", False))
         _rho_fit    = float(_dc_params.get("rho", 0.0) or 0.0)
         if abs(_rho_fit) < 0.02:
             DC_RHO_GLOBAL = None
@@ -1984,6 +1990,8 @@ def run_prediction_pipeline():
                         "mc_agreement": float(mc_agreement),
                         "confidence": round(float(confidence), 3),
                         "mle_weight": _mle_w,
+                        "mle_converged": DC_CONVERGED,
+                        "dc_rho_global": DC_RHO_GLOBAL,
                         "kalman_confidence": round(_conf, 3),
                         "shades": _shades_applied,
                         "anchored": sorted(_anchored_markets),

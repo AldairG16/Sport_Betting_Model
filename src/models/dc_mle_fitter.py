@@ -133,6 +133,17 @@ def _x_from_rho(rho):
 # AJUSTE MLE
 # ─────────────────────────────────────────────────────────────
 
+def _np_max_abs(arr):
+    """Norma inf del gradiente final (None si scipy no lo trae)."""
+    try:
+        import numpy as _np
+        if arr is None:
+            return None
+        return float(_np.max(_np.abs(_np.asarray(arr, dtype=float))))
+    except Exception:
+        return None
+
+
 def fit_dc_parameters(verbose: bool = True) -> dict:
     """
     Ajusta los parámetros Dixon-Coles MLE sobre datos históricos.
@@ -320,6 +331,12 @@ def fit_dc_parameters(verbose: bool = True) -> dict:
         "n_teams":    n_teams,
         "n_matches":  len(df),
         "converged":  bool(result.success),
+        # E2 (ronda 10): diagnóstico del optimizador — sin el valor final de
+        # la función y la norma del gradiente no se distingue ruido de
+        # presupuesto. Si n_matches cambia entre corridas, la "inestabilidad"
+        # es drift de datos, no del optimizador.
+        "final_fun":  round(float(result.fun), 4),
+        "final_grad_max": round(float(_np_max_abs(getattr(result, "jac", None))), 6),
         "fitted_at":  datetime.now().isoformat(),
     }
 
