@@ -45,7 +45,7 @@ def _tau(x, y, home_lambda, away_lambda, rho=RHO):
 # MODELO PRINCIPAL
 # =========================
 
-def match_outcomes(home_lambda, away_lambda, max_goals=MAX_GOALS):
+def match_outcomes(home_lambda, away_lambda, max_goals=MAX_GOALS, rho=None):
     """
     Calcula P(home_win), P(draw), P(away_win) con modelo Dixon-Coles.
 
@@ -58,10 +58,18 @@ def match_outcomes(home_lambda, away_lambda, max_goals=MAX_GOALS):
         home_lambda: goles esperados del local
         away_lambda: goles esperados del visitante
         max_goals:   techo de iteracion (default 10)
+        rho:         parametro tau. None usa el default de la literatura
+                     (RHO=-0.13). I1, ronda 14: el pipeline pasa el rho
+                     fitteado para que 1x2, AH y DNB valoren el mismo
+                     suceso con la MISMA matriz (antes: 1x2 con -0.13 y AH
+                     Poisson pura — 1.6pp de diferencia para el mismo
+                     evento, sesgando la seleccion de mercados).
 
     Returns:
         (p_home_win, p_draw, p_away_win) — suman 1.0
     """
+    if rho is None:
+        rho = RHO
     home = 0.0
     draw = 0.0
     away = 0.0
@@ -72,7 +80,7 @@ def match_outcomes(home_lambda, away_lambda, max_goals=MAX_GOALS):
             p = (
                 poisson.pmf(i, home_lambda)
                 * poisson.pmf(j, away_lambda)
-                * _tau(i, j, home_lambda, away_lambda)
+                * _tau(i, j, home_lambda, away_lambda, rho)
             )
 
             if i > j:

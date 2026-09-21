@@ -97,7 +97,7 @@ def _row_league_of(row) -> str:
         return str(sk)
     return str(lg)
 
-from src.models.dixon_coles_model import match_outcomes
+from src.models.dixon_coles_model import match_outcomes, RHO as RHO_DC_LITERATURE
 from src.models.poisson_markets import totals_and_btts, totals_extended
 from src.models.ensemble_model import ensemble_predict
 
@@ -590,6 +590,12 @@ def run_prediction_pipeline():
         DC_RHO_GLOBAL = None
         print(f"⚠️  DC rho no disponible ({_e}) → Poisson cruda")
 
+    # I1 (ronda 14): UN solo rho para la matriz de marcadores — 1x2, HT, AH
+    # y DNB valoran con la misma matriz. Antes: 1x2 con rho=-0.13 de la
+    # literatura y AH Poisson pura → el mismo suceso (AH -0.5 local ==
+    # victoria local) tenía dos precios (1.6pp) y sesgaba la selección.
+    DC_RHO_SCORE = DC_RHO_GLOBAL if DC_RHO_GLOBAL is not None else RHO_DC_LITERATURE
+
     elo = compute_elo()
 
     # DISTINCT ON dedup: cuando un partido tiene 2 rows en upcoming_matches
@@ -777,15 +783,19 @@ def run_prediction_pipeline():
         home_motiv = get_motivation_factor(home, league_key)
         away_motiv = get_motivation_factor(away, league_key)
 
+        # I2 (ronda 14): defense_rating va en GOLES CONCEDIDOS — un equipo
+        # motivado marca más Y CONCEDE MENOS. El multiplicador aplicado en la
+        # misma dirección a attack y defense enrutaba ~80% del efecto a
+        # goles totales y solo ~20% a la probabilidad de victoria.
         if home_motiv != 0.0:
             home_attack  *= (1 + home_motiv)
-            home_defense *= (1 + home_motiv)
+            home_defense /= (1 + home_motiv)
             label = "MOTIVADO" if home_motiv > 0 else "sin motivacion"
             print(f"  Motivacion {home}: {home_motiv:+.0%} ({label})")
 
         if away_motiv != 0.0:
             away_attack  *= (1 + away_motiv)
-            away_defense *= (1 + away_motiv)
+            away_defense /= (1 + away_motiv)
             label = "MOTIVADO" if away_motiv > 0 else "sin motivacion"
             print(f"  Motivacion {away}: {away_motiv:+.0%} ({label})")
 
@@ -980,10 +990,10 @@ def run_prediction_pipeline():
         # AH model probs (solo si tenemos línea y odds del mercado)
         _p_ah_home = _p_ah_away = None
         if _ah_line is not None and (_ah_home_odds or _ah_away_odds):
-            _p_ah_home, _p_ah_away = prob_ah(lambda_home, lambda_away, _ah_line)
+            _p_ah_home, _p_ah_away = prob_ah(lambda_home, lambda_away, _ah_line, rho=DC_RHO_SCORE)
 
         # DNB probs (siempre disponible desde Poisson)
-        _dnb = get_dnb_probs(lambda_home, lambda_away)
+        _dnb = get_dnb_probs(lambda_home, lambda_away, rho=DC_RHO_SCORE)
 
         # DNB odds: preferir las de API (draw_no_bet), fallback a derivadas de h2h
         _dnb_home_api = safe_odds(row.get("dnb_home_odds"))
@@ -1035,7 +1045,7 @@ def run_prediction_pipeline():
         # 1X2 — DIXON-COLES
         # =========================
 
-        dc_home, dc_draw, dc_away = match_outcomes(lambda_home, lambda_away)
+        dc_home, dc_draw, dc_away = match_outcomes(lambda_home, lambda_away, rho=DC_RHO_SCORE)
 
         # Normalizar Dixon-Coles
         dc_total = dc_home + dc_draw + dc_away
@@ -1137,14 +1147,14 @@ def run_prediction_pipeline():
         model_probs: dict = {}
 
         if _h1_home_odds or _h1_draw_odds or _h1_away_odds:
-            h1h, h1d, h1a = match_outcomes(lh_h1, la_h1)
+            h1h, h1d, h1a = match_outcomes(lh_h1, la_h1, rho=DC_RHO_SCORE)
             h1_total = h1h + h1d + h1a
             model_probs["h1_home"] = clamp_prob(h1h / h1_total)
             model_probs["h1_draw"] = clamp_prob(h1d / h1_total)
             model_probs["h1_away"] = clamp_prob(h1a / h1_total)
 
         if _h2_home_odds or _h2_draw_odds or _h2_away_odds:
-            h2h, h2d, h2a = match_outcomes(lh_h2, la_h2)
+            h2h, h2d, h2a = match_outcomes(lh_h2, la_h2, rho=DC_RHO_SCORE)
             h2_total = h2h + h2d + h2a
             model_probs["h2_home"] = clamp_prob(h2h / h2_total)
             model_probs["h2_draw"] = clamp_prob(h2d / h2_total)
@@ -2033,6 +2043,7 @@ def run_prediction_pipeline():
                         "mle_weight": _mle_w,
                         "mle_converged": DC_CONVERGED,
                         "dc_rho_global": DC_RHO_GLOBAL,
+                        "dc_rho_score": DC_RHO_SCORE,
                         "fit_fingerprint": DC_FIT_FINGERPRINT,
                         "mle_final_grad": DC_FINAL_GRAD,
                         "kalman_confidence": round(_conf, 3),

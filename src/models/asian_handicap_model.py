@@ -38,19 +38,41 @@ MAX_GOALS = 15   # máximo de goles a considerar en la distribución
 MIN_PROB  = 1e-6
 
 
-def _score_matrix(lambda_home: float, lambda_away: float) -> np.ndarray:
+def _score_matrix(lambda_home: float, lambda_away: float,
+                  rho: float | None = None) -> np.ndarray:
     """
     Matriz de probabilidades de marcadores [home_goals x away_goals].
     Forma: matrix[i][j] = P(home=i, away=j)
+
+    I1 (ronda 14): con rho != None aplica la correccion tau de
+    Dixon-Coles (misma parametrizacion que match_outcomes) y renormaliza.
+    Antes la matriz era Poisson independiente puro mientras el 1x2 usaba
+    tau con rho=-0.13: el mismo suceso (AH -0.5 local == victoria local)
+    tenia dos precios distintos, sesgando la seleccion de mercados.
     """
     h = np.arange(MAX_GOALS + 1)
     a = np.arange(MAX_GOALS + 1)
     ph = poisson.pmf(h, lambda_home)
     pa = poisson.pmf(a, lambda_away)
-    return np.outer(ph, pa)   # shape: (MAX+1, MAX+1)
+    matrix = np.outer(ph, pa)   # shape: (MAX+1, MAX+1)
+
+    if rho:
+        hh, aa = np.meshgrid(h, a, indexing="ij")
+        tau = np.ones_like(matrix)
+        tau = np.where((hh == 0) & (aa == 0), 1.0 - lambda_home * lambda_away * rho, tau)
+        # coincide con _tau de dixon_coles: x=goles LOCAL, y=goles VISITANTE
+        tau = np.where((hh == 0) & (aa == 1), 1.0 + lambda_home * rho, tau)
+        tau = np.where((hh == 1) & (aa == 0), 1.0 + lambda_away * rho, tau)
+        tau = np.where((hh == 1) & (aa == 1), 1.0 - rho, tau)
+        matrix = matrix * tau
+        total = matrix.sum()
+        if total > 0:
+            matrix = matrix / total
+    return matrix
 
 
-def prob_dnb_home(lambda_home: float, lambda_away: float) -> float:
+def prob_dnb_home(lambda_home: float, lambda_away: float,
+                  rho: float | None = None) -> float:
     """
     Draw No Bet — lado local.
 
@@ -61,7 +83,7 @@ def prob_dnb_home(lambda_home: float, lambda_away: float) -> float:
 
     DNB home price ≈ P(home wins) / (P(home wins) + P(away wins))
     """
-    matrix = _score_matrix(lambda_home, lambda_away)
+    matrix = _score_matrix(lambda_home, lambda_away, rho=rho)
     p_home_win = float(np.sum(np.tril(matrix, k=-1)))   # home > away
     p_away_win = float(np.sum(np.triu(matrix, k=1)))    # away > home
     denom = p_home_win + p_away_win
@@ -75,7 +97,8 @@ def prob_dnb_away(lambda_home: float, lambda_away: float) -> float:
     return 1.0 - prob_dnb_home(lambda_home, lambda_away)
 
 
-def prob_ah(lambda_home: float, lambda_away: float, line: float) -> tuple[float, float]:
+def prob_ah(lambda_home: float, lambda_away: float, line: float,
+            rho: float | None = None) -> tuple[float, float]:
     """
     Asian Handicap para cualquier línea.
 
@@ -98,7 +121,7 @@ def prob_ah(lambda_home: float, lambda_away: float, line: float) -> tuple[float,
         line = +0.5  → home gana si home_goals + 0.5 > away_goals
                         es decir, home_goals >= away_goals  (home no pierde)
     """
-    matrix = _score_matrix(lambda_home, lambda_away)
+    matrix = _score_matrix(lambda_home, lambda_away, rho=rho)
 
     # La condición para que el LOCAL cubra: home_goals - away_goals > -line
     # es decir: home_goals - away_goals > -line
@@ -195,14 +218,15 @@ def find_best_ah_line(
     return sorted(value_bets, key=lambda x: x["edge"], reverse=True)
 
 
-def get_dnb_probs(lambda_home: float, lambda_away: float) -> dict:
+def get_dnb_probs(lambda_home: float, lambda_away: float,
+                  rho: float | None = None) -> dict:
     """
     Retorna probabilidades DNB para ambos lados.
 
     Returns:
         {"dnb_home": float, "dnb_away": float}
     """
-    ph = prob_dnb_home(lambda_home, lambda_away)
+    ph = prob_dnb_home(lambda_home, lambda_away, rho=rho)
     return {
         "dnb_home": round(ph, 4),
         "dnb_away": round(1.0 - ph, 4),

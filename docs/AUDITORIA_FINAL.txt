@@ -1,0 +1,278 @@
+================================================================================
+                    AUDITORIA FINAL - SPORT BETTING MODEL
+                          21 de septiembre de 2026
+================================================================================
+
+Estado verificado: 152 archivos, 29.825 lineas, 267 tests en verde,
+13 rondas de auditoria cruzada con derecho de replica.
+
+
+--------------------------------------------------------------------------------
+1. RESUMEN
+--------------------------------------------------------------------------------
+
+COMO MAQUINA: SI, AHORA ES CONFIABLE.
+
+Esa frase no se podia decir en la primera auditoria. Entonces el problema no
+era que el modelo fuera malo: era que EL SISTEMA NO PODIA SABER SI ERA MALO.
+La capa que debia detectarlo escribia a un disco que se borraba en cada
+corrida, el kill-switch reventaba con un NameError tragado por un except, y
+197 tests en verde no cubrian ninguno de los defectos que costaban dinero.
+
+COMO GENERADOR DE DINERO: NO SE SABE, Y TODAVIA NADA LO SUGIERE.
+
+Lo unico medido con potencia estadistica es el -8% de ROI del modelo anterior,
+significativo con p = 0,005. El modelo actual es otro objeto, pero "otro
+objeto" no es "un objeto rentable": es un objeto sin medir.
+
+                        Primera auditoria     Hoy
+  Nota global           5 / 10                8 / 10
+  Veredicto             No confiable          Confiable como maquinaria;
+                                              ventaja sin medir
+  Decision correcta     Pasar a papel         Seguir en papel, con criterios
+                                              de salida numericos
+
+
+--------------------------------------------------------------------------------
+2. QUE SE ARREGLO
+--------------------------------------------------------------------------------
+
+Reejecute las mismas comprobaciones de la primera auditoria. Los defectos que
+motivaron el "no confiable" estan cerrados y verificados en produccion, no
+solo en tests.
+
+  DEFECTO ORIGINAL         ENTONCES                     AHORA
+  ----------------------------------------------------------------------------
+  Error dimensional en     +61% de goles esperados      error 2,22e-16 sobre
+  lambda                                                17 ligas
+
+  Prob. over 2.5           0,833 (real 0,538)           0,536
+  (EPL medio)
+
+  Prob. BTTS               0,801 (real ~0,50)           0,567
+
+  1X2                      0,478 / 0,203 / 0,319        0,422 / 0,280 / 0,299
+                                                        (real ~0,45/0,24/0,31)
+
+  Metodo Shin              nunca se ejecutaba:          corre y diverge de la
+                           fallback silencioso          proporcional
+
+  Cuartos de linea AH      -0.25 -> "-0.2",             :+.2f en las 8
+                           liquidado como perdida       ocurrencias; la linea
+                           total                        sobrevive
+
+  Persistencia de          runner efimero: MLE,         Neon (model_state,
+  estado                   calibracion y CLV se         model_state_history)
+                           perdian
+
+  Dixon-Coles MLE          mle_weight = 0.0 en          mle_weight = 0.25,
+                           187 de 187 apuestas          verificado en produccion
+
+  Kill-switch por CLV      NameError tragado;           gate estadistico
+                           nunca corrio                 (IC95, n>=30) con
+                                                        histeresis
+
+  Bankroll                 read-modify-write no         atomico, savepoint por
+                           atomico, UPDATE sin          fila, drift de -7,54u
+                           WHERE                        reparado
+
+  Cuotas fabricadas        21 apuestas reales contra    eliminadas;
+                           un precio de 1,80            anclable-sin-ancla no
+                           inexistente                  apuesta
+
+  Closing / CLV            filtro pending-only: una     resueltas incluidas,
+                           bet resuelta sin closing     ventana 7d, cobertura
+                           quedaba sin CLV siempre      ~100%
+
+  Tests                    197, ninguno detectaba       267, con guarda de
+                           nada de lo anterior          regresion por hallazgo
+
+
+--------------------------------------------------------------------------------
+3. HALLAZGOS DE ESTA ULTIMA PASADA
+--------------------------------------------------------------------------------
+
+I1 - TRES TRATAMIENTOS DE rho EN EL MISMO PARTIDO
+-------------------------------------------------
+
+  1x2 / DC / HT     ->  RHO = -0.13 hardcodeado en dixon_coles_model
+  BTTS / totales    ->  DC_RHO_GLOBAL = rho ajustado por MLE (-0.0947)
+  AH / DNB          ->  np.outer(ph, pa): Poisson independiente, rho = 0
+
+match_outcomes(home_lambda, away_lambda, max_goals=10) NO ACEPTA rho. Se
+ajusta un rho por maxima verosimilitud, se guarda en Neon, se usa para BTTS...
+y el camino 1X2 lo ignora y aplica el -0,13 de la literatura.
+
+Consecuencia demostrable - el mismo evento, dos precios en la misma corrida:
+
+  P(gana local) via 1x2  (tau rho=-0.13)     = 0.4218
+  P(local cubre -0.5) via AH (Poisson pura)  = 0.4370
+  diferencia = 1.53 puntos porcentuales
+
+AH -0,5 para el local ES "gana el local": no es una aproximacion, es el mismo
+suceso con dos matrices distintas. El efecto practico no es el 1,53 pp en si
+-es pequeno frente al umbral de ~19 pt- sino que el selector elige como maximo
+dos apuestas por partido ordenadas por score. Una diferencia sistematica a
+favor de AH SESGA QUE MERCADO SE ELIGE, y lo sesga hacia la familia peor
+calibrada del historico. Es seleccion creada por una incoherencia, no por
+informacion.
+
+ARREGLO: que match_outcomes acepte rho y el pipeline le pase DC_RHO_GLOBAL;
+y que _score_matrix de asian_handicap_model use la misma matriz DC.
+
+
+I2 - EL FACTOR DE MOTIVACION TIENE EL SIGNO INVERTIDO EN LA DEFENSA
+-------------------------------------------------------------------
+
+  # prediction_pipeline.py:780-782
+  if home_motiv != 0.0:
+      home_attack  *= (1 + home_motiv)
+      home_defense *= (1 + home_motiv)
+
+defense_rating son GOLES CONCEDIDOS por partido. Asi que un equipo motivado
+marca mas Y CONCEDE MAS. Y al reves: un equipo ya descendido
+(RELEGATED_BOOST = -0.08) marca menos Y SE VUELVE MAS DIFICIL DE BATIR.
+
+Medido, con un local motivado al +8%:
+
+  ESCENARIO                          P(local)   TOTAL GOLES   OVER 2.5
+  ----------------------------------------------------------------------
+  Sin motivacion (referencia)         0,4217       2,822       0,5359
+  Codigo actual (ambos x1,08)         0,4309       3,048       0,5875
+  Signo corregido (defensa /1,08)     0,4737       2,852       0,5428
+
+La senal esta MAL ENRUTADA: de su efecto total, ~85% aterriza en over 2.5 y
+solo ~15% en la probabilidad de victoria. El modulo se llama "motivacion" y
+sus comentarios dicen "peleando descenso / titulo / Europa -> mas motivado",
+pero lo que el pipeline expresa es "este partido tendra mas goles".
+
+ARREGLO: home_defense /= (1 + home_motiv). Es la misma clase de error que el
+lambda original: un multiplicador aplicado en la direccion equivocada sobre
+una magnitud cuyo signo importa.
+
+
+I3 e I4 - LATENTES, YA CONOCIDOS
+--------------------------------
+
+D7 SIGUE ABIERTO. GLOBAL_CALIBRATION = 0.85 y calibration_factors.json del
+2026-05-07 se aplican a los mercados NO ANCLADOS. Pero tras extender el ancla
+a AH, DNB, corners, tarjetas y HT, ese conjunto se redujo a DC y a los casos
+donde el devig falla la guardia de booksum, y las corridas en seco dan cero
+apuestas DC. Exposicion actual ~ 0, pero es la ultima pieza de parametro
+heredado de otra arquitectura.
+
+EL MLE NO CONVERGE (final_grad_max = 29.78; home_adv es el unico parametro
+sin L2, sin prior y sin presupuesto propio). Diferido a proposito para no
+cambiar el modelo en plena ventana de medicion: decision correcta, pero sigue
+siendo deuda.
+
+
+--------------------------------------------------------------------------------
+4. LA PREGUNTA QUE EL CODIGO NO PUEDE RESPONDER
+--------------------------------------------------------------------------------
+
+Todo lo anterior es maquinaria. La pregunta de fondo es si el modelo tiene
+ventaja, y ahi la situacion es esta: TODA LA EVIDENCIA DE DESEMPENO PERTENECE
+AL MODELO VIEJO.
+
+  METRICA               VALOR                      LECTURA
+  ----------------------------------------------------------------------------
+  ROI acumulado         -8% en 1.038 apuestas      z = -2,59 | p = 0,005
+                                                   IC95 [-14,1%, -1,9%]
+
+  Skill (Brier vs       negativo o nulo en         sin informacion en las
+  tasa base)            10 de 16 mercados          apuestas que eligio
+
+  CLV medio             ~ 0 (home_win -0,011%,     precios justos, sin ventaja
+                        over25 -0,201%)            demostrada
+
+  Q-G (brecha por       6,7 pt -> 58,4 pt          cuanta mas ventaja decia
+  tramo de edge)                                   tener, mas equivocado estaba
+
+Esas cifras miden un modelo con lambdas inflados un 60%, sin ancla, con el
+devig roto y con el MLE muerto. NO DICEN NADA SOBRE EL SISTEMA ACTUAL.
+
+Y el sistema actual tiene, a dia de hoy, UNA APUESTA con la huella de la
+generacion nueva. El primer corte con potencia estadistica esta agendado para
+el 29 de septiembre; la decision de piso por mercado, para el 20 de octubre;
+el horizonte completo, 4-6 meses al ritmo real de 13,1 apuestas por semana.
+
+
+--------------------------------------------------------------------------------
+5. CALIFICACION
+--------------------------------------------------------------------------------
+
+  DIMENSION                      ANTES   AHORA   QUE CAMBIO
+  ----------------------------------------------------------------------------
+  Ingenieria de software           8       9     267 tests con guarda por
+                                                 hallazgo; fallos silenciosos
+                                                 convertidos en avisos
+
+  Gestion de riesgo / bankroll     8       9     contabilidad atomica,
+                                                 savepoints, reconciliacion
+                                                 verificada
+
+  Arquitectura                     7       8     estado en Neon, mapeos
+                                                 consolidados, cohortes
+                                                 trazables
+
+  Modelado estadistico             4       7     lambdas exactos, devig
+                                                 correcto, ancla extendida.
+                                                 Restan I1 y I2
+
+  Validacion / metodologia         3       8     holdout, shadow logging,
+                                                 predicciones falsables,
+                                                 derecho de replica con
+                                                 refutaciones reales
+
+  Integridad operativa             2       9     la capa adaptativa corre de
+                                                 verdad: MLE vivo, gate real,
+                                                 closing completo
+
+  Honestidad consigo mismo         3       9     mide y publica su propio
+                                                 error; refuto a su auditor
+                                                 cuatro veces con datos
+
+  ----------------------------------------------------------------------------
+  NOTA GLOBAL                    5/10    8/10
+  ----------------------------------------------------------------------------
+
+El punto que impide el 9 no es ninguno de los hallazgos de hoy: es que EL
+DESEMPENO SIGUE SIN MEDIRSE. Un sistema de apuestas no puede puntuar mas alto
+que su evidencia, y la evidencia del modelo actual son unas horas.
+
+
+--------------------------------------------------------------------------------
+6. VEREDICTO
+--------------------------------------------------------------------------------
+
+Trece rondas para pasar de "no se puede confiar porque no puede saber si se
+equivoca" a "se puede confiar en que medira bien si se equivoca". Eso es
+exactamente el requisito previo para merecer confianza con dinero real, no la
+confianza misma.
+
+ORDEN DE ACCIONES RECOMENDADO
+
+  1. I2 ANTES DEL 29 DE SEPTIEMBRE. Una linea, y cambia hacia donde apunta una
+     senal que hoy se esta registrando mal en la muestra que va a decidir todo
+     lo demas.
+
+  2. I1 DESPUES. Mas trabajo, pero elimina un sesgo de seleccion hacia la
+     familia de mercados con peor historial.
+
+  3. SEGUIR EN PAPEL, con docs/SALIDA_PAPEL.md gobernando. El documento es
+     bueno: puertas numericas, asimetria correcta entre abrir y cerrar
+     exposicion, bitacora y disparadores de reapertura.
+
+  4. NO MOVER EL MLE NI LA CALIBRACION hasta tener el primer corte. La
+     disciplina de no cambiar dos cosas dentro de la ventana de medicion es lo
+     que hara interpretable lo que salga.
+
+  5. Y CUANDO LLEGUE LA EVIDENCIA, ACEPTARLA. Si el CLV de los mercados
+     habilitables no supera el limite inferior del IC95 tras 30-100 apuestas,
+     la conclusion correcta es que el modelo no tiene ventaja sobre estos
+     mercados, por mucho que la ingenieria sea ahora impecable. Una maquina
+     bien construida que mide honestamente puede perfectamente medir que no
+     hay edge.
+
+================================================================================

@@ -118,6 +118,7 @@ estimación)**. Criterio de G2 aplicado en ambas direcciones.
 | 21-sep-2026 | — | — | — | Creación del documento; corrección G1 (warm-start desde Neon, verificado: hereda 0.2211) y G2 (puerta espejo) | ronda 12 |
 | 21-sep-2026 | H1: tasa vs umbral n=100 | Q-Q + post-fix | inalcanzable en rodante; 4.2 meses en acumulada solo over25 | habilitación pasa a n=30 con espejo estadístico; ventana declarada ACUMULADA; tasa por mercado escrita al lado (R16) | ronda 13 |
 | 21-sep-2026 | H2: piso 0.08 bajo techo 30pt | — | ventana restante 0.9-4.9pt = bloqueo disfrazado | adoptado `piso_max(mercado) = 0.35×(techo−5pt) − slip`; subir piso más allá = bloqueo con ruta del gate | ronda 13 |
+| 21-sep-2026 | Auditoría final externa: I2 (motivación mal enrutada, 80% a goles) + I1 (1x2 vs AH-0.5 con matrices distintas, 1.6pp) | reproducción numérica propia | confirmados ambos | aplicados ANTES del inicio de la cohorte fingerprinted; bandera de cohorte `dc_rho_score` en decision_log separa pre/post | ronda 14 |
 | 28-sep-2026 | Q-AH: Δhome_adv entre refits CI | — | pendiente | si <0.08 → ciclo auditor cerrado formalmente | pendiente |
 | *(siguiente fila)* | *métrica* | *n* | *valor* | *acción tomada* | *quién* |
 
