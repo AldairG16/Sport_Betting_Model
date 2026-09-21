@@ -68,7 +68,10 @@ def collect_match_events(verbose: bool = True):
         print("\n📥 Descargando goalscorers.csv...")
 
     try:
-        df = pd.read_csv(GOALS_URL)
+        import requests, io
+        resp = requests.get(GOALS_URL, timeout=60)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text))
     except Exception as e:
         print(f"❌ Error descargando goalscorers.csv: {e}")
         return
@@ -96,9 +99,9 @@ def collect_match_events(verbose: bool = True):
 
     inserted = 0
     skipped  = 0
+    rows     = []
 
-    with engine.begin() as conn:
-        for (date, home, away), group in groups:
+    for (date, home, away), group in groups:
             # Separar goles de cada equipo.
             # Un own goal (dataset martj42) tiene team = el equipo del jugador
             # que la mandó a su arco, pero el gol cuenta para el RIVAL:
@@ -132,31 +135,32 @@ def collect_match_events(verbose: bool = True):
 
             penalty_in_match = bool(group["penalty"].any())
 
-            try:
-                conn.execute(text("""
-                    INSERT INTO match_events (
-                        date, home_team, away_team,
-                        home_scorers, away_scorers,
-                        penalty_in_match
-                    ) VALUES (
-                        :date, :home_team, :away_team,
-                        :home_scorers, :away_scorers,
-                        :penalty_in_match
-                    )
-                    ON CONFLICT (date, home_team, away_team) DO NOTHING
-                """), {
-                    "date":             date.strftime("%Y-%m-%d"),
-                    "home_team":        home,
-                    "away_team":        away,
-                    "home_scorers":     home_scorers,
-                    "away_scorers":     away_scorers,
-                    "penalty_in_match": penalty_in_match,
-                })
-                inserted += 1
-            except Exception as e:
-                skipped += 1
-                if verbose:
-                    print(f"   ⚠️  Skip {date} {home} vs {away}: {e}")
+            rows.append({
+                "date":             date.strftime("%Y-%m-%d"),
+                "home_team":        home,
+                "away_team":        away,
+                "home_scorers":     home_scorers,
+                "away_scorers":     away_scorers,
+                "penalty_in_match": penalty_in_match,
+            })
+
+    # un solo viaje a Neon por lote (executemany) en vez de uno por partido
+    with engine.begin() as conn:
+        CHUNK = 2000
+        for i in range(0, len(rows), CHUNK):
+            conn.execute(text("""
+                INSERT INTO match_events (
+                    date, home_team, away_team,
+                    home_scorers, away_scorers,
+                    penalty_in_match
+                ) VALUES (
+                    :date, :home_team, :away_team,
+                    :home_scorers, :away_scorers,
+                    :penalty_in_match
+                )
+                ON CONFLICT (date, home_team, away_team) DO NOTHING
+            """), rows[i:i + CHUNK])
+            inserted += len(rows[i:i + CHUNK])
 
     if verbose:
         print(f"   ✅ Insertados: {inserted:,}  |  Saltados: {skipped:,}")

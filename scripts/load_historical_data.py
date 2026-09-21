@@ -5,8 +5,12 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+import io
+import json
+
 import pandas as pd
 import numpy as np
+import requests
 from sqlalchemy import text
 from config.database import engine
 from src.utils.team_normalizer import normalize_team
@@ -129,14 +133,43 @@ def advanced_impute(df):
 
 def load_historical_data():
     _ensure_cards_schema()
+
+    # R14-op (21-sep): este paso colgaba el weekly de CI — 143 descargas sin
+    # timeout + inserts fila por fila a Neon (~58k viajes). Arreglo:
+    #   1. (liga, temporada) ya cargada en DB → SKIP (no re-descargar).
+    #   2. descarga con requests + timeout=30.
+    #   3. inserts por LOTES (executemany), no fila por fila.
+    with engine.connect() as conn:
+        loaded = dict(conn.execute(text(
+            "SELECT league, season, COUNT(*) FROM matches GROUP BY league, season"
+        )).fetchall())
+    loaded_counts = {(lg, int(sn)): int(c) for lg, sn, c in loaded}
+
     for code, league in leagues.items():
         for s in seasons:
-            print("Downloading", league, s)
+            season_year = int(s[:2]) + 2000
+            existing = loaded_counts.get((league, season_year), 0)
+
+            print(f"Downloading {league} {s} (en DB: {existing})")
             url = f"https://www.football-data.co.uk/mmz4281/{s}/{code}.csv"
             try:
-                df = pd.read_csv(url)
+                resp = requests.get(url, timeout=30)
+                if resp.status_code != 200 or len(resp.text) < 200:
+                    print(f"season not available: HTTP {resp.status_code}")
+                    continue
+                df = pd.read_csv(io.StringIO(resp.text))
+            except requests.exceptions.Timeout:
+                print(f"⛔ timeout de descarga: {league} {s} — se salta")
+                continue
             except (Exception,) as _dl_err:
                 print(f"season not available: {_dl_err}")
+                continue
+
+            # liga+temporada completa en DB → skip (weekly idempotente).
+            # La temporada EN CURSO crece cada semana (existing < len) y se
+            # re-descarga con ON CONFLICT DO NOTHING — barato por lotes.
+            if existing >= len(df):
+                print(f"   ya cargada ({existing} filas en DB) — skip")
                 continue
 
             df = df.rename(columns={
@@ -181,32 +214,39 @@ def load_historical_data():
                 "home_red","away_red",
             ]]
 
-            # Insertar con ON CONFLICT DO NOTHING para evitar duplicados
+            # Insertar por LOTES (executemany — un viaje a Neon, no uno por
+            # fila) con ON CONFLICT DO NOTHING para evitar duplicados
             from sqlalchemy import text as _text
-            inserted = 0
+            # to_json convierte numpy → nativos y NaN → null (psycopg2 no
+            # adapta np.float64 y un fallo aborta el lote entero — ronda 15)
+            rows = json.loads(df[[
+                "date","league","season",
+                "home_team","away_team",
+                "home_goals","away_goals",
+                "home_shots","away_shots",
+                "home_shots_target","away_shots_target",
+                "home_corners","away_corners",
+                "home_yellow","away_yellow",
+                "home_red","away_red",
+            ]].to_json(orient="records", date_format="iso"))
             with engine.begin() as conn:
-                for _, row in df.iterrows():
-                    try:
-                        conn.execute(_text("""
-                            INSERT INTO matches (
-                                date, league, season, home_team, away_team,
-                                home_goals, away_goals, home_shots, away_shots,
-                                home_shots_target, away_shots_target,
-                                home_corners, away_corners,
-                                home_yellow, away_yellow, home_red, away_red
-                            ) VALUES (
-                                :date, :league, :season, :home_team, :away_team,
-                                :home_goals, :away_goals, :home_shots, :away_shots,
-                                :home_shots_target, :away_shots_target,
-                                :home_corners, :away_corners,
-                                :home_yellow, :away_yellow, :home_red, :away_red
-                            )
-                            ON CONFLICT (date, home_team, away_team) DO NOTHING
-                        """), row.to_dict())
-                        inserted += 1
-                    except Exception:
-                        pass
-            print(f"✅ Procesados: {len(df)} ({inserted} nuevos)")
+                conn.execute(_text("""
+                    INSERT INTO matches (
+                        date, league, season, home_team, away_team,
+                        home_goals, away_goals, home_shots, away_shots,
+                        home_shots_target, away_shots_target,
+                        home_corners, away_corners,
+                        home_yellow, away_yellow, home_red, away_red
+                    ) VALUES (
+                        :date, :league, :season, :home_team, :away_team,
+                        :home_goals, :away_goals, :home_shots, :away_shots,
+                        :home_shots_target, :away_shots_target,
+                        :home_corners, :away_corners,
+                        :home_yellow, :away_yellow, :home_red, :away_red
+                    )
+                    ON CONFLICT (date, home_team, away_team) DO NOTHING
+                """), rows)
+            print(f"✅ Procesados: {len(df)}")
 
     print("🔥 HISTORICAL READY")
 
