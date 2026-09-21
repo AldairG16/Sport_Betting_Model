@@ -160,7 +160,25 @@ from src.features.league_calibration import get_over25_rate, OVER25_SHRINK
 
 GLOBAL_CALIBRATION      = 0.85     # corrección global de sobreconfianza (walk-forward 332 bets)
 CIRCUIT_BREAKER_THRESHOLD = 10.0   # bankroll mínimo para generar apuestas
-MIN_EDGE                = 0.05     # edge_market mínimo default
+# Ronda 6 (A1/R9): umbrales re-derivados de la arquitectura anclada como
+# DOS parámetros con papeles distintos:
+#
+# 1. MIN_EDGE (0.05, piso operativo): cubre el slip de vig (~2pt con el
+#    booksum medido 1.034 en pares AH) + ruido de cuota. No codifica
+#    calibración — el primer intento de esta ronda lo puso en 0.085 y la
+#    corrida en seco mostró que era incoherente: exigir edge ≥ 0.085 bajo el
+#    ancla obliga a desviarse ≥30pt del mercado, o sea apostar SOLO en el
+#    borde de la región confiable. Un piso, no un techo.
+#
+# 2. MAX_MODEL_DEVIATION (techo de calibración): |p_modelo − p_mercado| no
+#    puede pasar 30pt. Derivación: Q-G (brecha 20-58pt a edge alto) describe
+#    la generación PRE-anclaje/pre-fix-λ — no es transferible al modelo
+#    actual (R7). La única medición directa de la generación anclada es
+#    Q-A/Q-H: bets a desvíos de 18-36pt con brecha 1.7-4.3pt. El cap corta
+#    conservadoramente por debajo del límite de esa región medida. El ajuste
+#    fino por mercado vive en el gate dinámico de CLV, no aquí.
+MIN_EDGE                = 0.05
+MAX_MODEL_DEVIATION     = 0.30
 MAX_ODDS                = 3.80     # elimina longshots
 MAX_BETS_PER_MATCH      = 2
 MAX_RELIABLE_EDGE       = 0.499
@@ -178,25 +196,30 @@ UNDER35_ODDS = 1.65
 # Edge mínimo por mercado (backtest 120d, 585 bets — conservador, no el óptimo absoluto)
 # ah_home_fav subido 0.15→0.20 (15-jun-2026): 6 bets en 90d con 0 wins (-100% ROI)
 # pese al threshold previo de 0.15 — el modelo sobreestima favoritos AH consistentemente.
+# Ronda 6 (A1/R9): tabla re-derivada de la arquitectura anclada. Los valores
+# viejos (0.04-0.20) se calibraron contra el modelo SIN ancla y quedaron
+# incoherentes: ah_*_fav exigía 64pt de desvío (bloqueo aritmético, no
+# decisión) y dc quedaba en 17pt (vía de menor resistencia). Ahora todos los
+# mercados comparten el mismo piso operativo (0.05) y el techo de desvío
+# del modelo vive en MAX_MODEL_DEVIATION, aplicado como filtro aparte. La
+# diferencia por mercado la decide el gate de CLV con datos, no esta tabla.
 MIN_EDGE_BY_MARKET = {
-    # 14-sep-26: home_win con 19 bets el fin de semana a 15.8% WR (-4.5u) —
-    # el mercado de locales es el peor del sistema acumulado. Edge mínimo
-    # sube 0.05 → 0.09 hasta que la calibración demuestre lo contrario.
-    "home_win":     0.09,
+    "home_win":     0.05,
     "over25":       0.05,
-    "under25":      0.04,
-    "draw":         0.08,
-    "btts":         0.06,
-    "btts_no":      0.10,
-    "dnb_away":     0.08,
-    "dc_1x":        0.06,
-    "dc_x2":        0.06,
-    "ah_home_fav":  0.20,
-    "ah_home_pk":   0.10,
-    "ah_home_dog":  0.08,
-    "ah_away_fav":  0.20,
-    "ah_away_pk":   0.06,
-    "ah_away_dog":  0.08,
+    "under25":      0.05,
+    "draw":         0.05,
+    "btts":         0.05,
+    "btts_no":      0.05,
+    "dnb_home":     0.05,
+    "dnb_away":     0.05,
+    "dc_1x":        0.05,
+    "dc_x2":        0.05,
+    "ah_home_fav":  0.05,
+    "ah_home_pk":   0.05,
+    "ah_home_dog":  0.05,
+    "ah_away_fav":  0.05,
+    "ah_away_pk":   0.05,
+    "ah_away_dog":  0.05,
 }
 
 # Ligas problemáticas: exigir más edge
@@ -370,10 +393,18 @@ def _devig_two_way(o_a, o_b):
 
 
 def _devig_three_way(o1, o_x, o2):
-    """Devig proporcional de un trío. None si falta una pata."""
+    """
+    Devig proporcional de un trío. None si falta una pata o el booksum sale
+    de [0.90, 1.15] (ronda 6, A3): con cuotas-máximo entre casas el booksum
+    de tríos cae bajo 1.00 el 25% de las veces (mediana ~0.99 — Q-O) y eso
+    es un consenso válido; lo que se rechaza es el extremo incoherente
+    (medido: mín 0.139, fila rota).
+    """
     if not (o1 and o_x and o2):
         return None
     tot = 1.0 / o1 + 1.0 / o_x + 1.0 / o2
+    if not (0.90 <= tot <= 1.15):
+        return None
     return tot  # normalización: p_i = (1/o_i) / tot
 
 # =========================
@@ -1156,8 +1187,8 @@ def run_prediction_pipeline():
 
         # Agregar AH y DNB (clave con línea embebida para resolución automática)
         if _p_ah_home is not None:
-            _ah_key_home = f"ah_home_{_ah_line:+.1f}"   # ej: "ah_home_-1.5"
-            _ah_key_away = f"ah_away_{_ah_line:+.1f}"   # ej: "ah_away_-1.5"
+            _ah_key_home = f"ah_home_{_ah_line:+.2f}"   # ej: "ah_home_-1.5"
+            _ah_key_away = f"ah_away_{_ah_line:+.2f}"   # ej: "ah_away_-1.5"
             model_probs[_ah_key_home] = clamp_prob(_p_ah_home)
             model_probs[_ah_key_away] = clamp_prob(_p_ah_away)
 
@@ -1181,11 +1212,14 @@ def run_prediction_pipeline():
                 row.draw_odds,
                 row.away_odds
             )
-            market_probs.update({
-                "home_win": mh,
-                "draw": md,
-                "away_win": ma
-            })
+            # A3 (r6): si el booksum es incoherente, Shin devuelve None —
+            # sin ancla para 1x2 (la regla A2 hace el resto: no apostar).
+            if mh is not None:
+                market_probs.update({
+                    "home_win": mh,
+                    "draw": md,
+                    "away_win": ma
+                })
 
         # Over/Under
         _pair = _devig_two_way(safe_odds(row.over25_odds), safe_odds(row.under25_odds))
@@ -1211,13 +1245,13 @@ def run_prediction_pipeline():
         if _p_ah_home is not None:
             _pair = _devig_two_way(_ah_home_odds, _ah_away_odds)
             if _pair is not None:
-                market_probs[f"ah_home_{_ah_line:+.1f}"] = _pair
-                market_probs[f"ah_away_{_ah_line:+.1f}"] = 1.0 - _pair
+                market_probs[f"ah_home_{_ah_line:+.2f}"] = _pair
+                market_probs[f"ah_away_{_ah_line:+.2f}"] = 1.0 - _pair
             else:
                 if _ah_home_odds:
-                    market_probs_raw[f"ah_home_{_ah_line:+.1f}"] = 1.0 / _ah_home_odds
+                    market_probs_raw[f"ah_home_{_ah_line:+.2f}"] = 1.0 / _ah_home_odds
                 if _ah_away_odds:
-                    market_probs_raw[f"ah_away_{_ah_line:+.1f}"] = 1.0 / _ah_away_odds
+                    market_probs_raw[f"ah_away_{_ah_line:+.2f}"] = 1.0 / _ah_away_odds
 
         # DNB: las cuotas derivadas de h2h ya salen sin margen (booksum 1.0,
         # pasan la guardia solas); el par de API se devig con la misma guardia.
@@ -1284,24 +1318,33 @@ def run_prediction_pipeline():
         # =========================
 
         probabilities = {}
+        _model_deviation = {}   # |p_modelo − p_mercado de referencia| (A1, r6)
 
         for market, model_prob in model_probs.items():
 
             # Ronda 5 (N1/N2): los mercados anclables combinan UNA sola vez,
-            # en el bloque de anclaje — el modelo entra crudo al 35%. Antes
-            # se pre-mezclaban aquí y is_strong_edge llegaba a DESCARTAR el
-            # precio del mercado (umbral real 7.1pp con confianza de
-            # producción 0.8-1.0); Q-G midió brecha 19.8-58.4pt en esos
-            # tramos. El resto usa el blend simétrico y decreciente en
-            # |edge| (market_calibration reescrita).
-            if _anchorable(market) and market in market_probs:
-                probabilities[market] = model_prob
+            # en el bloque de anclaje — el modelo entra crudo al 35%.
+            # Ronda 6 (A2): regla estructural — anclable SIN ancla disponible
+            # (devig de par falló, patas sueltas) ⇒ NO APOSTAR. Antes caía al
+            # camino más permisivo (prob cruda del modelo 100%) y con cuota
+            # fabricada generaba bets a precios inexistentes.
+            if _anchorable(market):
+                if market in market_probs:
+                    probabilities[market] = model_prob
+                    _model_deviation[market] = abs(model_prob - market_probs[market])
                 continue
 
+            # Ronda 6 (A4): se pasa el edge para que la escalera
+            # blend_weight (decreciente en |desacuerdo|) se ejerza de verdad
+            # — antes se llamaba sin `edge` y el peso era plano 0.35.
+            _implied = market_probs_raw.get(market)
             probabilities[market] = calibrate_probability(
                 model_prob,
-                market_probs_raw.get(market)
+                _implied,
+                (model_prob - _implied) if _implied else None,
             )
+            if _implied:
+                _model_deviation[market] = abs(model_prob - _implied)
 
         # =========================
         # ODDS
@@ -1320,17 +1363,18 @@ def run_prediction_pipeline():
         }
 
         if _p_ah_home is not None:
-            odds[f"ah_home_{_ah_line:+.1f}"] = _ah_home_odds
-            odds[f"ah_away_{_ah_line:+.1f}"] = _ah_away_odds
+            odds[f"ah_home_{_ah_line:+.2f}"] = _ah_home_odds
+            odds[f"ah_away_{_ah_line:+.2f}"] = _ah_away_odds
 
         # Corners odds: SOLO si la API trae odds reales.
-        # El fallback a CORNERS_DEFAULT_ODDS generaba edge ficticio: el modelo
-        # comparaba su prob Poisson contra una odd hardcoded (no la del mercado)
-        # y "detectaba" ventaja aunque no la hubiera.
+        # Ronda 6 (A2): el fallback a CORNERS_DEFAULT_ODDS fabricaba un precio
+        # que no existía (21 bets a 1.80 inventado, Q-N) — sin pata under de
+        # la API no hay cuota y por tanto no hay apuesta.
         if _corners_over_api and _corners_line_api is not None:
             _cl = float(_corners_line_api)
             odds[f"corners_over_{_cl}"]  = _corners_over_api
-            odds[f"corners_under_{_cl}"] = _corners_under_api or CORNERS_DEFAULT_ODDS
+            if _corners_under_api:
+                odds[f"corners_under_{_cl}"] = _corners_under_api
 
         # Cards odds: SOLO si la API trae odds reales. Mismo motivo.
         # Además: cards requiere datos históricos en la liga — get_team_cards
@@ -1339,7 +1383,8 @@ def run_prediction_pipeline():
         if _cards_over_api and _cards_line_api is not None:
             _cdl = float(_cards_line_api)
             odds[f"cards_over_{_cdl}"]  = _cards_over_api
-            odds[f"cards_under_{_cdl}"] = _cards_under_api or CARDS_DEFAULT_ODDS
+            if _cards_under_api:
+                odds[f"cards_under_{_cdl}"] = _cards_under_api
 
         # Over 1.5 / 3.5 odds de referencia fijas
         odds["over_1.5"]  = OVER15_ODDS
@@ -1812,6 +1857,15 @@ def run_prediction_pipeline():
                 _min_edge *= 1.4
 
             if _edge_real < _min_edge:
+                continue
+
+            # 4) Techo de desvío del modelo (A1/R9, ronda 6). El piso de edge
+            # obliga al modelo a desviarse; este techo evita que se desvíe
+            # MÁS de la región donde la arquitectura anclada está medida
+            # (ver derivación en MAX_MODEL_DEVIATION). Sin desvío medido
+            # (mercado sin precio de referencia) no hay apuesta.
+            _dev = _model_deviation.get(mkt)
+            if _dev is None or _dev > MAX_MODEL_DEVIATION:
                 continue
 
             # MAX_ODDS: en paper usamos 6.0 para capturar underdogs del Mundial

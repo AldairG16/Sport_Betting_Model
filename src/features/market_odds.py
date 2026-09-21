@@ -65,6 +65,14 @@ def market_probabilities(home_odds, draw_odds, away_odds):
             return None, None, None
 
         raw = [1 / home_odds, 1 / draw_odds, 1 / away_odds]
+
+        # Ronda 6 (A3): guardia baja. Las cuotas son el MÁXIMO entre casas:
+        # un booksum < 0.90 no es un consenso, es una fila rota (medido en
+        # producción: mínimo 0.139). Normalizar eso "inventa" probabilidades.
+        # El rango sano de tríos es [0.90, 1.15] (mediana ~0.99, Q-O ronda 6).
+        if sum(raw) < 0.90:
+            return None, None, None
+
         fair, overround_pct = _shin_fair_probs(raw)
 
         # Margen demasiado alto = bookmaker sospechoso (> 12%)
