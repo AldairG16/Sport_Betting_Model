@@ -18,7 +18,7 @@ Mejora v2 — Over/Under por Liga:
   El campo "over25_rate" es la tasa histórica real de over 2.5 por liga.
   Se usa en el pipeline para calibrar las probabilidades de totales:
     final_over25 = poisson_over25 * (1-OVER25_SHRINK) + league_over25_rate * OVER25_SHRINK
-  donde OVER25_SHRINK = 0.20 (20% de shrinkage hacia la media de la liga)
+  donde OVER25_SHRINK = 0.20
 
 Liga                        | Home ADV | Tempo  | Draw Rate | Over25
 soccer_epl                  |  1.214   | 1.129  |  23.6%    | 53.8%
@@ -44,61 +44,71 @@ LEAGUE_FACTORS = {
         "home_advantage": 1.214,
         "tempo":          1.129,
         "draw_rate":      0.236,
-        "over25_rate":    0.538,  # 53.8% partidos over 2.5
+        "over25_rate":    0.538,
+        "btts_rate":    0.5734,  # J1 r15: Q-BA, 3 años n>=500  # 53.8% partidos over 2.5
     },
     "soccer_italy_serie_a": {
         "home_advantage": 1.190,
         "tempo":          1.094,
         "draw_rate":      0.255,
         "over25_rate":    0.512,
+        "btts_rate":    0.5022,  # J1 r15: Q-BA, 3 años n>=500
     },
     "soccer_spain_la_liga": {
         "home_advantage": 1.319,
         "tempo":          1.051,
         "draw_rate":      0.261,
         "over25_rate":    0.498,
+        "btts_rate":    0.5428,  # J1 r15: Q-BA, 3 años n>=500
     },
     "soccer_france_ligue_one": {
         "home_advantage": 1.256,
         "tempo":          1.081,
         "draw_rate":      0.254,
-        "over25_rate":    0.481,  # liga más defensiva de las Big5
+        "over25_rate":    0.481,
+        "btts_rate":    0.5477,  # J1 r15: Q-BA, 3 años n>=500  # liga más defensiva de las Big5
     },
     "soccer_uefa_champs_league": {
         "home_advantage": 1.215,
         "tempo":          1.102,
         "draw_rate":      0.265,
         "over25_rate":    0.532,
+        "btts_rate":    0.5647,  # J1 r15: Q-BA, 3 años n>=500
     },
     "soccer_germany_bundesliga": {
         "home_advantage": 1.253,
         "tempo":          1.225,
         "draw_rate":      0.247,
-        "over25_rate":    0.621,  # liga más goleadora de las Big5
+        "over25_rate":    0.621,
+        "btts_rate":    0.5997,  # J1 r15: Q-BA, 3 años n>=500  # liga más goleadora de las Big5
     },
     "soccer_brazil_campeonato": {
         "home_advantage": 1.470,
         "tempo":          0.956,
         "draw_rate":      0.269,
         "over25_rate":    0.423,
+        "btts_rate":    0.5187,  # J1 r15: Q-BA, 3 años n>=500
     },
     "soccer_mexico_ligamx": {
         "home_advantage": 1.306,
         "tempo":          1.064,
         "draw_rate":      0.271,
         "over25_rate":    0.498,
+        "btts_rate":    0.5629,  # J1 r15: Q-BA, 3 años n>=500
     },
     "soccer_argentina_primera_division": {
         "home_advantage": 1.330,
         "tempo":          0.892,
         "draw_rate":      0.309,
-        "over25_rate":    0.381,  # liga más baja en goles
+        "over25_rate":    0.381,
+        "btts_rate":    0.4324,  # J1 r15: Q-BA, 3 años n>=500  # liga más baja en goles
     },
     "soccer_usa_mls": {
         "home_advantage": 1.180,
         "tempo":          1.050,
         "draw_rate":      0.220,
         "over25_rate":    0.487,
+        "btts_rate":    0.53,  # J1 r15: Q-BA, 3 años n>=500
     },
 
     # Nuevas ligas europeas — valores calculados de datos reales
@@ -106,31 +116,36 @@ LEAGUE_FACTORS = {
         "home_advantage": 1.261,
         "tempo":          1.011,
         "draw_rate":      0.267,
-        "over25_rate":    0.471,  # Championship más defensivo que EPL
+        "over25_rate":    0.471,
+        "btts_rate":    0.5357,  # J1 r15: Q-BA, 3 años n>=500  # Championship más defensivo que EPL
     },
     "soccer_netherlands_eredivisie": {
         "home_advantage": 1.278,
         "tempo":          1.228,
         "draw_rate":      0.233,
-        "over25_rate":    0.624,  # la más alta — ~3.07 goles/partido
+        "over25_rate":    0.624,
+        "btts_rate":    0.5848,  # J1 r15: Q-BA, 3 años n>=500  # la más alta — ~3.07 goles/partido
     },
     "soccer_portugal_primeira_liga": {
         "home_advantage": 1.252,
         "tempo":          1.039,
         "draw_rate":      0.239,
         "over25_rate":    0.493,
+        "btts_rate":    0.4954,  # J1 r15: Q-BA, 3 años n>=500
     },
     "soccer_spl": {
         "home_advantage": 1.228,
         "tempo":          1.089,
         "draw_rate":      0.240,
         "over25_rate":    0.512,
+        "btts_rate":    0.5249,  # J1 r15: Q-BA, 3 años n>=500
     },
     "soccer_uefa_europa_league": {
         "home_advantage": 1.190,
         "tempo":          1.070,
         "draw_rate":      0.255,
         "over25_rate":    0.521,
+        "btts_rate":    0.53,  # J1 r15: Q-BA, 3 años n>=500
     },
 
     # Copa Libertadores — clubes sudamericanos, alta motivación, mercado menos eficiente
@@ -140,6 +155,7 @@ LEAGUE_FACTORS = {
         "tempo":          0.970,
         "draw_rate":      0.275,
         "over25_rate":    0.445,
+        "btts_rate":    0.53,  # J1 r15: Q-BA, 3 años n>=500
     },
 
     # Clasificatorias Mundial Europa — selecciones, alta motivación, partidos cerrados
@@ -148,7 +164,8 @@ LEAGUE_FACTORS = {
         "home_advantage": 1.280,   # ventaja local notable en selecciones
         "tempo":          1.010,
         "draw_rate":      0.290,   # más empates que en ligas (partidos más disputados)
-        "over25_rate":    0.468,   # tendencia defensiva en clasificatorias
+        "over25_rate":    0.468,
+        "btts_rate":    0.3899,  # J1 r15: Q-BA, 3 años n>=500   # tendencia defensiva en clasificatorias
     },
 
     # MLB (beisbol) — sin empates, promedio ~4.5 carreras por equipo
@@ -156,7 +173,8 @@ LEAGUE_FACTORS = {
         "home_advantage": 1.050,   # ventaja local pequena en MLB (~5%)
         "tempo":          1.000,   # ~4.5 carreras/equipo = baseline
         "draw_rate":      0.000,   # no hay empates en beisbol
-        "over25_rate":    0.500,   # placeholder (no se usa para MLB)
+        "over25_rate":    0.500,
+        "btts_rate":    0.53,  # J1 r15: Q-BA, 3 años n>=500   # placeholder (no se usa para MLB)
     },
 }
 
@@ -166,11 +184,14 @@ DEFAULT_FACTORS = {
     "tempo":          1.050,
     "draw_rate":      0.260,
     "over25_rate":    0.510,  # media europea
+    "btts_rate":      0.530,  # media de las 14 ligas medidas (Q-BA, ronda 15)
 }
 
 # Peso del shrinkage de la tasa histórica de liga sobre el Poisson
 # 0.20 = 20% liga histórica + 80% Poisson del partido
 OVER25_SHRINK = 0.20
+BTTS_SHRINK   = 0.20   # J1 r15: mismo estimador y misma data family que over25
+
 
 
 # =========================
@@ -217,6 +238,15 @@ def get_lambda_multipliers(league: str) -> tuple[float, float]:
     """
     f = get_league_factors(league)
     return f["home_advantage"], f["tempo"]
+
+
+def get_btts_rate(league: str) -> float:
+    """
+    Tasa histórica real de BTTS por liga (J1, ronda 15 — medido en Q-BA,
+    3 años, n>=500 por liga; default 0.53 donde no hubo muestra).
+    Usado para el shrink de BTTS, simétrico al de over25.
+    """
+    return get_league_factors(league).get("btts_rate", DEFAULT_FACTORS["btts_rate"])
 
 
 def get_over25_rate(league: str) -> float:

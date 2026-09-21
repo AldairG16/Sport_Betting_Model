@@ -73,6 +73,7 @@ def _form_probs(
     home_advantage: float = 1.10,
     tempo: float = 1.20,
     baseline: float | None = None,
+    rho: float | None = None,
 ) -> tuple[float, float, float]:
     """
     Calcula probabilidades solo desde los ratings de forma (ataque/defensa),
@@ -93,7 +94,7 @@ def _form_probs(
     mu_a = mu / (1 + home_advantage)
     lh = np.clip((home_attack / b) * (away_defense / b) * mu_h, 0.3, 3.5)
     la = np.clip((away_attack / b) * (home_defense / b) * mu_a, 0.3, 3.5)
-    return match_outcomes(lh, la)
+    return match_outcomes(lh, la, rho=rho)
 
 
 # =========================
@@ -225,6 +226,7 @@ def ensemble_predict(
     home_advantage: float = 1.10,
     tempo:          float = 1.20,
     baseline:       float | None = None,   # None → KALMAN_BASELINE (N5, r5)
+    rho:            float | None = None,   # J2 r15: misma tau que 1x2/AH/DNB
 ) -> dict:
     """
     Combina las tres señales en una predicción unificada.
@@ -265,6 +267,7 @@ def ensemble_predict(
     form_h, form_d, form_a = _form_probs(
         home_attack, home_defense, away_attack, away_defense,
         home_advantage=home_advantage, tempo=tempo, baseline=baseline,
+        rho=rho,
     )
 
     # Acuerdo entre señales

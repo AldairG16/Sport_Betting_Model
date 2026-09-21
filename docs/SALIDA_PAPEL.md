@@ -124,6 +124,29 @@ estimación)**. Criterio de G2 aplicado en ambas direcciones.
 
 ---
 
+### Nota ronda 15 — ancla empírica de BTTS (J1), señal 3 coherente (J2), fallback unificado (J3)
+
+- **Q-BA** (3 años, n≥500/liga; control `over25_calc` vs `LEAGUE_FACTORS`:
+  Δ medio ~3pp por ventana — método validado): la tasa real de BTTS va de
+  0.395 (WCQ-Europa) a 0.600 (Bundesliga); EPL 0.5734. **La refutación de
+  A no procede pero su cifra tampoco**: no hay sesgo global de +7pp — el
+  sesgo es POR LIGA (−0.6pp EPL, +6.7pp Argentina) y cambia de signo con el
+  tempo. Por eso el arreglo es shrink por liga, no una constante global.
+- **`BTTS_SHRINK = 0.20`** (igual que OVER25_SHRINK): mismo estimador,
+  misma data family, misma ventana; el ancla 65/35 absorbe el residual.
+  `btts_rate` añadido a las 18 ligas (14 medidas, 4 default 0.53) y
+  `get_btts_rate()` simétrico a `get_over25_rate()`.
+- **Bandera R13**: `decision_log.model.btts_shrink` — separa cohortes
+  pre/post shrink.
+- **R6, sitios que valoran la matriz de marcadores**: pipeline DC 1x2 (rho ✓),
+  HT h1 (✓), HT h2 (✓), ensemble señal 3 `_form_probs` (✓ — J2), AH/DNB
+  `prob_ah`/`get_dnb_probs` vía `_score_matrix` (✓ desde r14). Cinco de cinco.
+- **J3**: `totals_and_btts` recibe `DC_RHO_SCORE` como todo lo demás —
+  fallback unificado a la literatura (−0.13). La nota de ronda 10
+  ("Poisson cruda si el fit dejó rho≈0") queda SUPERSEDA: ronda 11 midió rho
+  estable en el prior (−0.088/−0.095) — el escenario de corner solution está
+  muerto empíricamente. `dc_rho_global` sigue en decision_log como cohorte.
+
 **CIERRE DEL CICLO (ronda 13).** Doce rondas llevaron el sistema de "el
 modelo infla los goles un 60% con toda su capa adaptativa muerta" a λ
 correctos a 1e-16 de la media de liga, estado persistido en Neon,

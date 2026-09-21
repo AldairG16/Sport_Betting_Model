@@ -152,7 +152,7 @@ NEUTRAL_VENUE_LEAGUES = {
     "soccer_afcon",
     "soccer_afc_asian_cup",
 }
-from src.features.league_calibration import get_over25_rate, OVER25_SHRINK
+from src.features.league_calibration import get_over25_rate, get_btts_rate, OVER25_SHRINK, BTTS_SHRINK
 
 # ─────────────────────────────────────────────────────────────
 # CONSTANTES DE PIPELINE (módulo-level para no recrearlas en cada llamada)
@@ -1069,6 +1069,7 @@ def run_prediction_pipeline():
             away_defense    = away_defense,
             home_advantage  = HOME_ADVANTAGE,
             tempo           = TEMPO,
+            rho             = DC_RHO_SCORE,
         )
 
         home_win = clamp_prob(ensemble["home_win"])
@@ -1120,8 +1121,14 @@ def run_prediction_pipeline():
 
         # MEJORA #3: pasar rho para usar Dixon-Coles tau-correction.
         # Mejora calibración de BTTS (-30pp de bias en sample 90d).
+        # J3 (ronda 15): mismo rho que la matriz de marcadores (DC_RHO_SCORE).
+        # Antes: matriz → -0.13 si no había fit, BTTS → Poisson cruda —
+        # fallbacks distintos para el mismo tau (1.11pp de divergencia si el
+        # refit entregaba rho bajo). La nota r10 sobre "Poisson cruda" queda
+        # superada: r11 midió rho estable en el prior (-0.09±0.01) — el
+        # escenario de corner solution está muerto empíricamente.
         poisson_probs = totals_and_btts(lambda_home, lambda_away,
-                                        rho=DC_RHO_GLOBAL)
+                                        rho=DC_RHO_SCORE)
 
         # =========================
         # HALF-TIME PREDICTIONS (h2h_h1 / h2h_h2)
@@ -1173,6 +1180,16 @@ def run_prediction_pipeline():
         poisson_probs["over25"] = (
             poisson_probs["over25"]  * (1 - OVER25_SHRINK)
             + league_over25          * OVER25_SHRINK
+        )
+        # J1 (ronda 15): shrink de BTTS a la tasa real de la liga —
+        # simétrico al de over25. La independencia de Poisson sesga el BTTS
+        # por liga (mide Q-BA: de −0.6pp en EPL a +6.7pp en Argentina, según
+        # tempo) y el ancla al 65% protege el dinero pero no la medición del
+        # shadow. Bandera btts_shrink en decision_log (R13).
+        league_btts = get_btts_rate(league_key)
+        poisson_probs["btts_yes"] = (
+            poisson_probs["btts_yes"] * (1 - BTTS_SHRINK)
+            + league_btts * BTTS_SHRINK
         )
         # 🔥 sanity caps — ANTES de derivar under25/btts_no para que sumen 1.
         # over25 en 0.80: Poisson legítimo con λ_total≈4.0 da 0.76 (Bundesliga
@@ -2044,6 +2061,7 @@ def run_prediction_pipeline():
                         "mle_converged": DC_CONVERGED,
                         "dc_rho_global": DC_RHO_GLOBAL,
                         "dc_rho_score": DC_RHO_SCORE,
+                        "btts_shrink": BTTS_SHRINK,
                         "fit_fingerprint": DC_FIT_FINGERPRINT,
                         "mle_final_grad": DC_FINAL_GRAD,
                         "kalman_confidence": round(_conf, 3),
