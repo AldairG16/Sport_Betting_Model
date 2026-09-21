@@ -29,12 +29,13 @@ def test_warm_start_prefers_neon():
     desde model_state — sin esto, cada lunes producía un fit desde zeros
     (home_adv 0.59, +45% en λ_home) que sobrescribía el bueno."""
     src = _source(fitter)
-    i_fix = src.index("G1 (ronda 12)")
-    i_block = src.index("prev = _load_params_from_db() or {}")
-    i_file = src.index("DC_PARAMS_FILE.exists()", i_block)
-    # Neon primero, archivo solo como fallback
-    assert 0 < i_block < i_file
-    assert src.index("_load_params_from_db") < i_block
+    fit_src = src.split("def fit_dc_parameters", 1)[1]
+    fit_src = fit_src.split("# ── Optimización", 1)[0]
+    i_fix = fit_src.index("G1 (ronda 12)")
+    i_db = fit_src.index("prev = _load_params_from_db() or {}")
+    i_file = fit_src.index("DC_PARAMS_FILE.exists()")
+    # dentro del fit: Neon primero, archivo solo como fallback
+    assert i_fix < i_db < i_file
 
 
 def test_file_remains_as_fallback_only():
