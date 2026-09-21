@@ -815,11 +815,13 @@ def _closing_odds_for(market, odds_row):
 def _update_shadow_closing():
     """Rellena closing_odds de shadow_bets con el MISMO lookup y mapeo que
     bets_history (B2, ronda 7) — el CLV por bandas depende de esto."""
-    sdf = pd.read_sql("""
+    sdf = pd.read_sql(text("""
         SELECT id, match, market, match_date
         FROM shadow_bets
         WHERE closing_odds IS NULL
-    """, engine)
+          AND match_date BETWEEN NOW() - INTERVAL '10 days'
+                             AND NOW() + INTERVAL '90 minutes'
+    """), engine)
     if sdf.empty:
         return
 

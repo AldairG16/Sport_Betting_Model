@@ -50,22 +50,28 @@ def update_closing_odds(only_near_kickoff: bool = True):
     # Nota: bets_history usa result='pending' (no NULL) — filtrar por NULL
     # dejaba el script sin trabajo y ningún closing odds se guardaba.
     if only_near_kickoff:
-        # Solo bets cuyo partido arranca en <=90 min (closing odds reales)
+        # D1 (ronda 9): antes solo bets 'pending' con partido en
+        # [NOW-4h, NOW+90min]. Dos defectos: (1) una bet RESUELTA sin closing
+        # quedaba invisible para siempre (btts 0/22 medido), (2) la ventana
+        # estrecha perdía confirmaciones tardías. Ahora: resultados finales
+        # incluidos y ventana de recuperación de 7 días (la retención de
+        # upcoming_matches), preservando el objetivo de capturar el precio
+        # cercano al kickoff.
         bets = pd.read_sql(text("""
             SELECT id, match, market, odds
             FROM bets_history
             WHERE closing_odds IS NULL
-              AND (result = 'pending' OR result IS NULL)
+              AND result IN ('pending','win','loss','half_win','half_loss','push')
               AND match_date <= NOW() AT TIME ZONE 'UTC' + INTERVAL '90 minutes'
-              AND match_date >= NOW() AT TIME ZONE 'UTC' - INTERVAL '4 hours'
+              AND match_date >= NOW() AT TIME ZONE 'UTC' - INTERVAL '7 days'
         """), engine)
     else:
-        # Modo backfill: procesa TODAS las pendientes (one_shot_data_quality_cleanup)
+        # Modo backfill (one_shot_data_quality_cleanup): TODO lo rellenable
         bets = pd.read_sql("""
             SELECT id, match, market, odds
             FROM bets_history
             WHERE closing_odds IS NULL
-              AND (result = 'pending' OR result IS NULL)
+              AND match_date >= NOW() AT TIME ZONE 'UTC' - INTERVAL '120 days'
         """, engine)
 
     if bets.empty:
@@ -190,6 +196,15 @@ def update_closing_odds(only_near_kickoff: bool = True):
             updates += 1
 
     print(f"✅ Closing odds actualizadas: {updates}")
+
+    # ── C1/D1 (rondas 8-9): closing de las candidatas shadow ──
+    # El gemelo de esta función en src/models/save_bets.py casi no corre en
+    # producción; el shadow se rellena AQUÍ, donde corre el hourly.
+    try:
+        from src.models.save_bets import _update_shadow_closing
+        _update_shadow_closing()
+    except Exception as e:
+        print(f"⚠️  shadow closing omitido: {type(e).__name__}")
     if not_found > 0:
         print(f"⚠️  Partidos no encontrados en DB (ya completados): {not_found}")
 

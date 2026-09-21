@@ -84,18 +84,20 @@ def _deviation_band(dev: float) -> str:
 
 def shadow_clv_bands(verbose: bool = True) -> dict:
     """
-    CLV medio por banda de desvío de las candidatas SHADOW (B2, ronda 7).
-    Responde empíricamente si la ventana apostable [piso, techo] está en el
-    lado correcto: CLV positivo en bandas bajas excluidas ⇒ bajar el piso;
-    CLV plano/negativo abajo y positivo dentro ⇒ ventana validada.
-    Solo tiene sentido cuando shadow_bets acumule closing_odds (semanas).
+    CLV de las candidatas SHADOW por (mercado × banda) — D1/R12, ronda 9.
+
+    La decisión B2 (bajar o no el piso) se aplica POR MERCADO (cada uno
+    tiene su ventana), así que la conclusión debe agregarse en esa misma
+    dimensión. Antes se agrupaba solo por banda: el CLV de una banda era el
+    del mercado que dominara la cobertura de closing, no el del nivel de
+    desvío. Columnas separadas n_banda / n_con_closing: "hay filas" y "hay
+    medición" no son el mismo dato (Q-S ronda 7: cobertura 0-97%).
     """
     try:
         df = pd.read_sql(text("""
-            SELECT deviation, odds, closing_odds
+            SELECT market, deviation, odds, closing_odds
             FROM shadow_bets
-            WHERE closing_odds IS NOT NULL AND closing_odds > 1 AND odds > 1
-              AND deviation IS NOT NULL
+            WHERE deviation IS NOT NULL AND odds > 1
         """), engine)
     except Exception as e:
         # tabla aún no creada → no es error en el primer ciclo
@@ -105,21 +107,29 @@ def shadow_clv_bands(verbose: bool = True) -> dict:
 
     if df.empty:
         if verbose:
-            print("   ℹ️  shadow_clv_bands: sin closing acumulado todavía")
+            print("   ℹ️  shadow_clv_bands: sin filas todavía")
         return {"status": "no_data"}
 
     df["clv"] = 1.0 / df["closing_odds"] - 1.0 / df["odds"]
+    df.loc[df["closing_odds"].isna() | (df["closing_odds"] <= 1), "clv"] = None
     df["band"] = df["deviation"].map(_deviation_band)
+
     out = {}
     if verbose:
-        print("\n🌑 SHADOW CLV por banda de desvío (candidatas no apostadas):")
-    for band, sub in df.groupby("band"):
-        n = len(sub)
-        avg = float(sub["clv"].mean())
-        out[band] = {"n": n, "avg_clv": round(avg, 5)}
-        if verbose:
-            print(f"   [{band:>5}] n={n:>4}  CLV medio={avg:+.4f}")
-    return {"status": "ok", "bands": out}
+        print("\n🌑 SHADOW CLV por (mercado × banda): n_banda · n_closing · CLV")
+    for (mkt, band), sub in df.groupby(["market", "band"]):
+        n_band = len(sub)
+        measured = sub["clv"].dropna()
+        n_close = len(measured)
+        avg = float(measured.mean()) if n_close else None
+        out.setdefault(mkt, {})[band] = {
+            "n_banda": n_band, "n_con_closing": n_close,
+            "avg_clv": round(avg, 5) if avg is not None else None,
+        }
+        if verbose and n_band >= 3:   # ruido mínimo fuera del log
+            clv_s = f"{avg:+.4f}" if avg is not None else "  -  "
+            print(f"   {mkt:<16} [{band:>5}] n={n_band:>3} - n_closing={n_close:>3} - CLV={clv_s}")
+    return {"status": "ok", "by_market": out}
 
 
 

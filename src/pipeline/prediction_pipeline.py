@@ -575,6 +575,8 @@ def run_prediction_pipeline():
     # el lado correcto (ver docs/AUDITORIA_RONDA7.md §3).
     shadow_records: list = []
     shadow_swept = 0
+    # D3 (ronda 9): ¿el sweep representa al slate o un rincón sesgado?
+    sweep_total = sweep_ref = 0
 
     skipped_no_odds  = 0
     fallback_used    = 0
@@ -1660,10 +1662,14 @@ def run_prediction_pipeline():
         _sweep_n = 0
         for _sm, _sp in clean_probabilities.items():
             _sodd = odds.get(_sm)
+            if not _sodd or _sodd <= 1.01:
+                continue
+            sweep_total += 1
             _spref = market_probs.get(_sm, market_probs_raw.get(_sm))
             _sdev = _signed_deviation.get(_sm)
-            if not _sodd or _sodd <= 1.01 or _spref is None or _sdev is None:
+            if _spref is None or _sdev is None:
                 continue
+            sweep_ref += 1
             if abs(_sdev) < SHADOW_MIN_DEV:
                 continue
             shadow_records.append({
@@ -2239,7 +2245,9 @@ def run_prediction_pipeline():
     save_bets(real_bets)
 
     # ── B2/C1 (ronda 8): candidatas no apostadas → shadow_bets ──
-    print(f"🌑 Shadow sweep: {shadow_swept} candidatas barridas en {total_matches} partidos")
+    print(f"🌑 Shadow sweep: {shadow_swept} candidatas barridas en {total_matches} partidos | "
+          f"pares con cuota: {sweep_total} · con referencia: {sweep_ref} "
+          f"({sweep_ref}/{sweep_total}) · sobre piso 2pt: {shadow_swept}")
     persist_shadow_bets(shadow_records)
 
     # Devolvemos TODAS (real + paper) para que notify_telegram las muestre

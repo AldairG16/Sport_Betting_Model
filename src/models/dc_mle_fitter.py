@@ -62,6 +62,10 @@ DECAY_PER_DAY   = 0.006    # decay temporal — vida media ~115 días (antes 0.0
 MIN_MATCHES     = 8        # mínimo de partidos para incluir un equipo en el ajuste
 MAX_SEASONS     = 3        # usar solo últimas 3 temporadas (≈ 3 × 365 días)
 MAX_ITER        = 2000     # iteraciones máximas del optimizador
+# Nota ronda 9: con 22k partidos, L-BFGS-B agotaba las EVALUACIONES de F/G
+# (límite interno ~1.5×maxfun antes de maxiter) → converged=False. Se sube
+# maxfun explícitamente para no depender del default oculto.
+MAX_FUN         = 10000    # evaluaciones máximas de función/gradiente
                            # L-BFGS-B con limited-memory Hessian → ~30s aún con 2000 iters
                            # Necesario para convergencia plena con prior + reg fuerte
 
@@ -278,7 +282,7 @@ def fit_dc_parameters(verbose: bool = True) -> dict:
             neg_log_likelihood,
             x0,
             method="L-BFGS-B",
-            options={"maxiter": MAX_ITER, "ftol": 1e-7, "gtol": 1e-5, "disp": False},
+            options={"maxiter": MAX_ITER, "maxfun": MAX_FUN, "ftol": 1e-7, "gtol": 1e-5, "disp": False},
         )
 
     if not result.success and verbose:
