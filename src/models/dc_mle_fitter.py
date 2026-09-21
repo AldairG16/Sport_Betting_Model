@@ -253,10 +253,22 @@ def fit_dc_parameters(verbose: bool = True) -> dict:
     x0[-2] = 0.25                       # home_advantage inicial
     x0[-1] = _x_from_rho(PRIOR_RHO)     # rho inicial = prior
 
-    if DC_PARAMS_FILE.exists():
+    # ── G1 (ronda 12): warm-start desde Neon PRIMERO ──
+    # El archivo local está gitignoreado: el weekly de CI arranca sin él y
+    # producía un fit desde zeros (home_adv 0.59, fun 5500) que
+    # SOBREESCRIBÍA en Neon el fit bueno de la semana anterior (+45% en
+    # λ_home entre semanas — medido en ronda 11). La fuente de verdad del
+    # fit anterior es model_state; el archivo es fallback de desarrollo.
+    prev = _load_params_from_db() or {}
+    if not prev and DC_PARAMS_FILE.exists():
         try:
             with open(DC_PARAMS_FILE, "r") as f:
                 prev = json.load(f)
+        except Exception as e:
+            if verbose:
+                print(f"   Warm-start: archivo ilegible ({e}) — arrancando desde zeros")
+    if prev:
+        try:
             prev_teams = prev.get("teams", {})
             warm = 0
             for team, idx in team_idx.items():
