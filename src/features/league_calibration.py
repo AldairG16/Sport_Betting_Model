@@ -209,8 +209,11 @@ def get_lambda_multipliers(league: str) -> tuple[float, float]:
 
     Usage:
         home_adv, tempo = get_lambda_multipliers(row.league)
-        lambda_home = home_attack * away_defense * home_adv * tempo
-        lambda_away = away_attack * home_defense * tempo
+        lambda_home, lambda_away = compute_lambdas(
+            home_attack, home_defense, away_attack, away_defense,
+            home_adv, tempo)
+    # home_advantage es un REPARTO (avg_local / avg_visitante), no un
+    # multiplicador — ver compute_lambdas en prediction_pipeline.
     """
     f = get_league_factors(league)
     return f["home_advantage"], f["tempo"]
