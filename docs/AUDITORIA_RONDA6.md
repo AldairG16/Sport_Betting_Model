@@ -52,15 +52,36 @@ cap corta en 30pt, conservadoramente dentro de esa región medida. Si Q-G
 fuera transferible, ni 10pt ni 30pt serían seguros: sería papel para
 siempre; no lo es, y la corrida en seco así lo muestra.
 
+> **[ERRATA, ronda 7]:** honestidad plena sobre el 30: es una **elección
+> prudencial dentro de una región observada con n=8-32 por celda**, no una
+> derivación. El propio §10 de este documento ya lo admitía ("el techo lo
+> excluye por diseño, no porque lo haya medido"); esta sección daba a
+> entender más de lo que hay (prohibición 11 de la ronda 7). Qué evidencia
+> lo movería: CLV shadow positivo sostenido en la banda [25-30+] con
+> n≥50 → revisar subida; CLV negativo significativo en [19-25) → bajar.
+> Mecanismo de medición: `shadow_bets` + `shadow_clv_bands` (ronda 7).
+
 ### 2.2 Tabla nueva
 
-Todos los mercados: `0.05` (piso único). Justificación por mercado ya no
-vive en esta tabla: la decide el **gate dinámico de CLV** (n≥100, CLV ≤−5%
-→ bloqueo automático, desbloqueo por recuperación). Las entradas
+> **[ERRATA, ronda 7 — B3]:** la frase siguiente era falsa tal como estaba
+> escrita y contradecía al §10 de este mismo documento (R5). El gate de CLV
+> con n≥100 fijo es INALCANZABLE para casi todos los mercados con las tasas
+> reales (Q-Q ronda 7: máximo 94 bets/120d en el mercado más grande), y fue
+> sustituido por un criterio estadístico (IC95 unilateral < 0, n≥30) en
+> `scripts/clv_gate.py` — commit de la ronda 7. Además, los favoritos AH
+> quedaron bloqueados explícitamente ese mismo commit. Ver
+> docs/AUDITORIA_RONDA7.md §2.
+
+Todos los mercados: `0.05` (piso único). ~~Justificación por mercado ya no
+vive en esta tabla: la decide el gate dinámico de CLV (n≥100, CLV ≤−5% →
+bloqueo automático, desbloqueo por recuperación).~~ *(Corregido: ver errata
+anterior.)* Las entradas
 `ah_*_fav: 0.20` morían por aritmética (64pt de desvío); ahora son
 apostables dentro del techo y con el mismo piso que todos — si los
 favoritos AH vuelven a comportarse mal, el gate de CLV los bloquea con
-datos, no con un número congelado de mayo.
+datos, no con un número congelado de mayo. *(Corregido en ronda 7: el gate
+no alcanzaba para protegerlos — bloqueo explícito con ruta de reactivación
+por CLV shadow.)*
 
 ### 2.3 Corrida en seco (slate del 20-sep, 153 partidos, bets capturadas sin escribir)
 

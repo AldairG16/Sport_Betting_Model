@@ -105,7 +105,7 @@ from src.models.betting_engine import find_value_bets, kelly_stake
 
 from src.features.market_odds import market_probabilities
 from src.models.bet_ranker import rank_bets
-from src.models.save_bets import save_bets
+from src.models.save_bets import save_bets, persist_shadow_bets
 from src.models.bet_filters import bet_quality_filter
 
 from src.features.market_calibration import calibrate_probability
@@ -564,6 +564,11 @@ def run_prediction_pipeline():
         return
 
     all_bets = []
+    # B2 (ronda 7): candidatas rechazadas con precio real — se registran en
+    # shadow_bets para medir CLV por banda de desvío SIN apostar. Responde
+    # si la ventana apostable [MIN_EDGE→desvío, MAX_MODEL_DEVIATION] está en
+    # el lado correcto (ver docs/AUDITORIA_RONDA7.md §3).
+    shadow_records: list = []
 
     skipped_no_odds  = 0
     fallback_used    = 0
@@ -1319,6 +1324,7 @@ def run_prediction_pipeline():
 
         probabilities = {}
         _model_deviation = {}   # |p_modelo − p_mercado de referencia| (A1, r6)
+        _signed_deviation = {}  # con signo: >0 modelo encima del precio (B2, r7)
 
         for market, model_prob in model_probs.items():
 
@@ -1331,7 +1337,8 @@ def run_prediction_pipeline():
             if _anchorable(market):
                 if market in market_probs:
                     probabilities[market] = model_prob
-                    _model_deviation[market] = abs(model_prob - market_probs[market])
+                    _signed_deviation[market] = model_prob - market_probs[market]
+                    _model_deviation[market] = abs(_signed_deviation[market])
                 continue
 
             # Ronda 6 (A4): se pasa el edge para que la escalera
@@ -1344,7 +1351,8 @@ def run_prediction_pipeline():
                 (model_prob - _implied) if _implied else None,
             )
             if _implied:
-                _model_deviation[market] = abs(model_prob - _implied)
+                _signed_deviation[market] = model_prob - _implied
+                _model_deviation[market] = abs(_signed_deviation[market])
 
         # =========================
         # ODDS
@@ -1778,6 +1786,21 @@ def run_prediction_pipeline():
         match_bets_count = 0
         groups_used = set()
 
+        # B2 (ronda 7): captura de candidatas rechazadas → shadow_bets.
+        def _shadow(reason, mkt, _bet):
+            shadow_records.append({
+                "match":      f"{home} vs {away}",
+                "match_date": date,
+                "league":     _league,
+                "market":     mkt,
+                "p_final":    _bet.get("probability"),
+                "p_ref":      market_probs.get(mkt, market_probs_raw.get(mkt)),
+                "deviation":  _signed_deviation.get(mkt),
+                "odds":       _bet.get("odds"),
+                "edge_market": _bet.get("edge_market", _bet.get("edge")),
+                "reason":     reason,
+            })
+
         for bet in bets:
             if match_bets_count >= MAX_BETS_PER_MATCH:
                 break
@@ -1806,6 +1829,17 @@ def run_prediction_pipeline():
             if mkt.startswith("ah_") and ("+0.0" in mkt or mkt.endswith("_0.0")):
                 continue
 
+            # ── B1(b) ronda 7: favoritos AH bloqueados explícitamente ──
+            # Los dos mercados peor calibrados del histórico (brecha +33-38pt
+            # en la era vieja) quedaron expuestos por la re-derivación de la
+            # ronda 6. El gate de CLV NO puede protegerlos (R10: con su tasa
+            # real jamás alcanza n para dispararse) y un piso estático más
+            # alto los mataría de nuevo por aritmética (desvío ≥40pt > techo
+            # 0.30). Bloqueo declarado; reactivación: CLV de la banda shadow
+            # de favoritos AH ≥ 0 con n>=30 (shadow_clv_bands, ronda 7).
+            if not _is_paper and _ah_group(mkt) in ("ah_home_fav", "ah_away_fav"):
+                continue
+
             # ── Mejora 4: Sweet spots de odds por mercado ────────────
             # Rangos donde el modelo ha demostrado edge real:
             #   home_win @1.5-2.0 → 81% WR, +42% ROI
@@ -1813,10 +1847,13 @@ def run_prediction_pipeline():
             #   draw     @2.5-4.0 → 100% WR (muestra chica, mantener amplio)
             _odds = bet["odds"]
             if mkt == "home_win" and not (1.3 <= _odds <= 3.80):
+                _shadow("odds_band", mkt, bet)
                 continue
             if mkt == "over25" and not (1.50 <= _odds <= 3.00):
+                _shadow("odds_band", mkt, bet)
                 continue
             if mkt == "draw" and not (2.5 <= _odds <= 5.0):
+                _shadow("odds_band", mkt, bet)
                 continue
 
             # ── Edge mínimo dinámico (Mejora #3 — por mercado) ──────
@@ -1857,6 +1894,7 @@ def run_prediction_pipeline():
                 _min_edge *= 1.4
 
             if _edge_real < _min_edge:
+                _shadow("edge_floor", mkt, bet)
                 continue
 
             # 4) Techo de desvío del modelo (A1/R9, ronda 6). El piso de edge
@@ -1865,13 +1903,18 @@ def run_prediction_pipeline():
             # (ver derivación en MAX_MODEL_DEVIATION). Sin desvío medido
             # (mercado sin precio de referencia) no hay apuesta.
             _dev = _model_deviation.get(mkt)
-            if _dev is None or _dev > MAX_MODEL_DEVIATION:
+            if _dev is None:
+                _shadow("no_reference_price", mkt, bet)
+                continue
+            if _dev > MAX_MODEL_DEVIATION:
+                _shadow("deviation_cap", mkt, bet)
                 continue
 
             # MAX_ODDS: en paper usamos 6.0 para capturar underdogs del Mundial
             # (ej. France @5.35 sería bloqueada con el límite de clubes de 3.80)
             _max_odds = 6.0 if _is_paper else MAX_ODDS
             if bet["odds"] > _max_odds:
+                _shadow("max_odds", mkt, bet)
                 continue
 
             # ── Filtro de contradicción ───────────────────────────────
@@ -2174,6 +2217,9 @@ def run_prediction_pipeline():
               f"(NO insertadas en bets_history)")
 
     save_bets(real_bets)
+
+    # ── B2 (ronda 7): candidatas no apostadas → shadow_bets ──
+    persist_shadow_bets(shadow_records)
 
     # Devolvemos TODAS (real + paper) para que notify_telegram las muestre
     return all_bets

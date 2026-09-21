@@ -707,6 +707,9 @@ def step_clv_gate():
     try:
         from scripts.clv_gate import run_clv_gate
         result = run_clv_gate(verbose=True)
+        # B2 (ronda 7): CLV por banda de desvío de las candidatas shadow
+        from scripts.clv_gate import shadow_clv_bands
+        shadow_clv_bands(verbose=True)
         if result.get("blocked"):
             from scripts.notify_telegram import send_message
             send_message(

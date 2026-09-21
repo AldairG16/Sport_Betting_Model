@@ -61,6 +61,59 @@ def is_resolvable_market(market) -> bool:
     return m in _RESOLVER_FIXED_MARKETS or m.startswith(_RESOLVER_PARAMETRIC_PREFIXES)
 
 
+# ============================================================
+# SHADOW BETS (ronda 7, B2)
+# ============================================================
+# Candidatas con precio real que NO se apostaron (piso de edge, techo de
+# desvío, banda de cuotas, max_odds). Se registran para medir CLV por banda
+# de desvío sin arriesgar unidades: responde si la ventana apostable está
+# en el lado correcto. El paso de closing las rellena igual que bets_history
+# (ver update_closing_odds → _update_shadow_closing).
+
+SHADOW_TABLE_SQL = """
+    CREATE TABLE IF NOT EXISTS shadow_bets (
+        id           SERIAL PRIMARY KEY,
+        match        TEXT NOT NULL,
+        match_date   TIMESTAMPTZ,
+        league       TEXT,
+        market       TEXT NOT NULL,
+        p_final      NUMERIC,
+        p_ref        NUMERIC,
+        deviation    NUMERIC,
+        odds         NUMERIC,
+        edge_market  NUMERIC,
+        reason       TEXT,
+        closing_odds NUMERIC,
+        created_at   TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (match, market, match_date)
+    )
+"""
+
+
+def persist_shadow_bets(records: list):
+    """Inserta candidatas shadow (ON CONFLICT DO NOTHING por re-runs)."""
+    if not records:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(SHADOW_TABLE_SQL))
+            for r in records:
+                if not r.get("odds") or r["odds"] <= 1.01:
+                    continue   # sin precio real no hay nada que medir
+                conn.execute(text("""
+                    INSERT INTO shadow_bets
+                        (match, match_date, league, market, p_final,
+                         p_ref, deviation, odds, edge_market, reason)
+                    VALUES
+                        (:match, :match_date, :league, :market, :p_final,
+                         :p_ref, :deviation, :odds, :edge_market, :reason)
+                    ON CONFLICT (match, market, match_date) DO NOTHING
+                """), r)
+        print(f"🌑 Shadow: {len(records)} candidatas registradas")
+    except Exception as e:
+        print(f"⚠️  persist_shadow_bets error: {e}")
+
+
 # =========================
 # SAVE BETS
 # =========================
@@ -621,6 +674,153 @@ def update_bet_results():
         if r2.rowcount > 0:
             print(f"🗑️  {r2.rowcount} bets 'unresolved' → 'stale' (tras 7 días sin datos fuente)")
 
+
+def _nearest_market_row(home, away, bet_match_date):
+    """Fila de upcoming_matches más cercana al kickoff (±4h) — B2 ronda 7.
+    Compartida por el closing de bets_history y de shadow_bets."""
+    return pd.read_sql(text("""
+        SELECT *
+        FROM upcoming_matches
+        WHERE home_team_norm = :home
+        AND away_team_norm = :away
+        AND match_date BETWEEN CAST(:date_from AS timestamptz) AND CAST(:date_to AS timestamptz)
+        ORDER BY ABS(EXTRACT(EPOCH FROM (match_date - CAST(:exact_date AS timestamptz)))) ASC
+        LIMIT 1
+    """), engine, params={
+        "home":       normalize_team(home).lower().strip(),
+        "away":       normalize_team(away).lower().strip(),
+        "date_from":  (bet_match_date - pd.Timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S+00:00"),
+        "date_to":    (bet_match_date + pd.Timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S+00:00"),
+        "exact_date": bet_match_date.strftime("%Y-%m-%d %H:%M:%S+00:00"),
+    })
+
+
+def _closing_odds_for(market, odds_row):
+    """Mapeo mercado → cuota de cierre (compartido bets/shadow, ronda 7)."""
+    closing_odds = None
+
+    # =========================
+    # MAPEO MERCADOS
+    # =========================
+
+    if market == "home_win":
+        closing_odds = odds_row.get("home_odds")
+
+    elif market == "draw":
+        closing_odds = odds_row.get("draw_odds")
+
+    elif market == "away_win":
+        closing_odds = odds_row.get("away_odds")
+
+    elif market == "over25":
+        closing_odds = odds_row.get("over25_odds")
+
+    elif market == "under25":
+        closing_odds = odds_row.get("under25_odds")
+
+    elif market == "btts":
+        closing_odds = odds_row.get("btts_yes_odds")
+
+    elif market == "btts_no":
+        closing_odds = odds_row.get("btts_no_odds")
+
+    elif market == "dnb_home":
+        # DNB odds derivadas de h2h closing odds
+        h = odds_row.get("home_odds")
+        a = odds_row.get("away_odds")
+        if h and a and h > 1 and a > 1:
+            imp_sum = 1/h + 1/a
+            closing_odds = round(imp_sum / (1/h), 3)
+
+    elif market == "dnb_away":
+        h = odds_row.get("home_odds")
+        a = odds_row.get("away_odds")
+        if h and a and h > 1 and a > 1:
+            imp_sum = 1/h + 1/a
+            closing_odds = round(imp_sum / (1/a), 3)
+
+    elif market.startswith("ah_home_") or market.startswith("ah_away_"):
+        side = market.split("_")[1]   # "home" o "away"
+        if side == "home":
+            closing_odds = odds_row.get("ah_home_odds")
+        else:
+            closing_odds = odds_row.get("ah_away_odds")
+
+    elif market == "dc_1x":
+        closing_odds = odds_row.get("dc_1x_odds")
+    elif market == "dc_x2":
+        closing_odds = odds_row.get("dc_x2_odds")
+    elif market == "dc_12":
+        closing_odds = odds_row.get("dc_12_odds")
+
+    elif market == "h1_home":
+        closing_odds = odds_row.get("h1_home_odds")
+    elif market == "h1_draw":
+        closing_odds = odds_row.get("h1_draw_odds")
+    elif market == "h1_away":
+        closing_odds = odds_row.get("h1_away_odds")
+    elif market == "h2_home":
+        closing_odds = odds_row.get("h2_home_odds")
+    elif market == "h2_draw":
+        closing_odds = odds_row.get("h2_draw_odds")
+    elif market == "h2_away":
+        closing_odds = odds_row.get("h2_away_odds")
+
+    elif market.startswith("corners_over_") or market.startswith("corners_under_"):
+        if market.startswith("corners_over_"):
+            closing_odds = odds_row.get("corners_over_odds")
+        else:
+            closing_odds = odds_row.get("corners_under_odds")
+
+    elif market.startswith("cards_over_") or market.startswith("cards_under_"):
+        if market.startswith("cards_over_"):
+            closing_odds = odds_row.get("cards_over_odds")
+        else:
+            closing_odds = odds_row.get("cards_under_odds")
+    return closing_odds
+
+
+
+def _update_shadow_closing():
+    """Rellena closing_odds de shadow_bets con el MISMO lookup y mapeo que
+    bets_history (B2, ronda 7) — el CLV por bandas depende de esto."""
+    sdf = pd.read_sql("""
+        SELECT id, match, market, match_date
+        FROM shadow_bets
+        WHERE closing_odds IS NULL
+    """, engine)
+    if sdf.empty:
+        return
+
+    s_updated = 0
+    with engine.begin() as conn:
+        for _, row in sdf.iterrows():
+            match = row["match"]
+            market = row["market"]
+            bet_match_date = pd.to_datetime(row["match_date"])
+            try:
+                home, away = match.split(" vs ")
+            except ValueError:
+                continue
+
+            odds_df = _nearest_market_row(home, away, bet_match_date)
+            if odds_df.empty:
+                continue
+
+            closing_odds = _closing_odds_for(market, odds_df.iloc[0])
+            if closing_odds is None:
+                continue
+
+            conn.execute(text("""
+                UPDATE shadow_bets
+                SET closing_odds = :closing_odds
+                WHERE id = :id
+            """), {"closing_odds": float(closing_odds), "id": int(row["id"])})
+            s_updated += 1
+
+    print(f"🌑 Shadow closing: {s_updated}/{len(sdf)}")
+
+
 def update_closing_odds():
 
     print("\n📡 UPDATING CLOSING ODDS...\n")
@@ -634,149 +834,52 @@ def update_closing_odds():
         WHERE closing_odds IS NULL
     """, engine)
 
-    if df.empty:
+    if not df.empty:
+        updated = 0
+
+        with engine.begin() as conn:
+
+            for _, row in df.iterrows():
+
+                match = row["match"]
+                market = row["market"]
+                bet_match_date = pd.to_datetime(row["match_date"])
+
+                try:
+                    home, away = match.split(" vs ")
+                except ValueError:
+                    continue
+
+                    odds_df = _nearest_market_row(home, away, bet_match_date)
+
+                if odds_df.empty:
+                    continue
+
+                odds_row = odds_df.iloc[0]
+                closing_odds = _closing_odds_for(market, odds_row)
+
+
+                if closing_odds is None:
+                    continue
+
+                conn.execute(text("""
+                    UPDATE bets_history
+                    SET closing_odds = :closing_odds
+                    WHERE id = :id
+                """), {
+                    "closing_odds": float(closing_odds),
+                    "id": int(row["id"])
+                })
+
+                updated += 1
+
+            print(f"✅ Closing odds updated: {updated}")
+    else:
         print("No bets need closing odds")
-        return
 
-    updated = 0
-
-    with engine.begin() as conn:
-
-        for _, row in df.iterrows():
-
-            match = row["match"]
-            market = row["market"]
-            bet_match_date = pd.to_datetime(row["match_date"])
-
-            try:
-                home, away = match.split(" vs ")
-            except ValueError:
-                continue
-
-            # Fix: buscar el partido MÁS CERCANO en fecha (±4 horas del
-            # kickoff original). Esto garantiza que tomamos odds del partido
-            # correcto, no de otro enfrentamiento futuro del mismo equipo.
-            # upcoming_matches.home_team / away_team vienen RAW de la API
-            # (ej. "Independiente Rivadavia"). Usamos home_team_norm / away_team_norm
-            # que guardan la forma canónica (ej. "ind rivadavia"), que es la misma
-            # que aparece en bets_history.match.
-            # upcoming_matches.match_date es TIMESTAMPTZ. Pasamos strings
-            # con offset UTC explícito (+00:00) para que la comparación sea
-            # inequívoca (bet_match_date es naive pero sabemos que está en UTC).
-            odds_df = pd.read_sql(text("""
-                SELECT *
-                FROM upcoming_matches
-                WHERE home_team_norm = :home
-                AND away_team_norm = :away
-                AND match_date BETWEEN :date_from::timestamptz AND :date_to::timestamptz
-                ORDER BY ABS(EXTRACT(EPOCH FROM (match_date - :exact_date::timestamptz))) ASC
-                LIMIT 1
-            """), engine, params={
-                "home":       normalize_team(home).lower().strip(),
-                "away":       normalize_team(away).lower().strip(),
-                "date_from":  (bet_match_date - pd.Timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S+00:00"),
-                "date_to":    (bet_match_date + pd.Timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S+00:00"),
-                "exact_date": bet_match_date.strftime("%Y-%m-%d %H:%M:%S+00:00"),
-            })
-
-            if odds_df.empty:
-                continue
-
-            odds_row = odds_df.iloc[0]
-
-            closing_odds = None
-
-            # =========================
-            # MAPEO MERCADOS
-            # =========================
-
-            if market == "home_win":
-                closing_odds = odds_row.get("home_odds")
-
-            elif market == "draw":
-                closing_odds = odds_row.get("draw_odds")
-
-            elif market == "away_win":
-                closing_odds = odds_row.get("away_odds")
-
-            elif market == "over25":
-                closing_odds = odds_row.get("over25_odds")
-
-            elif market == "under25":
-                closing_odds = odds_row.get("under25_odds")
-
-            elif market == "btts":
-                closing_odds = odds_row.get("btts_yes_odds")
-
-            elif market == "btts_no":
-                closing_odds = odds_row.get("btts_no_odds")
-
-            elif market == "dnb_home":
-                # DNB odds derivadas de h2h closing odds
-                h = odds_row.get("home_odds")
-                a = odds_row.get("away_odds")
-                if h and a and h > 1 and a > 1:
-                    imp_sum = 1/h + 1/a
-                    closing_odds = round(imp_sum / (1/h), 3)
-
-            elif market == "dnb_away":
-                h = odds_row.get("home_odds")
-                a = odds_row.get("away_odds")
-                if h and a and h > 1 and a > 1:
-                    imp_sum = 1/h + 1/a
-                    closing_odds = round(imp_sum / (1/a), 3)
-
-            elif market.startswith("ah_home_") or market.startswith("ah_away_"):
-                side = market.split("_")[1]   # "home" o "away"
-                if side == "home":
-                    closing_odds = odds_row.get("ah_home_odds")
-                else:
-                    closing_odds = odds_row.get("ah_away_odds")
-
-            elif market == "dc_1x":
-                closing_odds = odds_row.get("dc_1x_odds")
-            elif market == "dc_x2":
-                closing_odds = odds_row.get("dc_x2_odds")
-            elif market == "dc_12":
-                closing_odds = odds_row.get("dc_12_odds")
-
-            elif market == "h1_home":
-                closing_odds = odds_row.get("h1_home_odds")
-            elif market == "h1_draw":
-                closing_odds = odds_row.get("h1_draw_odds")
-            elif market == "h1_away":
-                closing_odds = odds_row.get("h1_away_odds")
-            elif market == "h2_home":
-                closing_odds = odds_row.get("h2_home_odds")
-            elif market == "h2_draw":
-                closing_odds = odds_row.get("h2_draw_odds")
-            elif market == "h2_away":
-                closing_odds = odds_row.get("h2_away_odds")
-
-            elif market.startswith("corners_over_") or market.startswith("corners_under_"):
-                if market.startswith("corners_over_"):
-                    closing_odds = odds_row.get("corners_over_odds")
-                else:
-                    closing_odds = odds_row.get("corners_under_odds")
-
-            elif market.startswith("cards_over_") or market.startswith("cards_under_"):
-                if market.startswith("cards_over_"):
-                    closing_odds = odds_row.get("cards_over_odds")
-                else:
-                    closing_odds = odds_row.get("cards_under_odds")
-
-            if closing_odds is None:
-                continue
-
-            conn.execute(text("""
-                UPDATE bets_history
-                SET closing_odds = :closing_odds
-                WHERE id = :id
-            """), {
-                "closing_odds": float(closing_odds),
-                "id": int(row["id"])
-            })
-
-            updated += 1
-
-    print(f"✅ Closing odds updated: {updated}")
+    # ── B2 (ronda 7): closing de las candidatas shadow ──
+    try:
+        _update_shadow_closing()
+    except Exception as e:
+        # la tabla aún no existe en el primer ciclo → no es error
+        print(f"⚠️  shadow closing omitido: {type(e).__name__}")
