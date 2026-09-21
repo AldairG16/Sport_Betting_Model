@@ -322,6 +322,12 @@ def fit_dc_parameters(verbose: bool = True) -> dict:
     with open(DC_PARAMS_FILE, "w") as f:
         json.dump(output, f, indent=2)
 
+    # Neon: sin esto el fit muere con el runner — el morning corre en otro
+    # runner sin el archivo (causa de mle_weight=0.0 en producción, H2).
+    if _save_params_to_db(output):
+        if verbose:
+            print("   Persistido en Neon: model_state/dc_params")
+
     if verbose:
         print(f"   ✅ Ajuste completado — {n_teams} equipos | home_adv={home_adv:.3f} | rho={rho:.3f}")
         print(f"   Guardado en: {DC_PARAMS_FILE}")
@@ -336,10 +342,60 @@ def fit_dc_parameters(verbose: bool = True) -> dict:
 _cached_params: dict | None = None
 
 
+def _load_params_from_db() -> dict:
+    """
+    Parámetros desde Neon (tabla model_state). Fuente de verdad en CI:
+    el fit corre en el runner del weekly y data/dc_params.json es efímero
+    (además está en .gitignore) — el morning corre en OTRO runner que jamás
+    vería el archivo. Era la causa de mle_weight=0.0 en 100% de producción
+    (H2, rondas 1-4).
+    """
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            row = conn.execute(text(
+                "SELECT value FROM model_state WHERE key = 'dc_params'"
+            )).first()
+        if row and row[0]:
+            return json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
+    except Exception as e:
+        print(f"⚠️  model_state/dc_params ilegible en Neon: {type(e).__name__}: {str(e)[:100]}")
+    return {}
+
+
+def _save_params_to_db(params: dict) -> bool:
+    """Persiste los parámetros en Neon para que otros runners los lean."""
+    try:
+        from sqlalchemy import text
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS model_state (
+                    key TEXT PRIMARY KEY,
+                    value JSONB NOT NULL,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            conn.execute(text("""
+                INSERT INTO model_state (key, value, updated_at)
+                VALUES ('dc_params', CAST(:p AS jsonb), NOW())
+                ON CONFLICT (key) DO UPDATE SET
+                    value = EXCLUDED.value, updated_at = NOW()
+            """), {"p": json.dumps(params)})
+        return True
+    except Exception as e:
+        print(f"⚠️  No se pudo persistir dc_params en Neon: {type(e).__name__}: {str(e)[:120]}")
+        return False
+
+
 def _load_params() -> dict:
-    """Carga los parámetros del disco (con caché en memoria)."""
+    """Parámetros MLE: Neon primero, archivo local como fallback (con caché)."""
     global _cached_params
     if _cached_params is not None:
+        return _cached_params
+
+    params = _load_params_from_db()
+    if params:
+        _cached_params = params
         return _cached_params
 
     if DC_PARAMS_FILE.exists():

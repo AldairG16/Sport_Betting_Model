@@ -74,7 +74,7 @@ def _has_coverage(league: str, market_kind: str) -> bool:
     return _COVERAGE_CACHE[key]
 
 from src.features.elo_rating import compute_elo
-from src.features.team_form import get_team_form
+from src.features.team_form import get_team_form, KALMAN_BASELINE
 from src.features.xg_proxy import get_team_xg
 from src.features.h2h_stats import get_h2h_stats
 from src.features.league_calibration import get_lambda_multipliers
@@ -278,7 +278,7 @@ try:
     from scripts.clv_gate import (load_clv_blocked_markets as _load_clv_blocked,
                                   load_clv_blocked_leagues as _load_clv_leagues)
     _CLV_BLOCKED = _load_clv_blocked()
-    _CLV_LEAGUES = _load_clv_blocked_leagues()
+    _CLV_LEAGUES = _load_clv_leagues()
     if _CLV_BLOCKED:
         print(f"🚦 Mercados bloqueados por CLV gate: {sorted(_CLV_BLOCKED)}")
     if _CLV_LEAGUES:
@@ -288,6 +288,58 @@ except Exception:
     _CLV_LEAGUES = set()
 _BLOCKED_MARKETS = _BLOCKED_MARKETS | _CLV_BLOCKED
 BLOCKED_LEAGUES = BLOCKED_LEAGUES | _CLV_LEAGUES
+
+# =========================
+# LAMBDAS DIXON-COLES (función pura — testeable, ronda 4)
+# =========================
+# home_advantage es un REPARTO (avg goles local / avg visitante, ver
+# league_calibration.py), NO un multiplicador: con equipos promedio debe
+# cumplir λ_total = 2.5·tempo y λ_home/λ_away = home_advantage. Aplicarlo
+# como multiplicador solo a λ_home dejaba el total en (1+HA)·baseline·tempo
+# (+23% de goles esperados medido en producción — ronda 4, D4/D8).
+LAMBDA_CAP = 3.5   # guardia de cola (simulado: recorta ~1% de ratings legítimos)
+
+def compute_lambdas(home_attack, home_defense, away_attack, away_defense,
+                    home_advantage, tempo, baseline=None):
+    """
+    Lambdas de Poisson por equipo desde ratings de goles absolutos.
+
+    Los ratings viven en escala de goles (baseline = KALMAN_BASELINE), así
+    que attack × defense da goles² → (a/B)·(d/B) los vuelve adimensionales
+    y el reparto μ_h/μ_a fija el nivel de liga (2.5·tempo) y la ventaja
+    local como reparto, no como multiplicador.
+    """
+    b = baseline if baseline is not None else KALMAN_BASELINE
+    mu   = 2.5 * tempo
+    mu_h = mu * home_advantage / (1 + home_advantage)
+    mu_a = mu / (1 + home_advantage)
+    lambda_home = (home_attack / b) * (away_defense / b) * mu_h
+    lambda_away = (away_attack / b) * (home_defense / b) * mu_a
+    return lambda_home, lambda_away
+
+# Mercados que model_probs puede producir (el anclaje y el resolver se
+# validan contra este conjunto en tests — ronda 4, D13).
+MODEL_PROB_MARKETS = frozenset({
+    "home_win", "draw", "away_win", "over25", "under25", "btts", "btts_no",
+})
+
+# Anclaje al mercado: clave = mercado del modelo, valor = clave en market_probs.
+# (fix ronda 4: la clave del modelo es "btts", no "btts_yes" — con la clave
+# vieja el bucle hacía `continue` siempre y BTTS jamás se anclaba mientras
+# su complemento btts_no sí → par binario que ya no sumaba 1. D6.)
+ANCHOR_MAP = {
+    "home_win": "home_win",
+    "draw": "draw",
+    "away_win": "away_win",
+    "over25": "over25",
+    "under25": "under25",
+    "btts": "btts",
+    "btts_no": "btts_no",
+}
+
+# Reparto 1T/2T medido sobre 4,559 partidos con descanso publicado (12
+# ligas, fracción 1T entre 0.426 y 0.471): antes 50% + 55% = 105% (D9).
+HT_FIRST_HALF_FRACTION = 0.44
 
 # =========================
 # SAFE HELPERS (CRÍTICO)
@@ -619,17 +671,16 @@ def run_prediction_pipeline():
         # aportaba señal real, solo comprimía los ataques hacia la media.
         # El ELO sí sigue usándose como señal independiente del ensemble.)
 
-        # ── FIX DIMENSIONAL (19-sep-26, producción: λ_total=4.02 vs 2.7 real) ──
-        # attack_rating y defense_rating están en escala de GOLES ABSOLUTOS
-        # (Kalman baseline = 1.35). El producto attack × defense da goles².
-        # Dividir por el baseline normaliza a goles/partido.
-        # Antes (promedio): 1.35 × 1.35 × 1.371 = 2.50 → PERO con attack=2.0:
-        #   2.0 × 1.5 × 1.371 = 4.11 (absurdo, 4 goles esperados)
-        # Después: (2.0 × 1.5 / 1.35) × 1.371 = 3.05 (razonable para el mejor
-        #   ataque vs la peor defensa)
-        _BASELINE = 1.35
-        lambda_home = (home_attack * away_defense / _BASELINE) * HOME_ADVANTAGE * TEMPO
-        lambda_away = (away_attack * home_defense / _BASELINE) * TEMPO
+        # ── FIX REPARTO (ronda 4, D4) ──
+        # La corrección dimensional (baada73) normalizó attack×defense pero
+        # dejó HOME_ADVANTAGE como multiplicador de solo λ_home. Producción
+        # post-fix: λ_total 4.05 vs 2.7-3.0 real (Q-B ronda 4) — el cap 2.5
+        # absorbía el exceso. La parametrización correcta reparte 2.5·tempo
+        # entre local y visitante según home_advantage (ver compute_lambdas).
+        lambda_home, lambda_away = compute_lambdas(
+            home_attack, home_defense, away_attack, away_defense,
+            HOME_ADVANTAGE, TEMPO,
+        )
 
         # =========================
         # H2H ADJUSTMENT
@@ -776,9 +827,13 @@ def run_prediction_pipeline():
         # =========================
         # CAP GOALS
         # =========================
+        # Guardia de cola, no calibración: con la parametrización de reparto
+        # los λ legítimos casi nunca superan 3.5 (simulado ~1%); el cap viejo
+        # de 2.5 existió para tapar el error dimensional y recortaba ~10% de
+        # favoritos reales (ronda 4, D8).
 
-        lambda_home = min(lambda_home, 2.5)
-        lambda_away = min(lambda_away, 2.5)
+        lambda_home = min(lambda_home, LAMBDA_CAP)
+        lambda_away = min(lambda_away, LAMBDA_CAP)
 
         # =========================
         # ASIAN HANDICAP + DNB
@@ -869,13 +924,15 @@ def run_prediction_pipeline():
         # agreement alto → más confianza en el modelo.
 
         ensemble = ensemble_predict(
-            dc_probs     = (dc_home, dc_draw, dc_away),
-            elo_home     = elo.get(home, 1500),
-            elo_away     = elo.get(away, 1500),
-            home_attack  = home_attack,
-            home_defense = home_defense,
-            away_attack  = away_attack,
-            away_defense = away_defense,
+            dc_probs        = (dc_home, dc_draw, dc_away),
+            elo_home        = elo.get(home, 1500),
+            elo_away        = elo.get(away, 1500),
+            home_attack     = home_attack,
+            home_defense    = home_defense,
+            away_attack     = away_attack,
+            away_defense    = away_defense,
+            home_advantage  = HOME_ADVANTAGE,
+            tempo           = TEMPO,
         )
 
         home_win = clamp_prob(ensemble["home_win"])
@@ -937,10 +994,14 @@ def run_prediction_pipeline():
         # y segundo tiempo con λ * 0.55 (ligeramente más goles en el 2T que en el 1T)
         # Solo generamos probs si la API nos dio odds para esos mercados.
 
-        lh_h1 = min(lambda_home / 2.0, 2.0)
-        la_h1 = min(lambda_away / 2.0, 2.0)
-        lh_h2 = min(lambda_home * 0.55, 2.0)
-        la_h2 = min(lambda_away * 0.55, 2.0)
+        # Modelamos cada tiempo con SU fracción medida de goles (44% / 56%,
+        # HT_FIRST_HALF_FRACTION) para que 1T + 2T sumen el partido completo.
+        # Antes: λ/2 + λ·0.55 = 105% de los goles del partido (D9, ronda 4).
+
+        lh_h1 = min(lambda_home * HT_FIRST_HALF_FRACTION, 2.0)
+        la_h1 = min(lambda_away * HT_FIRST_HALF_FRACTION, 2.0)
+        lh_h2 = min(lambda_home * (1 - HT_FIRST_HALF_FRACTION), 2.0)
+        la_h2 = min(lambda_away * (1 - HT_FIRST_HALF_FRACTION), 2.0)
 
         # IMPORTANTE: inicializar model_probs ANTES de que h1/h2 le asigne keys.
         # Si NO se inicializa aquí y un partido tiene _h1_*_odds o _h2_*_odds
@@ -977,8 +1038,11 @@ def run_prediction_pipeline():
             poisson_probs["over25"]  * (1 - OVER25_SHRINK)
             + league_over25          * OVER25_SHRINK
         )
-        # 🔥 sanity cap — ANTES de derivar under25 para que sumen exactamente 1
-        poisson_probs["over25"]   = min(poisson_probs["over25"],   0.75)
+        # 🔥 sanity caps — ANTES de derivar under25/btts_no para que sumen 1.
+        # over25 en 0.80: Poisson legítimo con λ_total≈4.0 da 0.76 (Bundesliga
+        # top vs colero); 0.75 recortaba ~13% de la masa válida (ronda 4, D8).
+        # btts se queda en 0.75: BTTS>0.75 exige ambos λ≥2.5, cola genuina.
+        poisson_probs["over25"]   = min(poisson_probs["over25"],   0.80)
         poisson_probs["btts_yes"] = min(poisson_probs["btts_yes"], 0.75)
         poisson_probs["btts_no"]  = 1.0 - poisson_probs["btts_yes"]
         poisson_probs["under25"]  = 1.0 - poisson_probs["over25"]
@@ -1277,19 +1341,10 @@ def run_prediction_pipeline():
         # precisión del mercado y solo añadimos la señal que el mercado no ve.
         # Solo mercados con devig confiable (1x2 Shin, O/U y BTTS
         # proporcionales). AH/DC/DNB/HT siguen modelo-crudo por ahora.
-        _ANCHOR_MAP = {
-            "home_win": "home_win",
-            "draw": "draw",
-            "away_win": "away_win",
-            "over25": "over25",
-            "under25": "under25",
-            "btts_yes": "btts",
-            "btts_no": "btts_no",
-        }
         _ANCHOR_WEIGHT = 0.65   # peso del mercado; el modelo aporta el 35%
         _anchored_markets = set()
         if market_probs:
-            for _mkt, _mpk in _ANCHOR_MAP.items():
+            for _mkt, _mpk in ANCHOR_MAP.items():
                 if _mkt not in probabilities:
                     continue
                 _mp = market_probs.get(_mpk)
@@ -1302,6 +1357,9 @@ def run_prediction_pipeline():
         if _anchored_markets:
             print(f"  ⚓ Anclado al mercado: {sorted(_anchored_markets)} "
                   f"(peso mercado {_ANCHOR_WEIGHT:.0%})")
+        # Snapshot post-anclaje: los shades de abajo corren DESPUÉS y su
+        # desviación conjunta se acota contra este valor (D12, más abajo).
+        _post_anchor_probs = dict(probabilities)
 
         for market in list(probabilities.keys()):
             if market in _anchored_markets:
@@ -1414,6 +1472,18 @@ def run_prediction_pipeline():
             probabilities["home_win"] = max(probabilities["home_win"] - _ded, 0.02)
             probabilities["away_win"] = max(probabilities["away_win"] - _ded, 0.02)
             _shades_applied["draw_context"] = True
+
+        # ── D12 (ronda 4): tope conjunto de desviación sobre el ancla ──
+        # Los shades (FLB, tabla miente, empates contextuales) son señal
+        # deliberada que corre DESPUÉS del anclaje — legítimos, pero sin
+        # tope el peso efectivo del modelo supera el 35% declarado. Se acota
+        # la desviación TOTAL de cada mercado anclado a ±5pt del valor
+        # anclado; la señal que necesite más de eso no pasa el filtro de edge.
+        _ANCHOR_DEV_CAP = 0.05
+        for _m, _p0 in _post_anchor_probs.items():
+            if _m in _anchored_markets and _m in probabilities:
+                probabilities[_m] = max(_p0 - _ANCHOR_DEV_CAP,
+                                        min(_p0 + _ANCHOR_DEV_CAP, probabilities[_m]))
 
         # ── GATE HT: mercados de primer/segundo tiempo solo en ligas cuya
         # fuente de resultados publica el descanso (football-data). En el

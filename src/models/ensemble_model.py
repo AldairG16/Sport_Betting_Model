@@ -70,14 +70,24 @@ def _form_probs(
     home_attack: float, home_defense: float,
     away_attack: float, away_defense: float,
     home_advantage: float = 1.10,
-    tempo: float = 1.20
+    tempo: float = 1.20,
+    baseline: float = 1.35,
 ) -> tuple[float, float, float]:
     """
     Calcula probabilidades solo desde los ratings de forma (ataque/defensa),
     sin blend de ELO. Es independiente de la señal Dixon-Coles del pipeline.
+
+    Misma parametrización que compute_lambdas del pipeline (ratings de goles
+    normalizados por el baseline + reparto local/visitante sobre 2.5·tempo):
+    antes multiplicaba attack×defense sin normalizar (goles²) y usaba los
+    defaults 1.10/1.20 ignorando la liga — la señal 3 vivía en otra escala
+    de λ que la señal 1 (ronda 4, D5/D13-3).
     """
-    lh = np.clip(home_attack * away_defense * home_advantage * tempo, 0.3, 2.8)
-    la = np.clip(away_attack * home_defense * tempo, 0.3, 2.8)
+    mu   = 2.5 * tempo
+    mu_h = mu * home_advantage / (1 + home_advantage)
+    mu_a = mu / (1 + home_advantage)
+    lh = np.clip((home_attack / baseline) * (away_defense / baseline) * mu_h, 0.3, 3.5)
+    la = np.clip((away_attack / baseline) * (home_defense / baseline) * mu_a, 0.3, 3.5)
     return match_outcomes(lh, la)
 
 
@@ -207,18 +217,25 @@ def ensemble_predict(
     away_attack:  float,
     away_defense: float,
     market:       str | None = None,
+    home_advantage: float = 1.10,
+    tempo:          float = 1.20,
+    baseline:       float = 1.35,
 ) -> dict:
     """
     Combina las tres señales en una predicción unificada.
 
     Args:
         dc_probs:     (p_home, p_draw, p_away) de Dixon-Coles
-        elo_home:     rating ELO del equipo local
-        elo_away:     rating ELO del equipo visitante
+        elo_home:     rating ELO del local
+        elo_away:     rating ELO del visitante
         home_attack:  rating de ataque del local (form-based)
         home_defense: rating de defensa del local
         away_attack:  rating de ataque del visitante
         away_defense: rating de defensa del visitante
+        home_advantage: ventaja local de la liga (reparto) — antes la señal 3
+                        usaba defaults y ignoraba la liga (ronda 4, D5)
+        tempo:        nivel de goles de la liga
+        baseline:     escala de goles de los ratings
 
     Returns:
         {
@@ -241,7 +258,8 @@ def ensemble_predict(
 
     # Señal 3: Form puro (sin ELO)
     form_h, form_d, form_a = _form_probs(
-        home_attack, home_defense, away_attack, away_defense
+        home_attack, home_defense, away_attack, away_defense,
+        home_advantage=home_advantage, tempo=tempo, baseline=baseline,
     )
 
     # Acuerdo entre señales

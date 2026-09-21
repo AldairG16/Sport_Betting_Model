@@ -30,6 +30,37 @@ def _market_required_match_fields(market: str) -> tuple[str, ...]:
     return ("home_goals", "away_goals")
 
 
+# ============================================================
+# COBERTURA DEL RESOLVER (ronda 4, D10)
+# ============================================================
+# El resolver liquidaba por default TODO mercado sin rama como "loss"
+# silencioso, descontando bankroll. Un nombre paramétrico nuevo sin rama
+# (ah_home_-1.2, corners_over_10.0...) era una pérdida inventada.
+# is_resolvable_market() delimita el default a mercados con rama real.
+
+_RESOLVER_FIXED_MARKETS = frozenset({
+    "home_win", "draw", "away_win",
+    "over25", "under25", "over_1.5", "under_1.5", "over_3.5", "under_3.5",
+    "btts", "btts_no",
+    "dc_1x", "dc_x2", "dc_12",
+    "dnb_home", "dnb_away",
+    "h1_home", "h1_draw", "h1_away", "h2_home", "h2_draw", "h2_away",
+})
+
+_RESOLVER_PARAMETRIC_PREFIXES = (
+    "ah_home_", "ah_away_",
+    "shots_over_", "shots_under_",
+    "corners_over_", "corners_under_",
+    "cards_over_", "cards_under_",
+)
+
+
+def is_resolvable_market(market) -> bool:
+    """True si el resolver tiene rama para este mercado."""
+    m = str(market or "").strip().lower()
+    return m in _RESOLVER_FIXED_MARKETS or m.startswith(_RESOLVER_PARAMETRIC_PREFIXES)
+
+
 # =========================
 # SAVE BETS
 # =========================
@@ -270,8 +301,16 @@ def update_bet_results():
                 if hg is None or ag is None or pd.isna(hg) or pd.isna(ag):
                     continue
 
-                outcome = "loss"
-                profit = -stake
+                # Default PÉRDIDA solo para mercados con rama en el resolver.
+                # Un nombre sin rama se marca unresolved sin tocar bankroll —
+                # antes era una pérdida silenciosa inventada (ronda 4, D10).
+                if is_resolvable_market(market):
+                    outcome = "loss"
+                    profit = -stake
+                else:
+                    outcome = "unresolved"
+                    profit = 0.0
+                    print(f"  ⚠️ Mercado sin rama en el resolver: {market!r} → unresolved")
 
                 # =========================
                 # EVALUACIÓN MERCADOS
