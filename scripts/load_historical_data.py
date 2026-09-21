@@ -140,10 +140,10 @@ def load_historical_data():
     #   2. descarga con requests + timeout=30.
     #   3. inserts por LOTES (executemany), no fila por fila.
     with engine.connect() as conn:
-        loaded = dict(conn.execute(text(
+        _rows = conn.execute(text(
             "SELECT league, season, COUNT(*) FROM matches GROUP BY league, season"
-        )).fetchall())
-    loaded_counts = {(lg, int(sn)): int(c) for lg, sn, c in loaded}
+        )).fetchall()
+    loaded_counts = {(lg, int(sn)): int(c) for lg, sn, c in _rows if sn is not None}
 
     for code, league in leagues.items():
         for s in seasons:
