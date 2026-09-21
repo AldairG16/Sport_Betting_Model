@@ -108,7 +108,7 @@ from src.models.bet_ranker import rank_bets
 from src.models.save_bets import save_bets
 from src.models.bet_filters import bet_quality_filter
 
-from src.features.market_calibration import calibrate_probability, is_strong_edge
+from src.features.market_calibration import calibrate_probability
 from src.features.market_intelligence import market_intelligence_filter, add_market_score
 from src.features.line_movement import get_line_movement, apply_line_movement_signal, line_moved_against, movement_for, should_skip_low_liquidity
 from src.dashboard.betting_dashboard import mostrar_dashboard
@@ -323,23 +323,58 @@ MODEL_PROB_MARKETS = frozenset({
     "home_win", "draw", "away_win", "over25", "under25", "btts", "btts_no",
 })
 
-# Anclaje al mercado: clave = mercado del modelo, valor = clave en market_probs.
-# (fix ronda 4: la clave del modelo es "btts", no "btts_yes" — con la clave
-# vieja el bucle hacía `continue` siempre y BTTS jamás se anclaba mientras
-# su complemento btts_no sí → par binario que ya no sumaba 1. D6.)
-ANCHOR_MAP = {
-    "home_win": "home_win",
-    "draw": "draw",
-    "away_win": "away_win",
-    "over25": "over25",
-    "under25": "under25",
-    "btts": "btts",
-    "btts_no": "btts_no",
-}
+# (ronda 5: ANCHOR_MAP fue sustituido por _anchorable() + los prefijos
+# paramétricos de arriba — el ancla ya no es un mapa fijo de 7 mercados.)
 
 # Reparto 1T/2T medido sobre 4,559 partidos con descanso publicado (12
 # ligas, fracción 1T entre 0.426 y 0.471): antes 50% + 55% = 105% (D9).
 HT_FIRST_HALF_FRACTION = 0.44
+
+# ─────────────────────────────────────────────────────────────────
+# ANCLAJE EXTENDIDO (ronda 5, decisión (b) de N1/N2)
+# ─────────────────────────────────────────────────────────────────
+# El ancla 65/35 (brecha 1.7pt medida) se extiende a TODOS los mercados
+# con devig confiable de dos patas o trío completo. Q-G midió que la ruta
+# no anclada (blend calibrate_probability) acumula 8.7pt de brecha media
+# y hasta 20-58pt en los tramos de edge alto. Los tríos parciales (DC) y
+# los mercados sin par de cuotas NO anclan: van por el blend simétrico.
+ANCHOR_PARAMETRIC_PREFIXES = (
+    "ah_home_", "ah_away_",
+    "dnb_home", "dnb_away",
+    "corners_over_", "corners_under_",
+    "cards_over_", "cards_under_",
+    "h1_", "h2_",
+)
+
+
+def _anchorable(market) -> bool:
+    """True si el mercado puede anclarse (devig de par o trío completo)."""
+    m = str(market)
+    return m in MODEL_PROB_MARKETS or m.startswith(ANCHOR_PARAMETRIC_PREFIXES)
+
+
+def _devig_two_way(o_a, o_b):
+    """
+    Probabilidad sin margen de un par de cuotas. None si falta una pata o
+    el booksum sale del rango creíble [0.95, 1.15]: las cuotas son el MÁXIMO
+    entre casas, así que un par inconsistente (booksum < 1) no representa
+    un mercado real y anclarlo inyectaría un precio falso.
+    """
+    if not o_a or not o_b:
+        return None
+    ia, ib = 1.0 / o_a, 1.0 / o_b
+    tot = ia + ib
+    if not (0.95 <= tot <= 1.15):
+        return None
+    return ia / tot
+
+
+def _devig_three_way(o1, o_x, o2):
+    """Devig proporcional de un trío. None si falta una pata."""
+    if not (o1 and o_x and o2):
+        return None
+    tot = 1.0 / o1 + 1.0 / o_x + 1.0 / o2
+    return tot  # normalización: p_i = (1/o_i) / tot
 
 # =========================
 # SAFE HELPERS (CRÍTICO)
@@ -1132,8 +1167,13 @@ def run_prediction_pipeline():
         # =========================
         # MARKET
         # =========================
+        # market_probs: SOLO devig confiable (Shin 1x2, pares O/U-BTTS-DNB-AH-
+        # córners-tarjetas con booksum sano, tríos HT completos) → alimenta el
+        # ancla. market_probs_raw: prob implícita cruda (1/odds) de patas sueltas
+        # → solo sirve al blend simétrico, JAMÁS ancla (ronda 5, N1/N2).
 
         market_probs = {}
+        market_probs_raw = {}
 
         if safe_odds(row.home_odds) and safe_odds(row.away_odds):
             mh, md, ma = market_probabilities(
@@ -1147,72 +1187,97 @@ def run_prediction_pipeline():
                 "away_win": ma
             })
 
-        # Over/Under y BTTS: quitar el margen del bookmaker (devig proporcional)
-        # para que sean comparables con las probs 1x2 (Shin) del bloque anterior.
-        if safe_odds(row.over25_odds) and safe_odds(row.under25_odds):
-            _ov_raw, _un_raw = 1 / row.over25_odds, 1 / row.under25_odds
-            _tot = _ov_raw + _un_raw
-            market_probs["over25"]  = _ov_raw / _tot
-            market_probs["under25"] = _un_raw / _tot
+        # Over/Under
+        _pair = _devig_two_way(safe_odds(row.over25_odds), safe_odds(row.under25_odds))
+        if _pair is not None:
+            market_probs["over25"]  = _pair
+            market_probs["under25"] = 1.0 - _pair
         elif safe_odds(row.over25_odds):
-            market_probs["over25"] = 1 / row.over25_odds
+            market_probs_raw["over25"] = 1 / row.over25_odds
         elif safe_odds(row.under25_odds):
-            market_probs["under25"] = 1 / row.under25_odds
+            market_probs_raw["under25"] = 1 / row.under25_odds
 
-        if safe_odds(row.btts_yes_odds) and safe_odds(row.btts_no_odds):
-            _by_raw, _bn_raw = 1 / row.btts_yes_odds, 1 / row.btts_no_odds
-            _tot_b = _by_raw + _bn_raw
-            market_probs["btts"]    = _by_raw / _tot_b
-            market_probs["btts_no"] = _bn_raw / _tot_b
+        # BTTS
+        _pair = _devig_two_way(safe_odds(row.btts_yes_odds), safe_odds(row.btts_no_odds))
+        if _pair is not None:
+            market_probs["btts"]    = _pair
+            market_probs["btts_no"] = 1.0 - _pair
         elif safe_odds(row.btts_yes_odds):
-            market_probs["btts"] = 1 / row.btts_yes_odds
+            market_probs_raw["btts"] = 1 / row.btts_yes_odds
         elif safe_odds(row.btts_no_odds):
-            market_probs["btts_no"] = 1 / row.btts_no_odds
+            market_probs_raw["btts_no"] = 1 / row.btts_no_odds
 
-        # AH market probs (si tenemos odds del spreads market)
+        # AH: el par comparte línea; con guardia de booksum ancla, si no, crudo
         if _p_ah_home is not None:
-            if _ah_home_odds:
-                market_probs[f"ah_home_{_ah_line:+.1f}"] = 1.0 / _ah_home_odds
-            if _ah_away_odds:
-                market_probs[f"ah_away_{_ah_line:+.1f}"] = 1.0 / _ah_away_odds
+            _pair = _devig_two_way(_ah_home_odds, _ah_away_odds)
+            if _pair is not None:
+                market_probs[f"ah_home_{_ah_line:+.1f}"] = _pair
+                market_probs[f"ah_away_{_ah_line:+.1f}"] = 1.0 - _pair
+            else:
+                if _ah_home_odds:
+                    market_probs_raw[f"ah_home_{_ah_line:+.1f}"] = 1.0 / _ah_home_odds
+                if _ah_away_odds:
+                    market_probs_raw[f"ah_away_{_ah_line:+.1f}"] = 1.0 / _ah_away_odds
 
-        # DNB market probs (API directo o derivadas)
-        if _dnb_home_odds:
-            market_probs["dnb_home"] = 1.0 / _dnb_home_odds
-        if _dnb_away_odds:
-            market_probs["dnb_away"] = 1.0 / _dnb_away_odds
+        # DNB: las cuotas derivadas de h2h ya salen sin margen (booksum 1.0,
+        # pasan la guardia solas); el par de API se devig con la misma guardia.
+        _pair = _devig_two_way(_dnb_home_odds, _dnb_away_odds)
+        if _pair is not None:
+            market_probs["dnb_home"] = _pair
+            market_probs["dnb_away"] = 1.0 - _pair
+        else:
+            if _dnb_home_odds:
+                market_probs_raw["dnb_home"] = 1.0 / _dnb_home_odds
+            if _dnb_away_odds:
+                market_probs_raw["dnb_away"] = 1.0 / _dnb_away_odds
 
-        # Double Chance market probs (API)
+        # Double Chance: odds parciales (una pata) → nunca devig de trío → crudo
         if _dc_1x_odds:
-            market_probs["dc_1x"] = 1.0 / _dc_1x_odds
+            market_probs_raw["dc_1x"] = 1.0 / _dc_1x_odds
         if _dc_x2_odds:
-            market_probs["dc_x2"] = 1.0 / _dc_x2_odds
+            market_probs_raw["dc_x2"] = 1.0 / _dc_x2_odds
         if _dc_12_odds:
-            market_probs["dc_12"] = 1.0 / _dc_12_odds
+            market_probs_raw["dc_12"] = 1.0 / _dc_12_odds
 
-        # Half-time market probs (API)
-        if _h1_home_odds:
-            market_probs["h1_home"] = 1.0 / _h1_home_odds
-        if _h1_draw_odds:
-            market_probs["h1_draw"] = 1.0 / _h1_draw_odds
-        if _h1_away_odds:
-            market_probs["h1_away"] = 1.0 / _h1_away_odds
-        if _h2_home_odds:
-            market_probs["h2_home"] = 1.0 / _h2_home_odds
-        if _h2_draw_odds:
-            market_probs["h2_draw"] = 1.0 / _h2_draw_odds
-        if _h2_away_odds:
-            market_probs["h2_away"] = 1.0 / _h2_away_odds
+        # Half-time: ancla solo con el TRÍO completo (devig proporcional)
+        for _half, (_ho, _do, _ao) in (
+            ("h1", (_h1_home_odds, _h1_draw_odds, _h1_away_odds)),
+            ("h2", (_h2_home_odds, _h2_draw_odds, _h2_away_odds)),
+        ):
+            _tot = _devig_three_way(_ho, _do, _ao)
+            if _tot:
+                market_probs[f"{_half}_home"] = (1.0 / _ho) / _tot
+                market_probs[f"{_half}_draw"] = (1.0 / _do) / _tot
+                market_probs[f"{_half}_away"] = (1.0 / _ao) / _tot
+            else:
+                if _ho:
+                    market_probs_raw[f"{_half}_home"] = 1.0 / _ho
+                if _do:
+                    market_probs_raw[f"{_half}_draw"] = 1.0 / _do
+                if _ao:
+                    market_probs_raw[f"{_half}_away"] = 1.0 / _ao
 
-        # Corners / Cards market probs (API → usa odds reales en vez de fijas)
+        # Corners / Cards: el par con booksum sano ancla; patas sueltas van crudas
+        _ccl = float(_corners_line_api) if _corners_line_api is not None else 9.5
+        _kcl = _cards_line_api is not None
+        _ccl_c = float(_cards_line_api) if _kcl else 4.5
+        _pair = _devig_two_way(_corners_over_api, _corners_under_api)
+        if _pair is not None:
+            market_probs[f"corners_over_{_ccl}"]  = _pair
+            market_probs[f"corners_under_{_ccl}"] = 1.0 - _pair
         if _corners_over_api:
-            market_probs[f"corners_over_{_corners_line_api or 9.5}"] = 1.0 / _corners_over_api
+            market_probs_raw[f"corners_over_{_ccl}"] = 1.0 / _corners_over_api
         if _corners_under_api:
-            market_probs[f"corners_under_{_corners_line_api or 9.5}"] = 1.0 / _corners_under_api
+            market_probs_raw[f"corners_under_{_ccl}"] = 1.0 / _corners_under_api
+
+        _pair = _devig_two_way(_cards_over_api, _cards_under_api)
+        if _pair is not None:
+            market_probs[f"cards_over_{_ccl_c}"]  = _pair
+            market_probs[f"cards_under_{_ccl_c}"] = 1.0 - _pair
         if _cards_over_api:
-            market_probs[f"cards_over_{_cards_line_api or 4.5}"] = 1.0 / _cards_over_api
+            market_probs_raw[f"cards_over_{_ccl_c}"] = 1.0 / _cards_over_api
         if _cards_under_api:
-            market_probs[f"cards_under_{_cards_line_api or 4.5}"] = 1.0 / _cards_under_api
+            market_probs_raw[f"cards_under_{_ccl_c}"] = 1.0 / _cards_under_api
 
         # =========================
         # CALIBRATION
@@ -1222,23 +1287,21 @@ def run_prediction_pipeline():
 
         for market, model_prob in model_probs.items():
 
-            market_prob = market_probs.get(market)
-
-            if market_prob is None:
+            # Ronda 5 (N1/N2): los mercados anclables combinan UNA sola vez,
+            # en el bloque de anclaje — el modelo entra crudo al 35%. Antes
+            # se pre-mezclaban aquí y is_strong_edge llegaba a DESCARTAR el
+            # precio del mercado (umbral real 7.1pp con confianza de
+            # producción 0.8-1.0); Q-G midió brecha 19.8-58.4pt en esos
+            # tramos. El resto usa el blend simétrico y decreciente en
+            # |edge| (market_calibration reescrita).
+            if _anchorable(market) and market in market_probs:
                 probabilities[market] = model_prob
                 continue
 
-            edge = model_prob - market_prob
-            edge = min(edge, 0.25)
-
-            if is_strong_edge(edge, confidence):
-                probabilities[market] = model_prob
-            else:
-                probabilities[market] = calibrate_probability(
-                    model_prob,
-                    market_prob,
-                    edge
-                )
+            probabilities[market] = calibrate_probability(
+                model_prob,
+                market_probs_raw.get(market)
+            )
 
         # =========================
         # ODDS
@@ -1339,21 +1402,21 @@ def run_prediction_pipeline():
         # comparado contra el mercado → sobreconfianza crónica (brecha +21%
         # en las primeras 45 bets del modelo recalibrado). Ahora heredamos la
         # precisión del mercado y solo añadimos la señal que el mercado no ve.
-        # Solo mercados con devig confiable (1x2 Shin, O/U y BTTS
-        # proporcionales). AH/DC/DNB/HT siguen modelo-crudo por ahora.
+        # Solo mercados con devig confiable (ronda 5: 1x2 Shin, O/U y BTTS
+        # por pares con guardia, AH/DNB/córners/tarjetas por pares, tríos HT
+        # completos). DC y patas sueltas siguen blend modelo-crudo.
         _ANCHOR_WEIGHT = 0.65   # peso del mercado; el modelo aporta el 35%
         _anchored_markets = set()
-        if market_probs:
-            for _mkt, _mpk in ANCHOR_MAP.items():
-                if _mkt not in probabilities:
-                    continue
-                _mp = market_probs.get(_mpk)
-                if _mp and 0.02 < _mp < 0.98:
-                    probabilities[_mkt] = (
-                        _mp * _ANCHOR_WEIGHT
-                        + probabilities[_mkt] * (1 - _ANCHOR_WEIGHT)
-                    )
-                    _anchored_markets.add(_mkt)
+        for _mkt in list(probabilities.keys()):
+            if not _anchorable(_mkt) or _mkt not in market_probs:
+                continue
+            _mp = market_probs[_mkt]
+            if _mp and 0.02 < _mp < 0.98:
+                probabilities[_mkt] = (
+                    _mp * _ANCHOR_WEIGHT
+                    + probabilities[_mkt] * (1 - _ANCHOR_WEIGHT)
+                )
+                _anchored_markets.add(_mkt)
         if _anchored_markets:
             print(f"  ⚓ Anclado al mercado: {sorted(_anchored_markets)} "
                   f"(peso mercado {_ANCHOR_WEIGHT:.0%})")

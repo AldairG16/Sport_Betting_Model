@@ -211,6 +211,10 @@ def update_bet_results():
         print("No bets to update")
         return
 
+    # El bankroll se escribe en la misma transacción que cada bet (N3, r5):
+    # garantizar el esquema una sola vez antes del batch.
+    ensure_bankroll_schema()
+
     # ── Pre-carga de resultados (elimina N+1 queries) ─────────────────────
     # En vez de hacer 1-5 pd.read_sql() por bet, traemos TODOS los partidos
     # relevantes en UNA sola query y resolvemos en memoria.
@@ -497,32 +501,39 @@ def update_bet_results():
                     profit = stake * (odds - 1)
 
                 # =========================
-                # UPDATE
+                # UPDATE (+ SAVEPOINT por fila)
                 # =========================
+                # Ronda 5 (N3): bet + bankroll se escriben en el MISMO
+                # savepoint — si el bankroll falla, la bet no se marca final
+                # y reintenta el próximo ciclo (antes el try/except tragaba
+                # el fallo y la bet quedaba final con bankroll sin aplicar:
+                # drift de −7.54u medido en producción). El savepoint aísla
+                # el fallo a esta fila sin abortar la transacción del batch.
 
-                conn.execute(text("""
-                    UPDATE bets_history
-                    SET result = :result,
-                        profit = :profit
-                    WHERE id = :id
-                """), {
-                    "result": outcome,
-                    "profit": float(profit),
-                    "id": int(row["id"])
-                })
+                with conn.begin_nested():
+                    conn.execute(text("""
+                        UPDATE bets_history
+                        SET result = :result,
+                            profit = :profit
+                        WHERE id = :id
+                    """), {
+                        "result": outcome,
+                        "profit": float(profit),
+                        "id": int(row["id"])
+                    })
 
-                # ── Actualizar bankroll real ──────────────────────────────
-                # Cada vez que se resuelve una apuesta, el bankroll se
-                # actualiza para que el Kelly del próximo ciclo use el
-                # capital correcto.
-                try:
-                    ensure_bankroll_schema()
-                    update_bankroll(
-                        profit=float(profit),
-                        notes=f"{match} | {market} | {outcome}"
-                    )
-                except Exception as br_err:
-                    print(f"⚠️ bankroll update skipped: {br_err}")
+                    # ── Actualizar bankroll real ──────────────────────────
+                    # Cada vez que se resuelve una apuesta, el bankroll se
+                    # actualiza para que el Kelly del próximo ciclo use el
+                    # capital correcto. Una bet 'unresolved' (profit 0) ya no
+                    # genera fila de bankroll: 307 filas amount-0 contaminaban
+                    # el historial y desacomodaban la reconciliación.
+                    if outcome != "unresolved":
+                        update_bankroll(
+                            profit=float(profit),
+                            notes=f"{match} | {market} | {outcome}",
+                            conn=conn,
+                        )
 
                 updated += 1
 

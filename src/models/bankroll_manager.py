@@ -111,46 +111,60 @@ def get_current_bankroll() -> float:
         return float(INITIAL_BANKROLL)
 
 
-def update_bankroll(profit: float, notes: str = "") -> float:
+def update_bankroll(profit: float, notes: str = "", conn=None) -> float:
     """
     Actualiza el bankroll sumando el profit/loss de una apuesta resuelta.
+
+    Ronda 5 (N3): el read-modify-write en Python no es atómico (dos runs
+    concurrentes leían el mismo balance y uno de los dos profits se
+    perdía) y el UPDATE sin WHERE sobrescribía todas las filas. Ahora el
+    ajuste ocurre en UNA sentencia (current + profit, con WHERE id fijo) y
+    acepta `conn` para ejecutarse DENTRO de la transacción que marca la
+    bet como final: si el bankroll falla, la bet no se liquida y reintenta
+    — antes el try/except tragaba el fallo y la bet quedaba final con el
+    bankroll sin aplicar (drift de −7.54u medido en producción).
 
     Args:
         profit: float positivo (ganancia) o negativo (pérdida)
         notes:  descripción del movimiento (ej. "Liverpool vs Arsenal home_win")
+        conn:   conexión SQLalchemy opcional — hereda la transacción de la bet
 
     Returns:
         Nuevo balance del bankroll
     """
     try:
+        if conn is not None:
+            return _apply_bankroll_movement(conn, profit, notes)
         ensure_bankroll_schema()
-        current = get_current_bankroll()
-        new_balance = current + profit
-
-        with engine.begin() as conn:
-            # Actualizar balance actual
-            conn.execute(text("""
-                UPDATE bankroll
-                SET current_bankroll = :balance,
-                    peak_bankroll    = GREATEST(peak_bankroll, :balance),
-                    last_updated     = NOW()
-            """), {"balance": float(new_balance)})
-
-            # Registrar en historial
-            conn.execute(text("""
-                INSERT INTO bankroll_history (event, amount, balance, notes)
-                VALUES ('bet_result', :profit, :balance, :notes)
-            """), {
-                "profit":  float(profit),
-                "balance": float(new_balance),
-                "notes":   notes or "",
-            })
-
-        return new_balance
-
+        with engine.begin() as c:
+            return _apply_bankroll_movement(c, profit, notes)
     except Exception as e:
         print(f"⚠️ bankroll_manager.update_bankroll error: {e}")
         return float(INITIAL_BANKROLL)
+
+
+def _apply_bankroll_movement(conn, profit: float, notes: str) -> float:
+    """UPDATE atómico + registro en historial, sobre la conexión dada."""
+    row = conn.execute(text("""
+        UPDATE bankroll
+        SET current_bankroll = current_bankroll + :profit,
+            peak_bankroll    = GREATEST(peak_bankroll, current_bankroll + :profit),
+            last_updated     = NOW()
+        WHERE id = (SELECT MIN(id) FROM bankroll)
+        RETURNING current_bankroll
+    """), {"profit": float(profit)}).first()
+
+    new_balance = float(row[0]) if row else float(INITIAL_BANKROLL)
+
+    conn.execute(text("""
+        INSERT INTO bankroll_history (event, amount, balance, notes)
+        VALUES ('bet_result', :profit, :balance, :notes)
+    """), {
+        "profit":  float(profit),
+        "balance": new_balance,
+        "notes":   notes or "",
+    })
+    return new_balance
 
 
 def deposit(amount: float, notes: str = "Depósito manual") -> float:

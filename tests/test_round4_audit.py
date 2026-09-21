@@ -21,7 +21,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.features.league_calibration import LEAGUE_FACTORS
 from src.features.team_form import KALMAN_BASELINE
 from src.pipeline.prediction_pipeline import (
-    ANCHOR_MAP,
     HT_FIRST_HALF_FRACTION,
     MODEL_PROB_MARKETS,
     compute_lambdas,
@@ -68,22 +67,25 @@ def test_ht_fractions_sum_to_one():
 
 
 # ============================================================
-# 2. D6 — claves del ancla ⊆ mercados del modelo
+# 2. D6 — todo el modelo 1x2/O-U/BTTS es anclable
 # ============================================================
 
-def test_anchor_map_keys_exist_in_model_markets():
+def test_all_model_markets_are_anchorable():
     """
-    Toda clave de ANCHOR_MAP debe existir en model_probs. El bug original:
-    _ANCHOR_MAP pedía "btts_yes" pero el modelo produce "btts" → el bucle
-    hacía continue siempre y BTTS jamás se anclaba (su complemento sí).
+    (ronda 5: ANCHOR_MAP fue sustituido por _anchorable()). Todos los
+    mercados fijos del modelo deben poder anclarse. El bug original:
+    _ANCHOR_MAP pedía "btts_yes" pero el modelo produce "btts" → BTTS
+    jamás se anclaba (su complemento sí).
     """
-    assert set(ANCHOR_MAP.keys()) <= MODEL_PROB_MARKETS, (
-        f"claves sin mercado: {set(ANCHOR_MAP.keys()) - MODEL_PROB_MARKETS}")
+    from src.pipeline.prediction_pipeline import _anchorable
+    for market in MODEL_PROB_MARKETS:
+        assert _anchorable(market), f"mercado fijo no anclable: {market}"
 
 
-def test_anchor_covers_binary_pairs():
-    """Los binarios anclables deben incluir ambos lados (btts y btts_no)."""
-    assert {"btts", "btts_no"} <= set(ANCHOR_MAP.keys())
+def test_binary_pairs_both_anchorable():
+    """Los binarios deben poder anclarse por ambos lados (btts y btts_no)."""
+    from src.pipeline.prediction_pipeline import _anchorable
+    assert _anchorable("btts") and _anchorable("btts_no")
 
 
 # ============================================================

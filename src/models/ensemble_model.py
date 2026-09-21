@@ -19,6 +19,7 @@ Las tres señales:
 import numpy as np
 from scipy.stats import poisson
 from src.models.dixon_coles_model import match_outcomes, MAX_GOALS
+from src.features.team_form import KALMAN_BASELINE
 
 # =========================
 # PESOS BASE
@@ -71,7 +72,7 @@ def _form_probs(
     away_attack: float, away_defense: float,
     home_advantage: float = 1.10,
     tempo: float = 1.20,
-    baseline: float = 1.35,
+    baseline: float | None = None,
 ) -> tuple[float, float, float]:
     """
     Calcula probabilidades solo desde los ratings de forma (ataque/defensa),
@@ -82,12 +83,16 @@ def _form_probs(
     antes multiplicaba attack×defense sin normalizar (goles²) y usaba los
     defaults 1.10/1.20 ignorando la liga — la señal 3 vivía en otra escala
     de λ que la señal 1 (ronda 4, D5/D13-3).
+
+    baseline por defecto = KALMAN_BASELINE (no un literal: si alguien
+    recalibra el Kalman, la señal 3 sigue la misma escala — ronda 5, N5).
     """
+    b = KALMAN_BASELINE if baseline is None else baseline
     mu   = 2.5 * tempo
     mu_h = mu * home_advantage / (1 + home_advantage)
     mu_a = mu / (1 + home_advantage)
-    lh = np.clip((home_attack / baseline) * (away_defense / baseline) * mu_h, 0.3, 3.5)
-    la = np.clip((away_attack / baseline) * (home_defense / baseline) * mu_a, 0.3, 3.5)
+    lh = np.clip((home_attack / b) * (away_defense / b) * mu_h, 0.3, 3.5)
+    la = np.clip((away_attack / b) * (home_defense / b) * mu_a, 0.3, 3.5)
     return match_outcomes(lh, la)
 
 
@@ -219,7 +224,7 @@ def ensemble_predict(
     market:       str | None = None,
     home_advantage: float = 1.10,
     tempo:          float = 1.20,
-    baseline:       float = 1.35,
+    baseline:       float | None = None,   # None → KALMAN_BASELINE (N5, r5)
 ) -> dict:
     """
     Combina las tres señales en una predicción unificada.

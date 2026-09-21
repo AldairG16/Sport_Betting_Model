@@ -981,6 +981,32 @@ def _cleanup_stale_duplicates():
     """
     try:
         with engine.begin() as conn:
+            # ── N4 (ronda 5): heredar el opening VERDADERO antes de borrar ──
+            # Cuando la API corrige un horario, la fila nueva fija opening_*
+            # a las cuotas DE ESE MOMENTO y el delete de abajo elimina la
+            # fila vieja (que sí tenía la apertura real). El filtro de
+            # movimiento de línea quedaba midiendo desde post-corrección:
+            # movimiento ≈ 0 y la señal se callaba. La fila que sobrevive
+            # hereda el opening de la vieja cuando existe (el más antiguo
+            # es el auténtico).
+            conn.execute(text("""
+                UPDATE upcoming_matches v
+                SET opening_home_odds   = COALESCE(u.opening_home_odds,   v.opening_home_odds),
+                    opening_draw_odds   = COALESCE(u.opening_draw_odds,   v.opening_draw_odds),
+                    opening_away_odds   = COALESCE(u.opening_away_odds,   v.opening_away_odds),
+                    opening_over25_odds = COALESCE(u.opening_over25_odds, v.opening_over25_odds)
+                FROM upcoming_matches u
+                WHERE v.home_team_norm = u.home_team_norm
+                  AND v.away_team_norm = u.away_team_norm
+                  AND v.sport_key      = u.sport_key
+                  AND v.match_key     <> u.match_key
+                  AND u.updated_at     < v.updated_at
+                  AND (u.opening_home_odds IS NOT NULL
+                       OR u.opening_draw_odds IS NOT NULL
+                       OR u.opening_away_odds IS NOT NULL
+                       OR u.opening_over25_odds IS NOT NULL)
+            """))
+
             r = conn.execute(text("""
                 DELETE FROM upcoming_matches u
                 WHERE EXISTS (
