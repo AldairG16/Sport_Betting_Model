@@ -54,10 +54,13 @@ def test_fit_records_optimizer_diagnostics():
 
 
 def test_tau_gate_threshold_unchanged():
-    """La puerta del rho (|rho|<0.02 → Poisson cruda) no se tocó — el
-    escalonado de E3 se resolvió con banderas, no cambiando pricing."""
+    """La puerta del rho evolucionó a histéresis en r11 (enciende >0.03,
+    apaga <0.015) — el pricing no cambia por ruido de un refit en la zona
+    intermedia."""
     src = _source(pp)
-    assert "abs(_rho_fit) < 0.02" in src
+    assert "abs(_rho_fit) > 0.03" in src
+    assert "abs(_rho_fit) < 0.015" in src
+    assert "_previous_fit_rho" in src
 
 
 # ============================================================

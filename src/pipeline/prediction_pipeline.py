@@ -457,6 +457,25 @@ def clamp_prob(p):
 # MAIN PIPELINE
 # =========================
 
+def _previous_fit_rho():
+    """rho del fit ANTERIOR al actual (model_state_history) — estado de la
+    puerta de tau para la histéresis. None si no hay histórico."""
+    try:
+        from sqlalchemy import text as _text
+        with engine.connect() as _c:
+            _rows = _c.execute(_text("""
+                SELECT value->>'rho' AS rho
+                FROM model_state_history
+                WHERE key = 'dc_params'
+                ORDER BY fitted_at DESC LIMIT 2
+            """)).fetchall()
+        if len(_rows) >= 2 and _rows[1][0] is not None:
+            return float(_rows[1][0])
+    except Exception:
+        pass
+    return None
+
+
 def run_prediction_pipeline():
 
     print("\nRUNNING PREDICTION PIPELINE\n")
@@ -529,6 +548,8 @@ def run_prediction_pipeline():
     # en este dataset — mejor mantener Poisson cruda y dejar que la
     # calibración por mercado (Mejora #1+#2) corrija el bias residual.
     DC_CONVERGED = False
+    DC_FIT_FINGERPRINT = None
+    DC_FINAL_GRAD = None
     try:
         from src.models.dc_mle_fitter import _load_params as _load_dc_params
         _dc_params  = _load_dc_params() or {}
@@ -538,13 +559,33 @@ def run_prediction_pipeline():
         # BTTS no sería atribuible.
         DC_CONVERGED = bool(_dc_params.get("converged", False))
         _rho_fit    = float(_dc_params.get("rho", 0.0) or 0.0)
-        if abs(_rho_fit) < 0.02:
+        # F1 (ronda 11): mle_converged es constante False y no segmenta.
+        # La huella real del fit es CUÁNDO se ajustó y qué tan lejos de
+        # estacionario quedó — sin ella, cada refit semanal produce un
+        # modelo materialmente distinto y las semanas son indistinguibles.
+        DC_FIT_FINGERPRINT = f"{_dc_params.get('fitted_at', '?')}|g{_dc_params.get('final_grad_max', '?')}"
+        DC_FINAL_GRAD = _dc_params.get("final_grad_max")
+        # F2 (ronda 11): histéresis. rho es tan inestable como home_adv
+        # (mismo fit, mismo presupuesto); una puerta binaria en 0.02 cambiaría
+        # el pricing de BTTS de modelo completo por ruido de un refit.
+        # Enciende con |rho| > 0.03, apaga solo bajo 0.015; entre ambas, manda
+        # el estado anterior (leído del histórico de fits).
+        _prev_rho = _previous_fit_rho()
+        if abs(_rho_fit) > 0.03:
+            DC_RHO_GLOBAL = _rho_fit
+            print(f"🔧 DC rho={DC_RHO_GLOBAL:+.3f} (tau ACTIVADA, >0.03)")
+        elif abs(_rho_fit) < 0.015 or _prev_rho is None:
             DC_RHO_GLOBAL = None
             print(f"🔧 DC rho fitteado={_rho_fit:+.3f} ≈0 → BTTS usa Poisson cruda")
             print(f"   (calibración por mercado corrige bias residual)")
         else:
-            DC_RHO_GLOBAL = _rho_fit
-            print(f"🔧 DC rho={DC_RHO_GLOBAL:+.3f} (BTTS con tau-correction activa)")
+            # zona de histéresis: estado anterior
+            if abs(_prev_rho) >= 0.015:
+                DC_RHO_GLOBAL = _rho_fit
+                print(f"🔧 DC rho={DC_RHO_GLOBAL:+.3f} (histéresis: tau sigue activa, prev={_prev_rho:+.3f})")
+            else:
+                DC_RHO_GLOBAL = None
+                print(f"🔧 DC rho={_rho_fit:+.3f} (histéresis: tau sigue apagada, prev={_prev_rho:+.3f})")
     except Exception as _e:
         DC_RHO_GLOBAL = None
         print(f"⚠️  DC rho no disponible ({_e}) → Poisson cruda")
@@ -1992,6 +2033,8 @@ def run_prediction_pipeline():
                         "mle_weight": _mle_w,
                         "mle_converged": DC_CONVERGED,
                         "dc_rho_global": DC_RHO_GLOBAL,
+                        "fit_fingerprint": DC_FIT_FINGERPRINT,
+                        "mle_final_grad": DC_FINAL_GRAD,
                         "kalman_confidence": round(_conf, 3),
                         "shades": _shades_applied,
                         "anchored": sorted(_anchored_markets),

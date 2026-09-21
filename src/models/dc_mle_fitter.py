@@ -339,6 +339,26 @@ def fit_dc_parameters(verbose: bool = True) -> dict:
         "final_grad_max": round(float(_np_max_abs(getattr(result, "jac", None))), 6),
         "fitted_at":  datetime.now().isoformat(),
     }
+    # R11: histograma del gradiente por parámetro — ¿concentrado en pocos
+    # equipos mal identificados o repartido? Top-10 + masa relativa.
+    try:
+        import numpy as _np
+        _jac = getattr(result, "jac", None)
+        if _jac is not None:
+            _g = _np.abs(_np.asarray(_jac, dtype=float)).ravel()
+            _names = ([f"att:{t}" for t in team_idx] +
+                      [f"def:{t}" for t in team_idx] + ["home_adv", "rho"])
+            _order = _np.argsort(_g)[::-1]
+            output["grad_l2"] = round(float(_np.sqrt(_np.sum(_g ** 2))), 4)
+            output["grad_top"] = [
+                {"param": _names[i], "grad": round(float(_g[i]), 4)}
+                for i in _order[:10]
+            ]
+            _top1pct = max(1, int(len(_g) * 0.01))
+            output["grad_top1pct_share"] = round(
+                float(_np.sort(_g)[::-1][:_top1pct].sum() / _g.sum()), 4)
+    except Exception as _ge:
+        output["grad_hist_error"] = str(_ge)[:100]
 
     with open(DC_PARAMS_FILE, "w") as f:
         json.dump(output, f, indent=2)
@@ -402,6 +422,27 @@ def _save_params_to_db(params: dict) -> bool:
                 ON CONFLICT (key) DO UPDATE SET
                     value = EXCLUDED.value, updated_at = NOW()
             """), {"p": json.dumps(params)})
+            # R11/F2: historizar la serie (model_state sobrescribe; sin esto
+            # la evolución de home_adv/rho entre refits se pierde)
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS model_state_history (
+                    id SERIAL PRIMARY KEY,
+                    key TEXT NOT NULL,
+                    value JSONB NOT NULL,
+                    fitted_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            conn.execute(text("""
+                INSERT INTO model_state_history (key, value, fitted_at)
+                SELECT 'dc_params', CAST(:p AS jsonb),
+                       CAST(:fa AS timestamptz)
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM model_state_history
+                    WHERE key = 'dc_params' AND fitted_at = CAST(:fa AS timestamptz)
+                )
+            """), {"p": json.dumps(params),
+                   "fa": params.get("fitted_at", datetime.now().isoformat())})
         return True
     except Exception as e:
         print(f"⚠️  No se pudo persistir dc_params en Neon: {type(e).__name__}: {str(e)[:120]}")
