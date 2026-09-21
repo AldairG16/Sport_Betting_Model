@@ -119,6 +119,7 @@ estimación)**. Criterio de G2 aplicado en ambas direcciones.
 | 21-sep-2026 | H1: tasa vs umbral n=100 | Q-Q + post-fix | inalcanzable en rodante; 4.2 meses en acumulada solo over25 | habilitación pasa a n=30 con espejo estadístico; ventana declarada ACUMULADA; tasa por mercado escrita al lado (R16) | ronda 13 |
 | 21-sep-2026 | H2: piso 0.08 bajo techo 30pt | — | ventana restante 0.9-4.9pt = bloqueo disfrazado | adoptado `piso_max(mercado) = 0.35×(techo−5pt) − slip`; subir piso más allá = bloqueo con ruta del gate | ronda 13 |
 | 21-sep-2026 | Auditoría final externa: I2 (motivación mal enrutada, 80% a goles) + I1 (1x2 vs AH-0.5 con matrices distintas, 1.6pp) | reproducción numérica propia | confirmados ambos | aplicados ANTES del inicio de la cohorte fingerprinted; bandera de cohorte `dc_rho_score` en decision_log separa pre/post | ronda 14 |
+| 21-sep-2026 | K1: 6/17 ligas activas al default (Q-CA 3 años + control) | 382-768 por liga (Noruega n=21) | 5 calibradas; Noruega bloqueada | LEAGUE_FACTORS_VERSION="r16" en decision_log; test R17 de cobertura | ronda 16 |
 | 28-sep-2026 | Q-AH: Δhome_adv entre refits CI | — | pendiente | si <0.08 → ciclo auditor cerrado formalmente | pendiente |
 | *(siguiente fila)* | *métrica* | *n* | *valor* | *acción tomada* | *quién* |
 
@@ -146,6 +147,33 @@ estimación)**. Criterio de G2 aplicado en ambas direcciones.
   ("Poisson cruda si el fit dejó rho≈0") queda SUPERSEDA: ronda 11 midió rho
   estable en el prior (−0.088/−0.095) — el escenario de corner solution está
   muerto empíricamente. `dc_rho_global` sigue en decision_log como cohorte.
+
+### Nota ronda 16 — K1: cobertura de LEAGUE_FACTORS contra el universo operativo (R17)
+
+- **K1 verificado tal cual**: 19 ligas en SPORT_KEYS, 2 bloqueadas, 17
+  activas — 11 con calibración propia y **6 al DEFAULT_FACTORS**. Verificado
+  que caen al default limpio (get_league_factors → DEFAULT_FACTORS.copy()).
+- **Q-CA (3 años, misma ventana que Q-BA)**: las seis medidas. Cinco con
+  muestra sólida → **calibradas**: Korea n=768 (tempo 1.212, BTTS 0.557),
+  Suecia n=750 (1.144), Bélgica n=687 (1.102), Grecia n=551 (1.007),
+  Turquía n=382 (1.082; el HA 1.29 es consistente con el perfil conocido de
+  la liga). **Noruega n=21 → BLOQUEADA** (no medible; la ruta del gate
+  aplica).
+- **Control del método** (derivado vs almacenado en las ligas calibradas,
+  n≥500): Δ típico ±0.05 (máx +0.12 en WCQ) — consistente con ventana
+  distinta. Por eso las cinco entradas nuevas usan **la misma ventana de 3
+  años que Q-BA** y las once existentes NO se regeneran ahora (sería un
+  cambio de modelo en plena ventana de medición — R13); su regeneración con
+  la ventana común queda para la revisión del 20-oct, con bandera.
+- **Bandera R13**: `decision_log.model.league_factors_version = "r16"`.
+- **Corrección de la nota r15** (rango del sesgo BTTS): mi nota decía
+  "−0.6pp (EPL) a +6.7pp (Argentina)" midiendo con ratings reales; la de A
+  decía "−3.8 a +6.1" con equipos promedio, y +12.9pp en WCQ-Europa
+  (bloqueada). Ambas son ciertas en su unidad — el rango depende del
+  método. Referencia única desde ahora: la serie por liga de Q-BA/Q-CA.
+- **Test R17**: `test_every_active_league_has_own_calibration` — cualquier
+  liga de SPORT_KEYS activa sin entrada propia rompe la suite. Es la
+  aserción que habría atrapado K1 en la ronda 4.
 
 **CIERRE DEL CICLO (ronda 13).** Doce rondas llevaron el sistema de "el
 modelo infla los goles un 60% con toda su capa adaptativa muerta" a λ

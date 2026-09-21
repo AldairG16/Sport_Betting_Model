@@ -176,6 +176,44 @@ LEAGUE_FACTORS = {
         "over25_rate":    0.500,
         "btts_rate":    0.53,  # J1 r15: Q-BA, 3 años n>=500   # placeholder (no se usa para MLB)
     },
+    # ── K1 (ronda 16): Q-CA, 3 años, misma ventana que Q-BA ──
+    "soccer_korea_kleague1": {
+        "home_advantage": 1.223,
+        "tempo":          1.212,
+        "draw_rate":      0.217,
+        "over25_rate":    0.582,
+        "btts_rate":      0.557,
+    },
+    "soccer_sweden_allsvenskan": {
+        "home_advantage": 1.191,
+        "tempo":          1.144,
+        "draw_rate":      0.231,
+        "over25_rate":    0.535,
+        "btts_rate":      0.545,
+    },
+    "soccer_belgium_first_div": {
+        "home_advantage": 1.260,
+        "tempo":          1.102,
+        "draw_rate":      0.253,
+        "over25_rate":    0.527,
+        "btts_rate":      0.523,
+    },
+    "soccer_greece_super_league": {
+        "home_advantage": 1.205,
+        "tempo":          1.007,
+        "draw_rate":      0.260,
+        "over25_rate":    0.483,
+        "btts_rate":      0.495,
+    },
+    "soccer_turkey_super_league": {
+        "home_advantage": 1.290,
+        "tempo":          1.082,
+        "draw_rate":      0.283,
+        "over25_rate":    0.534,
+        "btts_rate":      0.531,
+    },
+    # soccer_norway_eliteserien: n=21 en 3 años — no medible → BLOQUEADA
+    # (ver BLOCKED_LEAGUES en prediction_pipeline)
 }
 
 # Valores por defecto si la liga no está en el mapa
@@ -191,6 +229,7 @@ DEFAULT_FACTORS = {
 # 0.20 = 20% liga histórica + 80% Poisson del partido
 OVER25_SHRINK = 0.20
 BTTS_SHRINK   = 0.20   # J1 r15: mismo estimador y misma data family que over25
+LEAGUE_FACTORS_VERSION = "r16"  # K1: 5 ligas calibradas (Q-CA) + noruega bloqueada
 
 
 

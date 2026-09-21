@@ -152,7 +152,7 @@ NEUTRAL_VENUE_LEAGUES = {
     "soccer_afcon",
     "soccer_afc_asian_cup",
 }
-from src.features.league_calibration import get_over25_rate, get_btts_rate, OVER25_SHRINK, BTTS_SHRINK
+from src.features.league_calibration import get_over25_rate, get_btts_rate, OVER25_SHRINK, BTTS_SHRINK, LEAGUE_FACTORS_VERSION
 
 # ─────────────────────────────────────────────────────────────
 # CONSTANTES DE PIPELINE (módulo-level para no recrearlas en cada llamada)
@@ -239,6 +239,9 @@ TOUGH_LEAGUES = {
 #   soccer_epl:                43 bets, -44.6% ROI,  -8.69u → BLOQUEADA
 #   soccer_greece_super_league:13 bets, -49.2% ROI,  -4.17u → BLOQUEADA
 BLOCKED_LEAGUES = {
+    # K1 (ronda 16): n=21 partidos con resultado en 3 años — no medible
+    # para LEAGUE_FACTORS (Q-CA) → bloqueada en vez de correr con defaults.
+    "soccer_norway_eliteserien",
     "soccer_fifa_world_cup_qualifiers_europe",
     "soccer_uefa_europa_league",
     "soccer_netherlands_eredivisie",
@@ -2062,6 +2065,7 @@ def run_prediction_pipeline():
                         "dc_rho_global": DC_RHO_GLOBAL,
                         "dc_rho_score": DC_RHO_SCORE,
                         "btts_shrink": BTTS_SHRINK,
+                        "league_factors_version": LEAGUE_FACTORS_VERSION,
                         "fit_fingerprint": DC_FIT_FINGERPRINT,
                         "mle_final_grad": DC_FINAL_GRAD,
                         "kalman_confidence": round(_conf, 3),
