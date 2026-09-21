@@ -69,7 +69,7 @@ def test_enable_gate_mirrors_block_gate():
 def test_r13_window_rate_and_floor_cap_declared():
     """R16/R13: ventana acumulada declarada, tasa de activación al lado del
     umbral, y el techo del piso (H2) documentado."""
-    text = DOC.read_text(encoding="utf-8")
+    text = " ".join(DOC.read_text(encoding="utf-8").split())
     assert "ACUMULADA desde el inicio de la generación" in text
     assert "piso_max(mercado) = 0.35 × (techo − 5pt) − slip(mercado)" in text
     assert "Tasa de activación por mercado (R16" in text
