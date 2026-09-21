@@ -53,10 +53,19 @@ def test_clv_gate_large_sample_small_effect():
 # B2 — shadow logging
 # ============================================================
 
-def test_shadow_capture_points_exist():
-    """Siete puntos de rechazo capturan candidatas (3 odds_band, piso,
-    techo, sin referencia, max_odds)."""
-    assert _source(pp).count('_shadow("') == 7
+def test_shadow_captures_before_edge_filter():
+    """
+    (actualizado en ronda 8/C1) La captura ya no vive en el loop de bets
+    (que pierde todo con edge_market < 0.02 en find_value_bets): es un
+    barrido sobre clean_probabilities × odds ANTES de find_value_bets, con
+    piso propio SHADOW_MIN_DEV declarado (R11).
+    """
+    src = _source(pp)
+    assert "SHADOW SWEEP" in src
+    assert src.count('shadow_records.append({') == 1
+    assert "find_value_bets(clean_probabilities, odds)" in src
+    # el sweep debe aparecer ANTES que find_value_bets en el archivo
+    assert src.index("SHADOW SWEEP") < src.index("find_value_bets(clean_probabilities")
 
 
 def test_pipeline_persists_shadow_records():

@@ -91,25 +91,56 @@ SHADOW_TABLE_SQL = """
 
 
 def persist_shadow_bets(records: list):
-    """Inserta candidatas shadow (ON CONFLICT DO NOTHING por re-runs)."""
+    """Inserta candidatas shadow (ON CONFLICT DO NOTHING por re-runs).
+    Sanea NaN/NaT y aísla fallos por fila — una candidata corrupta no
+    tumba el lote (lección de la primera corrida C1, ronda 8)."""
     if not records:
         return
     try:
         with engine.begin() as conn:
             conn.execute(text(SHADOW_TABLE_SQL))
+            inserted = 0
             for r in records:
                 if not r.get("odds") or r["odds"] <= 1.01:
                     continue   # sin precio real no hay nada que medir
-                conn.execute(text("""
-                    INSERT INTO shadow_bets
-                        (match, match_date, league, market, p_final,
-                         p_ref, deviation, odds, edge_market, reason)
-                    VALUES
-                        (:match, :match_date, :league, :market, :p_final,
-                         :p_ref, :deviation, :odds, :edge_market, :reason)
-                    ON CONFLICT (match, market, match_date) DO NOTHING
-                """), r)
-        print(f"🌑 Shadow: {len(records)} candidatas registradas")
+                clean = {}
+                for k, v in r.items():
+                    if v is None:
+                        clean[k] = None
+                    elif isinstance(v, pd.Timestamp):
+                        clean[k] = None if pd.isna(v) else v.to_pydatetime()
+                    else:
+                        try:
+                            if pd.isna(v):
+                                clean[k] = None
+                                continue
+                        except (TypeError, ValueError):
+                            pass
+                        # escalares numpy (np.float64/np.int64) → nativos:
+                        # psycopg2 no adapta numpy y aborta la transacción
+                        if hasattr(v, "item") and not isinstance(v, (str, bytes)):
+                            v = v.item()
+                        clean[k] = v
+                try:
+                    # savepoint por fila: un fallo no aborta el lote
+                    with conn.begin_nested():
+                        conn.execute(text("""
+                            INSERT INTO shadow_bets
+                                (match, match_date, league, market, p_final,
+                                 p_ref, deviation, odds, edge_market, reason)
+                            VALUES
+                                (:match, :match_date, :league, :market, :p_final,
+                                 :p_ref, :deviation, :odds, :edge_market, :reason)
+                            ON CONFLICT (match, market, match_date) DO NOTHING
+                        """), clean)
+                    inserted += 1
+                except Exception as row_err:
+                    if inserted == 0 and not hasattr(persist_shadow_bets, "_dbg"):
+                        persist_shadow_bets._dbg = True
+                        print(f"⚠️  shadow primera fila rechazada: {str(row_err)[:200]}")
+                    print(f"⚠️  shadow fila rechazada ({r.get('market')}): "
+                          f"{type(row_err).__name__}")
+        print(f"🌑 Shadow: {inserted}/{len(records)} candidatas registradas")
     except Exception as e:
         print(f"⚠️  persist_shadow_bets error: {e}")
 

@@ -122,6 +122,66 @@ def shadow_clv_bands(verbose: bool = True) -> dict:
     return {"status": "ok", "bands": out}
 
 
+
+
+# ── C2 (ronda 8): histéresis ─────────────────────────────────────────
+# El gate viejo recalculaba la lista de cero cada semana: al bloquear, el
+# mercado deja de apostar, la ventana se vacía, n<30 y desbloquea sin que
+# el CLV haya mejorado (ciclo de 24-41 semanas). Nuevo diseño:
+#   * BLOQUEO exige 2 ventanas semanales consecutivas con CLV
+#     significativamente negativo (corrección de multiplicidad: P(espurio)
+#     por mercado-año cae de ~14% a ~2%).
+#   * DESBLOQUEO solo con evidencia positiva: n>=30 y CLV medio >= 0.
+#     La ausencia de datos ya no es prueba de inocencia.
+BLOCK_STREAK_WEEKS = 2
+
+
+def significant_negative(n, mean, sd) -> bool:
+    """CLV significativamente negativo (IC95 unilateral por debajo de 0)."""
+    return n >= MIN_BETS_STAT and sd is not None and sd > 0 and (
+        mean + CLV_Z_95 * sd / (n ** 0.5) < 0)
+
+
+def positive_evidence(n, mean, sd) -> bool:
+    """Evidencia suficiente para desbloquear: muestra real y CLV no negativo."""
+    return n >= MIN_BETS_STAT and mean >= 0
+
+
+def merge_gate_state(prev_blocked, prev_streaks, stats):
+    """
+    Fusión de estado (función pura, testeable).
+
+    prev_blocked: set de mercados bloqueados la semana pasada
+    prev_streaks: {market: semanas consecutivas significativo-negativas}
+    stats:        {market: (n, mean, sd)} de la ventana actual
+
+    Retorna (blocked_set, streaks, unblocked_list, blocked_since_updates)
+    """
+    blocked = set(prev_blocked)
+    streaks = {}
+    unblocked = []
+
+    # mercados sin datos esta semana: conservan streak congelada
+    for mkt in prev_blocked:
+        if mkt not in stats:
+            streaks[mkt] = prev_streaks.get(mkt, 0)
+
+    for mkt, (n, mean, sd) in stats.items():
+        if significant_negative(n, mean, sd):
+            streaks[mkt] = prev_streaks.get(mkt, 0) + 1
+        else:
+            streaks[mkt] = 0
+
+        if mkt in prev_blocked:
+            if positive_evidence(n, mean, sd):
+                unblocked.append(mkt)
+                blocked.discard(mkt)
+            # sin evidencia positiva → sigue bloqueado (histéresis)
+        elif streaks[mkt] >= BLOCK_STREAK_WEEKS:
+            blocked.add(mkt)
+
+    return blocked, streaks, unblocked
+
 def run_clv_gate(verbose: bool = True) -> dict:
     try:
         df = pd.read_sql(text(f"""
@@ -147,20 +207,31 @@ def run_clv_gate(verbose: bool = True) -> dict:
     # CLV en escala de probabilidad (misma definición que clv_tracker)
     df["clv"] = 1.0 / df["closing_odds"] - 1.0 / df["odds"]
 
-    blocked = []
+    # Estado previo (C2): blocked + streaks viven en el payload del JSON
+    prev_state = _read_blocked_state()
+    prev_blocked = set(prev_state.get("blocked_markets", []))
+    prev_streaks = prev_state.get("negative_streak", {})
+
+    stats = {}
     report = []
     for mkt, sub in df.groupby("market"):
         n = len(sub)
         avg = float(sub["clv"].mean())
         sd = float(sub["clv"].std(ddof=1)) if n > 1 else None
+        stats[str(mkt)] = (n, avg, sd)
         entry = {"market": str(mkt), "n": n, "avg_clv": round(avg, 5)}
-        # B1 (ronda 7): criterio estadístico — CLV significativamente negativo
-        # (IC95 unilateral por debajo de 0). Sustituye al n>=100 fijo
-        # inalcanzable (R10).
-        if market_clv_blocked(n, avg, sd):
-            blocked.append(str(mkt))
-            entry["blocked"] = True
+        if significant_negative(n, avg, sd):
+            entry["significativo_neg"] = True
         report.append(entry)
+
+    blocked_set, streaks, unblocked = merge_gate_state(
+        prev_blocked, prev_streaks, stats)
+    blocked = sorted(blocked_set)
+    for u in unblocked:
+        print(f"   🔓 {u}: desbloqueado por evidencia positiva (CLV>=0, n>=30)")
+    for mkt in blocked:
+        if mkt not in prev_blocked:
+            print(f"   ⛔ {mkt}: bloqueado (2 ventanas consecutivas con CLV neg. significativo)")
 
     # ── GATE POR LIGA (n>=20, CLV <= -5%) ─────────────────────────────
     # Protege las ligas re-habilitadas: si vuelven a fallar con muestra,
@@ -187,7 +258,12 @@ def run_clv_gate(verbose: bool = True) -> dict:
         print(f"   ⚠️  League gate omitido: {e}")
     _write_league_blocked(blocked_leagues, verbose=verbose)
 
-    _write_blocked(blocked, verbose=verbose)
+    # blocked_since: conservar el existente; fecha nueva para los recién bloqueados
+    prev_since = prev_state.get("blocked_since", {})
+    now_iso = datetime.now(timezone.utc).isoformat()
+    blocked_since = {m: prev_since.get(m, now_iso) for m in blocked}
+    _write_blocked(blocked, verbose=verbose, streaks=streaks,
+                   blocked_since=blocked_since)
 
     if verbose:
         print(f"\n🚦 CLV GATE (últimos {LOOKBACK_DAYS}d, criterio: IC95 unilateral "
@@ -211,14 +287,30 @@ def run_clv_gate(verbose: bool = True) -> dict:
     }
 
 
-def _write_blocked(blocked: list, verbose: bool = True):
+def _read_blocked_state() -> dict:
+    """Estado completo del gate (blocked + streaks + blocked_since)."""
+    try:
+        if BLOCKED_FILE.exists():
+            return json.loads(BLOCKED_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _write_blocked(blocked: list, verbose: bool = True,
+                   streaks: dict | None = None, blocked_since: dict | None = None):
     payload = {
         "blocked_markets": blocked,
+        "negative_streak": streaks or {},
+        "blocked_since": blocked_since or {},
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "policy": {
             "lookback_days": LOOKBACK_DAYS,
-            "criterion": "mean_clv + 1.645 * sd/sqrt(n) < 0 (IC95 unilateral)",
+            "criterion": ("2 ventanas consecutivas con IC95 unilateral < 0 "
+                          f"(n>={MIN_BETS_STAT}); desbloqueo solo con "
+                          "evidencia positiva (CLV>=0, n>=30)"),
             "min_bets_stat": MIN_BETS_STAT,
+            "block_streak_weeks": BLOCK_STREAK_WEEKS,
             "legacy_min_bets": MIN_BETS,
             "legacy_clv_floor": CLV_FLOOR,
         },

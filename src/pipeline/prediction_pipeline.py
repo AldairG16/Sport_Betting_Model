@@ -179,6 +179,10 @@ CIRCUIT_BREAKER_THRESHOLD = 10.0   # bankroll mínimo para generar apuestas
 #    fino por mercado vive en el gate dinámico de CLV, no aquí.
 MIN_EDGE                = 0.05
 MAX_MODEL_DEVIATION     = 0.30
+# C1/R11 (ronda 8): piso del barrido shadow — el rango observable empieza
+# aquí. Banda [0-2pt) fuera por diseño (ruido de cuota); declarado en
+# docs/AUDITORIA_RONDA8.md §2.3.
+SHADOW_MIN_DEV          = 0.02
 MAX_ODDS                = 3.80     # elimina longshots
 MAX_BETS_PER_MATCH      = 2
 MAX_RELIABLE_EDGE       = 0.499
@@ -558,7 +562,8 @@ def run_prediction_pipeline():
         ORDER BY match_date
     """, engine)
 
-    print(f"📊 Matches encontrados: {len(df)}")
+    total_matches = len(df)
+    print(f"📊 Matches encontrados: {total_matches}")
 
     if df.empty:
         return
@@ -569,6 +574,7 @@ def run_prediction_pipeline():
     # si la ventana apostable [MIN_EDGE→desvío, MAX_MODEL_DEVIATION] está en
     # el lado correcto (ver docs/AUDITORIA_RONDA7.md §3).
     shadow_records: list = []
+    shadow_swept = 0
 
     skipped_no_odds  = 0
     fallback_used    = 0
@@ -1639,6 +1645,42 @@ def run_prediction_pipeline():
 
             clean_probabilities[market] = p
 
+        # =========================
+        # SHADOW SWEEP (C1, ronda 8)
+        # =========================
+        # Barrido de TODAS las candidatas con precio real, ANTES de
+        # find_value_bets. La ronda 7 capturaba dentro del loop de bets,
+        # que ya perdió todo lo que edge_market < 0.02 (betting_engine) —
+        # el shadow medía solo una franja de ~8.6pt bajo el umbral de
+        # apuesta, no la región baja donde vive la decisión de bajar el
+        # piso (B2). R11 declarada: rango observable = desvío >= 2pt
+        # (SHADOW_MIN_DEV) con precio de referencia; banda [0-2) fuera por
+        # diseño (ruido de cuota). Los favoritos AH bloqueados TAMBIÉN
+        # pasan por aquí (la captura precede al filtro) — resuelve C3.
+        _sweep_n = 0
+        for _sm, _sp in clean_probabilities.items():
+            _sodd = odds.get(_sm)
+            _spref = market_probs.get(_sm, market_probs_raw.get(_sm))
+            _sdev = _signed_deviation.get(_sm)
+            if not _sodd or _sodd <= 1.01 or _spref is None or _sdev is None:
+                continue
+            if abs(_sdev) < SHADOW_MIN_DEV:
+                continue
+            shadow_records.append({
+                "match":      f"{home} vs {away}",
+                "match_date": date,
+                "league":     _row_league,
+                "market":     _sm,
+                "p_final":    _sp,
+                "p_ref":      _spref,
+                "deviation":  _sdev,
+                "odds":       _sodd,
+                "edge_market": _sp - 1.0 / _sodd,
+                "reason":     "sweep",
+            })
+            _sweep_n += 1
+        shadow_swept += _sweep_n
+
 
         # =========================
         # LINE MOVEMENT
@@ -1786,21 +1828,6 @@ def run_prediction_pipeline():
         match_bets_count = 0
         groups_used = set()
 
-        # B2 (ronda 7): captura de candidatas rechazadas → shadow_bets.
-        def _shadow(reason, mkt, _bet):
-            shadow_records.append({
-                "match":      f"{home} vs {away}",
-                "match_date": date,
-                "league":     _league,
-                "market":     mkt,
-                "p_final":    _bet.get("probability"),
-                "p_ref":      market_probs.get(mkt, market_probs_raw.get(mkt)),
-                "deviation":  _signed_deviation.get(mkt),
-                "odds":       _bet.get("odds"),
-                "edge_market": _bet.get("edge_market", _bet.get("edge")),
-                "reason":     reason,
-            })
-
         for bet in bets:
             if match_bets_count >= MAX_BETS_PER_MATCH:
                 break
@@ -1847,13 +1874,10 @@ def run_prediction_pipeline():
             #   draw     @2.5-4.0 → 100% WR (muestra chica, mantener amplio)
             _odds = bet["odds"]
             if mkt == "home_win" and not (1.3 <= _odds <= 3.80):
-                _shadow("odds_band", mkt, bet)
                 continue
             if mkt == "over25" and not (1.50 <= _odds <= 3.00):
-                _shadow("odds_band", mkt, bet)
                 continue
             if mkt == "draw" and not (2.5 <= _odds <= 5.0):
-                _shadow("odds_band", mkt, bet)
                 continue
 
             # ── Edge mínimo dinámico (Mejora #3 — por mercado) ──────
@@ -1894,7 +1918,6 @@ def run_prediction_pipeline():
                 _min_edge *= 1.4
 
             if _edge_real < _min_edge:
-                _shadow("edge_floor", mkt, bet)
                 continue
 
             # 4) Techo de desvío del modelo (A1/R9, ronda 6). El piso de edge
@@ -1904,17 +1927,14 @@ def run_prediction_pipeline():
             # (mercado sin precio de referencia) no hay apuesta.
             _dev = _model_deviation.get(mkt)
             if _dev is None:
-                _shadow("no_reference_price", mkt, bet)
                 continue
             if _dev > MAX_MODEL_DEVIATION:
-                _shadow("deviation_cap", mkt, bet)
                 continue
 
             # MAX_ODDS: en paper usamos 6.0 para capturar underdogs del Mundial
             # (ej. France @5.35 sería bloqueada con el límite de clubes de 3.80)
             _max_odds = 6.0 if _is_paper else MAX_ODDS
             if bet["odds"] > _max_odds:
-                _shadow("max_odds", mkt, bet)
                 continue
 
             # ── Filtro de contradicción ───────────────────────────────
@@ -2218,7 +2238,8 @@ def run_prediction_pipeline():
 
     save_bets(real_bets)
 
-    # ── B2 (ronda 7): candidatas no apostadas → shadow_bets ──
+    # ── B2/C1 (ronda 8): candidatas no apostadas → shadow_bets ──
+    print(f"🌑 Shadow sweep: {shadow_swept} candidatas barridas en {total_matches} partidos")
     persist_shadow_bets(shadow_records)
 
     # Devolvemos TODAS (real + paper) para que notify_telegram las muestre
