@@ -91,6 +91,13 @@ REG_TEAMS       = 0.001    # L2 sobre attacks/defenses (mismo valor original)
                            # Conclusión: el rho era el verdadero problema, NO
                            # la reg de teams. Mantenemos 0.001 (reg suave).
 REG_RHO         = 50.0     # L2 sobre desviación de rho del prior (fuerte)
+# D1 (ronda 17): prior sobre home_adv — el ÚNICO parámetro sin restricción
+# (gradiente 703 vs 5.98 del siguiente; desde zeros deriva a 0.592 = ventaja
+# local 1.81×, fuera del rango de las 22 ligas medidas [1.18, 1.47]).
+# OFF por defecto en producción hasta decidir en el corte del 20-oct
+# (experimento r17: histograma del gradiente con prior, ver docs/DEBATE_R17.md).
+HA_PRIOR        = 0.2344   # ln(1.2641) — media de home_adv en 22 ligas medidas
+REG_HA          = 0.0      # 0 = OFF; 150 = propuesta D1
 PRIOR_RHO       = -0.10    # valor empírico DC97 (~ promedio fútbol europeo)
 RHO_BOUND       = 0.5      # |rho| <= 0.5 (límite sano vía sigmoide)
 
@@ -241,7 +248,10 @@ def fit_dc_parameters(verbose: bool = True) -> dict:
         # Sin esto el optimizer derivaba a rho=0 por ruido en data internacional.
         reg_rho   = REG_RHO * (rho - PRIOR_RHO) ** 2
 
-        return -(np.sum(ll) - reg_teams - reg_rho)
+        obj = -(np.sum(ll) - reg_teams - reg_rho)
+        if REG_HA > 0:
+            obj += REG_HA * (params[-2] - HA_PRIOR) ** 2
+        return obj
 
     # ── Parámetros iniciales ──────────────────────────────────────────────
     # Warm start desde el fit anterior si existe, así el optimizador no
