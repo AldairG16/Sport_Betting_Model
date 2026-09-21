@@ -35,13 +35,41 @@ Todo lleva `fit_fingerprint` como dimensión de cohortes.
 
 ## §2 — Con qué n es concluyente cada métrica
 
+**Ventana declarada (H1, ronda 13): ACUMULADA desde el inicio de la
+generación (21-sep-2026 12:03 UTC).** No es rodante de 120 días por dos
+razones: mezclaría cohortes excluidas en §0 (R12) y no existe dato previo de
+la generación vigente.
+
 | Métrica | n mínimo | Mientras no lo alcance |
 |---|---|---|
 | Brecha anclada | 50 por mercado | se registra, no se decide |
-| CLV (habilitar) | 100 por mercado con closing | mercado sin habilitación |
+| CLV (habilitar) | **30 por mercado con closing** + espejo estadístico (límite inferior IC95 > 0) | mercado sin habilitación |
 | CLV (bloquear) | 30 (gate estadístico, ya activo) | — |
 | ROI | 200 | no-descalificador (§3) |
 | Shadow por banda | 50 por celda | se registra, no se decide |
+
+**Por qué 30 y no 100 (H1, ronda 13):** el 100 era B1 otra vez — con las
+tasas medidas, era inalcanzable en ventana rodante para TODOS los mercados
+(over25 topaba en 94). El espejo con n=30 es MÁS estricto en efecto (el
+error estándar crece): exige CLV medio ≥ 1.645·sd/√30 — **+1.11pp para
+over25 y +2.25pp para home_win** — frente a los +0.61pp poco exigentes del
+100. Viabilidad sin perder rigor.
+
+**Tasa de activación por mercado (R16 — el umbral dividido por la tasa):**
+
+| Mercado | /sem baseline (Q-Q, 120d) | /sem post-fix (últimos 8d) | n=30 acumulado en |
+|---|---|---|---|
+| over25 | 5.5 | **49.0** (56/56 con closing) | 1-5.5 semanas |
+| home_win | 2.2 | 6.1 | 5-13.6 semanas |
+| btts | 1.3 | 19.3 (verificar closing nuevo) | 1.6-23 semanas |
+| dnb_away | 0.76 | 7.0 | 4.3-39 semanas |
+| dc_1x | 0.53 | 3.5 | 8.6-57 semanas |
+
+**Si ningún mercado habilita nunca:** el mercado permanece en papel
+indefinidamente y NO se le aplican conclusiones ajenas; a las 8 semanas sin
+n≥30, la tasa del mercado pasa a revisión trimestral (¿cobertura de closing,
+calendario de ligas, filtros?) — el silencio nunca se interpreta como
+inocencia (misma lógica que la histéresis del gate).
 
 sd de referencia medido (120d): over25 0.037 · home_win 0.075 · away_win
 0.10. La puerta usa el sd DEL mercado, nunca un global.
@@ -53,7 +81,8 @@ sd de referencia medido (120d): over25 0.037 · home_win 0.075 · away_win
 | **Habilitar mercado** (puerta 1): límite INFERIOR del IC95 unilateral del CLV > 0 con n≥100 — el espejo exacto del criterio de bloqueo (G2). Con sd medido: exige CLV medio ≥ +0.6pp (over25) o +1.2pp (home_win) a n=100 | el mercado entra al universe apostable |
 | Brecha anclada ≤3pt sostenida + al menos un mercado habilitado + ROI **no-descalificador** (IC95 que contenga 0 — significa "no demostrado que perdemos", NO evidencia a favor) | **piloto real**: 1% de bankroll por apuesta, tope 5u/día |
 | CLV shadow positivo SIGNIFICATIVO (límite inferior > 0) en la banda baja de un mercado, n_con_closing ≥ 50 | bajar el piso de ESE mercado a 0.03 (abre exposición → exige prueba) |
-| CLV shadow negativo con punto estimado < 0 y n_con_closing ≥ 30 en [19-25) de un mercado | subir el piso de ESE mercado a 0.08 (cierra exposición → basta estimación) |
+| CLV shadow negativo con punto estimado < 0 y n_con_closing ≥ 30 en [19-25) de un mercado | subir el piso de ESE mercado, **acotado por `piso_max`** (H2, ronda 13, ver abajo) |
+| **`piso_max(mercado) = 0.35 × (techo − 5pt) − slip(mercado)`** → 1x2 **0.068** · O/U **0.069** · AH **0.066** · BTTS **0.048** | ninguna subida de piso puede superar `piso_max`: dejaría menos de 5pt de ventana viva bajo el techo de 30pt y sería **un bloqueo disfrazado** (H2) — un bloqueo real usa la ruta del gate, con su reactivación por evidencia. Si el techo pasa a ser por mercado, la fórmula se parametriza con el techo de ese mercado |
 | Gate de CLV (IC95 < 0, 2 ventanas) | bloqueo automático (ya operativo) |
 | \|Δhome_adv\| > 0.08 entre refits consecutivos | cohort="inestable" esa semana; no cuenta para habilitaciones |
 | rho en zona de histéresis [0.015, 0.03] | estado anterior manda (implementado ronda 11) |
@@ -87,8 +116,22 @@ estimación)**. Criterio de G2 aplicado en ambas direcciones.
 | Fecha | Métrica | n | Valor | Decisión | Autor |
 |---|---|---|---|---|---|
 | 21-sep-2026 | — | — | — | Creación del documento; corrección G1 (warm-start desde Neon, verificado: hereda 0.2211) y G2 (puerta espejo) | ronda 12 |
+| 21-sep-2026 | H1: tasa vs umbral n=100 | Q-Q + post-fix | inalcanzable en rodante; 4.2 meses en acumulada solo over25 | habilitación pasa a n=30 con espejo estadístico; ventana declarada ACUMULADA; tasa por mercado escrita al lado (R16) | ronda 13 |
+| 21-sep-2026 | H2: piso 0.08 bajo techo 30pt | — | ventana restante 0.9-4.9pt = bloqueo disfrazado | adoptado `piso_max(mercado) = 0.35×(techo−5pt) − slip`; subir piso más allá = bloqueo con ruta del gate | ronda 13 |
 | 28-sep-2026 | Q-AH: Δhome_adv entre refits CI | — | pendiente | si <0.08 → ciclo auditor cerrado formalmente | pendiente |
 | *(siguiente fila)* | *métrica* | *n* | *valor* | *acción tomada* | *quién* |
+
+---
+
+**CIERRE DEL CICLO (ronda 13).** Doce rondas llevaron el sistema de "el
+modelo infla los goles un 60% con toda su capa adaptativa muerta" a λ
+correctos a 1e-16 de la media de liga, estado persistido en Neon,
+contabilidad atómica, gate estadístico con histéresis, shadow que mide el
+rango correcto y agrega en la unidad correcta, cohortes por huella de fit,
+266 tests, y este documento con criterios numéricos y tasas de activación
+declaradas. **A partir de hoy el gobierno del sistema es
+`docs/SALIDA_PAPEL.md`; los disparadores de su §5 son la única vía de
+reapertura del ciclo de auditorías.**
 
 ---
 
