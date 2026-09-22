@@ -21,7 +21,9 @@ concurrency:
 jobs:
   weekly:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 120 (antes 60): las cargas de datos solas tardan ~50 min y el 22-sep,
+    # con Load historical data ya funcionando, el job rozaba/pasaba el límite.
+    timeout-minutes: 120
 
     steps:
       - name: Checkout code

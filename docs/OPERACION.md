@@ -120,7 +120,10 @@ aprende de los datos que recolecta solo, y lo guarda en `model_state` (§7):
 calibración, CLV gate, caché de CLV para Kelly, **peso del modelo frente al
 mercado** y **reactivaciones por shadow**. Las corridas diarias lo leen de la DB
 al arrancar (`load_learned_state()` en el pipeline). Solo aprende de datos de la
-cohorte actual (`LEARNING_SINCE`, §7).
+cohorte actual (`LEARNING_SINCE`, §7). Estos pasos corren **al inicio** del weekly,
+antes de las cargas de datos: las cargas tardan ~62 min (histórico 11', eventos 21',
+ligas extra 25') y el 22-sep-2026 el job se cortó en el límite de 60 min antes de
+llegar a aprender. Límite actual del job: 120 min.
 
 ### Cómo auditar
 
