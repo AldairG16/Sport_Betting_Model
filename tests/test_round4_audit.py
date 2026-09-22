@@ -145,23 +145,19 @@ def test_clv_gate_binds_both_blocked_sets(monkeypatch):
     """
     El bloque import-time del gate CLV llamaba a un nombre que el import no
     definía (_load_clv_blocked_leagues) → NameError silencioso → ambos
-    conjuntos vacíos en cada arranque. El reload con loaders parcheados
-    prueba que hoy llegan vivos a _CLV_BLOCKED/_CLV_LEAGUES.
+    conjuntos vacíos en cada arranque. Desde el 22-sep-26 la carga es en
+    cada corrida (load_learned_state, desde la DB): ambos conjuntos llegan.
     """
-    import importlib
-
     import scripts.clv_gate as clv_gate
     monkeypatch.setattr(clv_gate, "load_clv_blocked_markets",
                         lambda: {"fake_market"})
     monkeypatch.setattr(clv_gate, "load_clv_blocked_leagues",
                         lambda: {"fake_league"})
+    monkeypatch.setattr(clv_gate, "load_shadow_reactivated", lambda: set())
+    import src.models.anchor_learner as al
+    monkeypatch.setattr(al, "load_anchor_weights", lambda: {})
 
     import src.pipeline.prediction_pipeline as pp
-    reloaded = importlib.reload(pp)
-    assert "fake_market" in reloaded._CLV_BLOCKED
-    assert "fake_league" in reloaded._CLV_LEAGUES
-
-    # Higiene: dejar el módulo recargado con los loaders reales, no los
-    # patches de este test (el módulo vive en sys.modules para otros tests).
-    monkeypatch.undo()
-    importlib.reload(pp)
+    state = pp.load_learned_state()
+    assert "fake_market" in state["blocked_markets"]
+    assert "fake_league" in state["blocked_leagues"]

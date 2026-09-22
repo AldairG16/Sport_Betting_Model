@@ -107,11 +107,11 @@ def test_significant_negative_matches_gate_criterion():
 # C3 — la reactivación AH tiene datos
 # ============================================================
 
-def test_sweep_precedes_ah_fav_block():
+def test_sweep_precedes_ah_fav_block(monkeypatch):
     """Los favoritos AH bloqueados pasan por el sweep (captura previa al
     filtro de candidatos): su CLV de reactivación es medible por
-    construcción, no por aproximación."""
-    src = _source(pp)
-    i_sweep = src.index("SHADOW SWEEP")
-    i_block = src.index('_ah_group(mkt) in ("ah_home_fav", "ah_away_fav")')
-    assert i_sweep < i_block
+    construcción, no por aproximación. Verificado ejecutando el pipeline."""
+    from tests.pipeline_harness import run_pipeline
+    out = run_pipeline(monkeypatch)
+    assert any(s["market"] == "ah_home_-0.50" for s in out["shadow"])
+    assert not any(b["market"] == "ah_home_-0.50" for b in out["bets"])

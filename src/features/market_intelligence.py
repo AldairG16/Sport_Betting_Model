@@ -63,8 +63,12 @@ def market_intelligence_filter(bets):
             if edge < 0.06:
                 continue
 
-        else:
-            continue
+        # Resto de mercados (AH, DNB, doble oportunidad, 1T/2T): sin regla
+        # propia aquí — los gobiernan el piso de edge, el techo de desvío y
+        # los bloqueos del pipeline. Antes se RECHAZABAN aquí, y solo
+        # entraban cuando el pipeline caía al fallback `or bets` (ningún
+        # mercado principal pasaba): una política que dependía de qué otros
+        # mercados tenía el partido.
 
         # =========================
         # 3. ANTI-TRAP (CLAVE PRO)

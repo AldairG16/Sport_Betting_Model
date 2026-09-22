@@ -15,8 +15,15 @@ Métricas:
     → factor > 1: modelo subconfiado (gana más de lo que predice)
     → factor < 1: modelo sobreconfiado (gana menos de lo que predice)
 
-Los factores se guardan en config/calibration_factors.json y se
-aplican automáticamente en el pipeline para corregir el sesgo.
+Los factores se guardan en la DB (model_state/calibration_factors, la
+única copia que sobrevive entre runners de CI) con espejo en
+config/calibration_factors.json, y se aplican automáticamente en el
+pipeline para corregir el sesgo. Solo aprende de apuestas de la cohorte
+actual (settings.LEARNING_SINCE).
+
+Alcance real (arquitectura anclada, 14-sep-26): los mercados anclados al
+mercado NO pasan por esta calibración (heredan la del precio sin margen);
+hoy solo la usan los mercados sin ancla (doble oportunidad).
 
 Mínimo recomendado: 50 bets por mercado para que los factores sean estables.
 """
@@ -32,7 +39,13 @@ import numpy as np
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
+from sqlalchemy import text
+
 from config.database import engine
+from config.settings import LEARNING_SINCE
+from src.utils.model_state import load_state, save_state
+
+STATE_KEY = "calibration_factors"
 
 # MEJORA #5 — Isotonic regression (sklearn) para calibración no-paramétrica.
 # Aprende un mapping monótono pred_prob → real_prob a partir de los datos.
@@ -126,8 +139,16 @@ def _apply_isotonic(prob: float, knots: dict | None) -> float:
 
 def _ah_group(market: str) -> str | None:
     """
-    Mapea 'ah_home_-0.5' → 'ah_home_fav'.
+    Mapea un AH parametrizado a su grupo, desde la perspectiva del lado
+    apostado: 'ah_home_-0.50' → 'ah_home_fav', 'ah_away_-0.50' → 'ah_away_dog'.
     Devuelve None si no es un mercado AH parametrizado.
+
+    La línea embebida en la clave es SIEMPRE la del local (así la escribe el
+    pipeline y así la liquida el resolver), así que para el lado visitante
+    hay que invertirla: 'ah_away_-0.50' es el visitante RECIBIENDO +0.5.
+    Hasta el 22-sep-26 no se invertía y los grupos del visitante estaban
+    cruzados (fav↔dog) — en calibración, en el umbral de edge y en el
+    bloqueo de favoritos AH.
     """
     if not (market.startswith("ah_home_") or market.startswith("ah_away_")):
         return None
@@ -136,6 +157,8 @@ def _ah_group(market: str) -> str | None:
         line = float(market.rsplit("_", 1)[-1])
     except ValueError:
         return None
+    if side == "ah_away":
+        line = -line
     for tag, (lo, hi) in AH_GROUP_BOUNDARIES.items():
         if lo <= line < hi:
             return f"{side}_{tag}"
@@ -196,16 +219,26 @@ MIN_BETS_BY_LEAGUE = 25       # mínimo TOTAL de bets en la liga (todos mercados
 
 _CAL_CACHE: dict | None = None
 _CAL_CACHE_MTIME: float = 0.0
+_CAL_SOURCE: str | None = None   # "db" | "file" — se decide en la 1ª lectura
 
 
 def load_calibration_factors() -> dict:
     """
-    Carga los factores de calibración guardados.
-    Si el archivo no existe, retorna factores neutros (1.0).
-    Usa caché en memoria invalidada por mtime para evitar lecturas de disco
-    repetidas (apply_calibration lo llama N_markets × N_partidos por ejecución).
+    Carga los factores de calibración guardados: DB primero (lo que dejó el
+    último weekly), archivo local como fallback, factores neutros (1.0) si
+    no hay ninguno.
+    Caché en memoria: apply_calibration lo llama N_markets × N_partidos por
+    ejecución, así que la DB se consulta una sola vez por proceso.
     """
-    global _CAL_CACHE, _CAL_CACHE_MTIME
+    global _CAL_CACHE, _CAL_CACHE_MTIME, _CAL_SOURCE
+    if _CAL_SOURCE == "db" and _CAL_CACHE is not None:
+        return _CAL_CACHE
+    if _CAL_SOURCE is None:
+        _CAL_SOURCE = "file"
+        state = load_state(STATE_KEY)
+        if state:
+            _CAL_CACHE, _CAL_SOURCE = state, "db"
+            return _CAL_CACHE
     if CALIBRATION_FILE.exists():
         try:
             mtime = CALIBRATION_FILE.stat().st_mtime
@@ -229,12 +262,14 @@ def _neutral_factors() -> dict:
 
 
 def _save_calibration_factors(factors: dict):
-    CALIBRATION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    global _CAL_CACHE, _CAL_SOURCE
     # tz-aware UTC: evita ambigüedad cuando el script corre en distintas zonas
-    factors["updated_at"]    = datetime.now(timezone.utc).isoformat()
-    factors["window_days"]   = CALIBRATION_WINDOW_DAYS
-    with open(CALIBRATION_FILE, "w") as f:
-        json.dump(factors, f, indent=2)
+    factors["updated_at"]     = datetime.now(timezone.utc).isoformat()
+    factors["window_days"]    = CALIBRATION_WINDOW_DAYS
+    factors["learning_since"] = LEARNING_SINCE
+    save_state(STATE_KEY, factors, file_path=CALIBRATION_FILE)
+    # el resto de este proceso (holdout, reporte) ve lo recién calculado
+    _CAL_CACHE, _CAL_SOURCE = factors, "db"
 
 
 def get_calibration_factor(market: str, league: str | None = None) -> float:
@@ -369,7 +404,11 @@ def compute_calibration(min_bets: int = MIN_BETS_FOR_CALIBRATION,
         # Filtro de ventana temporal: sólo últimos CALIBRATION_WINDOW_DAYS días.
         # Esto desacopla la calibración del modelo *actual* del histórico lejano
         # (bets generadas con thresholds/features distintos).
-        df = pd.read_sql(f"""
+        # Cohorte (LEARNING_SINCE): solo apuestas del modelo actual. Con el
+        # holdout de 45 días, la ventana de fit puede quedar vacía durante
+        # las primeras semanas de una cohorte nueva — eso es correcto: se
+        # guardan factores neutros en vez de seguir con los del modelo viejo.
+        df = pd.read_sql(text(f"""
             SELECT market, probability, result, league
             FROM bets_history
             WHERE result IN ('win', 'loss', 'half_win', 'half_loss')
@@ -378,15 +417,21 @@ def compute_calibration(min_bets: int = MIN_BETS_FOR_CALIBRATION,
               AND probability < 1
               AND match_date >= NOW() - INTERVAL '{CALIBRATION_WINDOW_DAYS} days'
               AND match_date <  NOW() - INTERVAL '{CALIBRATION_HOLDOUT_DAYS} days'
-        """, engine)
+              AND match_date >= CAST(:since AS timestamptz)
+        """), engine, params={"since": LEARNING_SINCE})
     except Exception as e:
+        # Error de lectura ≠ "no hay datos": NO se sobreescribe el estado
+        # guardado con neutros por un fallo transitorio de la DB.
         print(f"❌ calibration_monitor: no se pudo leer bets_history: {e}")
         return _neutral_factors()
 
     if df.empty:
         if verbose:
-            print("⚠️  Sin bets resueltas para calibración")
-        return _neutral_factors()
+            print(f"⚠️  Sin bets resueltas de la cohorte actual (desde {LEARNING_SINCE}) "
+                  f"fuera del holdout — se guardan factores neutros")
+        factors = _neutral_factors()
+        _save_calibration_factors(factors)
+        return factors
 
     # Resultado binario: 1 = win, 0 = loss
     df["outcome"] = df["result"].isin(["win", "half_win"]).astype(int)

@@ -54,6 +54,7 @@ jobs:
         run: python scripts/orchestrator.py --mode weekly
 
       - name: Sanity audit
+        if: always()   # corre aunque el weekly haya fallado (run en rojo)
         env:
           DB_URL:              ${{ secrets.DB_URL }}
           TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -63,6 +64,7 @@ jobs:
         continue-on-error: true
 
       - name: CLV calibration audit
+        if: always()   # corre aunque el weekly haya fallado (run en rojo)
         env:
           DB_URL:              ${{ secrets.DB_URL }}
           TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}

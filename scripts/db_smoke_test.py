@@ -17,6 +17,8 @@ septiembre-2026 funcionan contra el esquema real de producción:
   9. Query del cap de exposición por slate (pending por fecha)
   10. Queries de slippage (odds_placed) y backtest_engine
   11. DDL guards de save_bets (ADD COLUMN IF NOT EXISTS — idempotente)
+  12. Ciclo de aprendizaje (22-sep-26): model_state, cohorte, peso del
+      modelo y reactivación por shadow EN SECO, closing compartido y BTTS
 
 READ-ONLY sobre datos: no inserta, no actualiza ni borra bets. Los DDL
 guards son idempotentes (IF NOT EXISTS) y son los mismos que correría el
@@ -197,6 +199,94 @@ def _misc():
         ORDER BY match_date
     """), engine)
     return f"slippage={r.get('status')} | resueltas={len(df)}"
+
+
+# ── Ciclo de aprendizaje (22-sep-26) — todo SOLO LECTURA ──────────────
+# Ejecuta las queries y la matemática nuevas contra datos reales sin
+# persistir nada: lo que el weekly haría, en seco.
+
+@check("Aprendizaje: tabla model_state y claves guardadas")
+def _model_state():
+    with engine.connect() as c:
+        rows = c.execute(text(
+            "SELECT key, updated_at FROM model_state ORDER BY key")).fetchall()
+    return ", ".join(f"{k} ({str(u)[:10]})" for k, u in rows) or "vacía"
+
+
+@check("Aprendizaje: calibración de la cohorte (LEARNING_SINCE)")
+def _calib_cohort():
+    from config.settings import LEARNING_SINCE
+    from src.models.calibration_monitor import CALIBRATION_WINDOW_DAYS, CALIBRATION_HOLDOUT_DAYS
+    df = pd.read_sql(text(f"""
+        SELECT market FROM bets_history
+        WHERE result IN ('win', 'loss', 'half_win', 'half_loss')
+          AND probability IS NOT NULL AND probability > 0 AND probability < 1
+          AND match_date >= NOW() - INTERVAL '{CALIBRATION_WINDOW_DAYS} days'
+          AND match_date <  NOW() - INTERVAL '{CALIBRATION_HOLDOUT_DAYS} days'
+          AND match_date >= CAST(:since AS timestamptz)
+    """), engine, params={"since": LEARNING_SINCE})
+    return f"{len(df)} bets de la cohorte fuera del holdout (desde {LEARNING_SINCE})"
+
+
+@check("Aprendizaje: CLV gate de la cohorte")
+def _clv_cohort():
+    from config.settings import LEARNING_SINCE
+    df = pd.read_sql(text("""
+        SELECT market, COUNT(*) AS n
+        FROM bets_history
+        WHERE closing_odds IS NOT NULL AND closing_odds > 1 AND odds > 1
+          AND result IN ('win', 'loss', 'half_win', 'half_loss')
+          AND match_date >= NOW() - INTERVAL '120 days'
+          AND match_date >= CAST(:since AS timestamptz)
+        GROUP BY market ORDER BY n DESC
+    """), engine, params={"since": LEARNING_SINCE})
+    return ", ".join(f"{r.market}={r.n}" for r in df.head(8).itertuples()) or "sin datos"
+
+
+@check("Aprendizaje: peso del modelo (anchor_learner en seco)")
+def _anchor_dry():
+    from src.models.anchor_learner import (read_shadow_with_closing,
+                                           learn_anchor_weights, format_report)
+    df = read_shadow_with_closing()
+    state = learn_anchor_weights(df)          # sin save_state
+    print("\n" + format_report(state) + "\n")
+    return f"{len(df)} candidatas shadow con cierre"
+
+
+@check("Aprendizaje: reactivación por shadow (en seco)")
+def _reactivation_dry():
+    from scripts.clv_gate import shadow_reactivation_stats
+    stats = shadow_reactivation_stats()
+    return ", ".join(f"{g}: n={s[0]} CLV={s[1]:+.4f}" for g, s in stats.items()) or "sin candidatas aún"
+
+
+@check("Closing: mapeo compartido sobre una bet real")
+def _closing_shared():
+    from src.models.save_bets import _nearest_market_row, _closing_odds_for
+    bet = pd.read_sql(text("""
+        SELECT match, market, match_date FROM bets_history
+        WHERE match_date >= NOW() - INTERVAL '7 days' AND position(' vs ' in match) > 0
+        ORDER BY match_date DESC LIMIT 1
+    """), engine)
+    if bet.empty:
+        return "sin bets recientes"
+    b = bet.iloc[0]
+    home, away = b["match"].split(" vs ")
+    row = _nearest_market_row(home, away, pd.to_datetime(b["match_date"], utc=True))
+    co = _closing_odds_for(b["market"], row.iloc[0]) if not row.empty else None
+    return f"{b['match']} | {b['market']} → cierre {co}"
+
+
+@check("Closing: bets BTTS con cierre (antes 0 por clave 'btts_yes')")
+def _btts_closing():
+    df = pd.read_sql(text("""
+        SELECT COUNT(*) FILTER (WHERE closing_odds IS NOT NULL) AS con,
+               COUNT(*) AS total
+        FROM bets_history
+        WHERE market IN ('btts', 'btts_no')
+          AND match_date >= NOW() - INTERVAL '120 days'
+    """), engine)
+    return f"{int(df.iloc[0]['con'])}/{int(df.iloc[0]['total'])} con closing (120d)"
 
 
 def main():

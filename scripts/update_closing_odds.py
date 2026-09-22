@@ -12,9 +12,7 @@ Esto ahorra todos los creditos que antes consumia get_live_odds().
 """
 
 import sys
-import os
 from pathlib import Path
-from datetime import datetime, timezone
 
 import pandas as pd
 from sqlalchemy import text
@@ -25,7 +23,6 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from config.database import engine
-from src.utils.team_normalizer import normalize_team
 
 
 # ============================================================
@@ -58,7 +55,7 @@ def update_closing_odds(only_near_kickoff: bool = True):
         # upcoming_matches), preservando el objetivo de capturar el precio
         # cercano al kickoff.
         bets = pd.read_sql(text("""
-            SELECT id, match, market, odds
+            SELECT id, match, market, odds, match_date
             FROM bets_history
             WHERE closing_odds IS NULL
               AND result IN ('pending','win','loss','half_win','half_loss','push')
@@ -68,7 +65,7 @@ def update_closing_odds(only_near_kickoff: bool = True):
     else:
         # Modo backfill (one_shot_data_quality_cleanup): TODO lo rellenable
         bets = pd.read_sql("""
-            SELECT id, match, market, odds
+            SELECT id, match, market, odds, match_date
             FROM bets_history
             WHERE closing_odds IS NULL
               AND match_date >= NOW() AT TIME ZONE 'UTC' - INTERVAL '120 days'
@@ -83,6 +80,14 @@ def update_closing_odds(only_near_kickoff: bool = True):
     updates = 0
     not_found = 0
 
+    # Un solo mapeo mercado → cuota de cierre para apuestas Y shadow
+    # (save_bets._closing_odds_for). Antes este script tenía su propia
+    # copia, que buscaba "btts_yes" cuando el mercado se guarda como "btts":
+    # ninguna apuesta BTTS recibía cierre ni CLV. Además tomaba la fila más
+    # reciente de los dos equipos (podía ser OTRO partido entre ellos); la
+    # compartida busca la más cercana al kickoff (±4h).
+    from src.models.save_bets import _nearest_market_row, _closing_odds_for
+
     with engine.begin() as conn:
         for _, bet in bets.iterrows():
             match   = bet["match"]
@@ -93,97 +98,18 @@ def update_closing_odds(only_near_kickoff: bool = True):
             except ValueError:
                 continue
 
-            home_n = normalize_team(home_raw).lower().strip()
-            away_n = normalize_team(away_raw).lower().strip()
+            try:
+                odds_df = _nearest_market_row(home_raw, away_raw,
+                                              pd.to_datetime(bet["match_date"], utc=True))
+            except Exception as e:
+                print(f"⚠️  closing: no se pudo buscar {match}: {type(e).__name__}")
+                continue
 
-            # Buscar en upcoming_matches (datos ya descargados)
-            result = conn.execute(text("""
-                SELECT home_odds, draw_odds, away_odds,
-                       over25_odds, under25_odds,
-                       btts_yes_odds, btts_no_odds,
-                       ah_home_odds, ah_away_odds, ah_line,
-                       dnb_home_odds, dnb_away_odds,
-                       dc_1x_odds, dc_x2_odds, dc_12_odds,
-                       h1_home_odds, h1_draw_odds, h1_away_odds,
-                       h2_home_odds, h2_draw_odds, h2_away_odds,
-                       corners_over_odds, corners_under_odds, corners_line,
-                       cards_over_odds, cards_under_odds, cards_line
-                FROM upcoming_matches
-                WHERE home_team_norm = :home
-                  AND away_team_norm = :away
-                ORDER BY match_date DESC
-                LIMIT 1
-            """), {"home": home_n, "away": away_n}).fetchone()
-
-            if result is None:
+            if odds_df.empty:
                 not_found += 1
                 continue
 
-            # Mapear mercado → columna (mercados simples)
-            market_map = {
-                "home_win":  result.home_odds,
-                "draw":      result.draw_odds,
-                "away_win":  result.away_odds,
-                "over25":    result.over25_odds,
-                "under25":   result.under25_odds,
-                "btts_yes":  result.btts_yes_odds,
-                "btts_no":   result.btts_no_odds,
-                "dnb_home":  result.dnb_home_odds,
-                "dnb_away":  result.dnb_away_odds,
-                "dc_1x":     result.dc_1x_odds,
-                "dc_x2":     result.dc_x2_odds,
-                "dc_12":     result.dc_12_odds,
-                "h1_home":   result.h1_home_odds,
-                "h1_draw":   result.h1_draw_odds,
-                "h1_away":   result.h1_away_odds,
-                "h2_home":   result.h2_home_odds,
-                "h2_draw":   result.h2_draw_odds,
-                "h2_away":   result.h2_away_odds,
-            }
-
-            closing_odds = market_map.get(market)
-
-            # Asian Handicap: format "ah_home_+0.5" / "ah_away_-1.5"
-            # Solo coincidir si la línea que guardó el modelo es igual a la
-            # línea de consenso actual (ah_line). Si no, no podemos dar CO.
-            if closing_odds is None and market.startswith("ah_"):
-                try:
-                    _, side, line_str = market.split("_", 2)  # ah, home/away, +0.5
-                    bet_line = float(line_str)
-                    if result.ah_line is not None and abs(float(result.ah_line) - bet_line) < 0.01:
-                        if side == "home":
-                            closing_odds = result.ah_home_odds
-                        elif side == "away":
-                            closing_odds = result.ah_away_odds
-                except (ValueError, AttributeError):
-                    pass
-
-            # Corners: format "corners_over_9.5" / "corners_under_9.5"
-            if closing_odds is None and market.startswith("corners_"):
-                try:
-                    _, side, line_str = market.split("_", 2)
-                    bet_line = float(line_str)
-                    if result.corners_line is not None and abs(float(result.corners_line) - bet_line) < 0.01:
-                        if side == "over":
-                            closing_odds = result.corners_over_odds
-                        elif side == "under":
-                            closing_odds = result.corners_under_odds
-                except (ValueError, AttributeError):
-                    pass
-
-            # Cards: format "cards_over_4.5" / "cards_under_4.5"
-            if closing_odds is None and market.startswith("cards_"):
-                try:
-                    _, side, line_str = market.split("_", 2)
-                    bet_line = float(line_str)
-                    if result.cards_line is not None and abs(float(result.cards_line) - bet_line) < 0.01:
-                        if side == "over":
-                            closing_odds = result.cards_over_odds
-                        elif side == "under":
-                            closing_odds = result.cards_under_odds
-                except (ValueError, AttributeError):
-                    pass
-
+            closing_odds = _closing_odds_for(market, odds_df.iloc[0])
             if closing_odds is None:
                 continue
 

@@ -9,16 +9,27 @@ rentabilidad de largo plazo mucho antes. Regla:
   Si un mercado tiene >= MIN_BETS (default 100) bets con closing_odds en los
   últimos LOOKBACK días y CLV promedio < CLV_FLOOR (default -0.005, escala de
   probabilidad), el mercado se considera sin ventaja real contra el cierre
-  y se BLOQUEA: se escribe en config/clv_blocked_markets.json, que el
-  prediction_pipeline suma a sus kill-switches.
+  y se BLOQUEA: se guarda en la DB (model_state/clv_gate_markets), que el
+  prediction_pipeline suma a sus kill-switches en cada corrida.
 
 Se desbloquea solo: si el CLV trailing recupera (o la muestra cae por
 rotación de la ventana), el mercado sale del archivo y vuelve a apostarse.
 
+Persistencia (22-sep-26): el estado vive en la DB (model_state), con los
+JSON de config/ como espejo. Antes solo existían los archivos, que morían
+con el runner del weekly: el morning nunca los vio, el gate nunca bloqueó
+nada en producción y la histéresis (2 semanas seguidas) jamás pudo contar
+más de 1 semana.
+
+Reactivación por shadow (run_shadow_reactivation): mercados bloqueados de
+forma fija en el pipeline vuelven SOLO con evidencia de sus candidatas
+shadow medidas contra el cierre, sin arriesgar dinero.
+
+Solo mira datos de la cohorte actual (settings.LEARNING_SINCE).
+
 Ejecutar semanalmente (lo llama el orchestrator --mode weekly).
 """
 
-import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,9 +40,14 @@ from sqlalchemy import text
 sys.path.append(str(Path(__file__).parent.parent))
 
 from config.database import engine
+from config.settings import LEARNING_SINCE
+from src.utils.model_state import load_state, save_state
 
 ROOT = Path(__file__).parent.parent
 BLOCKED_FILE = ROOT / "config" / "clv_blocked_markets.json"
+STATE_KEY_MARKETS = "clv_gate_markets"
+STATE_KEY_LEAGUES = "clv_gate_leagues"
+STATE_KEY_REACTIVATION = "shadow_reactivation"
 
 LOOKBACK_DAYS = 120
 _LEAGUE_MIN_BETS = 20      # muestra mínima para auto-bloquear liga
@@ -202,7 +218,8 @@ def run_clv_gate(verbose: bool = True) -> dict:
               AND odds > 1
               AND result IN ('win', 'loss', 'half_win', 'half_loss')
               AND match_date >= NOW() - INTERVAL '{LOOKBACK_DAYS} days'
-        """), engine)
+              AND match_date >= CAST(:since AS timestamptz)
+        """), engine, params={"since": LEARNING_SINCE})
     except Exception as e:
         if verbose:
             print(f"❌ clv_gate: no se pudo leer bets_history: {e}")
@@ -255,7 +272,8 @@ def run_clv_gate(verbose: bool = True) -> dict:
               AND league IS NOT NULL
               AND result IN ('win', 'loss', 'push', 'half_win', 'half_loss')
               AND match_date >= NOW() - INTERVAL '{LOOKBACK_DAYS} days'
-        """), engine)
+              AND match_date >= CAST(:since AS timestamptz)
+        """), engine, params={"since": LEARNING_SINCE})
         if not lg.empty:
             lg["clv"] = 1.0 / lg["closing_odds"] - 1.0 / lg["odds"]
             for l, sub in lg.groupby("league"):
@@ -298,13 +316,10 @@ def run_clv_gate(verbose: bool = True) -> dict:
 
 
 def _read_blocked_state() -> dict:
-    """Estado completo del gate (blocked + streaks + blocked_since)."""
-    try:
-        if BLOCKED_FILE.exists():
-            return json.loads(BLOCKED_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return {}
+    """Estado completo del gate (blocked + streaks + blocked_since): DB
+    primero — sin esto la racha de semanas negativas se reiniciaba en
+    cada runner y el bloqueo (exige 2 seguidas) era inalcanzable."""
+    return load_state(STATE_KEY_MARKETS, BLOCKED_FILE) or {}
 
 
 def _write_blocked(blocked: list, verbose: bool = True,
@@ -323,13 +338,10 @@ def _write_blocked(blocked: list, verbose: bool = True,
             "block_streak_weeks": BLOCK_STREAK_WEEKS,
             "legacy_min_bets": MIN_BETS,
             "legacy_clv_floor": CLV_FLOOR,
+            "learning_since": LEARNING_SINCE,
         },
     }
-    try:
-        BLOCKED_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    except Exception as e:
-        if verbose:
-            print(f"⚠️  clv_gate: no se pudo escribir {BLOCKED_FILE}: {e}")
+    save_state(STATE_KEY_MARKETS, payload, file_path=BLOCKED_FILE)
 
 
 LEAGUE_BLOCKED_FILE = ROOT / "config" / "clv_blocked_leagues.json"
@@ -339,35 +351,119 @@ def _write_league_blocked(leagues: list, verbose: bool = True):
     payload = {
         "blocked_leagues": leagues,
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "policy": {"min_bets": _LEAGUE_MIN_BETS, "clv_floor": _LEAGUE_CLV_FLOOR},
+        "policy": {"min_bets": _LEAGUE_MIN_BETS, "clv_floor": _LEAGUE_CLV_FLOOR,
+                   "learning_since": LEARNING_SINCE},
     }
-    try:
-        LEAGUE_BLOCKED_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    except Exception as e:
-        if verbose:
-            print(f"⚠️  clv_gate: no se pudo escribir {LEAGUE_BLOCKED_FILE}: {e}")
+    save_state(STATE_KEY_LEAGUES, payload, file_path=LEAGUE_BLOCKED_FILE)
 
 
 def load_clv_blocked_leagues() -> set:
-    """Lee config/clv_blocked_leagues.json → set de ligas a bloquear."""
-    try:
-        if LEAGUE_BLOCKED_FILE.exists():
-            data = json.loads(LEAGUE_BLOCKED_FILE.read_text(encoding="utf-8"))
-            return set(data.get("blocked_leagues", []))
-    except Exception:
-        pass
-    return set()
+    """Ligas bloqueadas por el gate (DB; archivo como fallback local)."""
+    data = load_state(STATE_KEY_LEAGUES, LEAGUE_BLOCKED_FILE) or {}
+    return set(data.get("blocked_leagues", []))
 
 
 def load_clv_blocked_markets() -> set:
-    """Lee config/clv_blocked_markets.json → set de mercados a bloquear."""
+    """Mercados bloqueados por el gate (DB; archivo como fallback local)."""
+    data = load_state(STATE_KEY_MARKETS, BLOCKED_FILE) or {}
+    return set(data.get("blocked_markets", []))
+
+
+# ── Reactivación por shadow ───────────────────────────────────────────
+# Mercados que el pipeline bloquea de forma FIJA (no por el gate) y que
+# pueden volver solo con evidencia de sus candidatas shadow: las que se
+# habrían apostado (modelo por encima del precio y edge >= piso operativo)
+# medidas contra el cierre, sin arriesgar dinero. Es el criterio que la
+# ronda 7 (B1b) dejó documentado para los favoritos AH, ahora ejecutado.
+#   - away_win: bloqueo fijo desde abril-26 (el peor mercado del histórico)
+#   - AH con el local favorito: grupos ah_home_fav y ah_away_dog (ver
+#     _ah_group — son las dos patas de la misma línea)
+SHADOW_REACTIVABLE = ("away_win", "ah_home_fav", "ah_away_dog")
+REACTIVATION_MIN_N = MIN_BETS_STAT      # 30, como el gate
+REACTIVATION_MIN_EDGE = 0.05            # piso operativo del pipeline (MIN_EDGE)
+
+
+def _reactivation_group(market: str) -> str:
+    from src.models.calibration_monitor import _ah_group
+    return _ah_group(market) or market
+
+
+def merge_reactivation_state(prev: dict, stats: dict) -> dict:
+    """
+    Función pura. prev: {grupo: bool reactivado}; stats: {grupo: (n, mean, sd)}.
+    Reactiva con evidencia positiva (n >= 30 y CLV medio >= 0); vuelve a
+    bloquear solo con CLV significativamente negativo; entre ambos manda el
+    estado anterior (histéresis, igual que merge_gate_state).
+    """
+    out = {g: bool(prev.get(g, False)) for g in SHADOW_REACTIVABLE}
+    for g, (n, mean, sd) in stats.items():
+        if g not in out:
+            continue
+        if not out[g] and positive_evidence(n, mean, sd):
+            out[g] = True
+        elif out[g] and significant_negative(n, mean, sd):
+            out[g] = False
+    return out
+
+
+def shadow_reactivation_stats() -> dict:
+    """
+    Solo lectura: {grupo: (n, CLV medio, sd)} de las candidatas shadow que
+    se habrían apostado, por grupo reactivable. Lanza si la DB falla.
+    """
+    df = pd.read_sql(text("""
+        SELECT market, odds, closing_odds, deviation, edge_market
+        FROM shadow_bets
+        WHERE closing_odds > 1 AND odds > 1
+          AND deviation > 0
+          AND edge_market >= :min_edge
+          AND match_date >= CAST(:since AS timestamptz)
+    """), engine, params={"min_edge": REACTIVATION_MIN_EDGE, "since": LEARNING_SINCE})
+    stats = {}
+    if not df.empty:
+        df["grp"] = df["market"].map(_reactivation_group)
+        df = df[df["grp"].isin(SHADOW_REACTIVABLE)].copy()
+        df["clv"] = 1.0 / df["closing_odds"].astype(float) - 1.0 / df["odds"].astype(float)
+        for g, sub in df.groupby("grp"):
+            n = len(sub)
+            sd = float(sub["clv"].std(ddof=1)) if n > 1 else None
+            stats[str(g)] = (n, float(sub["clv"].mean()), sd)
+    return stats
+
+
+def run_shadow_reactivation(verbose: bool = True) -> dict:
     try:
-        if BLOCKED_FILE.exists():
-            data = json.loads(BLOCKED_FILE.read_text(encoding="utf-8"))
-            return set(data.get("blocked_markets", []))
-    except Exception:
-        pass
-    return set()
+        stats = shadow_reactivation_stats()
+    except Exception as e:
+        if verbose:
+            print(f"   ℹ️  reactivación shadow omitida: {type(e).__name__}: {e}")
+        return {"status": "error"}
+
+    prev_state = load_state(STATE_KEY_REACTIVATION) or {}
+    prev = prev_state.get("reactivated", {})
+    new = merge_reactivation_state(prev, stats)
+    changed = {g: v for g, v in new.items() if bool(prev.get(g, False)) != v}
+    save_state(STATE_KEY_REACTIVATION, {
+        "reactivated": new,
+        "stats": {g: {"n": s[0], "mean_clv": round(s[1], 5)} for g, s in stats.items()},
+        "policy": {"min_n": REACTIVATION_MIN_N, "min_edge": REACTIVATION_MIN_EDGE,
+                   "learning_since": LEARNING_SINCE},
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
+    if verbose:
+        print("\n🔁 REACTIVACIÓN POR SHADOW (candidatas que se habrían apostado vs cierre)")
+        for g in SHADOW_REACTIVABLE:
+            n, mean, _ = stats.get(g, (0, None, None))
+            clv_s = f"{mean:+.4f}" if mean is not None else "  -  "
+            estado = "REACTIVADO" if new[g] else "bloqueado"
+            print(f"   {g:<12} n={n:>3}  CLV={clv_s}  → {estado}")
+    return {"status": "ok", "reactivated": new, "changed": changed, "stats": stats}
+
+
+def load_shadow_reactivated() -> set:
+    """Grupos bloqueados de forma fija que el shadow ya reactivó."""
+    data = load_state(STATE_KEY_REACTIVATION) or {}
+    return {g for g, on in (data.get("reactivated") or {}).items() if on}
 
 
 if __name__ == "__main__":

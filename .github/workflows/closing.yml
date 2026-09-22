@@ -42,7 +42,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Restore API cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: data/api_cache.json
           key: odds-api-cache-${{ github.run_id }}
@@ -66,3 +66,13 @@ jobs:
           API_FOOTBALL_KEY:             ${{ secrets.API_FOOTBALL_KEY }}
           USER_TIMEZONE:                America/Mexico_City
         run: python scripts/orchestrator.py --mode closing
+
+      # Guardar el cache AUNQUE el run falle: desde el 22-sep-26 un paso
+      # fallido deja el run en rojo, y actions/cache@v4 solo guarda en
+      # runs exitosos — sin esto el siguiente run haría full fetch.
+      - name: Save API cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/api_cache.json
+          key: odds-api-cache-${{ github.run_id }}
