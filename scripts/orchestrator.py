@@ -884,6 +884,19 @@ def main():
             # Esto captura las odds de cierre reales para calcular CLV
             run_step(logger, "Pre-kickoff closing odds", step_pre_kickoff_closing)
         elif args.mode == "weekly":
+            # 1) PRIMERO lo que aprende de datos ya recolectados (bets y
+            #    shadow resueltos por evening/closing): solo DB, segundos en
+            #    total, y no depende de las cargas de abajo. Ir antes las
+            #    protege del timeout del job — las cargas tardan ~50 min
+            #    (eventos 21', ligas extra 25') y un corte ahí dejaba al
+            #    sistema una semana sin aprender.
+            run_step(logger, "Calibration monitor",      step_calibration)
+            run_step(logger, "CLV gate (kill-switch)",   step_clv_gate)
+            run_step(logger, "Reactivación por shadow",  step_shadow_reactivation)
+            run_step(logger, "Peso del modelo (ancla)",  step_anchor_learning)
+            run_step(logger, "Refresh CLV cache",        step_refresh_clv_cache)   # Mejora #14
+            run_step(logger, "Holdout evaluation",       step_evaluate_holdout)
+            # 2) Cargas de datos (lentas) y el ajuste que depende de ellas
             run_step(logger, "Load historical data",     step_load_historical)
             run_step(logger, "Load international data",  step_load_international)
             run_step(logger, "Collect match events",     step_collect_events)
@@ -891,12 +904,7 @@ def main():
             # run_step(logger, "Load MLB data",            step_load_mlb)  # desactivado — sin creditos MLB
             run_step(logger, "Soccerdata refresh (xG real)", step_soccerdata_refresh)
             run_step(logger, "Fit DC-MLE parameters",    step_fit_dc_mle)
-            run_step(logger, "Calibration monitor",      step_calibration)
-            run_step(logger, "CLV gate (kill-switch)",   step_clv_gate)
-            run_step(logger, "Reactivación por shadow",  step_shadow_reactivation)
-            run_step(logger, "Peso del modelo (ancla)",  step_anchor_learning)
-            run_step(logger, "Holdout evaluation",       step_evaluate_holdout)
-            run_step(logger, "Refresh CLV cache",        step_refresh_clv_cache)   # Mejora #14
+            # 3) Monitores y reportes
             run_step(logger, "Drift detection",          step_drift_detection)     # Mejora #15
             run_step(logger, "Market regime monitor",    step_market_regime)
             run_step(logger, "Sanity audit",             step_sanity_audit)
