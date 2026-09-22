@@ -81,8 +81,13 @@ def _ensure_table(engine):
 # QUERIES
 # ============================================================
 
-def get_daily_spent_usd(engine) -> float:
-    """Devuelve cuánto se gastó HOY (en USD), 0.0 si nada."""
+def get_daily_spent_usd(engine) -> float | None:
+    """
+    Devuelve cuánto se gastó HOY (en USD), 0.0 si nada, y None si NO se
+    pudo leer. Antes devolvía 0.0 ante cualquier error: sin tabla o sin DB
+    el guard leía "gasté $0" y dejaba pasar todas las llamadas (fallaba
+    abierto). "No sé cuánto gasté" ya no se confunde con "no gasté nada".
+    """
     _ensure_table(engine)
     try:
         with engine.connect() as conn:
@@ -90,16 +95,20 @@ def get_daily_spent_usd(engine) -> float:
                 "SELECT cost_usd FROM anthropic_usage WHERE day = CURRENT_DATE"
             )).first()
         return float(r.cost_usd) if r else 0.0
-    except Exception:
-        return 0.0
+    except Exception as e:
+        print(f"⚠️  anthropic_usage ilegible — el presupuesto se trata como agotado: {e}")
+        return None
 
 
 def can_call(engine, estimated_cost_usd: float) -> tuple[bool, str]:
     """
     Returns (ok, reason). Si estimated_cost_usd + spent > DAILY_BUDGET_USD,
     devuelve (False, mensaje). Si ok, (True, "").
+    Falla CERRADO: si el gasto del día no se puede leer, rechaza.
     """
     spent = get_daily_spent_usd(engine)
+    if spent is None:
+        return False, "Gasto del día desconocido (anthropic_usage ilegible) — se rechaza por seguridad"
     if spent + estimated_cost_usd > DAILY_BUDGET_USD:
         return False, (f"Daily budget tope: spent=${spent:.3f} + "
                        f"est=${estimated_cost_usd:.3f} > "

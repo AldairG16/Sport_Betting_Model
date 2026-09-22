@@ -107,10 +107,13 @@ def test_deviation_bands_cover_the_window():
 # B1(b) — favoritos AH bloqueados explícitamente
 # ============================================================
 
-def test_ah_favorites_explicitly_blocked():
-    """Bloqueo declarado en el filtro (no piso inalcanzable), paper excluido."""
-    src = _source(pp)
-    assert '_ah_group(mkt) in ("ah_home_fav", "ah_away_fav")' in src
+def test_ah_favorites_explicitly_blocked(monkeypatch):
+    """Bloqueo declarado en el filtro (no piso inalcanzable): el AH del
+    local favorito no se apuesta. Desde el 22-sep-26 se verifica ejecutando
+    el pipeline (tests/pipeline_harness.py), no buscando el texto."""
+    from tests.pipeline_harness import run_pipeline
+    out = run_pipeline(monkeypatch)
+    assert not any(b["market"].startswith("ah_home_-") for b in out["bets"])
 
 
 # ============================================================

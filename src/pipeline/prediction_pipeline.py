@@ -1,5 +1,6 @@
 import sys
 import os
+import traceback
 import pandas as pd
 import numpy as np
 from scipy.stats import poisson as _poisson
@@ -101,7 +102,7 @@ from src.models.dixon_coles_model import match_outcomes, RHO as RHO_DC_LITERATUR
 from src.models.poisson_markets import totals_and_btts, totals_extended
 from src.models.ensemble_model import ensemble_predict
 
-from src.models.betting_engine import find_value_bets, kelly_stake
+from src.models.betting_engine import find_value_bets, kelly_stake, calculate_edges
 
 from src.features.market_odds import market_probabilities
 from src.models.bet_ranker import rank_bets
@@ -136,6 +137,7 @@ from src.models.calibration_monitor import (
     _ah_group,
 )
 from src.models.dc_mle_fitter import get_dc_lambdas, is_params_fresh, DC_MLE_WEIGHT
+from src.models.anchor_learner import model_weight_for, market_family
 from config.settings import PAPER_ONLY_LEAGUES
 from collections import Counter
 
@@ -157,6 +159,11 @@ from src.features.league_calibration import get_over25_rate, get_btts_rate, OVER
 # ─────────────────────────────────────────────────────────────
 # CONSTANTES DE PIPELINE (módulo-level para no recrearlas en cada llamada)
 # ─────────────────────────────────────────────────────────────
+
+# Versión de la LÓGICA de decisión (viaja en el decision_log de cada bet).
+# Subirla cuando cambie cómo se decide — no en cada commit, como el SHA —
+# para poder separar cohortes al analizar resultados.
+MODEL_VERSION = "2026-09-22-aprendizaje"
 
 GLOBAL_CALIBRATION      = 0.85     # corrección global de sobreconfianza (walk-forward 332 bets)
 CIRCUIT_BREAKER_THRESHOLD = 10.0   # bankroll mínimo para generar apuestas
@@ -253,8 +260,11 @@ BLOCKED_LEAGUES = {
     #   fresca, no con el histórico viejo del modelo pre-revisión.
     # RE-HABILITADAS 17-sep-26 (experimento con modelo anclado, red de
     # seguridad: CLV gate por liga n>=20 / CLV<=-5% → auto-bloqueo):
-    #   turkey, norway, eredivisie, greece — fallas de muestra chica o
-    #   del modelo viejo inflado; el nuevo modelo las re-juzga.
+    #   turkey, greece — fallas de muestra chica o del modelo viejo
+    #   inflado; el nuevo modelo las re-juzga. (Norway y Eredivisie
+    #   volvieron a esta lista el 21-sep por K1, arriba.)
+    # Bloqueada ≠ ignorada: el shadow sweep corre ANTES de este filtro, así
+    # que sus candidatas se siguen midiendo contra el cierre.
     "soccer_japan_j_league",
     "soccer_efl_champ",
 }
@@ -285,6 +295,20 @@ _EXCLUSIVE_GROUPS = {
     "h2_away":   "h2_1x2",
 }
 
+def _exclusive_group(market: str) -> str | None:
+    """
+    Grupo de exclusión del mercado (máximo una bet por grupo y partido).
+    Los AH paramétricos apuestan al resultado del partido igual que el 1X2
+    y el DNB ('ah_home_-0.50' ES la victoria local), así que comparten el
+    grupo "1x2". Mientras market_intelligence_filter descartaba los AH en
+    cuanto pasaba un mercado principal, la falta no se notaba.
+    """
+    m = str(market)
+    if m.startswith(("ah_home_", "ah_away_")):
+        return "1x2"
+    return _EXCLUSIVE_GROUPS.get(m)
+
+
 # Mercados con odds fijas (edge irreal sin odds reales del mercado)
 _DISABLED_MARKETS = {
     "over_1.5", "under_1.5",
@@ -297,27 +321,36 @@ _DISABLED_MARKETS = {
 # RE-HABILITADOS 17-sep-26: under25, away_win y btts fallaban con el xG
 # inflado; ahora bajo arquitectura anclada + tilte asimétrico. dnb_home
 # sigue bloqueado (mercado nicho, sin evidencia nueva).
+# away_win NO llegó a re-habilitarse: un bloqueo fijo en el filtro de
+# mercados (desde abril) lo seguía impidiendo. Desde el 22-sep vuelve solo
+# con evidencia shadow (ver el filtro y clv_gate.run_shadow_reactivation).
 _BLOCKED_MARKETS = {
     "dnb_home",
 }
 
-# Kill-switch dinámico por CLV: mercados con CLV trailing negativo
-# (n >= 100, últimos 120d) escritos por scripts/clv_gate.py en el weekly.
-# Se desbloquean solos cuando el CLV recupera.
-try:
-    from scripts.clv_gate import (load_clv_blocked_markets as _load_clv_blocked,
-                                  load_clv_blocked_leagues as _load_clv_leagues)
-    _CLV_BLOCKED = _load_clv_blocked()
-    _CLV_LEAGUES = _load_clv_leagues()
-    if _CLV_BLOCKED:
-        print(f"🚦 Mercados bloqueados por CLV gate: {sorted(_CLV_BLOCKED)}")
-    if _CLV_LEAGUES:
-        print(f"🚦 Ligas bloqueadas por CLV gate: {sorted(_CLV_LEAGUES)}")
-except Exception:
-    _CLV_BLOCKED = set()
-    _CLV_LEAGUES = set()
-_BLOCKED_MARKETS = _BLOCKED_MARKETS | _CLV_BLOCKED
-BLOCKED_LEAGUES = BLOCKED_LEAGUES | _CLV_LEAGUES
+# Estado APRENDIDO por el weekly (DB, tabla model_state). Se lee en cada
+# corrida, no al importar: antes el CLV gate se cargaba de archivos al
+# importar el módulo, y en CI esos archivos no existían (morían con el
+# runner del weekly) — el kill-switch dinámico nunca aplicó en producción.
+#   blocked_markets / blocked_leagues: CLV gate (se suman a los estáticos)
+#   reactivated: grupos de bloqueo fijo que el shadow ya reactivó
+#   anchor: peso del modelo vs mercado por familia (anchor_learner)
+def load_learned_state() -> dict:
+    from scripts.clv_gate import (load_clv_blocked_markets, load_clv_blocked_leagues,
+                                  load_shadow_reactivated)
+    from src.models.anchor_learner import load_anchor_weights
+    state = {"blocked_markets": set(), "blocked_leagues": set(),
+             "reactivated": set(), "anchor": {}}
+    loaders = (("blocked_markets", load_clv_blocked_markets),
+               ("blocked_leagues", load_clv_blocked_leagues),
+               ("reactivated", load_shadow_reactivated),
+               ("anchor", load_anchor_weights))
+    for key, fn in loaders:
+        try:
+            state[key] = fn()
+        except Exception as e:
+            print(f"⚠️  Estado aprendido '{key}' no disponible — uso el default: {e}")
+    return state
 
 # =========================
 # LAMBDAS DIXON-COLES (función pura — testeable, ronda 4)
@@ -599,6 +632,25 @@ def run_prediction_pipeline():
     # victoria local) tenía dos precios (1.6pp) y sesgaba la selección.
     DC_RHO_SCORE = DC_RHO_GLOBAL if DC_RHO_GLOBAL is not None else RHO_DC_LITERATURE
 
+    # ── Estado aprendido (weekly → DB) ─────────────────────────────────────
+    learned = load_learned_state()
+    blocked_markets = _BLOCKED_MARKETS | set(learned["blocked_markets"])
+    blocked_leagues = BLOCKED_LEAGUES | set(learned["blocked_leagues"])
+    reactivated     = set(learned["reactivated"])
+    anchor_state    = learned["anchor"] or {}
+    if learned["blocked_markets"]:
+        print(f"🚦 Mercados bloqueados por CLV gate: {sorted(learned['blocked_markets'])}")
+    if learned["blocked_leagues"]:
+        print(f"🚦 Ligas bloqueadas por CLV gate: {sorted(learned['blocked_leagues'])}")
+    if reactivated:
+        print(f"🔁 Reactivados por evidencia shadow: {sorted(reactivated)}")
+    _fams = (anchor_state.get("families") or {})
+    if _fams:
+        print("⚓ Peso del modelo aprendido: " + ", ".join(
+            f"{f}={n.get('weight', 0):.0%}" for f, n in _fams.items()))
+    else:
+        print("⚓ Peso del modelo: prior 35% (aún sin estado aprendido)")
+
     elo = compute_elo()
 
     # DISTINCT ON dedup: cuando un partido tiene 2 rows en upcoming_matches
@@ -650,7 +702,16 @@ def run_prediction_pipeline():
     # LOOP MATCHES
     # =========================
 
-    for _, row in df.iterrows():
+    # Aislamiento por partido: una fila con datos corruptos ya no tumba el
+    # slate completo (pasó el 10-sep-26 con int(NaN) en corners_line). Cada
+    # partido se evalúa en su propio try; el fallo queda en el log con su
+    # traceback y el resto del slate sigue.
+    def _evaluate_match(row):
+        nonlocal skipped_no_odds, fallback_used, xg_used, h2h_used
+        nonlocal corners_used, shots_used, fatigued_teams, weather_adjusted
+        nonlocal mc_diverged, sharp_confirmed, sharp_rejected
+        nonlocal sweep_total, sweep_ref, shadow_swept
+
 
         home = normalize_team(row.home_team)
         away = normalize_team(row.away_team)
@@ -668,7 +729,7 @@ def run_prediction_pipeline():
 
         if not odds_available:
             skipped_no_odds += 1
-            continue
+            return
 
         # =========================
         # TEAM FORM (SAFE + VENUE SPLIT)
@@ -689,7 +750,7 @@ def run_prediction_pipeline():
             fallback_used += 1
             print(f"⚠️  Skip fallback: {home} vs {away} — datos insuficientes")
             skipped_no_odds += 1
-            continue
+            return
 
         # 🔥 CONFIDENCE
         min_matches = min(home_form["matches"], away_form["matches"])
@@ -1543,21 +1604,29 @@ def run_prediction_pipeline():
         # Solo mercados con devig confiable (ronda 5: 1x2 Shin, O/U y BTTS
         # por pares con guardia, AH/DNB/córners/tarjetas por pares, tríos HT
         # completos). DC y patas sueltas siguen blend modelo-crudo.
-        _ANCHOR_WEIGHT = 0.65   # peso del mercado; el modelo aporta el 35%
+        #
+        # Peso del modelo APRENDIDO por familia de mercado (anchor_learner,
+        # weekly): la fracción de la desviación del modelo que el mercado
+        # confirma al cierre, medida sobre las candidatas shadow. Sin datos
+        # suficientes queda el prior 35% (el ancla 65/35 original).
         _anchored_markets = set()
+        _anchor_w_by_family = {}
         for _mkt in list(probabilities.keys()):
             if not _anchorable(_mkt) or _mkt not in market_probs:
                 continue
             _mp = market_probs[_mkt]
             if _mp and 0.02 < _mp < 0.98:
+                _w_model = model_weight_for(_mkt, anchor_state)
                 probabilities[_mkt] = (
-                    _mp * _ANCHOR_WEIGHT
-                    + probabilities[_mkt] * (1 - _ANCHOR_WEIGHT)
+                    _mp * (1 - _w_model)
+                    + probabilities[_mkt] * _w_model
                 )
                 _anchored_markets.add(_mkt)
+                _anchor_w_by_family[market_family(_mkt)] = _w_model
         if _anchored_markets:
+            _w_desc = ", ".join(f"{f} {w:.0%}" for f, w in sorted(_anchor_w_by_family.items()))
             print(f"  ⚓ Anclado al mercado: {sorted(_anchored_markets)} "
-                  f"(peso mercado {_ANCHOR_WEIGHT:.0%})")
+                  f"(peso modelo: {_w_desc})")
         # Snapshot post-anclaje: los shades de abajo corren DESPUÉS y su
         # desviación conjunta se acota contra este valor (D12, más abajo).
         _post_anchor_probs = dict(probabilities)
@@ -1808,7 +1877,7 @@ def run_prediction_pipeline():
         if should_skip_low_liquidity(bk_count):
             print(f"  Skip liquidez: {home} vs {away} ({bk_count} books < 4)")
             skipped_no_odds += 1
-            continue
+            return
 
         # Detección de línea blanda: mejor precio >> consenso (+10%)
         if best_home_odd and cons_home and cons_home > 0:
@@ -1846,29 +1915,36 @@ def run_prediction_pipeline():
                 sharp_rejected += 1
                 continue
 
-            adj_edge, adj_conf = apply_line_movement_signal(
+            _, adj_conf = apply_line_movement_signal(
                 bet["market"], bet["edge"], confidence, line
             )
-            if adj_edge > bet["edge"]:
-                sharp_confirmed += 1
-            elif adj_edge < bet["edge"]:
-                sharp_rejected += 1
-            # Calculamos factor de ajuste sobre edge_ev y lo aplicamos también
-            # a edge_market (el verdadero edge usado por filtros downstream).
-            _adj_factor = (adj_edge / bet["edge"]) if bet["edge"] > 0 else 1.0
-            bet["edge"]        = adj_edge
-            bet["edge_market"] = max(min(bet.get("edge_market", 0) * _adj_factor, 0.25), -0.25)
-            bet["probability"] = min(0.95, bet["probability"] * (1 + (adj_conf - confidence) * 0.3))
+            if adj_conf != confidence:
+                # La señal de línea ajusta la PROBABILIDAD y los dos edges se
+                # recalculan de ella. Antes se escalaban por separado y la bet
+                # quedaba incoherente (edge guardado ≠ prob − 1/odds), lo que
+                # ensuciaba la calibración y cualquier análisis por edge.
+                _p_adj = min(0.95, bet["probability"] * (1 + (adj_conf - confidence) * 0.3))
+                _em, _ev = calculate_edges(_p_adj, bet["odds"])
+                if _em > bet["edge_market"]:
+                    sharp_confirmed += 1
+                elif _em < bet["edge_market"]:
+                    sharp_rejected += 1
+                bet["probability"], bet["edge_market"], bet["edge"] = _p_adj, _em, _ev
             filtered_bets.append(bet)
 
         raw_bets = filtered_bets
 
-        bets = bet_quality_filter(raw_bets) or raw_bets
-        bets = market_intelligence_filter(bets) or bets
+        # Sin fallback `or raw_bets`: un filtro que rechaza TODAS las bets de
+        # un partido significa "no apostar", no "ignorar el filtro". Antes, si
+        # el filtro vaciaba la lista, se apostaba la lista SIN filtrar — y
+        # los mercados que el filtro no conoce (AH, DNB, 1T, córners) solo
+        # entraban por esa puerta, cuando ningún mercado principal pasaba.
+        bets = bet_quality_filter(raw_bets)
+        bets = market_intelligence_filter(bets)
         bets = add_market_score(bets)
 
         if not bets:
-            continue
+            return
 
         # =========================
         # FILTROS DE CALIDAD (optimizados con 332 bets walk-forward)
@@ -1881,8 +1957,8 @@ def run_prediction_pipeline():
         # -23.7% ROI (overfit). Ahora filtramos sobre edge_market real.
         _league = _row_league_of(row)
         _is_paper = _league in PAPER_ONLY_LEAGUES
-        if _league in BLOCKED_LEAGUES:
-            continue
+        if _league in blocked_leagues:
+            return
 
         # ── MEJORA #12: filtro de partidos "raros" ─────────────────
         # Dead rubber (ambos en zona media, fin de temporada) o asimetría
@@ -1892,7 +1968,7 @@ def run_prediction_pipeline():
                 row.get("home_team",""), row.get("away_team",""), _league
             )
             if _unreliable:
-                continue
+                return
         except Exception:
             pass   # si la feature falla, no bloquea
 
@@ -1925,9 +2001,13 @@ def run_prediction_pipeline():
             # Para paper-only (Mundial): estos bloqueos se basan en datos de
             # clubes europeos y no aplican a selecciones nacionales en sede neutral.
             if not _is_paper:
-                if mkt == "away_win":
+                # away_win: bloqueo fijo desde abril-26 (peor mercado del
+                # histórico). La re-habilitación del 17-sep nunca aplicó
+                # porque esta línea seguía aquí; desde el 22-sep vuelve solo
+                # con evidencia shadow (clv_gate.run_shadow_reactivation).
+                if mkt == "away_win" and "away_win" not in reactivated:
                     continue
-                if mkt in _BLOCKED_MARKETS:
+                if mkt in blocked_markets:
                     continue
                 if mkt.startswith("corners_over_") or mkt.startswith("cards_over_"):
                     continue
@@ -1935,19 +2015,30 @@ def run_prediction_pipeline():
                 # En paper: solo bloquear mercados sin odds reales
                 if mkt in _DISABLED_MARKETS:
                     continue
-            # AH pk (+0.0): bloqueado siempre, paper o no
-            if mkt.startswith("ah_") and ("+0.0" in mkt or mkt.endswith("_0.0")):
-                continue
+            # AH con línea 0 (pk): bloqueado siempre, paper o no. Se compara
+            # el número (no el texto) para no dejar pasar "-0.00".
+            if mkt.startswith("ah_"):
+                try:
+                    if abs(float(mkt.rsplit("_", 1)[-1])) < 1e-9:
+                        continue
+                except ValueError:
+                    continue
 
-            # ── B1(b) ronda 7: favoritos AH bloqueados explícitamente ──
-            # Los dos mercados peor calibrados del histórico (brecha +33-38pt
+            # ── B1(b) ronda 7: AH con el local favorito, bloqueados ──
+            # Los dos grupos peor calibrados del histórico (brecha +33-38pt
             # en la era vieja) quedaron expuestos por la re-derivación de la
             # ronda 6. El gate de CLV NO puede protegerlos (R10: con su tasa
             # real jamás alcanza n para dispararse) y un piso estático más
             # alto los mataría de nuevo por aritmética (desvío ≥40pt > techo
-            # 0.30). Bloqueo declarado; reactivación: CLV de la banda shadow
-            # de favoritos AH ≥ 0 con n>=30 (shadow_clv_bands, ronda 7).
-            if not _is_paper and _ah_group(mkt) in ("ah_home_fav", "ah_away_fav"):
+            # 0.30). Son las dos patas de una línea con el local dando goles:
+            # el local favorito (ah_home_fav) y el visitante recibiendo
+            # (ah_away_dog). Hasta el 22-sep _ah_group rotulaba esta segunda
+            # como "ah_away_fav" (no invertía la línea del visitante); el
+            # conjunto bloqueado es el mismo de siempre, ahora bien nombrado.
+            # Reactivación: CLV shadow >= 0 con n >= 30 (run_shadow_reactivation).
+            _grp = _ah_group(mkt)
+            if (not _is_paper and _grp in ("ah_home_fav", "ah_away_dog")
+                    and _grp not in reactivated):
                 continue
 
             # ── Mejora 4: Sweet spots de odds por mercado ────────────
@@ -2022,7 +2113,7 @@ def run_prediction_pipeline():
 
             # ── Filtro de contradicción ───────────────────────────────
             # Si ya apostamos en un grupo, no apostar en el mismo grupo
-            group = _EXCLUSIVE_GROUPS.get(mkt)
+            group = _exclusive_group(mkt)
             if group and group in groups_used:
                 continue
 
@@ -2071,6 +2162,7 @@ def run_prediction_pipeline():
                         "kalman_confidence": round(_conf, 3),
                         "shades": _shades_applied,
                         "anchored": sorted(_anchored_markets),
+                        "anchor_model_weight": _anchor_w_by_family,
                         "xg_source": _xg_source,
                     },
                     "signals": {
@@ -2092,6 +2184,8 @@ def run_prediction_pipeline():
                     "meta": {
                         "generated_at": _dt.now(_tz.utc).isoformat(),
                         "calibration_updated_at": (cal_factors or {}).get("updated_at"),
+                        "anchor_updated_at": anchor_state.get("updated_at"),
+                        "model_version": MODEL_VERSION,
                         "sha": os.environ.get("GITHUB_SHA", "local"),
                     },
                 }
@@ -2118,11 +2212,42 @@ def run_prediction_pipeline():
             if group:
                 groups_used.add(group)
 
+    failed_matches: list = []
+    for _, row in df.iterrows():
+        try:
+            _evaluate_match(row)
+        except Exception as _match_err:
+            failed_matches.append(f"{row.get('home_team')} vs {row.get('away_team')}")
+            print(f"❌ Partido omitido por error: {failed_matches[-1]} — "
+                  f"{type(_match_err).__name__}: {_match_err}")
+            traceback.print_exc()
+
+    if failed_matches:
+        # Todos fallaron → error sistémico (una feature rota, esquema de DB
+        # cambiado): se relanza para que el paso quede FALLIDO y el
+        # orchestrator alerte, en vez de mandar "sin value bets".
+        if len(failed_matches) == total_matches:
+            raise RuntimeError(
+                f"Los {total_matches} partidos fallaron al evaluarse — "
+                f"error sistémico, ver tracebacks arriba")
+        # Fallo parcial: el slate sigue, pero el usuario se entera.
+        try:
+            from scripts.notify_telegram import send_message
+            send_message(
+                f"⚠️ <b>Predicciones parciales</b>\n\n"
+                f"{len(failed_matches)} de {total_matches} partidos se omitieron por error:\n"
+                + "\n".join(f"• {m}" for m in failed_matches[:10])
+                + "\n\nEl resto del slate se evaluó normal. Revisa el log del run."
+            )
+        except Exception as e:
+            print(f"⚠️  No se pudo avisar por Telegram de los partidos omitidos: {e}")
+
     # =========================
     # DEBUG
     # =========================
 
     print("\n📊 DEBUG SUMMARY")
+    print("Partidos con error: ", len(failed_matches))
     print("Sin odds:           ", skipped_no_odds)
     print("Fallback usados:    ", fallback_used)
     print("xG proxy usado:     ", xg_used)

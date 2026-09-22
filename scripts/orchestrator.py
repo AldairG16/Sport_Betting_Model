@@ -229,6 +229,7 @@ class Logger:
         self._fh = open(self.log_file, "w", encoding="utf-8")
         self.steps_ok    = 0
         self.steps_total = 0
+        self.failed_steps: list[str] = []
 
     def log(self, msg: str):
         ts = datetime.now().strftime("%H:%M:%S")
@@ -255,6 +256,7 @@ def run_step(logger: Logger, name: str, func, *args, **kwargs) -> bool:
     except Exception as e:
         logger.log(f"❌ {name} — ERROR: {e}")
         logger.log(traceback.format_exc())
+        logger.failed_steps.append(name)
         return False
 
 
@@ -700,9 +702,10 @@ def step_drift_detection():
 
 
 def step_clv_gate():
-    """CLV como métrica de decisión: bloquea mercados con CLV trailing
-    negativo persistente (n>=100, 120d). Escribe config/clv_blocked_markets.json
-    que el prediction_pipeline lee como kill-switch dinámico.
+    """CLV como métrica de decisión: bloquea mercados con CLV significativamente
+    negativo (IC95, n>=30, 2 semanas seguidas) y ligas con CLV <= -5%. Guarda
+    el estado en la DB (model_state), que el prediction_pipeline lee en cada
+    corrida como kill-switch dinámico.
     """
     try:
         from scripts.clv_gate import run_clv_gate
@@ -720,6 +723,35 @@ def step_clv_gate():
     except Exception as e:
         # Informativo — no debe bloquear el weekly
         print(f"⚠️  CLV gate falló: {e}")
+
+
+def step_anchor_learning():
+    """Aprende el peso del modelo frente al mercado por familia de mercado,
+    con el CLV de las candidatas shadow (src/models/anchor_learner.py).
+    El pipeline lo lee de la DB en la siguiente corrida."""
+    from src.models.anchor_learner import run_anchor_learning, format_report, PRIOR_MODEL_WEIGHT
+    state = run_anchor_learning(verbose=True)
+    # Telegram solo si algún peso se movió del prior: silencio = sin novedad
+    moved = [f for f, n in state.get("families", {}).items()
+             if abs(n.get("weight", PRIOR_MODEL_WEIGHT) - PRIOR_MODEL_WEIGHT) > 1e-9]
+    if moved:
+        from scripts.notify_telegram import send_message
+        send_message(format_report(state, html=True))
+
+
+def step_shadow_reactivation():
+    """Mercados de bloqueo fijo (away_win, AH con el local favorito) que
+    vuelven solo con evidencia shadow contra el cierre."""
+    from scripts.clv_gate import run_shadow_reactivation
+    result = run_shadow_reactivation(verbose=True)
+    if result.get("changed"):
+        from scripts.notify_telegram import send_message
+        send_message(
+            "🔁 <b>REACTIVACIÓN POR SHADOW</b>\n\n"
+            + "\n".join(f"• {g}: {'REACTIVADO' if on else 'bloqueado de nuevo'}"
+                        for g, on in result["changed"].items())
+            + "\n\nCriterio: CLV de sus candidatas shadow ≥ 0 con n ≥ 30."
+        )
 
 
 def step_evaluate_holdout():
@@ -776,8 +808,9 @@ def step_market_regime():
 
 
 def step_refresh_clv_cache():
-    """MEJORA #14 — refresca data/clv_cache.json para que kelly_stake
-    use el CLV trailing al modular kelly_fraction. Llamado en weekly.
+    """MEJORA #14 — refresca el caché de CLV (DB model_state/clv_cache, con
+    espejo en data/clv_cache.json) para que kelly_stake use el CLV trailing
+    de la cohorte al modular kelly_fraction. Llamado en weekly.
     """
     try:
         from src.models.betting_engine import refresh_clv_cache
@@ -860,6 +893,8 @@ def main():
             run_step(logger, "Fit DC-MLE parameters",    step_fit_dc_mle)
             run_step(logger, "Calibration monitor",      step_calibration)
             run_step(logger, "CLV gate (kill-switch)",   step_clv_gate)
+            run_step(logger, "Reactivación por shadow",  step_shadow_reactivation)
+            run_step(logger, "Peso del modelo (ancla)",  step_anchor_learning)
             run_step(logger, "Holdout evaluation",       step_evaluate_holdout)
             run_step(logger, "Refresh CLV cache",        step_refresh_clv_cache)   # Mejora #14
             run_step(logger, "Drift detection",          step_drift_detection)     # Mejora #15
@@ -941,9 +976,32 @@ def main():
                     )
             except Exception:
                 pass  # nunca bloquear el finally por el health check
+        elif logger.failed_steps:
+            # Los modos sin health check (weekly, closing, results) fallaban
+            # en silencio: el 21-sep "Load historical data" del weekly murió
+            # y nadie se enteró. Aviso corto con los pasos caídos.
+            try:
+                from scripts.notify_telegram import send_message
+                send_message(
+                    f"🚨 <b>Pipeline {args.mode}: {len(logger.failed_steps)} "
+                    f"paso(s) fallaron</b>\n\n"
+                    + "\n".join(f"• {s}" for s in logger.failed_steps)
+                    + "\n\nRevisa el log del run en GitHub Actions."
+                )
+            except Exception:
+                pass
 
         logger.close()
         _release_lock()
+
+    # Un paso fallido deja el run en ROJO en Actions. Antes salía verde
+    # aunque fallara ("un fallo verde se ve igual que un día normal",
+    # docs/OPERACION.md §2). Se evalúa al final: todos los pasos corren y
+    # las notificaciones salen igual; solo cambia el código de salida.
+    if logger.failed_steps:
+        print(f"::error::{len(logger.failed_steps)} de {logger.steps_total} pasos "
+              f"fallaron en modo {args.mode}: {', '.join(logger.failed_steps)}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

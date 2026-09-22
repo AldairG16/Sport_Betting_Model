@@ -158,8 +158,6 @@ def kelly_stake(prob, odds, bankroll=100, kelly_fraction=0.25, max_bet_pct=0.02,
 #   • Cap final: kelly_fraction queda en [0.10, 0.35] (nunca apaga, nunca
 #     escala más de 40% del default 0.25).
 
-import json
-import os
 import time
 from pathlib import Path
 
@@ -173,23 +171,23 @@ _clv_cache_mem: dict | None = None
 _clv_cache_loaded_at: float = 0
 
 
+_CLV_STATE_KEY = "clv_cache"
+
+
 def _load_clv_cache() -> dict:
-    """Carga el cache de CLV por (market, league). Refresh cada 6h."""
+    """
+    Carga el cache de CLV por (market, league): DB primero (lo que dejó el
+    último weekly), archivo local como fallback. Antes solo leía el archivo,
+    y en CI eso era la copia commiteada del 7-may-26: Kelly se modulaba con
+    CLV de hace meses. Refresh en memoria cada 6h.
+    """
     global _clv_cache_mem, _clv_cache_loaded_at
     now = time.time()
     if _clv_cache_mem is not None and (now - _clv_cache_loaded_at) < _CLV_CACHE_TTL:
         return _clv_cache_mem
-    if not _CLV_CACHE_FILE.exists():
-        _clv_cache_mem = {}
-        _clv_cache_loaded_at = now
-        return _clv_cache_mem
-    try:
-        with open(_CLV_CACHE_FILE, "r") as f:
-            _clv_cache_mem = json.load(f)
-        _clv_cache_loaded_at = now
-    except Exception:
-        _clv_cache_mem = {}
-        _clv_cache_loaded_at = now
+    from src.utils.model_state import load_state
+    _clv_cache_mem = load_state(_CLV_STATE_KEY, _CLV_CACHE_FILE) or {}
+    _clv_cache_loaded_at = now
     return _clv_cache_mem
 
 
@@ -261,22 +259,29 @@ def refresh_clv_cache() -> dict:
         # Import diferido — config.database puede tardar y no queremos
         # cargarla en cada `import betting_engine`.
         from config.database import engine
+        from config.settings import LEARNING_SINCE
+        from sqlalchemy import text
         import pandas as pd
         from datetime import datetime
 
-        df = pd.read_sql("""
+        df = pd.read_sql(text("""
             SELECT market, league, odds, closing_odds, result
             FROM bets_history
             WHERE result IN ('win','loss')
               AND closing_odds IS NOT NULL
               AND closing_odds > 0
               AND match_date >= NOW() - INTERVAL '120 days'
-        """, engine)
+              AND match_date >= CAST(:since AS timestamptz)
+        """), engine, params={"since": LEARNING_SINCE})
     except Exception as e:
         return {"error": str(e)}
 
     if df.empty:
-        return {"by_market": {}, "updated_at": None}
+        # Cohorte sin datos aún: se persiste vacío para que Kelly use la
+        # fracción base, no el CLV del modelo viejo.
+        out = {"by_market": {}, "updated_at": datetime.utcnow().isoformat()}
+        _persist_clv_cache(out)
+        return out
 
     # CLV en escala de PROBABILIDAD (1/cierre − 1/apertura), la misma
     # definición que clv_tracker escribe en la columna bets_history.clv.
@@ -304,12 +309,14 @@ def refresh_clv_cache() -> dict:
         "by_market":  by_market,
         "updated_at": datetime.utcnow().isoformat(),
     }
-    _CLV_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(_CLV_CACHE_FILE, "w") as f:
-        json.dump(out, f, indent=2)
+    _persist_clv_cache(out)
+    return out
 
-    # Invalidar el cache en memoria
+
+def _persist_clv_cache(out: dict) -> None:
+    """DB (la ven las demás corridas) + espejo local; invalida la memoria."""
+    from src.utils.model_state import save_state
+    save_state(_CLV_STATE_KEY, out, file_path=_CLV_CACHE_FILE)
     global _clv_cache_mem, _clv_cache_loaded_at
     _clv_cache_mem = out
     _clv_cache_loaded_at = time.time()
-    return out

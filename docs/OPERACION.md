@@ -14,7 +14,7 @@ ver §2.
 | Servicio | Para qué | Credencial | Coste |
 |---|---|---|---|
 | **The Odds API** | Cuotas (`/odds`) y resultados (`/scores`). Es la fuente crítica: sin ella no hay apuestas ni resolución. | `ODDS_API_KEY` | Plan de pago. 1 crédito por liga y llamada; ~600-700 créditos/día sobre 20K al mes. |
-| **PostgreSQL** | Todo el estado: `matches`, `upcoming_matches`, `bets_history`, `bankroll`, `pre_kickoff_analyses`, `analyst_heartbeat`, `anthropic_usage`. | `DB_URL` | Alojada fuera del repo. Ver §7. |
+| **PostgreSQL** | Todo el estado: `matches`, `upcoming_matches`, `bets_history`, `shadow_bets`, `bankroll`, `pre_kickoff_analyses`, `analyst_heartbeat`, `anthropic_usage`, y lo aprendido en `model_state` (§7). | `DB_URL` | Alojada fuera del repo. Ver §7. |
 | **Anthropic** | Los dos agentes LLM: analista pre-kickoff y resolver de pendientes. | `ANTHROPIC_API_KEY` | ~$0.014-0.020 por llamada. Ver §6. |
 | **Telegram** | Único canal de salida: picks, resumen diario, alertas del watchdog. | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`; el analista usa `*_PREKICKOFF` y cae al bot principal si no están. | Gratis. |
 | **football-data.co.uk** | Respaldo de resultados y **única** fuente de córners y tarjetas. Publica con 24-36 h de retraso. | Ninguna, son CSV públicos. | Gratis. |
@@ -35,8 +35,9 @@ son *repository secrets*; en local, un `.env` (que está en `.gitignore`).
 
 Esto **no** es lo que uno esperaría, y confundirlo cuesta caro:
 
-- **El cron de GitHub casi no se usa.** Solo `watchdog.yml` y `late_results.yml`
-  llevan `schedule:`. Los demás lo perdieron a propósito.
+- **El cron de GitHub casi no se usa.** Solo `watchdog.yml`, `late_results.yml` y
+  `closing.yml` (cada hora, `5 * * * *`) llevan `schedule:`. Los demás lo
+  perdieron a propósito.
 - **Producción la dispara un agente externo** vía `workflow_dispatch` contra `master`,
   con un PAT de la cuenta dueña. Lanza `morning`, `closing`, `evening` y `weekly` a
   las 12:00 / 18:00 / 09:00 UTC y los lunes.
@@ -50,17 +51,34 @@ Esto **no** es lo que uno esperaría, y confundirlo cuesta caro:
 Para lanzar uno a mano: Actions → el workflow → «Run workflow», o
 `scripts/_trigger_workflow.ps1`, que hace el `workflow_dispatch` por API.
 
+> **Cuidado al hacer push a `master`:** `morning.yml`, `evening.yml`,
+> `closing.yml`, `weekly.yml` y `late_results.yml` tienen un trigger `push`
+> filtrado a su propio archivo. Cambiar uno de esos YAML y hacer push **lanza
+> esa corrida** (apuestas, Telegram y créditos incluidos). Si no se quiere,
+> el commit lleva `[skip ci]`.
+
 Los scripts de Windows Task Scheduler se retiraron: apuntaban a una ruta muerta y,
 arreglados, habrían abierto una segunda vía de ejecución en paralelo a Actions.
 
-### Un fallo verde se ve igual que un día normal
+### Fallos: rojo en Actions + Telegram, pero un apagón de datos sigue siendo "verde"
 
-`run_step()` captura el error de cada paso y continúa. Un apagón total de datos
-**no** pone el run en rojo. Ocurrió: la key de The Odds API se desactivó el
-17-jun-2026 (`401 DEACTIVATED_KEY`, pago fallido) y las 15 ligas devolvieron
-«0 partidos procesados» durante 82 días sin que nada avisara.
+`run_step()` captura el error de cada paso y continúa con los demás. Desde el
+22-sep-2026, al terminar, si **algún paso falló** el orchestrator sale con
+código 1 (run en **rojo**, con `::error::` listando los pasos) y manda a
+Telegram qué pasos cayeron — en todos los modos, no solo morning/evening (el
+weekly del 21-sep perdió "Load historical data" sin que nadie se enterara).
+El caché de cuotas se guarda aunque el run falle (`actions/cache/save` con
+`if: always()`).
 
-De ahí los CHECK 5 y 6 del watchdog (§4): miden **producto**, no actividad.
+Dentro de las predicciones, cada partido se evalúa aislado: una fila corrupta
+se omite (con traceback en el log y aviso "Predicciones parciales") y el resto
+del slate sigue. Si fallan **todos**, el paso falla.
+
+Lo que el código de salida **no** detecta es un apagón de datos: la key de The
+Odds API se desactivó el 17-jun-2026 (`401 DEACTIVATED_KEY`, pago fallido) y
+las 15 ligas devolvieron «0 partidos procesados» durante 82 días — cada paso
+"funcionó". De ahí los CHECK 5 y 6 del watchdog (§4): miden **producto**, no
+actividad.
 
 ---
 
@@ -96,6 +114,13 @@ puntúa). Pide a Claude el resultado FT vía `web_search`, completa `matches` y 
 `update_bet_results()`. **Gasta tokens.** `late_results.yml` cubre el caso barato:
 re-corre `--mode results` a las 00:00 y 06:30 MX para partidos que acaban después
 del evening, sin llamar a la LLM.
+
+**4 · Aprendizaje semanal** — el modo `weekly` recalcula todo lo que el sistema
+aprende de los datos que recolecta solo, y lo guarda en `model_state` (§7):
+calibración, CLV gate, caché de CLV para Kelly, **peso del modelo frente al
+mercado** y **reactivaciones por shadow**. Las corridas diarias lo leen de la DB
+al arrancar (`load_learned_state()` en el pipeline). Solo aprende de datos de la
+cohorte actual (`LEARNING_SINCE`, §7).
 
 ### Cómo auditar
 
@@ -143,6 +168,29 @@ grupo: `ah_home_fav` / `ah_home_pk` / `ah_home_dog`. Usa `_ah_group()` de
 `src/models/calibration_monitor.py`. Hay precedente de un `dict.get(mkt, default)`
 silencioso cayendo al default en todas las bets AH.
 
+**La línea embebida en la clave AH es SIEMPRE la del local**, también en el lado
+visitante: `ah_away_-0.50` es el visitante *recibiendo* +0.5. `_ah_group()` la
+invierte para el visitante (`ah_away_-0.50` → `ah_away_dog`); hasta el 22-sep-2026
+no lo hacía y los grupos del visitante estaban cruzados. El bloqueo de "AH con el
+local favorito" es `("ah_home_fav", "ah_away_dog")`: las dos patas de la misma línea.
+
+**AH, DNB y 1X2 apuestan al mismo resultado.** `ah_home_-0.50` es literalmente
+`home_win`. Comparten grupo de exclusión (`_exclusive_group()`): máximo una bet por
+partido entre ellos.
+
+**Nada que escriba un runner sobrevive a su runner.** Cada corrida de Actions arranca
+limpia: un archivo que genera el weekly no existe para el morning. Todo estado que
+otra corrida deba leer va a `model_state` con `src/utils/model_state.py`
+(`save_state` / `load_state`). Hasta el 22-sep-2026 la calibración y el caché de CLV
+de producción eran la copia commiteada del 7-may, y el CLV gate nunca aplicó.
+
+**Cuotas de cierre: mismo mercado, misma línea.** Hay UN mapeo mercado → cierre
+(`_closing_odds_for` en `src/models/save_bets.py`) para apuestas y shadow. Si la línea
+se movió (AH −0.5 → −0.75, córners 9.5 → 10.5) no hay cierre comparable y devuelve
+`None`; nunca compares contra otra línea. El closing de producción tenía su propia
+copia que buscaba `"btts_yes"` cuando la bet se llama `"btts"`: ninguna bet BTTS tuvo
+CLV hasta el 22-sep-2026.
+
 **`upcoming_matches` acumula duplicados stale.** Su clave de upsert incluye
 `match_day`, derivado del kickoff, así que cuando la API corrige un horario se inserta
 fila nueva en vez de actualizar. Todo consumidor debe leer con
@@ -176,9 +224,9 @@ Ambos agentes usan `claude-haiku-4-5` con `max_uses=1-2` en `web_search_20250305
 La búsqueda web cuesta $0.01 y domina el coste. No añadas llamadas a `web_search` a
 la ligera.
 
-> `_ensure_table()` envuelve su DDL en `try/except: pass` y `get_daily_spent_usd()`
-> devuelve `0.0` ante cualquier excepción. Si la tabla no se puede crear, el guard
-> **lee 0.0 y deja pasar todas las llamadas**. Falla abierto, no cerrado.
+> Falla **cerrado** (desde el 22-sep-2026): si `anthropic_usage` no se puede leer,
+> `get_daily_spent_usd()` devuelve `None` y `can_call()` rechaza la llamada. Antes
+> devolvía `0.0` ante cualquier error y dejaba pasar todo.
 
 Cuando el analista revienta en una bet, el traceback queda en
 `analyst_heartbeat.error_msg` y salta alerta si fallan ≥3 bets en una corrida. Nunca
@@ -187,14 +235,56 @@ perdió un día entero en silencio.
 
 ---
 
-## 7. Calibración
+## 7. Aprendizaje y calibración
 
-`config/calibration_factors.json` se regenera cada lunes en `step_calibration`.
+### Dónde vive lo aprendido
+
+Tabla `model_state` (clave → JSON), historizada en `model_state_history`. La DB es la
+fuente de verdad; los archivos de `config/` y `data/` son espejo local.
+
+| Clave | Lo escribe (weekly) | Lo usa |
+|---|---|---|
+| `dc_params` | `dc_mle_fitter` | lambdas DC-MLE |
+| `calibration_factors` | `calibration_monitor.compute_calibration` | mercados sin ancla (hoy: doble oportunidad) |
+| `clv_gate_markets` / `clv_gate_leagues` | `clv_gate.run_clv_gate` | kill-switch por mercado / liga |
+| `clv_cache` | `betting_engine.refresh_clv_cache` | fracción de Kelly por CLV |
+| `anchor_weights` | `anchor_learner.run_anchor_learning` | **peso del modelo** frente al mercado |
+| `shadow_reactivation` | `clv_gate.run_shadow_reactivation` | `away_win` y AH con local favorito |
+
+**Cohorte:** todo aprende solo de datos desde `LEARNING_SINCE` (`config/settings.py`,
+default `2026-09-14`, inicio de la arquitectura anclada). Si la arquitectura vuelve a
+cambiar, se mueve esa fecha (variable de GitHub, sin tocar código). Con cohorte nueva
+los learners arrancan en neutro y se van llenando: es a propósito.
+
+### Peso del modelo (lo que más importa)
+
+Un mercado anclado vale `p = p_mercado + w·(p_modelo − p_mercado)`. `w` era 0.35 fijo;
+ahora `anchor_learner` lo aprende por familia (1x2, totales, BTTS, AH/DNB, medio tiempo,
+córners/tarjetas): regresa el movimiento del mercado hasta el cierre (Δ = 1/cierre −
+1/apertura) sobre el desvío crudo del modelo en las candidatas shadow. La pendiente es la
+fracción de la opinión del modelo que el mercado termina confirmando. Límites:
+encogimiento bayesiano hacia 0.35, rango [0, 0.50], ±0.10 por semana, mínimo 100
+candidatas con cierre por familia (si no, estimado agregado; si no, 0.35). Si los datos
+dicen que el modelo no anticipa al mercado, `w` baja y el sistema **apuesta menos**:
+es el comportamiento correcto, y el shadow sigue midiendo.
+
+### Reactivación por shadow
+
+`away_win` y los AH con el local favorito están bloqueados de forma fija. Vuelven solos
+si sus candidatas shadow que se habrían apostado (desvío > 0, edge ≥ 5 pt) muestran
+CLV ≥ 0 con n ≥ 30; se re-bloquean con CLV significativamente negativo.
+
+### Calibración por mercado
+
 `apply_calibration(prob, market, league)` de `src/models/calibration_monitor.py` es el
 **único** punto de entrada: corrección isotónica o escalar con suavizado bayesiano
 (prior=30) y clamp adaptativo (0.75-1.30 con n≥30, 0.85-1.20 con n<30). El sub-dict
-`by_league` se rellena para ligas con ≥25 bets en 90 días; se mira primero el nivel de
-liga y se cae al global, con la cadena de fallback de grupos AH encima.
+`by_league` se rellena para ligas con ≥25 bets en la ventana; se mira primero el nivel de
+liga y se cae al global, con la cadena de fallback de grupos AH encima. **Alcance real:**
+los mercados anclados no pasan por aquí (heredan la calibración del precio sin margen);
+hoy solo la usan los mercados sin ancla. Con el holdout de 45 días y la cohorte del
+14-sep, la ventana de ajuste está vacía hasta finales de octubre: se guardan factores
+neutros.
 
 Cuando un mercado cruza los umbrales de alerta (factor <0.82 o >1.20 con n≥10), el
 cron semanal manda `check_calibration_alert()` a Telegram. Trata esas alertas como
@@ -261,9 +351,19 @@ El código está comentado en español (histórico del proyecto), con nombres de
 función en inglés. Sigue ese estilo: comentarios en español, mensajes de commit en
 inglés.
 
-`archive/` en la rama `main` documenta la regla de **archivar, nunca borrar** para
-módulos que dejan de ser alcanzables. Cada módulo retirado lleva su motivo, qué lo
-sustituye y si es seguro re-ejecutarlo.
+`archive/` documenta la regla de **archivar, nunca borrar** para módulos que dejan
+de ser alcanzables. Cada módulo retirado lleva su motivo, qué lo sustituye y si es
+seguro re-ejecutarlo (`archive/README.md`).
+
+### Tests
+
+`tests/pipeline_harness.py` corre `run_prediction_pipeline()` de punta a punta sin DB
+ni APIs (dependencias sustituidas por datos fijos). Los cambios de lógica se prueban
+**ejecutando** el pipeline, no buscando texto en el código:
+`tests/test_pipeline_end_to_end.py` congela la salida completa en
+`tests/golden/pipeline_baseline.json`; si un cambio intencional la altera, se regenera
+con `UPDATE_GOLDEN=1 python -m pytest tests/test_pipeline_end_to_end.py` y el diff va
+en el commit.
 
 ### Ramas
 

@@ -110,6 +110,18 @@ API_CREDITS_ALERT_THRESHOLD = env_int("API_CREDITS_ALERT_THRESHOLD", 2000)
 INITIAL_BANKROLL = env_float("INITIAL_BANKROLL", 100.0)
 
 # ============================================================
+# APRENDIZAJE — cohorte del modelo actual
+# ============================================================
+# Todo lo que aprende de datos recolectados (calibración, CLV gate, Kelly
+# por CLV, pesos del ancla) mira SOLO datos generados desde esta fecha: el
+# inicio de la arquitectura anclada al mercado (14-sep-26). Las apuestas
+# anteriores salieron de un modelo con lambdas infladas +49% y no
+# describen cómo decide el sistema hoy — mezclarlas enseñaría al sistema a
+# corregir errores que ya no comete. Si la arquitectura vuelve a cambiar,
+# se mueve esta fecha (variable LEARNING_SINCE en GitHub, sin tocar código).
+LEARNING_SINCE = env_str("LEARNING_SINCE", "2026-09-14")
+
+# ============================================================
 # WEATHER API (OpenWeatherMap — gratis 1,000 calls/día)
 # Registro: https://openweathermap.org/api
 # Agrega WEATHER_API_KEY=tu_clave en el archivo .env
@@ -199,10 +211,16 @@ if not WORLD_CUP_BETTING_ENABLED:
     PAPER_ONLY_LEAGUES.add("soccer_fifa_world_cup")
 
 
+# Ligas de las que se DESCARGAN cuotas. Estar aquí no implica apostar: las
+# ligas de BLOCKED_LEAGUES (prediction_pipeline) y las que bloquee el CLV
+# gate solo se OBSERVAN — sus candidatas van a shadow_bets y alimentan el
+# aprendizaje (peso del modelo, reactivaciones) sin arriesgar dinero.
+# Los ROI anotados abajo son del walk-forward del modelo VIEJO (pre-anclaje,
+# abril-mayo 2026): contexto histórico, no evidencia del modelo actual.
 SPORT_KEYS = [
     # ── Tier 1: Ligas RENTABLES (walk-forward ROI positivo) ──────────
     "soccer_brazil_campeonato",           # +53.7% ROI, mejor liga del modelo
-    "soccer_efl_champ",                   # +19.2% ROI, muchos partidos, lineas blandas
+    "soccer_efl_champ",                   # SOLO SHADOW: bloqueada desde 15-jun (BLOCKED_LEAGUES)
     "soccer_mexico_ligamx",               # +39.7% ROI, mercado menos eficiente
     "soccer_germany_bundesliga",          # +38.6% ROI, datos muy buenos
     "soccer_argentina_primera_division",  # +10.3% ROI, alta varianza
@@ -234,9 +252,11 @@ SPORT_KEYS = [
     # Fallaban con el modelo viejo inflado; ahora con anclaje al mercado,
     # xG recalibrado, Kalman y guardia de alineaciones. El CLV gate por
     # liga (n>=20, CLV<=-5%) las re-bloquea SOLAS si vuelven a fallar.
+    # Noruega y Eredivisie se RE-BLOQUEARON el 21-sep (K1, ronda 16: sin
+    # calibración propia medible) — hoy son SOLO SHADOW.
     "soccer_turkey_super_league",
-    "soccer_norway_eliteserien",
-    "soccer_netherlands_eredivisie",
+    "soccer_norway_eliteserien",          # SOLO SHADOW (BLOCKED_LEAGUES, K1)
+    "soccer_netherlands_eredivisie",      # SOLO SHADOW (BLOCKED_LEAGUES, K1)
     # ── Champions League — habilitada 10-sep-26 a pedido del dueño ────
     # Histórico: -100% ROI en walkforward de 332 bets (modelo pre-revisión).
     # Se re-habilita junto con fixes de calibración/holdout; vigilar de

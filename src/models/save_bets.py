@@ -726,6 +726,31 @@ def _nearest_market_row(home, away, bet_match_date):
     })
 
 
+def _line_of(market: str):
+    """Línea embebida en un mercado paramétrico ('ah_home_-0.50' → -0.5)."""
+    try:
+        return float(str(market).rsplit("_", 1)[-1])
+    except (TypeError, ValueError):
+        return None
+
+
+def _same_line(market: str, row_line) -> bool:
+    """
+    ¿La línea del cierre es la MISMA que la apostada? Si la línea principal
+    se movió (AH -0.5 → -0.75, córners 9.5 → 10.5), la cuota de la fila ya
+    es de otro mercado: compararla daría un CLV inventado. Sin línea
+    comparable no hay cierre (None), que es la respuesta honesta.
+    """
+    bet_line = _line_of(market)
+    try:
+        rl = float(row_line)
+    except (TypeError, ValueError):
+        return False
+    if bet_line is None or rl != rl:   # rl != rl → NaN
+        return False
+    return abs(bet_line - rl) < 1e-6
+
+
 def _closing_odds_for(market, odds_row):
     """Mapeo mercado → cuota de cierre (compartido bets/shadow, ronda 7)."""
     closing_odds = None
@@ -755,27 +780,31 @@ def _closing_odds_for(market, odds_row):
     elif market == "btts_no":
         closing_odds = odds_row.get("btts_no_odds")
 
-    elif market == "dnb_home":
-        # DNB odds derivadas de h2h closing odds
-        h = odds_row.get("home_odds")
-        a = odds_row.get("away_odds")
-        if h and a and h > 1 and a > 1:
-            imp_sum = 1/h + 1/a
-            closing_odds = round(imp_sum / (1/h), 3)
-
-    elif market == "dnb_away":
-        h = odds_row.get("home_odds")
-        a = odds_row.get("away_odds")
-        if h and a and h > 1 and a > 1:
-            imp_sum = 1/h + 1/a
-            closing_odds = round(imp_sum / (1/a), 3)
+    elif market in ("dnb_home", "dnb_away"):
+        # Misma fuente que la apertura (prediction_pipeline): cuotas DNB de
+        # la API si están las dos patas; si no, derivadas del 1X2. Antes el
+        # cierre SIEMPRE se derivaba del 1X2 (sin margen) aunque la apuesta
+        # se hubiera tomado a la cuota de la API (con margen): el CLV de
+        # DNB salía sesgado por la diferencia de márgenes, no por el mercado.
+        dh, da = odds_row.get("dnb_home_odds"), odds_row.get("dnb_away_odds")
+        if dh and da and dh == dh and da == da and dh > 1 and da > 1:
+            closing_odds = dh if market == "dnb_home" else da
+        else:
+            h = odds_row.get("home_odds")
+            a = odds_row.get("away_odds")
+            if h and a and h > 1 and a > 1:
+                imp_sum = 1/h + 1/a
+                own = h if market == "dnb_home" else a
+                closing_odds = round(imp_sum / (1/own), 3)
 
     elif market.startswith("ah_home_") or market.startswith("ah_away_"):
-        side = market.split("_")[1]   # "home" o "away"
-        if side == "home":
-            closing_odds = odds_row.get("ah_home_odds")
-        else:
-            closing_odds = odds_row.get("ah_away_odds")
+        # La línea embebida es la del local, igual que ah_line de la fila.
+        if _same_line(market, odds_row.get("ah_line")):
+            side = market.split("_")[1]   # "home" o "away"
+            if side == "home":
+                closing_odds = odds_row.get("ah_home_odds")
+            else:
+                closing_odds = odds_row.get("ah_away_odds")
 
     elif market == "dc_1x":
         closing_odds = odds_row.get("dc_1x_odds")
@@ -798,17 +827,27 @@ def _closing_odds_for(market, odds_row):
         closing_odds = odds_row.get("h2_away_odds")
 
     elif market.startswith("corners_over_") or market.startswith("corners_under_"):
-        if market.startswith("corners_over_"):
-            closing_odds = odds_row.get("corners_over_odds")
-        else:
-            closing_odds = odds_row.get("corners_under_odds")
+        if _same_line(market, odds_row.get("corners_line")):
+            if market.startswith("corners_over_"):
+                closing_odds = odds_row.get("corners_over_odds")
+            else:
+                closing_odds = odds_row.get("corners_under_odds")
 
     elif market.startswith("cards_over_") or market.startswith("cards_under_"):
-        if market.startswith("cards_over_"):
-            closing_odds = odds_row.get("cards_over_odds")
-        else:
-            closing_odds = odds_row.get("cards_under_odds")
-    return closing_odds
+        if _same_line(market, odds_row.get("cards_line")):
+            if market.startswith("cards_over_"):
+                closing_odds = odds_row.get("cards_over_odds")
+            else:
+                closing_odds = odds_row.get("cards_under_odds")
+
+    # Salida saneada: una celda vacía llega como NaN desde pandas y se
+    # escribía tal cual (NaN en NUMERIC pasa el filtro `closing_odds > 1`
+    # de Postgres, porque NaN ordena por encima de todo).
+    try:
+        v = float(closing_odds)
+    except (TypeError, ValueError):
+        return None
+    return v if v == v and v > 1 else None
 
 
 
@@ -830,7 +869,7 @@ def _update_shadow_closing():
         for _, row in sdf.iterrows():
             match = row["match"]
             market = row["market"]
-            bet_match_date = pd.to_datetime(row["match_date"])
+            bet_match_date = pd.to_datetime(row["match_date"], utc=True)
             try:
                 home, away = match.split(" vs ")
             except ValueError:

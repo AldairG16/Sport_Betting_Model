@@ -163,6 +163,22 @@ def _neutral_signal() -> dict:
 # APLICAR SEÑAL AL PIPELINE
 # =========================
 
+def market_side(bet_market: str) -> str | None:
+    """
+    Lado del 1X2 que respalda una apuesta ("home_win" / "draw" / "away_win"),
+    o None si el mercado no apuesta por un lado (totales, BTTS, córners,
+    tarjetas, medio tiempo, doble oportunidad).
+    """
+    m = str(bet_market or "")
+    if m in ("home_win", "dnb_home") or m.startswith("ah_home_"):
+        return "home_win"
+    if m in ("away_win", "dnb_away") or m.startswith("ah_away_"):
+        return "away_win"
+    if m == "draw":
+        return "draw"
+    return None
+
+
 def apply_line_movement_signal(
     bet_market: str,
     base_edge: float,
@@ -171,6 +187,12 @@ def apply_line_movement_signal(
 ) -> tuple[float, float]:
     """
     Ajusta edge y confianza de una apuesta según la señal de línea.
+
+    La señal sale SOLO del 1X2 (qué resultado acortó más), así que solo
+    opina sobre mercados que apuestan por un lado del 1X2 (market_side).
+    Antes se comparaba el nombre del mercado con el lado "sharp": cualquier
+    over/BTTS/córner era "contradicho" por un movimiento del 1X2 y perdía
+    edge por una señal que no le concierne.
 
     Args:
         bet_market:       mercado de la apuesta (ej. "home_win", "away_win")
@@ -184,17 +206,24 @@ def apply_line_movement_signal(
     if not line["has_movement"]:
         return base_edge, base_confidence
 
+    side = market_side(bet_market)
+    if side is None:
+        return base_edge, base_confidence
+
     sharp = line["sharp_signal"]
     strength = line["movement_strength"]
     boost = CONFIDENCE_BOOST if strength == "strong" else CONFIDENCE_BOOST * 0.5
 
-    if sharp == bet_market:
+    # Nota: para 1X2 puro la rama "confirma" casi nunca se alcanza — si
+    # nuestra propia cuota acortó más de HARD_SKIP_THRESHOLD, el filtro duro
+    # line_moved_against() ya descartó la bet antes de llegar aquí.
+    if sharp == side:
         # Sharp money CONFIRMA nuestra apuesta
         new_confidence = min(1.0, base_confidence + boost)
         new_edge = base_edge * (1 + boost * 0.5)
         return round(new_edge, 4), round(new_confidence, 4)
 
-    elif sharp != "none" and sharp != bet_market:
+    elif sharp != "none" and sharp != side:
         # Sharp money CONTRADICE nuestra apuesta
         new_confidence = max(0.0, base_confidence - boost)
         new_edge = base_edge * (1 - boost * 0.5)
