@@ -204,6 +204,13 @@ más frecuente que cada hora usa minutos off-peak — `pre_kickoff.yml` usa
 `7,22,37,52 * * * *`. El síntoma es heartbeats con `bets_found > 0, bets_analyzed = 0`
 durante horas.
 
+**pandas convierte los NULL de columnas enteras en `NaN` (float).** Si ese valor vuelve
+a la DB en un `UPDATE`/`INSERT`, Postgres lo trata como `double` y al guardarlo en una
+columna `INTEGER` revienta con *integer out of range* — y la transacción entera se
+revierte. Convierte a `None` antes de escribir (`_sql_value` en
+`scripts/weekly_sanity_audit.py`). Así estuvo roto el auto-fusionador de partidos
+duplicados al menos desde el 21-sep-2026: detectaba, fallaba y no fusionaba nada.
+
 **Los nombres de equipo pasan por `normalize_team()` antes de consultar.** `matches` y
 `upcoming_matches` guardan minúsculas normalizadas. Un desajuste deja bets en `pending`
 para siempre aunque `fetch_results` haya corrido.
