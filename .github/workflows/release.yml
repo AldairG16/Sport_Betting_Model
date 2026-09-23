@@ -96,7 +96,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          name: Betting Model v${{ github.ref_name }}
+          name: Betting Model ${{ github.ref_name }}   # el tag ya trae la "v"
           generate_release_notes: true
           files: |
             installer/dist/BettingDashboard.exe
