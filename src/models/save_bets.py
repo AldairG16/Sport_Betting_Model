@@ -3,6 +3,9 @@ from sqlalchemy import text
 from config.database import engine
 from src.utils.team_normalizer import normalize_team
 from src.models.bankroll_manager import update_bankroll, ensure_bankroll_schema
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 
 # ============================================================
@@ -144,12 +147,12 @@ def persist_shadow_bets(records: list):
                 except Exception as row_err:
                     if inserted == 0 and not hasattr(persist_shadow_bets, "_dbg"):
                         persist_shadow_bets._dbg = True
-                        print(f"⚠️  shadow primera fila rechazada: {str(row_err)[:200]}")
-                    print(f"⚠️  shadow fila rechazada ({r.get('market')}): "
+                        log.warning(f"⚠️  shadow primera fila rechazada: {str(row_err)[:200]}")
+                    log.warning(f"⚠️  shadow fila rechazada ({r.get('market')}): "
                           f"{type(row_err).__name__}")
         print(f"🌑 Shadow: {inserted}/{len(records)} candidatas registradas")
     except Exception as e:
-        print(f"⚠️  persist_shadow_bets error: {e}")
+        log.error(f"⚠️  persist_shadow_bets error: {e}")
 
 
 # =========================
@@ -406,7 +409,7 @@ def update_bet_results():
                 else:
                     outcome = "unresolved"
                     profit = 0.0
-                    print(f"  ⚠️ Mercado sin rama en el resolver: {market!r} → unresolved")
+                    log.warning(f"  ⚠️ Mercado sin rama en el resolver: {market!r} → unresolved")
 
                 # =========================
                 # EVALUACIÓN MERCADOS
@@ -533,7 +536,7 @@ def update_bet_results():
                                 if side == "away":
                                     outcome = "win"
                     except (IndexError, ValueError) as ah_err:
-                        print(f"⚠️  AH market mal formateado '{market}': {ah_err}")
+                        log.warning(f"⚠️  AH market mal formateado '{market}': {ah_err}")
                         # outcome queda como "loss" por default — mejor loggear
                         # que fallar silenciosamente
 
@@ -683,7 +686,7 @@ def update_bet_results():
                     recheck_count += 1
                 except Exception as e:
                     # Fix: logging para no perder errores silenciosamente
-                    print(f"⚠️  Recheck error ({row.get('match', '?')}): {e}")
+                    log.error(f"⚠️  Recheck error ({row.get('match', '?')}): {e}")
         if recheck_count > 0:
             print(f"🔄 {recheck_count} bets 'unresolved' re-marcadas como 'pending' (datos market-specific ya completos)")
 
@@ -702,7 +705,7 @@ def update_bet_results():
               AND match_date < NOW() - INTERVAL '3 days'
         """))
         if r1.rowcount > 0:
-            print(f"⚠️  {r1.rowcount} bets 'pending' → 'unresolved' (tras 3 días sin resultado)")
+            log.warning(f"⚠️  {r1.rowcount} bets 'pending' → 'unresolved' (tras 3 días sin resultado)")
 
         r2 = conn.execute(text("""
             UPDATE bets_history

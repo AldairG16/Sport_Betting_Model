@@ -44,6 +44,9 @@ from sqlalchemy import text
 from config.database import engine
 from config.settings import LEARNING_SINCE
 from src.utils.model_state import load_state, save_state
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 STATE_KEY = "calibration_factors"
 
@@ -422,12 +425,12 @@ def compute_calibration(min_bets: int = MIN_BETS_FOR_CALIBRATION,
     except Exception as e:
         # Error de lectura ≠ "no hay datos": NO se sobreescribe el estado
         # guardado con neutros por un fallo transitorio de la DB.
-        print(f"❌ calibration_monitor: no se pudo leer bets_history: {e}")
+        log.error(f"❌ calibration_monitor: no se pudo leer bets_history: {e}")
         return _neutral_factors()
 
     if df.empty:
         if verbose:
-            print(f"⚠️  Sin bets resueltas de la cohorte actual (desde {LEARNING_SINCE}) "
+            log.warning(f"⚠️  Sin bets resueltas de la cohorte actual (desde {LEARNING_SINCE}) "
                   f"fuera del holdout — se guardan factores neutros")
         factors = _neutral_factors()
         _save_calibration_factors(factors)

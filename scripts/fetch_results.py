@@ -28,6 +28,9 @@ from sqlalchemy import text
 from config.database import engine
 from config.settings import ODDS_API_KEY, SPORT_KEYS
 from src.utils.team_normalizer import normalize_team
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 SCORES_URL = "https://api.the-odds-api.com/v4/sports/{sport}/scores/"
 
@@ -46,7 +49,7 @@ def fetch_scores_for_league(sport_key: str, days_from: int = 2) -> tuple[list, b
         r.raise_for_status()
         data = r.json()
     except Exception as e:
-        print(f"   ⚠️  Error fetching {sport_key}: {e}")
+        log.error(f"   ⚠️  Error fetching {sport_key}: {e}")
         return [], False
 
     results = []
@@ -109,7 +112,7 @@ def insert_results(results: list) -> tuple[int, int]:
                 else:
                     skipped += 1
             except Exception as e:
-                print(f"   ❌ Error insertando {r['home_team']} vs {r['away_team']}: {e}")
+                log.error(f"   ❌ Error insertando {r['home_team']} vs {r['away_team']}: {e}")
 
     return inserted, skipped
 

@@ -24,6 +24,9 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from config.database import engine
 from src.utils.team_normalizer import normalize_team
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 
 # ============================================================
@@ -190,7 +193,7 @@ def update_closing_odds(only_near_kickoff: bool = True):
             try:
                 odds_df = _nearest_market_row(home_raw, away_raw, match_date)
             except Exception as e:
-                print(f"⚠️  closing: no se pudo buscar {match}: {type(e).__name__}")
+                log.warning(f"⚠️  closing: no se pudo buscar {match}: {type(e).__name__}")
                 continue
 
             if odds_df.empty:
@@ -228,9 +231,9 @@ def update_closing_odds(only_near_kickoff: bool = True):
         from src.models.save_bets import _update_shadow_closing
         _update_shadow_closing()
     except Exception as e:
-        print(f"⚠️  shadow closing omitido: {type(e).__name__}")
+        log.warning(f"⚠️  shadow closing omitido: {type(e).__name__}")
     if not_found > 0:
-        print(f"⚠️  Partidos no encontrados en DB (ya completados): {not_found}")
+        log.warning(f"⚠️  Partidos no encontrados en DB (ya completados): {not_found}")
 
 
 if __name__ == "__main__":

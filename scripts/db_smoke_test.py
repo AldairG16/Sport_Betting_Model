@@ -318,6 +318,21 @@ def _valid_closings():
             f"bets {int(r['bets_ok'])} válidos (de {int(r['bets_30d'])} con cierre en 30d)")
 
 
+@check("Pipeline completo en ENSAYO sobre datos reales (no escribe nada)")
+def _pipeline_dry_run():
+    """Valida el código de predicción de ESTA rama contra los partidos y
+    features reales de producción, sin guardar apuestas ni shadow ni
+    mandar Telegram. Un partido que falla aquí fallaría mañana en el morning."""
+    import src.pipeline.prediction_pipeline as pp
+    pp.run_prediction_pipeline(dry_run=True)
+    s = pp.LAST_RUN_SUMMARY
+    assert s.get("dry_run") is True, s
+    assert s.get("failed_matches", 0) == 0, f"{s.get('failed_matches')} partidos con error"
+    return (f"partidos={s.get('matches')} errores={s.get('failed_matches')} "
+            f"bets={s.get('bets')} papel={s.get('paper_bets')} shadow={s.get('shadow')} "
+            f"mercados={s.get('markets')}")
+
+
 @check("Closing: bets BTTS con cierre (antes 0 por clave 'btts_yes')")
 def _btts_closing():
     df = pd.read_sql(text("""

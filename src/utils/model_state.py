@@ -27,6 +27,9 @@ from pathlib import Path
 from sqlalchemy import text
 
 from config.database import engine
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 _DDL_STATE = """
     CREATE TABLE IF NOT EXISTS model_state (
@@ -52,7 +55,7 @@ def _write_file(file_path: Path, value: dict) -> None:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(json.dumps(value, indent=2, default=str), encoding="utf-8")
     except Exception as e:
-        print(f"⚠️  model_state: no se pudo escribir el espejo {file_path.name}: {e}")
+        log.warning(f"⚠️  model_state: no se pudo escribir el espejo {file_path.name}: {e}")
 
 
 def save_state(key: str, value: dict, file_path: Path | None = None,
@@ -82,7 +85,7 @@ def save_state(key: str, value: dict, file_path: Path | None = None,
                 """), {"k": key, "v": payload, "t": datetime.now(timezone.utc)})
         return True
     except Exception as e:
-        print(f"⚠️  model_state/{key}: no se pudo persistir en la DB — las demás "
+        log.warning(f"⚠️  model_state/{key}: no se pudo persistir en la DB — las demás "
               f"corridas NO verán este estado. {type(e).__name__}: {str(e)[:150]}")
         return False
 
@@ -101,11 +104,11 @@ def load_state(key: str, file_path: Path | None = None) -> dict | None:
             v = row[0]
             return json.loads(v) if isinstance(v, str) else dict(v)
     except Exception as e:
-        print(f"⚠️  model_state/{key}: DB no disponible, uso fallback local. "
+        log.warning(f"⚠️  model_state/{key}: DB no disponible, uso fallback local. "
               f"{type(e).__name__}: {str(e)[:120]}")
     if file_path is not None and file_path.exists():
         try:
             return json.loads(file_path.read_text(encoding="utf-8"))
         except Exception as e:
-            print(f"⚠️  model_state: {file_path.name} ilegible: {e}")
+            log.warning(f"⚠️  model_state: {file_path.name} ilegible: {e}")
     return None

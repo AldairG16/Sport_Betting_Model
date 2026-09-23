@@ -1,6 +1,7 @@
 import sys
 import os
 import traceback
+from types import SimpleNamespace
 import pandas as pd
 import numpy as np
 from scipy.stats import poisson as _poisson
@@ -70,7 +71,7 @@ def _has_coverage(league: str, market_kind: str) -> bool:
         # Si la query falla, asumimos que la liga NO tiene cobertura
         # (conservador: no usar señales no validables). Logueamos para que
         # el orchestrator vea el warning en el log de GH Actions.
-        print(f"⚠️  league_coverage_ok({league}): error en query — asumiendo sin cobertura. {e}")
+        log.error(f"⚠️  league_coverage_ok({league}): error en query — asumiendo sin cobertura. {e}")
         _COVERAGE_CACHE[key] = False
     return _COVERAGE_CACHE[key]
 
@@ -155,6 +156,9 @@ NEUTRAL_VENUE_LEAGUES = {
     "soccer_afc_asian_cup",
 }
 from src.features.league_calibration import get_over25_rate, get_btts_rate, OVER25_SHRINK, BTTS_SHRINK, LEAGUE_FACTORS_VERSION
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 # ─────────────────────────────────────────────────────────────
 # CONSTANTES DE PIPELINE (módulo-level para no recrearlas en cada llamada)
@@ -349,7 +353,7 @@ def load_learned_state() -> dict:
         try:
             state[key] = fn()
         except Exception as e:
-            print(f"⚠️  Estado aprendido '{key}' no disponible — uso el default: {e}")
+            log.warning(f"⚠️  Estado aprendido '{key}' no disponible — uso el default: {e}")
     return state
 
 # =========================
@@ -512,71 +516,1742 @@ def _previous_fit_rho():
     return None
 
 
-def run_prediction_pipeline():
+# =========================
+# ETAPAS POR PARTIDO (refactor 22-sep-26)
+# =========================
+# run_prediction_pipeline era una sola función de ~1,950 líneas. Cada
+# etapa es ahora una función con entradas y salidas explícitas; el código
+# de cada una es el mismo que antes (verificado con los goldens de
+# tests/test_pipeline_end_to_end.py y tests/test_pipeline_extended.py).
 
-    print("\nRUNNING PREDICTION PIPELINE\n")
+def _stage_team_strengths(row, stats):
+    """Etapa 1 — fuerzas de ataque/defensa de ambos equipos (forma, xG, fatiga, motivación). None = no evaluar el partido."""
 
-    # ── Bankroll real para Kelly Criterion ────────────────────────────────
-    # Asegura que la tabla existe y usa el balance actual.
-    # Si nunca se inicializó, usa INITIAL_BANKROLL de settings.py.
-    ensure_bankroll_schema()
-    current_bankroll = get_current_bankroll()
-    print(f"💰 Bankroll actual: {current_bankroll:.2f} unidades")
+    home = normalize_team(row.home_team)
+    away = normalize_team(row.away_team)
+    date = row.match_date
 
-    # ── Circuit Breaker: si el bankroll es < 10u, detener apuestas ────────
-    if current_bankroll < CIRCUIT_BREAKER_THRESHOLD:
-        print(f"🚨 CIRCUIT BREAKER ACTIVADO: bankroll ({current_bankroll:.2f}u) "
-              f"< umbral ({CIRCUIT_BREAKER_THRESHOLD}u)")
-        print("   ⛔ No se generarán apuestas hasta que se recargue el bankroll.")
-        try:
-            from scripts.notify_telegram import send_message
-            from src.models.bankroll_manager import get_bankroll_stats
-            stats = get_bankroll_stats()
-            send_message(
-                f"🚨 <b>CIRCUIT BREAKER ACTIVADO</b>\n\n"
-                f"Bankroll actual: <b>{current_bankroll:.2f}u</b>\n"
-                f"Umbral mínimo: {CIRCUIT_BREAKER_THRESHOLD}u\n"
-                f"Drawdown desde pico: {stats['drawdown_pct']:.1f}%\n\n"
-                f"⛔ Apuestas pausadas automáticamente.\n"
-                f"Recarga el bankroll o espera resultados pendientes."
-            )
-        except Exception as e:
-            # Si Telegram cae no rompemos el pipeline, pero AVISAMOS al log:
-            # antes este bloque silenciaba el alert de circuit breaker —
-            # podías quedarte sin enterar de que el bankroll cruzó el umbral.
-            print(f"⚠️  Circuit breaker activo pero NO se pudo notificar a Telegram: {e}")
-        return
+    # =========================
+    # ODDS CHECK
+    # =========================
 
-    # ── Factores de calibración (Brier) ───────────────────────────────────
-    # Corrigen el sesgo sistemático del modelo (sobreconfianza / subconfianza)
-    # Si el archivo no existe aún, usa factores neutros (1.0 = sin ajuste)
-    cal_factors = load_calibration_factors()
-    cal_active  = any(
-        isinstance(v, dict) and v.get("n_bets", 0) >= MIN_BETS_FOR_CALIBRATION
-        for k, v in cal_factors.items()
-        if k not in ("updated_at", "window_days", "by_league")
+    odds_available = any([
+        safe_odds(row.get("home_odds")),
+        safe_odds(row.get("over25_odds")),
+        safe_odds(row.get("btts_yes_odds"))
+    ])
+
+    if not odds_available:
+        stats['skipped_no_odds'] += 1
+        return None
+    # =========================
+    # TEAM FORM (SAFE + VENUE SPLIT)
+    # =========================
+    # Usamos forma LOCAL del equipo de casa y forma VISITANTE del equipo
+    # visitante. Si hay pocos partidos de venue, get_team_form() hace
+    # fallback automático a forma combinada.
+
+    home_form = get_safe_form(home, venue="home")
+    away_form = get_safe_form(away, venue="away")
+
+    # 🔥 FALLBACK DETECTION
+    home_fallback = home_form.get("is_fallback", False)
+    away_fallback = away_form.get("is_fallback", False)
+
+    # CAMBIO B: Skip partido si cualquier equipo es fallback (sin historial real)
+    if home_fallback or away_fallback:
+        stats['fallback_used'] += 1
+        log.warning(f"⚠️  Skip fallback: {home} vs {away} — datos insuficientes")
+        stats['skipped_no_odds'] += 1
+        return None
+    # 🔥 CONFIDENCE
+    min_matches = min(home_form["matches"], away_form["matches"])
+    confidence  = min(1.0, min_matches / 10)
+
+    # =========================
+    # TEAM STRENGTH
+    # =========================
+
+    # Factores calibrados por liga (calculados de 58k+ partidos reales)
+    HOME_ADVANTAGE, TEMPO = get_lambda_multipliers(
+        _row_league_of(row)
     )
-    if cal_active:
-        n_calibrated = sum(
-            1 for k, v in cal_factors.items()
-            if isinstance(v, dict) and v.get("n_bets", 0) >= MIN_BETS_FOR_CALIBRATION
-            and k not in ("updated_at", "window_days", "by_league")
+    XG_WEIGHT  = 0.40   # 40% xG proxy, 60% goals-based form
+    H2H_WEIGHT = 0.15   # 15% H2H histórico sobre lambdas finales
+
+    home_attack  = home_form.get("attack_rating", 1.0)
+    home_defense = home_form.get("defense_rating", 1.0)
+    away_attack  = away_form.get("attack_rating", 1.0)
+    away_defense = away_form.get("defense_rating", 1.0)
+
+    # =========================
+    # xG PROXY BLEND
+    # =========================
+    # Reemplaza hasta 40% del ataque/defensa basado en goals
+    # con estimaciones xG más estables (menos varianza)
+
+    # xG REAL (Understat, semanal) tiene prioridad sobre el proxy de
+    # tiros — mismo contrato (xg_for/xg_against por partido).
+    home_xg = get_real_xg(home) or get_team_xg(home)
+    away_xg = get_real_xg(away) or get_team_xg(away)
+    _xg_source = "understat" if (home_xg and home_xg.get("source") == "understat"
+                                 and away_xg and away_xg.get("source") == "understat") else "proxy"
+
+    if home_xg:
+        home_attack  = home_attack  * (1 - XG_WEIGHT) + home_xg["xg_for"]     * XG_WEIGHT
+        home_defense = home_defense * (1 - XG_WEIGHT) + home_xg["xg_against"] * XG_WEIGHT
+        stats['xg_used'] += 1
+
+    if away_xg:
+        away_attack  = away_attack  * (1 - XG_WEIGHT) + away_xg["xg_for"]     * XG_WEIGHT
+        away_defense = away_defense * (1 - XG_WEIGHT) + away_xg["xg_against"] * XG_WEIGHT
+
+    # =========================
+    # PENALIZACIÓN POR POCO DATA
+    # =========================
+
+    # =========================
+    # FILTRO: AMBOS EQUIPOS FALLBACK
+    # =========================
+    # Si ambos equipos usan valores de fallback (sin historial en DB),
+    # el modelo no tiene información real → los edges son falsos.
+    # Caso típico: selecciones nacionales (solo tenemos datos de clubes).
+    # Con ambos fallback → skip del partido para evitar apuestas incorrectas.
+
+    # Nota: el skip por fallback ya ocurrió arriba — este bloque ya no aplica
+
+    if min_matches < 3:
+        home_attack *= 0.9
+        away_attack *= 0.9
+
+    # =========================
+    # FIXTURE CONGESTION
+    # =========================
+    # Detecta fatiga por acumulación de partidos recientes.
+    # Un equipo con 3 días de descanso rinde ~8% menos en ataque.
+    # Usa fechas históricas de la DB → 0 créditos API.
+
+    home_cong = get_fixture_congestion(home, date)
+    away_cong = get_fixture_congestion(away, date)
+
+    home_attack  *= home_cong["attack_multiplier"]
+    home_defense *= home_cong["defense_multiplier"]
+    away_attack  *= away_cong["attack_multiplier"]
+    away_defense *= away_cong["defense_multiplier"]
+
+    if home_cong["is_fatigued"] or away_cong["is_fatigued"]:
+        stats['fatigued_teams'] += 1
+        fatigued_info = []
+        if home_cong["is_fatigued"]:
+            fatigued_info.append(f"{home}({home_cong['days_rest']}d)")
+        if away_cong["is_fatigued"]:
+            fatigued_info.append(f"{away}({away_cong['days_rest']}d)")
+        print(f"  Fatiga: {' vs '.join(fatigued_info)}")
+
+    # =========================
+    # FACTOR DE MOTIVACIÓN
+    # =========================
+    # Ajusta ataque/defensa según situación en la tabla:
+    # campeon asegurado / descendido → menos motivado
+    # peleando descenso / título / Europa → más motivado
+
+    league_key = _row_league_of(row)
+    home_motiv = get_motivation_factor(home, league_key)
+    away_motiv = get_motivation_factor(away, league_key)
+
+    # I2 (ronda 14): defense_rating va en GOLES CONCEDIDOS — un equipo
+    # motivado marca más Y CONCEDE MENOS. El multiplicador aplicado en la
+    # misma dirección a attack y defense enrutaba ~80% del efecto a
+    # goles totales y solo ~20% a la probabilidad de victoria.
+    if home_motiv != 0.0:
+        home_attack  *= (1 + home_motiv)
+        home_defense /= (1 + home_motiv)
+        label = "MOTIVADO" if home_motiv > 0 else "sin motivacion"
+        print(f"  Motivacion {home}: {home_motiv:+.0%} ({label})")
+
+    if away_motiv != 0.0:
+        away_attack  *= (1 + away_motiv)
+        away_defense /= (1 + away_motiv)
+        label = "MOTIVADO" if away_motiv > 0 else "sin motivacion"
+        print(f"  Motivacion {away}: {away_motiv:+.0%} ({label})")
+
+    return SimpleNamespace(
+        home=home, away=away, date=date, league_key=league_key,
+        home_form=home_form, away_form=away_form,
+        home_attack=home_attack, home_defense=home_defense,
+        away_attack=away_attack, away_defense=away_defense,
+        HOME_ADVANTAGE=HOME_ADVANTAGE, TEMPO=TEMPO, H2H_WEIGHT=H2H_WEIGHT,
+        confidence=confidence, home_xg=home_xg, away_xg=away_xg, xg_source=_xg_source,
+        home_cong=home_cong, away_cong=away_cong,
+        home_motiv=home_motiv, away_motiv=away_motiv,
+    )
+
+
+def _stage_lambdas(row, T, ctx, stats):
+    """Etapa 2 — goles esperados (λ): reparto por liga, H2H, córners/tiros/tarjetas, clima, DC-MLE, tope."""
+    home = T.home
+    away = T.away
+    home_form = T.home_form
+    away_form = T.away_form
+    home_attack = T.home_attack
+    home_defense = T.home_defense
+    away_attack = T.away_attack
+    away_defense = T.away_defense
+    HOME_ADVANTAGE = T.HOME_ADVANTAGE
+    TEMPO = T.TEMPO
+    H2H_WEIGHT = T.H2H_WEIGHT
+    mle_fresh = ctx.mle_fresh
+
+    # =========================
+    # LAMBDAS BASE
+    # =========================
+    # (ELO blend eliminado 09-sep-26: promediaba una escala de goles
+    # (~0.75-2.5) con un ratio adimensional elo/1500 (~0.9-1.2) — no
+    # aportaba señal real, solo comprimía los ataques hacia la media.
+    # El ELO sí sigue usándose como señal independiente del ensemble.)
+
+    # ── FIX REPARTO (ronda 4, D4) ──
+    # La corrección dimensional (baada73) normalizó attack×defense pero
+    # dejó HOME_ADVANTAGE como multiplicador de solo λ_home. Producción
+    # post-fix: λ_total 4.05 vs 2.7-3.0 real (Q-B ronda 4) — el cap 2.5
+    # absorbía el exceso. La parametrización correcta reparte 2.5·tempo
+    # entre local y visitante según home_advantage (ver compute_lambdas).
+    lambda_home, lambda_away = compute_lambdas(
+        home_attack, home_defense, away_attack, away_defense,
+        HOME_ADVANTAGE, TEMPO,
+    )
+
+    # =========================
+    # H2H ADJUSTMENT
+    # =========================
+    # Blend 15% de los goles históricos directos sobre los lambdas finales
+    # Captura dinámicas específicas del enfrentamiento (derbies, estilos)
+
+    h2h = get_h2h_stats(home, away)
+
+    if h2h:
+        lambda_home = lambda_home * (1 - H2H_WEIGHT) + h2h["h2h_home_goals"] * H2H_WEIGHT
+        lambda_away = lambda_away * (1 - H2H_WEIGHT) + h2h["h2h_away_goals"] * H2H_WEIGHT
+        stats['h2h_used'] += 1
+
+    # =========================
+    # CORNERS MODEL
+    # =========================
+    # Predice tiros de esquina usando Poisson simple.
+    # Ajusta la confianza en 1x2 si hay dominancia clara de córners.
+    # No consume créditos API — usa datos históricos de la DB.
+
+    corners_prediction = None
+    corners_confidence_delta = 0.0
+
+    home_corners_stats = get_team_corners(home)
+    away_corners_stats = get_team_corners(away)
+
+    if home_corners_stats and away_corners_stats:
+        corners_prediction = predict_corners(
+            home_attack    = home_corners_stats["attack_rating"],
+            home_defense   = home_corners_stats["defense_rating"],
+            away_attack    = away_corners_stats["attack_rating"],
+            away_defense   = away_corners_stats["defense_rating"],
         )
-        print(f"📐 Factores de calibración activos ({n_calibrated} mercados, "
-              f"min_bets={MIN_BETS_FOR_CALIBRATION})")
-    else:
-        print(f"📐 Calibración: datos insuficientes (< {MIN_BETS_FOR_CALIBRATION} bets), "
-              f"usando factores neutros")
+        corners_confidence_delta = corners_to_confidence_signal(corners_prediction)
+        stats['corners_used'] += 1
 
-    # ── Parámetros MLE Dixon-Coles ─────────────────────────────────────────
-    # Si existen parámetros ajustados recientes (<= 8 días), los usa.
-    # El ajuste se hace en el modo weekly (lunes 7AM).
-    mle_fresh = is_params_fresh(max_age_days=8)
+    # =========================
+    # SHOTS MODEL
+    # =========================
+    # Predice tiros al arco. Alta presión de tiros → partido más abierto.
+    # Se usa para calibrar la confianza en over/under goles.
+
+    shots_prediction = None
+    shots_confidence_delta = 0.0
+
+    home_shots_stats = get_team_shots(home)
+    away_shots_stats = get_team_shots(away)
+
+    if home_shots_stats and away_shots_stats:
+        shots_prediction = predict_shots(
+            home_attack    = home_shots_stats["attack_rating"],
+            home_defense   = home_shots_stats["defense_rating"],
+            away_attack    = away_shots_stats["attack_rating"],
+            away_defense   = away_shots_stats["defense_rating"],
+            expected_goals_total = lambda_home + lambda_away,
+        )
+        shots_confidence_delta = shots_to_confidence_signal(shots_prediction)
+        stats['shots_used'] += 1
+
+    # =========================
+    # CARDS MODEL
+    # =========================
+    # Predice tarjetas totales usando Poisson.
+    # Requiere home_yellow/away_yellow en la tabla matches.
+    # Sin datos suficientes → silenciosamente se omite.
+
+    cards_prediction = None
+
+    home_cards_stats = get_team_cards(home)
+    away_cards_stats = get_team_cards(away)
+
+    if home_cards_stats and away_cards_stats:
+        cards_prediction = predict_cards(
+            home_attack    = home_cards_stats["attack_rating"],
+            home_defense   = home_cards_stats["defense_rating"],
+            away_attack    = away_cards_stats["attack_rating"],
+            away_defense   = away_cards_stats["defense_rating"],
+        )
+
+    # ─── Info por partido (corners + shots) ──────────────────────────
+    if corners_prediction or shots_prediction:
+        parts = []
+        if corners_prediction:
+            c = corners_prediction
+            parts.append(
+                f"Corners exp: {c['lambda_home']:.1f}H / {c['lambda_away']:.1f}A"
+                f"  (over9.5={c['over95']:.0%})"
+            )
+        if shots_prediction:
+            s = shots_prediction
+            parts.append(
+                f"SOT exp: {s['lambda_home']:.1f}H / {s['lambda_away']:.1f}A"
+                f"  (over5.5={s['over55']:.0%})"
+            )
+        print(f"  >> {home} vs {away}: {' | '.join(parts)}")
+
+    # =========================
+    # WEATHER IMPACT
+    # =========================
+    # Ajusta ambos lambdas según clima en el estadio local.
+    # Lluvia/viento/nieve reducen la tasa de goles.
+    # 0 créditos extra (OpenWeatherMap gratis 1,000 calls/día).
+    # Requiere WEATHER_API_KEY en .env — sin clave, no hay ajuste.
+
+    weather_mult = get_weather_multiplier(home)
+    if weather_mult < 1.0:
+        lambda_home *= weather_mult
+        lambda_away *= weather_mult
+        stats['weather_adjusted'] += 1
+
+    # =========================
+    # BLEND DC-MLE (si disponible)
+    # =========================
+    # Los parámetros MLE ajustan lambdas por calidad del rival.
+    # Blend: 40% MLE + 60% forma actual → transición suave.
+    # Si algún equipo no está en los parámetros MLE → 100% forma actual.
+
+    _mle_w = 0.0   # peso DC-MLE efectivo usado (para el decision log)
     if mle_fresh:
-        print("🔧 Parámetros DC-MLE cargados (ajuste reciente)")
-    else:
-        print("🔧 DC-MLE: sin parámetros frescos, usando solo forma actual")
+        # Detectar venue neutral por liga — fundamental para Mundial,
+        # Euro, Copa América y otros torneos en sede única.
+        _league_for_neutral = _row_league_of(row)
+        _is_neutral_match   = _league_for_neutral in NEUTRAL_VENUE_LEAGUES
+        mle_result = get_dc_lambdas(home, away, is_neutral=_is_neutral_match)
+        if mle_result is not None:
+            mle_lh, mle_la = mle_result
+            # Peso adaptativo por volumen de datos del equipo: el MLE es
+            # más fiable que la forma simple cuando ambos equipos tienen
+            # historia suficiente; con poca data, mandar la forma actual.
+            _min_hist = min(
+                int(home_form.get("matches", 0)),
+                int(away_form.get("matches", 0)),
+            )
+            if _min_hist >= 30:
+                _mle_w = 0.55
+            elif _min_hist >= 15:
+                _mle_w = DC_MLE_WEIGHT
+            else:
+                _mle_w = 0.25
+            lambda_home = lambda_home * (1 - _mle_w) + mle_lh * _mle_w
+            lambda_away = lambda_away * (1 - _mle_w) + mle_la * _mle_w
 
+    # =========================
+    # CAP GOALS
+    # =========================
+    # Guardia de cola, no calibración: con la parametrización de reparto
+    # los λ legítimos casi nunca superan 3.5 (simulado ~1%); el cap viejo
+    # de 2.5 existió para tapar el error dimensional y recortaba ~10% de
+    # favoritos reales (ronda 4, D8).
+
+    lambda_home = min(lambda_home, LAMBDA_CAP)
+    lambda_away = min(lambda_away, LAMBDA_CAP)
+
+    return SimpleNamespace(
+        lambda_home=lambda_home, lambda_away=lambda_away, h2h=h2h,
+        weather_mult=weather_mult, mle_w=_mle_w,
+        corners_prediction=corners_prediction,
+        corners_confidence_delta=corners_confidence_delta,
+        shots_prediction=shots_prediction,
+        shots_confidence_delta=shots_confidence_delta,
+        cards_prediction=cards_prediction,
+    )
+
+
+def _stage_model_probabilities(row, T, L, ctx, stats):
+    """Etapa 3 — probabilidades del modelo por mercado (DC, ensemble, Monte Carlo, Poisson, 1T/2T, córners, tarjetas, DC, AH, DNB) y cuotas del partido."""
+    home = T.home
+    away = T.away
+    home_attack = T.home_attack
+    home_defense = T.home_defense
+    away_attack = T.away_attack
+    away_defense = T.away_defense
+    HOME_ADVANTAGE = T.HOME_ADVANTAGE
+    TEMPO = T.TEMPO
+    confidence = T.confidence
+    lambda_home = L.lambda_home
+    lambda_away = L.lambda_away
+    corners_prediction = L.corners_prediction
+    corners_confidence_delta = L.corners_confidence_delta
+    shots_prediction = L.shots_prediction
+    shots_confidence_delta = L.shots_confidence_delta
+    cards_prediction = L.cards_prediction
+    elo = ctx.elo
+    DC_RHO_SCORE = ctx.DC_RHO_SCORE
+
+    # =========================
+    # ASIAN HANDICAP + DNB
+    # =========================
+    # Calcula probabilidades AH usando la distribución Poisson bivariada.
+    # AH elimina el empate → mercado de 2 resultados → más fácil hallar edge.
+    # DNB: derivado de h2h odds existentes (sin API extra).
+
+    _ah_line = None
+    _ah_home_odds = None
+    _ah_away_odds = None
+    _raw_ah_line = row.get("ah_line")
+    if _raw_ah_line is not None and not pd.isna(_raw_ah_line):
+        _ah_line = float(_raw_ah_line)
+        _ah_home_odds = safe_odds(row.get("ah_home_odds"))
+        _ah_away_odds = safe_odds(row.get("ah_away_odds"))
+
+    # AH model probs (solo si tenemos línea y odds del mercado)
+    _p_ah_home = _p_ah_away = None
+    if _ah_line is not None and (_ah_home_odds or _ah_away_odds):
+        _p_ah_home, _p_ah_away = prob_ah(lambda_home, lambda_away, _ah_line, rho=DC_RHO_SCORE)
+
+    # DNB probs (siempre disponible desde Poisson)
+    _dnb = get_dnb_probs(lambda_home, lambda_away, rho=DC_RHO_SCORE)
+
+    # DNB odds: preferir las de API (draw_no_bet), fallback a derivadas de h2h
+    _dnb_home_api = safe_odds(row.get("dnb_home_odds"))
+    _dnb_away_api = safe_odds(row.get("dnb_away_odds"))
+
+    _dnb_home_odds = _dnb_away_odds = None
+    if _dnb_home_api and _dnb_away_api:
+        _dnb_home_odds = _dnb_home_api
+        _dnb_away_odds = _dnb_away_api
+    else:
+        # Fallback: derivar de h2h odds
+        _h_odds = safe_odds(row.home_odds)
+        _a_odds = safe_odds(row.away_odds)
+        if _h_odds and _a_odds:
+            _imp_h = 1.0 / _h_odds
+            _imp_a = 1.0 / _a_odds
+            _imp_sum = _imp_h + _imp_a
+            if _imp_sum > 0:
+                _dnb_home_odds = round(_imp_sum / _imp_h, 3)
+                _dnb_away_odds = round(_imp_sum / _imp_a, 3)
+
+    # ── Double Chance odds de API ────────────────────────────────────
+    _dc_1x_odds = safe_odds(row.get("dc_1x_odds"))
+    _dc_x2_odds = safe_odds(row.get("dc_x2_odds"))
+    _dc_12_odds = safe_odds(row.get("dc_12_odds"))
+
+    # ── Half-time odds de API ─────────────────────────────────────────
+    _h1_home_odds = safe_odds(row.get("h1_home_odds"))
+    _h1_draw_odds = safe_odds(row.get("h1_draw_odds"))
+    _h1_away_odds = safe_odds(row.get("h1_away_odds"))
+    _h2_home_odds = safe_odds(row.get("h2_home_odds"))
+    _h2_draw_odds = safe_odds(row.get("h2_draw_odds"))
+    _h2_away_odds = safe_odds(row.get("h2_away_odds"))
+
+    # ── Corners / Cards odds de API ───────────────────────────────────
+    _corners_over_api  = safe_odds(row.get("corners_over_odds") )
+    _corners_under_api = safe_odds(row.get("corners_under_odds"))
+    # NOTA: en pandas un NULL llega como NaN, no None. Normalizar a None
+    # aquí evita que int(NaN) reviente el pipeline en el cálculo de la
+    # cola de Poisson (fix del crash del morning 10-sep-26).
+    _raw_cl = row.get("corners_line")
+    _corners_line_api = None if (_raw_cl is None or (isinstance(_raw_cl, float) and pd.isna(_raw_cl))) else _raw_cl
+    _cards_over_api    = safe_odds(row.get("cards_over_odds")  )
+    _cards_under_api   = safe_odds(row.get("cards_under_odds") )
+    _raw_cl_c = row.get("cards_line")
+    _cards_line_api = None if (_raw_cl_c is None or (isinstance(_raw_cl_c, float) and pd.isna(_raw_cl_c))) else _raw_cl_c
+
+    # =========================
+    # 1X2 — DIXON-COLES
+    # =========================
+
+    dc_home, dc_draw, dc_away = match_outcomes(lambda_home, lambda_away, rho=DC_RHO_SCORE)
+
+    # Normalizar Dixon-Coles
+    dc_total = dc_home + dc_draw + dc_away
+    dc_home /= dc_total
+    dc_draw /= dc_total
+    dc_away /= dc_total
+
+    # =========================
+    # ENSEMBLE (3 señales)
+    # =========================
+    # Combina Dixon-Coles + ELO puro + Form puro con pesos adaptativos.
+    # agreement alto → más confianza en el modelo.
+
+    ensemble = ensemble_predict(
+        dc_probs        = (dc_home, dc_draw, dc_away),
+        elo_home        = elo.get(home, 1500),
+        elo_away        = elo.get(away, 1500),
+        home_attack     = home_attack,
+        home_defense    = home_defense,
+        away_attack     = away_attack,
+        away_defense    = away_defense,
+        home_advantage  = HOME_ADVANTAGE,
+        tempo           = TEMPO,
+        rho             = DC_RHO_SCORE,
+    )
+
+    home_win = clamp_prob(ensemble["home_win"])
+    draw     = clamp_prob(ensemble["draw"])
+    away_win = clamp_prob(ensemble["away_win"])
+
+    # =========================
+    # MONTE CARLO (4ª señal)
+    # =========================
+    # Simula 50,000 partidos con ruido en lambda (15% CV).
+    # Si MC coincide con ensemble → confianza alta.
+    # Si MC diverge → partido incierto → penalizar confianza.
+    # Blend MC: 15% MC + 85% ensemble (señal de corrección suave).
+
+    mc = simulate_match(lambda_home, lambda_away)
+
+    mc_agreement = mc_confidence_vs_analytical(
+        mc,
+        {"home_win": home_win, "draw": draw, "away_win": away_win}
+    )
+
+    # Blend suave MC → reduce extremos del ensemble
+    MC_WEIGHT = 0.15
+    home_win = clamp_prob(home_win * (1 - MC_WEIGHT) + mc["home_win"] * MC_WEIGHT)
+    draw     = clamp_prob(draw     * (1 - MC_WEIGHT) + mc["draw"]     * MC_WEIGHT)
+    away_win = clamp_prob(away_win * (1 - MC_WEIGHT) + mc["away_win"] * MC_WEIGHT)
+
+    # Ajuste de confianza según acuerdo MC ↔ ensemble
+    # mc_agreement < 0.85 → el partido es genuinamente incierto
+    if mc_agreement < 0.80:
+        confidence *= 0.88
+        stats['mc_diverged'] += 1
+    elif mc_agreement > 0.95:
+        confidence = min(1.0, confidence * 1.03)   # ligero boost
+
+    # Ajustar confianza según acuerdo entre señales (ensemble)
+    confidence = min(1.0, max(0.0,
+        confidence + ensemble["confidence_boost"]
+    ))
+
+    # Ajuste adicional por dominancia de córners y tiros
+    # Ambas señales apuntan en la misma dirección → más confianza
+    corner_shot_delta = corners_confidence_delta + shots_confidence_delta
+    confidence = min(1.0, max(0.0, confidence + corner_shot_delta))
+
+    # =========================
+    # POISSON
+    # =========================
+
+    # MEJORA #3: pasar rho para usar Dixon-Coles tau-correction.
+    # Mejora calibración de BTTS (-30pp de bias en sample 90d).
+    # J3 (ronda 15): mismo rho que la matriz de marcadores (DC_RHO_SCORE).
+    # Antes: matriz → -0.13 si no había fit, BTTS → Poisson cruda —
+    # fallbacks distintos para el mismo tau (1.11pp de divergencia si el
+    # refit entregaba rho bajo). La nota r10 sobre "Poisson cruda" queda
+    # superada: r11 midió rho estable en el prior (-0.09±0.01) — el
+    # escenario de corner solution está muerto empíricamente.
+    poisson_probs = totals_and_btts(lambda_home, lambda_away,
+                                    rho=DC_RHO_SCORE)
+
+    # =========================
+    # HALF-TIME PREDICTIONS (h2h_h1 / h2h_h2)
+    # =========================
+    # Modelamos primer tiempo con λ/2 (misma forma, mitad de goles esperados)
+    # y segundo tiempo con λ * 0.55 (ligeramente más goles en el 2T que en el 1T)
+    # Solo generamos probs si la API nos dio odds para esos mercados.
+
+    # Modelamos cada tiempo con SU fracción medida de goles (44% / 56%,
+    # HT_FIRST_HALF_FRACTION) para que 1T + 2T sumen el partido completo.
+    # Antes: λ/2 + λ·0.55 = 105% de los goles del partido (D9, ronda 4).
+
+    lh_h1 = min(lambda_home * HT_FIRST_HALF_FRACTION, 2.0)
+    la_h1 = min(lambda_away * HT_FIRST_HALF_FRACTION, 2.0)
+    lh_h2 = min(lambda_home * (1 - HT_FIRST_HALF_FRACTION), 2.0)
+    la_h2 = min(lambda_away * (1 - HT_FIRST_HALF_FRACTION), 2.0)
+
+    # IMPORTANTE: inicializar model_probs ANTES de que h1/h2 le asigne keys.
+    # Si NO se inicializa aquí y un partido tiene _h1_*_odds o _h2_*_odds
+    # (viene del enrichment per-event), el `if` de abajo dispara
+    # UnboundLocalError porque `model_probs = {...}` está más adelante.
+    # Más adelante usamos .update(...) en vez de `=` para no perder estas keys.
+    model_probs: dict = {}
+
+    if _h1_home_odds or _h1_draw_odds or _h1_away_odds:
+        h1h, h1d, h1a = match_outcomes(lh_h1, la_h1, rho=DC_RHO_SCORE)
+        h1_total = h1h + h1d + h1a
+        model_probs["h1_home"] = clamp_prob(h1h / h1_total)
+        model_probs["h1_draw"] = clamp_prob(h1d / h1_total)
+        model_probs["h1_away"] = clamp_prob(h1a / h1_total)
+
+    if _h2_home_odds or _h2_draw_odds or _h2_away_odds:
+        # (antes h2h/h2d/h2a: pisaba la variable h2h de los datos H2H y el
+        # decision_log registraba h2h_used=True en todo partido con cuotas 2T)
+        h2p_home, h2p_draw, h2p_away = match_outcomes(lh_h2, la_h2, rho=DC_RHO_SCORE)
+        h2_total = h2p_home + h2p_draw + h2p_away
+        model_probs["h2_home"] = clamp_prob(h2p_home / h2_total)
+        model_probs["h2_draw"] = clamp_prob(h2p_draw / h2_total)
+        model_probs["h2_away"] = clamp_prob(h2p_away / h2_total)
+
+    # =========================
+    # OVER/UNDER POR LIGA
+    # =========================
+    # Calibra over25 con la tasa histórica real de la liga.
+    # Eredivisie (62%) ≠ Ligue 1 (48%) ≠ Argentina (38%).
+    # Blend: 80% Poisson + 20% tasa histórica de liga.
+
+    league_key    = row.get("sport_key", "")
+    league_over25 = get_over25_rate(league_key)
+
+    poisson_probs["over25"] = (
+        poisson_probs["over25"]  * (1 - OVER25_SHRINK)
+        + league_over25          * OVER25_SHRINK
+    )
+    # J1 (ronda 15): shrink de BTTS a la tasa real de la liga —
+    # simétrico al de over25. La independencia de Poisson sesga el BTTS
+    # por liga (mide Q-BA: de −0.6pp en EPL a +6.7pp en Argentina, según
+    # tempo) y el ancla al 65% protege el dinero pero no la medición del
+    # shadow. Bandera btts_shrink en decision_log (R13).
+    league_btts = get_btts_rate(league_key)
+    poisson_probs["btts_yes"] = (
+        poisson_probs["btts_yes"] * (1 - BTTS_SHRINK)
+        + league_btts * BTTS_SHRINK
+    )
+    # 🔥 sanity caps — ANTES de derivar under25/btts_no para que sumen 1.
+    # over25 en 0.80: Poisson legítimo con λ_total≈4.0 da 0.76 (Bundesliga
+    # top vs colero); 0.75 recortaba ~13% de la masa válida (ronda 4, D8).
+    # btts se queda en 0.75: BTTS>0.75 exige ambos λ≥2.5, cola genuina.
+    poisson_probs["over25"]   = min(poisson_probs["over25"],   0.80)
+    poisson_probs["btts_yes"] = min(poisson_probs["btts_yes"], 0.75)
+    poisson_probs["btts_no"]  = 1.0 - poisson_probs["btts_yes"]
+    poisson_probs["under25"]  = 1.0 - poisson_probs["over25"]
+
+    totals_probs = totals_extended(lambda_home, lambda_away)
+
+    # .update() (no `=`) — preserva las keys h1_*/h2_* asignadas arriba.
+    # Antes del fix esto era `model_probs = {...}` que sobreescribía el dict
+    # y borraba silenciosamente cualquier predicción de half-time.
+    model_probs.update({
+        "home_win": home_win,
+        "draw": draw,
+        "away_win": away_win,
+        "over25": clamp_prob(poisson_probs["over25"]),
+        "under25": clamp_prob(poisson_probs["under25"]),
+        "btts": clamp_prob(poisson_probs["btts_yes"]),
+        "btts_no": clamp_prob(poisson_probs["btts_no"])
+    })
+
+    model_probs.update(totals_probs)
+
+    # =========================
+    # CORNERS COMO MERCADO
+    # =========================
+
+    # Gate de cobertura: si la liga no tiene >= 50% de partidos con
+    # córners/tarjetas en los últimos 30 días, NO generamos bets para
+    # ese mercado — quedarían 'unresolved' indefinidamente y ensuciarían
+    # la calibración + el bankroll en paper.
+    _league_for_gate = row.get("sport_key", "")
+
+    if corners_prediction and _has_coverage(_league_for_gate, "corners"):
+        # Usar la línea de la API si está disponible, fallback 9.5.
+        # La probabilidad debe calcularse en la línea REAL de la API:
+        # over95/under95 solo valen para 9.5; para otra línea usamos la
+        # cola de Poisson con lambda_total del modelo.
+        cl = float(_corners_line_api) if _corners_line_api is not None else 9.5
+        over_key  = f"corners_over_{cl}"
+        under_key = f"corners_under_{cl}"
+        if abs(cl - 9.5) < 1e-9:
+            p_over = corners_prediction["over95"]
+        else:
+            _k = int(cl)
+            p_over = float(1 - _poisson.cdf(_k, corners_prediction["lambda_total"]))
+        model_probs[over_key]  = clamp_prob(p_over)
+        model_probs[under_key] = clamp_prob(1.0 - p_over)
+
+    if cards_prediction and _has_coverage(_league_for_gate, "cards"):
+        cl_c = float(_cards_line_api) if _cards_line_api is not None else 4.5
+        if abs(cl_c - 4.5) < 1e-9:
+            p_over_c = cards_prediction["over45"]
+        else:
+            _kc = int(cl_c)
+            p_over_c = float(1 - _poisson.cdf(_kc, cards_prediction["lambda_total"]))
+        model_probs[f"cards_over_{cl_c}"]  = clamp_prob(p_over_c)
+        model_probs[f"cards_under_{cl_c}"] = clamp_prob(1.0 - p_over_c)
+
+    # =========================
+    # OVER 1.5 / OVER 3.5 GOLES
+    # =========================
+
+    # =========================
+    # TOTAL TIROS AL ARCO
+    # =========================
+    if shots_prediction:
+        model_probs["shots_over_5.5"]  = clamp_prob(shots_prediction["over55"])
+        model_probs["shots_under_5.5"] = clamp_prob(shots_prediction["under55"])
+
+    # =========================
+    # DOBLE OPORTUNIDAD (1X / X2 / 12)
+    # =========================
+    # Probabilidades derivadas de 1x2. Odds derivadas de cuotas 1x2 existentes.
+    model_probs["dc_1x"] = clamp_prob(home_win + draw)
+    model_probs["dc_x2"] = clamp_prob(draw + away_win)
+    model_probs["dc_12"] = clamp_prob(home_win + away_win)
+
+    # Agregar AH y DNB (clave con línea embebida para resolución automática)
+    if _p_ah_home is not None:
+        _ah_key_home = f"ah_home_{_ah_line:+.2f}"   # ej: "ah_home_-1.5"
+        _ah_key_away = f"ah_away_{_ah_line:+.2f}"   # ej: "ah_away_-1.5"
+        model_probs[_ah_key_home] = clamp_prob(_p_ah_home)
+        model_probs[_ah_key_away] = clamp_prob(_p_ah_away)
+
+    model_probs["dnb_home"] = clamp_prob(_dnb["dnb_home"])
+    model_probs["dnb_away"] = clamp_prob(_dnb["dnb_away"])
+
+    M = SimpleNamespace(
+        model_probs=model_probs, home_win=home_win, draw=draw, away_win=away_win,
+        mc_agreement=mc_agreement, confidence=confidence, p_ah_home=_p_ah_home,
+    )
+    Q = SimpleNamespace(_ah_line=_ah_line, _ah_home_odds=_ah_home_odds, _ah_away_odds=_ah_away_odds, _dnb_home_odds=_dnb_home_odds, _dnb_away_odds=_dnb_away_odds, _dc_1x_odds=_dc_1x_odds, _dc_x2_odds=_dc_x2_odds, _dc_12_odds=_dc_12_odds, _h1_home_odds=_h1_home_odds, _h1_draw_odds=_h1_draw_odds, _h1_away_odds=_h1_away_odds, _h2_home_odds=_h2_home_odds, _h2_draw_odds=_h2_draw_odds, _h2_away_odds=_h2_away_odds, _corners_over_api=_corners_over_api, _corners_under_api=_corners_under_api, _corners_line_api=_corners_line_api, _cards_over_api=_cards_over_api, _cards_under_api=_cards_under_api, _cards_line_api=_cards_line_api)
+    return M, Q
+
+
+def _stage_market_probabilities(row, Q, p_ah_home):
+    """Etapa 4 — probabilidad del mercado sin margen: market_probs (devig confiable, ancla) y market_probs_raw (patas sueltas)."""
+    _ah_line = Q._ah_line
+    _ah_home_odds = Q._ah_home_odds
+    _ah_away_odds = Q._ah_away_odds
+    _dnb_home_odds = Q._dnb_home_odds
+    _dnb_away_odds = Q._dnb_away_odds
+    _dc_1x_odds = Q._dc_1x_odds
+    _dc_x2_odds = Q._dc_x2_odds
+    _dc_12_odds = Q._dc_12_odds
+    _h1_home_odds = Q._h1_home_odds
+    _h1_draw_odds = Q._h1_draw_odds
+    _h1_away_odds = Q._h1_away_odds
+    _h2_home_odds = Q._h2_home_odds
+    _h2_draw_odds = Q._h2_draw_odds
+    _h2_away_odds = Q._h2_away_odds
+    _corners_over_api = Q._corners_over_api
+    _corners_under_api = Q._corners_under_api
+    _corners_line_api = Q._corners_line_api
+    _cards_over_api = Q._cards_over_api
+    _cards_under_api = Q._cards_under_api
+    _cards_line_api = Q._cards_line_api
+    _p_ah_home = p_ah_home
+
+    # =========================
+    # MARKET
+    # =========================
+    # market_probs: SOLO devig confiable (Shin 1x2, pares O/U-BTTS-DNB-AH-
+    # córners-tarjetas con booksum sano, tríos HT completos) → alimenta el
+    # ancla. market_probs_raw: prob implícita cruda (1/odds) de patas sueltas
+    # → solo sirve al blend simétrico, JAMÁS ancla (ronda 5, N1/N2).
+
+    market_probs = {}
+    market_probs_raw = {}
+
+    if safe_odds(row.home_odds) and safe_odds(row.away_odds):
+        mh, md, ma = market_probabilities(
+            row.home_odds,
+            row.draw_odds,
+            row.away_odds
+        )
+        # A3 (r6): si el booksum es incoherente, Shin devuelve None —
+        # sin ancla para 1x2 (la regla A2 hace el resto: no apostar).
+        if mh is not None:
+            market_probs.update({
+                "home_win": mh,
+                "draw": md,
+                "away_win": ma
+            })
+
+    # Over/Under
+    _pair = _devig_two_way(safe_odds(row.over25_odds), safe_odds(row.under25_odds))
+    if _pair is not None:
+        market_probs["over25"]  = _pair
+        market_probs["under25"] = 1.0 - _pair
+    elif safe_odds(row.over25_odds):
+        market_probs_raw["over25"] = 1 / row.over25_odds
+    elif safe_odds(row.under25_odds):
+        market_probs_raw["under25"] = 1 / row.under25_odds
+
+    # BTTS
+    _pair = _devig_two_way(safe_odds(row.btts_yes_odds), safe_odds(row.btts_no_odds))
+    if _pair is not None:
+        market_probs["btts"]    = _pair
+        market_probs["btts_no"] = 1.0 - _pair
+    elif safe_odds(row.btts_yes_odds):
+        market_probs_raw["btts"] = 1 / row.btts_yes_odds
+    elif safe_odds(row.btts_no_odds):
+        market_probs_raw["btts_no"] = 1 / row.btts_no_odds
+
+    # AH: el par comparte línea; con guardia de booksum ancla, si no, crudo
+    if _p_ah_home is not None:
+        _pair = _devig_two_way(_ah_home_odds, _ah_away_odds)
+        if _pair is not None:
+            market_probs[f"ah_home_{_ah_line:+.2f}"] = _pair
+            market_probs[f"ah_away_{_ah_line:+.2f}"] = 1.0 - _pair
+        else:
+            if _ah_home_odds:
+                market_probs_raw[f"ah_home_{_ah_line:+.2f}"] = 1.0 / _ah_home_odds
+            if _ah_away_odds:
+                market_probs_raw[f"ah_away_{_ah_line:+.2f}"] = 1.0 / _ah_away_odds
+
+    # DNB: las cuotas derivadas de h2h ya salen sin margen (booksum 1.0,
+    # pasan la guardia solas); el par de API se devig con la misma guardia.
+    _pair = _devig_two_way(_dnb_home_odds, _dnb_away_odds)
+    if _pair is not None:
+        market_probs["dnb_home"] = _pair
+        market_probs["dnb_away"] = 1.0 - _pair
+    else:
+        if _dnb_home_odds:
+            market_probs_raw["dnb_home"] = 1.0 / _dnb_home_odds
+        if _dnb_away_odds:
+            market_probs_raw["dnb_away"] = 1.0 / _dnb_away_odds
+
+    # Double Chance: odds parciales (una pata) → nunca devig de trío → crudo
+    if _dc_1x_odds:
+        market_probs_raw["dc_1x"] = 1.0 / _dc_1x_odds
+    if _dc_x2_odds:
+        market_probs_raw["dc_x2"] = 1.0 / _dc_x2_odds
+    if _dc_12_odds:
+        market_probs_raw["dc_12"] = 1.0 / _dc_12_odds
+
+    # Half-time: ancla solo con el TRÍO completo (devig proporcional)
+    for _half, (_ho, _do, _ao) in (
+        ("h1", (_h1_home_odds, _h1_draw_odds, _h1_away_odds)),
+        ("h2", (_h2_home_odds, _h2_draw_odds, _h2_away_odds)),
+    ):
+        _tot = _devig_three_way(_ho, _do, _ao)
+        if _tot:
+            market_probs[f"{_half}_home"] = (1.0 / _ho) / _tot
+            market_probs[f"{_half}_draw"] = (1.0 / _do) / _tot
+            market_probs[f"{_half}_away"] = (1.0 / _ao) / _tot
+        else:
+            if _ho:
+                market_probs_raw[f"{_half}_home"] = 1.0 / _ho
+            if _do:
+                market_probs_raw[f"{_half}_draw"] = 1.0 / _do
+            if _ao:
+                market_probs_raw[f"{_half}_away"] = 1.0 / _ao
+
+    # Corners / Cards: el par con booksum sano ancla; patas sueltas van crudas
+    _ccl = float(_corners_line_api) if _corners_line_api is not None else 9.5
+    _kcl = _cards_line_api is not None
+    _ccl_c = float(_cards_line_api) if _kcl else 4.5
+    _pair = _devig_two_way(_corners_over_api, _corners_under_api)
+    if _pair is not None:
+        market_probs[f"corners_over_{_ccl}"]  = _pair
+        market_probs[f"corners_under_{_ccl}"] = 1.0 - _pair
+    if _corners_over_api:
+        market_probs_raw[f"corners_over_{_ccl}"] = 1.0 / _corners_over_api
+    if _corners_under_api:
+        market_probs_raw[f"corners_under_{_ccl}"] = 1.0 / _corners_under_api
+
+    _pair = _devig_two_way(_cards_over_api, _cards_under_api)
+    if _pair is not None:
+        market_probs[f"cards_over_{_ccl_c}"]  = _pair
+        market_probs[f"cards_under_{_ccl_c}"] = 1.0 - _pair
+    if _cards_over_api:
+        market_probs_raw[f"cards_over_{_ccl_c}"] = 1.0 / _cards_over_api
+    if _cards_under_api:
+        market_probs_raw[f"cards_under_{_ccl_c}"] = 1.0 / _cards_under_api
+
+    return market_probs, market_probs_raw
+
+
+def _stage_blend(model_probs, market_probs, market_probs_raw):
+    """Etapa 5 — combinación modelo/mercado previa al ancla y desvío del modelo por mercado."""
+
+    # =========================
+    # CALIBRATION
+    # =========================
+
+    probabilities = {}
+    _model_deviation = {}   # |p_modelo − p_mercado de referencia| (A1, r6)
+    _signed_deviation = {}  # con signo: >0 modelo encima del precio (B2, r7)
+
+    for market, model_prob in model_probs.items():
+
+        # Ronda 5 (N1/N2): los mercados anclables combinan UNA sola vez,
+        # en el bloque de anclaje — el modelo entra crudo al 35%.
+        # Ronda 6 (A2): regla estructural — anclable SIN ancla disponible
+        # (devig de par falló, patas sueltas) ⇒ NO APOSTAR. Antes caía al
+        # camino más permisivo (prob cruda del modelo 100%) y con cuota
+        # fabricada generaba bets a precios inexistentes.
+        if _anchorable(market):
+            if market in market_probs:
+                probabilities[market] = model_prob
+                _signed_deviation[market] = model_prob - market_probs[market]
+                _model_deviation[market] = abs(_signed_deviation[market])
+            continue
+
+        # Ronda 6 (A4): se pasa el edge para que la escalera
+        # blend_weight (decreciente en |desacuerdo|) se ejerza de verdad
+        # — antes se llamaba sin `edge` y el peso era plano 0.35.
+        _implied = market_probs_raw.get(market)
+        probabilities[market] = calibrate_probability(
+            model_prob,
+            _implied,
+            (model_prob - _implied) if _implied else None,
+        )
+        if _implied:
+            _signed_deviation[market] = model_prob - _implied
+            _model_deviation[market] = abs(_signed_deviation[market])
+
+    return probabilities, _model_deviation, _signed_deviation
+
+
+def _stage_quote_table(row, Q, p_ah_home, shots_prediction):
+    """Etapa 6 — cuota apostable por mercado (mejor precio real; nunca inventada)."""
+    _ah_line = Q._ah_line
+    _ah_home_odds = Q._ah_home_odds
+    _ah_away_odds = Q._ah_away_odds
+    _dnb_home_odds = Q._dnb_home_odds
+    _dnb_away_odds = Q._dnb_away_odds
+    _dc_1x_odds = Q._dc_1x_odds
+    _dc_x2_odds = Q._dc_x2_odds
+    _dc_12_odds = Q._dc_12_odds
+    _h1_home_odds = Q._h1_home_odds
+    _h1_draw_odds = Q._h1_draw_odds
+    _h1_away_odds = Q._h1_away_odds
+    _h2_home_odds = Q._h2_home_odds
+    _h2_draw_odds = Q._h2_draw_odds
+    _h2_away_odds = Q._h2_away_odds
+    _corners_over_api = Q._corners_over_api
+    _corners_under_api = Q._corners_under_api
+    _corners_line_api = Q._corners_line_api
+    _cards_over_api = Q._cards_over_api
+    _cards_under_api = Q._cards_under_api
+    _cards_line_api = Q._cards_line_api
+    _p_ah_home = p_ah_home
+
+    # =========================
+    # ODDS
+    # =========================
+
+    odds = {
+        "home_win": safe_odds(row.home_odds),
+        "draw": safe_odds(row.draw_odds),
+        "away_win": safe_odds(row.away_odds),
+        "over25": safe_odds(row.over25_odds),
+        "under25": safe_odds(row.under25_odds),
+        "btts": safe_odds(row.btts_yes_odds),
+        "btts_no": safe_odds(row.btts_no_odds),
+        "dnb_home": _dnb_home_odds,
+        "dnb_away": _dnb_away_odds,
+    }
+
+    if _p_ah_home is not None:
+        odds[f"ah_home_{_ah_line:+.2f}"] = _ah_home_odds
+        odds[f"ah_away_{_ah_line:+.2f}"] = _ah_away_odds
+
+    # Corners odds: SOLO si la API trae odds reales.
+    # Ronda 6 (A2): el fallback a CORNERS_DEFAULT_ODDS fabricaba un precio
+    # que no existía (21 bets a 1.80 inventado, Q-N) — sin pata under de
+    # la API no hay cuota y por tanto no hay apuesta.
+    if _corners_over_api and _corners_line_api is not None:
+        _cl = float(_corners_line_api)
+        odds[f"corners_over_{_cl}"]  = _corners_over_api
+        if _corners_under_api:
+            odds[f"corners_under_{_cl}"] = _corners_under_api
+
+    # Cards odds: SOLO si la API trae odds reales. Mismo motivo.
+    # Además: cards requiere datos históricos en la liga — get_team_cards
+    # ya retorna None si hay < 5 partidos con data, por lo que
+    # cards_prediction ya no se genera en esos casos.
+    if _cards_over_api and _cards_line_api is not None:
+        _cdl = float(_cards_line_api)
+        odds[f"cards_over_{_cdl}"]  = _cards_over_api
+        if _cards_under_api:
+            odds[f"cards_under_{_cdl}"] = _cards_under_api
+
+    # Over 1.5 / 3.5 odds de referencia fijas
+    odds["over_1.5"]  = OVER15_ODDS
+    odds["under_1.5"] = UNDER15_ODDS
+    odds["over_3.5"]  = OVER35_ODDS
+    odds["under_3.5"] = UNDER35_ODDS
+
+    # Total shots odds fijas
+    if shots_prediction:
+        odds["shots_over_5.5"]  = SHOTS_DEFAULT_ODDS
+        odds["shots_under_5.5"] = SHOTS_DEFAULT_ODDS
+
+    # Double Chance: preferir API, fallback a derivadas de 1x2
+    if _dc_1x_odds:
+        odds["dc_1x"] = _dc_1x_odds
+    if _dc_x2_odds:
+        odds["dc_x2"] = _dc_x2_odds
+    if _dc_12_odds:
+        odds["dc_12"] = _dc_12_odds
+    if not (_dc_1x_odds and _dc_x2_odds and _dc_12_odds):
+        _h = safe_odds(row.home_odds)
+        _d = safe_odds(row.draw_odds)
+        _a = safe_odds(row.away_odds)
+        if _h and _d and _a:
+            if not _dc_1x_odds:
+                odds["dc_1x"] = round(1.0 / (1.0/_h + 1.0/_d), 3)
+            if not _dc_x2_odds:
+                odds["dc_x2"] = round(1.0 / (1.0/_d + 1.0/_a), 3)
+            if not _dc_12_odds:
+                odds["dc_12"] = round(1.0 / (1.0/_h + 1.0/_a), 3)
+
+    # Half-time odds (de API)
+    if _h1_home_odds:
+        odds["h1_home"] = _h1_home_odds
+    if _h1_draw_odds:
+        odds["h1_draw"] = _h1_draw_odds
+    if _h1_away_odds:
+        odds["h1_away"] = _h1_away_odds
+    if _h2_home_odds:
+        odds["h2_home"] = _h2_home_odds
+    if _h2_draw_odds:
+        odds["h2_draw"] = _h2_draw_odds
+    if _h2_away_odds:
+        odds["h2_away"] = _h2_away_odds
+
+    return odds
+
+
+def _stage_final_probabilities(row, T, L, probabilities, market_probs, odds, ctx):
+    """Etapa 7 — probabilidad final: ancla con peso aprendido, calibración, sesgos (FLB, tabla miente, empates), tope D12, gate 1T/2T y sanidad."""
+    home = T.home
+    away = T.away
+    date = T.date
+    lambda_home = L.lambda_home
+    lambda_away = L.lambda_away
+    cal_active = ctx.cal_active
+    anchor_state = ctx.anchor_state
+
+    # =========================
+    # CALIBRACIÓN DE PROBABILIDADES
+    # =========================
+    # Mejora 3: Corrección global de sobrecalibración.
+    # Liga del partido — usado para calibración específica (Mundial/Euro/etc.)
+    _row_league = _row_league_of(row)
+    _is_paper_match = _row_league in PAPER_ONLY_LEAGUES
+
+    # =========================
+    # ANCLAJE AL MERCADO (arquitectura 14-sep-26)
+    # =========================
+    # Cambio de filosofía: la probabilidad FINAL se ancla a la cuota sin
+    # margen (el mejor predictor que existe) y el modelo estadístico
+    # aporta solo una fracción de la desviación. Antes: modelo absoluto
+    # comparado contra el mercado → sobreconfianza crónica (brecha +21%
+    # en las primeras 45 bets del modelo recalibrado). Ahora heredamos la
+    # precisión del mercado y solo añadimos la señal que el mercado no ve.
+    # Solo mercados con devig confiable (ronda 5: 1x2 Shin, O/U y BTTS
+    # por pares con guardia, AH/DNB/córners/tarjetas por pares, tríos HT
+    # completos). DC y patas sueltas siguen blend modelo-crudo.
+    #
+    # Peso del modelo APRENDIDO por familia de mercado (anchor_learner,
+    # weekly): la fracción de la desviación del modelo que el mercado
+    # confirma al cierre, medida sobre las candidatas shadow. Sin datos
+    # suficientes queda el prior 35% (el ancla 65/35 original).
+    _anchored_markets = set()
+    _anchor_w_by_family = {}
+    for _mkt in list(probabilities.keys()):
+        if not _anchorable(_mkt) or _mkt not in market_probs:
+            continue
+        _mp = market_probs[_mkt]
+        if _mp and 0.02 < _mp < 0.98:
+            _w_model = model_weight_for(_mkt, anchor_state)
+            probabilities[_mkt] = (
+                _mp * (1 - _w_model)
+                + probabilities[_mkt] * _w_model
+            )
+            _anchored_markets.add(_mkt)
+            _anchor_w_by_family[market_family(_mkt)] = _w_model
+    if _anchored_markets:
+        _w_desc = ", ".join(f"{f} {w:.0%}" for f, w in sorted(_anchor_w_by_family.items()))
+        print(f"  ⚓ Anclado al mercado: {sorted(_anchored_markets)} "
+              f"(peso modelo: {_w_desc})")
+    # Snapshot post-anclaje: los shades de abajo corren DESPUÉS y su
+    # desviación conjunta se acota contra este valor (D12, más abajo).
+    _post_anchor_probs = dict(probabilities)
+
+    for market in list(probabilities.keys()):
+        if market in _anchored_markets:
+            # Los mercados anclados YA heredan la calibración implícita
+            # del mercado: aplicar el shrink global/por-mercato aquí sería
+            # doble corrección. Solo clamp.
+            probabilities[market] = min(0.95, max(0.05, probabilities[market]))
+            continue
+
+        # Paso 1: corrección global de sobreconfianza.
+        # Paso 1: corrección global de sobreconfianza.
+        # Para ligas paper-only (Mundial, etc.) NO aplicamos el descuento:
+        # está calibrado sobre datos de clubes europeos, no selecciones nacionales.
+        # El downside de sobre-calibración en papel es cero.
+        if not _is_paper_match:
+            probabilities[market] = probabilities[market] * GLOBAL_CALIBRATION
+
+        # Paso 2: calibración por mercado.
+        # MEJORA #5 — apply_calibration usa isotonic regression (curva
+        # no-paramétrica) cuando hay sample suficiente (n>=30); si no,
+        # cae al factor escalar suavizado bayesianamente. Para mercados
+        # sin sample, deja la prob sin tocar.
+        if cal_active:
+            probabilities[market] = apply_calibration(
+                probabilities[market], market, league=_row_league
+            )
+
+        # Clamp final
+        probabilities[market] = min(0.95, max(0.05, probabilities[market]))
+
+    # =========================
+    # =========================
+    # TILDE FAVORITO-AZAR (sesgo documentado del mercado)
+    # =========================
+    # Anomalía más robusta de los mercados de apuestas: las cuotas largas
+    # están sistemáticamente sobrevaloradas (el público ama el longshot) y
+    # las cortas infravaloradas. Corregimos la probabilidad final según su
+    # propia cuota: cuotas > 2.8 → encoger; cuotas < 2.8 → levantar a la
+    # mitad de la intensidad. Nuestros datos lo confirman: away_win y
+    # líneas de underdogs acumulan las peores pérdidas del sistema.
+    _FLB_TILT = 0.12
+    _FLB_REF = 2.8
+    _HOME_SIDES = ("home_win", "dnb_home", "dc_1x", "h1_home", "h2_home")
+
+    def _flb_side(market: str) -> str:
+        m = str(market)
+        if m in _HOME_SIDES or m.startswith("ah_home"):
+            return "home"
+        if m in ("away_win", "dnb_away", "dc_x2", "h1_away", "h2_away") or m.startswith("ah_away"):
+            return "away"
+        return "neutral"
+
+    # 14-sep-26: asimetría por localía (CBS Business School) — el sesgo
+    # se concentra en longshots VISITANTES (sobrevalorados ×1.5) y
+    # favoritos LOCALES (infravalorados ×1.5).
+    for market in list(probabilities.keys()):
+        o = odds.get(market)
+        if not o or o <= 1.01:
+            continue
+        _side = _flb_side(market)
+        if o > _FLB_REF:
+            L = min((o - _FLB_REF) / _FLB_REF, 1.0)
+            _mult = 1.5 if _side == "away" else 1.0
+            probabilities[market] *= (1 - _FLB_TILT * _mult * L)
+        else:
+            L = min((_FLB_REF - o) / _FLB_REF, 1.0)
+            _mult = 1.5 if _side == "home" else (0.75 if _side == "away" else 1.0)
+            probabilities[market] *= (1 + _FLB_TILT * _mult * L)
+        probabilities[market] = min(0.95, max(0.05, probabilities[market]))
+
+    # =========================
+    # SHADE "LA TABLA MIENTE" (Flepp 2024) + EMPATES CONTEXTUALES
+    # =========================
+    # luck = puntos reales − puntos esperados por desempeño (xPts).
+    # El mercado infla a los que sobre-rinden la tabla y castiga de más
+    # a los desafortunados → ajustamos en sentido contrario y
+    # renormalizamos el trío 1X2.
+    _luck_home = get_luck(home, cutoff=date) or {}
+    _luck_away = get_luck(away, cutoff=date) or {}
+    _shades_applied = {
+        "luck_home": _luck_home.get("luck"),
+        "luck_away": _luck_away.get("luck"),
+    }
+    _sh_h = max(-0.08, min(0.08, _shades_applied["luck_home"] * 0.02 or 0))             if _luck_home else 0.0
+    _sh_a = max(-0.08, min(0.08, _shades_applied["luck_away"] * 0.02 or 0))             if _luck_away else 0.0
+    _trio = ("home_win", "draw", "away_win")
+    if any(m in probabilities for m in _trio) and (_sh_h or _sh_a):
+        _sum0 = sum(probabilities.get(m, 0) for m in _trio)
+        probabilities["home_win"] = probabilities.get("home_win", 0) * (1 - _sh_h)
+        probabilities["away_win"] = probabilities.get("away_win", 0) * (1 - _sh_a)
+        _s = sum(probabilities.get(m, 0) for m in _trio)
+        if _s > 0:
+            for m in _trio:
+                probabilities[m] = probabilities.get(m, 0) * _sum0 / _s
+        _shades_applied["aplicado"] = round(_sh_h, 3)
+
+    # Empates contextuales: parejos + liga de pocos goles → el público
+    # infravalora el empate (sesgo recracional documentado)
+    try:
+        _ovrate = get_over25_rate(_row_league)
+    except Exception:
+        _ovrate = None
+    if (_ovrate is not None and _ovrate < 0.45
+            and abs(lambda_home - lambda_away) < 0.3
+            and "draw" in probabilities):
+        _draw_tilt = 0.06
+        _extra = probabilities["draw"] * _draw_tilt
+        probabilities["draw"] += _extra
+        _ded = _extra / 2
+        probabilities["home_win"] = max(probabilities["home_win"] - _ded, 0.02)
+        probabilities["away_win"] = max(probabilities["away_win"] - _ded, 0.02)
+        _shades_applied["draw_context"] = True
+
+    # ── D12 (ronda 4): tope conjunto de desviación sobre el ancla ──
+    # Los shades (FLB, tabla miente, empates contextuales) son señal
+    # deliberada que corre DESPUÉS del anclaje — legítimos, pero sin
+    # tope el peso efectivo del modelo supera el 35% declarado. Se acota
+    # la desviación TOTAL de cada mercado anclado a ±5pt del valor
+    # anclado; la señal que necesite más de eso no pasa el filtro de edge.
+    _ANCHOR_DEV_CAP = 0.05
+    for _m, _p0 in _post_anchor_probs.items():
+        if _m in _anchored_markets and _m in probabilities:
+            probabilities[_m] = max(_p0 - _ANCHOR_DEV_CAP,
+                                    min(_p0 + _ANCHOR_DEV_CAP, probabilities[_m]))
+
+    # ── GATE HT: mercados de primer/segundo tiempo solo en ligas cuya
+    # fuente de resultados publica el descanso (football-data). En el
+    # resto (MLS, Brasil, Argentina, Mexico...) quedarian "esperando
+    # datos" dias o para siempre (lecciones 13-17 sep).
+    _HT_COVERED = {
+        "soccer_epl", "soccer_efl_champ", "soccer_spain_la_liga",
+        "soccer_germany_bundesliga", "soccer_italy_serie_a",
+        "soccer_france_ligue_one", "soccer_netherlands_eredivisie",
+        "soccer_portugal_primeira_liga", "soccer_belgium_first_div",
+        "soccer_greece_super_league", "soccer_spl",
+        "soccer_turkey_super_league",
+    }
+    if _row_league_of(row) not in _HT_COVERED:
+        for _m in list(probabilities.keys()):
+            if _m.startswith(("h1_", "h2_")):
+                del probabilities[_m]
+
+    # SANITY CHECK (🔥 NUEVO)
+    # =========================
+
+    clean_probabilities = {}
+
+    for market, p in probabilities.items():
+
+        # ❌ probabilidades irreales
+        if p is None:
+            continue
+
+        if p < 0.03 or p > 0.90:
+            continue
+
+        # ❌ evitar favoritos extremos en odds altas
+        odd = odds.get(market)
+        if odd and odd > 4 and p > 0.6:
+            continue
+
+        clean_probabilities[market] = p
+
+    return SimpleNamespace(
+        clean_probabilities=clean_probabilities, anchored_markets=_anchored_markets,
+        anchor_w_by_family=_anchor_w_by_family, shades_applied=_shades_applied,
+        row_league=_row_league,
+    )
+
+
+def _stage_shadow_sweep(row, T, F, market_probs, market_probs_raw, signed_deviation, odds, stats):
+    """Etapa 8 — candidatas shadow (todas las que tienen precio real, antes de filtrar) para medir CLV sin apostar."""
+    records: list = []
+    home = T.home
+    away = T.away
+    date = T.date
+    clean_probabilities = F.clean_probabilities
+    _row_league = F.row_league
+    _signed_deviation = signed_deviation
+
+    # =========================
+    # SHADOW SWEEP (C1, ronda 8)
+    # =========================
+    # Barrido de TODAS las candidatas con precio real, ANTES de
+    # find_value_bets. La ronda 7 capturaba dentro del loop de bets,
+    # que ya perdió todo lo que edge_market < 0.02 (betting_engine) —
+    # el shadow medía solo una franja de ~8.6pt bajo el umbral de
+    # apuesta, no la región baja donde vive la decisión de bajar el
+    # piso (B2). R11 declarada: rango observable = desvío >= 2pt
+    # (SHADOW_MIN_DEV) con precio de referencia; banda [0-2) fuera por
+    # diseño (ruido de cuota). Los favoritos AH bloqueados TAMBIÉN
+    # pasan por aquí (la captura precede al filtro) — resuelve C3.
+    _sweep_n = 0
+    for _sm, _sp in clean_probabilities.items():
+        _sodd = odds.get(_sm)
+        if not _sodd or _sodd <= 1.01:
+            continue
+        stats['sweep_total'] += 1
+        _spref = market_probs.get(_sm, market_probs_raw.get(_sm))
+        _sdev = _signed_deviation.get(_sm)
+        if _spref is None or _sdev is None:
+            continue
+        stats['sweep_ref'] += 1
+        if abs(_sdev) < SHADOW_MIN_DEV:
+            continue
+        records.append({
+            "match":      f"{home} vs {away}",
+            "match_date": date,
+            "league":     _row_league,
+            "market":     _sm,
+            "p_final":    _sp,
+            "p_ref":      _spref,
+            "deviation":  _sdev,
+            "odds":       _sodd,
+            "edge_market": _sp - 1.0 / _sodd,
+            "reason":     "sweep",
+        })
+        _sweep_n += 1
+    stats['shadow_swept'] += _sweep_n
+
+    return records
+
+
+def _stage_market_context(row, T, confidence, stats):
+    """Etapa 9 — contexto del mercado: movimiento de línea, consenso, liquidez. None = mercado ilíquido, no apostar."""
+    home = T.home
+    away = T.away
+    confidence = T.confidence
+
+    # =========================
+    # LINE MOVEMENT
+    # =========================
+    # Detecta si hay dinero sharp entrando en algún lado.
+    # No consume créditos API — usa las opening_odds ya guardadas en DB.
+
+    match_key = row.get("match_key", "")
+    line = get_line_movement(match_key)
+
+    # =========================
+    # CONSENSO DE BOOKMAKERS
+    # =========================
+    # spread_pct alto (>15%) = mercado dividido = más incertidumbre real
+    # spread_pct bajo (<5%)  = mercado muy eficiente = bets más confiables
+    # soft line: nuestra mejor odd >> consenso (+10%) = edge potencial extra
+    # pocos bookmakers (<3)  = mercado poco líquido = más caution
+
+    spread_pct      = row.get("h2h_spread_pct")  
+    bk_count        = row.get("bookmaker_count")  
+    cons_home       = row.get("consensus_home_odds")
+    best_home_odd   = safe_odds(row.home_odds)
+
+    consensus_conf_adj = 1.0
+    soft_line_detected = False
+
+    if spread_pct is not None and spread_pct > 0:
+        if spread_pct > 20:
+            consensus_conf_adj *= 0.82     # mercado muy dividido
+        elif spread_pct > 15:
+            consensus_conf_adj *= 0.90
+        elif spread_pct > 10:
+            consensus_conf_adj *= 0.95
+        elif spread_pct < 5:
+            consensus_conf_adj *= 1.02     # mercado eficiente → ligero boost
+
+    if bk_count is not None and bk_count < 3:
+        consensus_conf_adj *= 0.88         # pocos bookmakers = mercado poco líquido
+
+    # ── FILTRO DURO: liquidez mínima ──────────────────────────────────
+    # Menos de 4 casas = mercado no tiene consenso suficiente → skip partido
+    if should_skip_low_liquidity(bk_count):
+        print(f"  Skip liquidez: {home} vs {away} ({bk_count} books < 4)")
+        stats['skipped_no_odds'] += 1
+        return None
+    # Detección de línea blanda: mejor precio >> consenso (+10%)
+    if best_home_odd and cons_home and cons_home > 0:
+        if best_home_odd > cons_home * 1.10:
+            soft_line_detected = True
+            # Soft line: potencial edge extra, pero también posible error del book
+            # Mantener el edge pero marcar para revisión (no cambia confianza)
+
+    if consensus_conf_adj != 1.0:
+        confidence = max(0.1, min(1.0, confidence * consensus_conf_adj))
+
+    if spread_pct and spread_pct > 15:
+        print(
+            f"  Spread {spread_pct:.1f}%  "
+            f"books={bk_count}  "
+            f"{'soft line!' if soft_line_detected else ''}"
+        )
+
+    return SimpleNamespace(line=line, spread_pct=spread_pct, bk_count=bk_count,
+                           soft_line_detected=soft_line_detected, confidence=confidence)
+
+
+def _stage_candidates(clean_probabilities, odds, line, confidence, home, away, stats):
+    """Etapa 10 — apuestas candidatas con value, ajustadas por la señal de línea y filtradas por calidad."""
+
+    # =========================
+    # VALUE BETS
+    # =========================
+
+    raw_bets = find_value_bets(clean_probabilities, odds)
+
+    # Aplicar señal de línea + filtro duro por apuesta
+    filtered_bets = []
+    for bet in raw_bets:
+        # ── FILTRO DURO: movimiento de línea en contra ─────────────────
+        # Si la línea cayó >8% en nuestra dirección, el edge ya fue
+        # absorbido por el mercado sharp antes de que apostemos
+        if line_moved_against(bet["market"], line):
+            mkt   = bet["market"]
+            delta = movement_for(mkt, line)
+            print(f"  Skip linea: {home} vs {away} | {mkt} | caida {delta*100:.1f}%")
+            stats['sharp_rejected'] += 1
+            continue
+
+        _, adj_conf = apply_line_movement_signal(
+            bet["market"], bet["edge"], confidence, line
+        )
+        if adj_conf != confidence:
+            # La señal de línea ajusta la PROBABILIDAD y los dos edges se
+            # recalculan de ella. Antes se escalaban por separado y la bet
+            # quedaba incoherente (edge guardado ≠ prob − 1/odds), lo que
+            # ensuciaba la calibración y cualquier análisis por edge.
+            _p_adj = min(0.95, bet["probability"] * (1 + (adj_conf - confidence) * 0.3))
+            _em, _ev = calculate_edges(_p_adj, bet["odds"])
+            if _em > bet["edge_market"]:
+                stats['sharp_confirmed'] += 1
+            elif _em < bet["edge_market"]:
+                stats['sharp_rejected'] += 1
+            bet["probability"], bet["edge_market"], bet["edge"] = _p_adj, _em, _ev
+        filtered_bets.append(bet)
+
+    raw_bets = filtered_bets
+
+    # Sin fallback `or raw_bets`: un filtro que rechaza TODAS las bets de
+    # un partido significa "no apostar", no "ignorar el filtro". Antes, si
+    # el filtro vaciaba la lista, se apostaba la lista SIN filtrar — y
+    # los mercados que el filtro no conoce (AH, DNB, 1T, córners) solo
+    # entraban por esa puerta, cuando ningún mercado principal pasaba.
+    bets = bet_quality_filter(raw_bets)
+    bets = market_intelligence_filter(bets)
+    bets = add_market_score(bets)
+
+    if not bets:
+        return []
+
+    return bets
+
+
+def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation):
+    """Etapa 11 — selección final por partido: bloqueos, umbrales de edge, techo de desvío, grupos excluyentes, stake Kelly y decision_log."""
+    selected: list = []
+    home = T.home
+    away = T.away
+    date = T.date
+    home_form = T.home_form
+    away_form = T.away_form
+    home_xg = T.home_xg
+    away_xg = T.away_xg
+    home_cong = T.home_cong
+    away_cong = T.away_cong
+    home_motiv = T.home_motiv
+    away_motiv = T.away_motiv
+    _xg_source = T.xg_source
+    lambda_home = L.lambda_home
+    lambda_away = L.lambda_away
+    h2h = L.h2h
+    weather_mult = L.weather_mult
+    _mle_w = L.mle_w
+    corners_prediction = L.corners_prediction
+    cards_prediction = L.cards_prediction
+    home_win = M.home_win
+    draw = M.draw
+    away_win = M.away_win
+    mc_agreement = M.mc_agreement
+    _anchored_markets = F.anchored_markets
+    _anchor_w_by_family = F.anchor_w_by_family
+    _shades_applied = F.shades_applied
+    bk_count = C.bk_count
+    spread_pct = C.spread_pct
+    soft_line_detected = C.soft_line_detected
+    _model_deviation = model_deviation
+    cal_factors = ctx.cal_factors
+    anchor_state = ctx.anchor_state
+    DC_RHO_SCORE = ctx.DC_RHO_SCORE
+    DC_RHO_GLOBAL = ctx.DC_RHO_GLOBAL
+    DC_CONVERGED = ctx.DC_CONVERGED
+    DC_FIT_FINGERPRINT = ctx.DC_FIT_FINGERPRINT
+    DC_FINAL_GRAD = ctx.DC_FINAL_GRAD
+    blocked_markets = ctx.blocked_markets
+    blocked_leagues = ctx.blocked_leagues
+    reactivated = ctx.reactivated
+    current_bankroll = ctx.current_bankroll
+    confidence = C.confidence
+
+
+    # =========================
+    # FILTROS DE CALIDAD (optimizados con 332 bets walk-forward)
+    # =========================
+    # ⚠️  IMPORTANTE — bug detectado 04-may-26 por model-auditor:
+    # `bet["edge"]` es `edge_ev` ((prob*odds)-1), NO el edge real.
+    # `bet["edge_market"]` (prob - implied_prob) es el verdadero edge.
+    # Antes filtrábamos `bet["edge"] < 0.10` que con odds 5.0 dejaba
+    # pasar bets con solo 5% de edge real → bucket 15-20% edge tenía
+    # -23.7% ROI (overfit). Ahora filtramos sobre edge_market real.
+    _league = _row_league_of(row)
+    _is_paper = _league in PAPER_ONLY_LEAGUES
+    if _league in blocked_leagues:
+        return selected
+    # ── MEJORA #12: filtro de partidos "raros" ─────────────────
+    # Dead rubber (ambos en zona media, fin de temporada) o asimetría
+    # extrema de motivación → resultado impredecible. Saltar.
+    try:
+        _unreliable, _why = is_unreliable_match(
+            row.get("home_team",""), row.get("away_team",""), _league
+        )
+        if _unreliable:
+            return selected
+    except Exception:
+        pass   # si la feature falla, no bloquea
+
+    # ── Penalización Lun-Mié (ROI -27% a -60%) ──────────────────
+    # Partidos entre semana (copas, recuperaciones) tienen datos
+    # menos fiables y líneas más eficientes.
+    _match_dow = None
+    try:
+        _match_dow = pd.to_datetime(date).weekday()  # 0=Lun ... 6=Dom
+    except Exception as e:
+        # Si la fecha no parsea, no aplicamos penalización midweek.
+        # Loguear permite detectar formatos raros en upcoming_matches.
+        log.warning(f"⚠️  No se pudo parsear match_date={date!r} para weekday: {e}")
+    _midweek = _match_dow in MIDWEEK_DAYS if _match_dow is not None else False
+
+    match_bets_count = 0
+    groups_used = set()
+
+    for bet in bets:
+        if match_bets_count >= MAX_BETS_PER_MATCH:
+            break
+
+        mkt = bet["market"]
+
+        # ── Mercados desactivados ─────────────────────────────────
+        if mkt in _DISABLED_MARKETS:
+            continue
+
+        # ── Mercados bloqueados por ROI negativo en clubes ────────
+        # Para paper-only (Mundial): estos bloqueos se basan en datos de
+        # clubes europeos y no aplican a selecciones nacionales en sede neutral.
+        if not _is_paper:
+            # away_win: bloqueo fijo desde abril-26 (peor mercado del
+            # histórico). La re-habilitación del 17-sep nunca aplicó
+            # porque esta línea seguía aquí; desde el 22-sep vuelve solo
+            # con evidencia shadow (clv_gate.run_shadow_reactivation).
+            if mkt == "away_win" and "away_win" not in reactivated:
+                continue
+            if mkt in blocked_markets:
+                continue
+            if mkt.startswith("corners_over_") or mkt.startswith("cards_over_"):
+                continue
+        else:
+            # En paper: solo bloquear mercados sin odds reales
+            if mkt in _DISABLED_MARKETS:
+                continue
+        # AH con línea 0 (pk): bloqueado siempre, paper o no. Se compara
+        # el número (no el texto) para no dejar pasar "-0.00".
+        if mkt.startswith("ah_"):
+            try:
+                if abs(float(mkt.rsplit("_", 1)[-1])) < 1e-9:
+                    continue
+            except ValueError:
+                continue
+
+        # ── B1(b) ronda 7: AH con el local favorito, bloqueados ──
+        # Los dos grupos peor calibrados del histórico (brecha +33-38pt
+        # en la era vieja) quedaron expuestos por la re-derivación de la
+        # ronda 6. El gate de CLV NO puede protegerlos (R10: con su tasa
+        # real jamás alcanza n para dispararse) y un piso estático más
+        # alto los mataría de nuevo por aritmética (desvío ≥40pt > techo
+        # 0.30). Son las dos patas de una línea con el local dando goles:
+        # el local favorito (ah_home_fav) y el visitante recibiendo
+        # (ah_away_dog). Hasta el 22-sep _ah_group rotulaba esta segunda
+        # como "ah_away_fav" (no invertía la línea del visitante); el
+        # conjunto bloqueado es el mismo de siempre, ahora bien nombrado.
+        # Reactivación: CLV shadow >= 0 con n >= 30 (run_shadow_reactivation).
+        _grp = _ah_group(mkt)
+        if (not _is_paper and _grp in ("ah_home_fav", "ah_away_dog")
+                and _grp not in reactivated):
+            continue
+
+        # ── Mejora 4: Sweet spots de odds por mercado ────────────
+        # Rangos donde el modelo ha demostrado edge real:
+        #   home_win @1.5-2.0 → 81% WR, +42% ROI
+        #   over25   @2.0-2.5 → 53% WR, +16% ROI
+        #   draw     @2.5-4.0 → 100% WR (muestra chica, mantener amplio)
+        _odds = bet["odds"]
+        if mkt == "home_win" and not (1.3 <= _odds <= 3.80):
+            continue
+        if mkt == "over25" and not (1.50 <= _odds <= 3.00):
+            continue
+        if mkt == "draw" and not (2.5 <= _odds <= 5.0):
+            continue
+
+        # ── Edge mínimo dinámico (Mejora #3 — por mercado) ──────
+        # Usar `edge_market` (prob - implied) — el verdadero edge.
+        # `edge` (= edge_ev) infla con odds altas y rompe filtros.
+        _edge_real = bet.get("edge_market", bet["edge"])
+
+        # 1) Threshold base por mercado (Mejora #3)
+        # FIX 11-may-26: para mercados AH parametrizados (`ah_home_-0.5`,
+        # `ah_away_-1.0`, etc.), el lookup directo en MIN_EDGE_BY_MARKET
+        # FALLABA (el dict tiene `ah_home_fav` no `ah_home_-0.5`) y caía
+        # al default 0.05. Esto dejó pasar 41 ah_fav bets en 90d con
+        # edge=5-12% que en realidad tenían win rate 27%. Ahora hacemos
+        # fallback al grupo AH (ah_home_fav/pk/dog) antes del default.
+        _min_edge = MIN_EDGE_BY_MARKET.get(mkt)
+        if _min_edge is None:
+            grp = _ah_group(mkt)
+            if grp is not None:
+                _min_edge = MIN_EDGE_BY_MARKET.get(grp, MIN_EDGE)
+            else:
+                _min_edge = MIN_EDGE
+
+        # 2) Bump por liga problemática (Italia, MLS, Ligue 1)
+        if _league in TOUGH_LEAGUES:
+            _min_edge = max(_min_edge, 0.07)
+
+        # 2b) Bump por liquidez de bookmakers.
+        # Con pocas casas el consenso está mal estimado y el vig es más
+        # alto — el mismo "edge" es más ruido. <6 books → +2pt, <8 → +1pt.
+        if bk_count is not None and not _is_paper:
+            if bk_count < 6:
+                _min_edge = max(_min_edge, _min_edge + 0.02)
+            elif bk_count < 8:
+                _min_edge = max(_min_edge, _min_edge + 0.01)
+
+        # 3) Bump midweek — no aplica a paper (WC juega cualquier día)
+        if _midweek and not _is_paper:
+            _min_edge *= 1.4
+
+        if _edge_real < _min_edge:
+            continue
+
+        # 4) Techo de desvío del modelo (A1/R9, ronda 6). El piso de edge
+        # obliga al modelo a desviarse; este techo evita que se desvíe
+        # MÁS de la región donde la arquitectura anclada está medida
+        # (ver derivación en MAX_MODEL_DEVIATION). Sin desvío medido
+        # (mercado sin precio de referencia) no hay apuesta.
+        _dev = _model_deviation.get(mkt)
+        if _dev is None:
+            continue
+        if _dev > MAX_MODEL_DEVIATION:
+            continue
+
+        # MAX_ODDS: en paper usamos 6.0 para capturar underdogs del Mundial
+        # (ej. France @5.35 sería bloqueada con el límite de clubes de 3.80)
+        _max_odds = 6.0 if _is_paper else MAX_ODDS
+        if bet["odds"] > _max_odds:
+            continue
+
+        # ── Filtro de contradicción ───────────────────────────────
+        # Si ya apostamos en un grupo, no apostar en el mismo grupo
+        group = _exclusive_group(mkt)
+        if group and group in groups_used:
+            continue
+
+        # MEJORA #14: pasar market+league para que kelly_stake module la
+        # fracción según el CLV histórico (ver _adjusted_kelly_fraction).
+        stake = kelly_stake(
+            bet["probability"], bet["odds"],
+            bankroll=current_bankroll,
+            market=mkt,
+            league=_league,
+        )
+
+        # ── STAKES POR CONFIANZA (Constantinou 2013) ────────────────
+        # El Kalman expone la incertidumbre del rating: menos partidos
+        # observados → menos confianza → stake reducido (0.61-0.73x).
+        _unc = ((home_form.get("uncertainty") or 0.27)
+                + (away_form.get("uncertainty") or 0.27)) / 2
+        _conf = max(0.0, min(1.0, 1.0 - _unc / 0.5))
+        stake = round(stake * (0.55 + 0.45 * _conf), 2)
+
+        # ── DECISION LOG ─────────────────────────────────────────────
+        # Snapshot del contexto completo en el momento de la decisión.
+        # Permite autopsia: cuando una bet pierde, saber QUÉ señales
+        # estaban activas y con qué versión de calibración/modelo se
+        # generó. Congela las odds vistas (para medir slippage después).
+        try:
+            import json as _json
+            from datetime import datetime as _dt, timezone as _tz
+            _decision_log = {
+                "model": {
+                    "lambda_home": round(float(lambda_home), 3),
+                    "lambda_away": round(float(lambda_away), 3),
+                    "p_home": round(float(home_win), 4),
+                    "p_draw": round(float(draw), 4),
+                    "p_away": round(float(away_win), 4),
+                    "mc_agreement": float(mc_agreement),
+                    "confidence": round(float(confidence), 3),
+                    "mle_weight": _mle_w,
+                    "mle_converged": DC_CONVERGED,
+                    "dc_rho_global": DC_RHO_GLOBAL,
+                    "dc_rho_score": DC_RHO_SCORE,
+                    "btts_shrink": BTTS_SHRINK,
+                    "league_factors_version": LEAGUE_FACTORS_VERSION,
+                    "fit_fingerprint": DC_FIT_FINGERPRINT,
+                    "mle_final_grad": DC_FINAL_GRAD,
+                    "kalman_confidence": round(_conf, 3),
+                    "shades": _shades_applied,
+                    "anchored": sorted(_anchored_markets),
+                    "anchor_model_weight": _anchor_w_by_family,
+                    "xg_source": _xg_source,
+                },
+                "signals": {
+                    "h2h_used": bool(h2h),
+                    "xg_used": bool(home_xg and away_xg),
+                    "motivation": [home_motiv, away_motiv],
+                    "rest_days": [home_cong.get("days_rest"), away_cong.get("days_rest")],
+                    "fatigued": bool(home_cong.get("is_fatigued") or away_cong.get("is_fatigued")),
+                    "weather_mult": round(float(weather_mult), 3),
+                    "corners_lambda": (corners_prediction or {}).get("lambda_total"),
+                    "cards_lambda": (cards_prediction or {}).get("lambda_total"),
+                    "form_matches": [home_form.get("matches"), away_form.get("matches")],
+                },
+                "market_ctx": {
+                    "bookmakers": bk_count,
+                    "spread_pct": spread_pct,
+                    "soft_line": bool(soft_line_detected),
+                },
+                "meta": {
+                    "generated_at": _dt.now(_tz.utc).isoformat(),
+                    "calibration_updated_at": (cal_factors or {}).get("updated_at"),
+                    "anchor_updated_at": anchor_state.get("updated_at"),
+                    "model_version": MODEL_VERSION,
+                    "sha": os.environ.get("GITHUB_SHA", "local"),
+                },
+            }
+            _decision_log = _json.dumps(_decision_log, ensure_ascii=False, default=str)
+        except Exception:
+            _decision_log = None
+
+        selected.append({
+            "match":       f"{home} vs {away}",
+            "match_date":  date,
+            "league":      _row_league_of(row),
+            "market":      bet["market"],
+            "probability": bet["probability"],
+            "odds":        bet["odds"],
+            # Guardamos `edge_market` (verdadero edge vs línea) en lugar
+            # de `edge_ev`. A partir de 04-may-26 bets_history.edge mide
+            # `prob - implied`, no `(prob*odds)-1` (que era inflado).
+            "edge":        bet.get("edge_market", bet["edge"]),
+            "stake":       stake,
+            "decision_log": _decision_log
+        })
+
+        match_bets_count += 1
+        if group:
+            groups_used.add(group)
+
+    return selected
+
+
+def _resolve_dc_rho():
+    """
+    rho de Dixon-Coles para la matriz de marcadores, con histéresis, y la
+    huella del último fit. Devuelve (DC_RHO_GLOBAL, DC_CONVERGED,
+    DC_FIT_FINGERPRINT, DC_FINAL_GRAD); DC_RHO_GLOBAL=None → Poisson cruda.
+    """
     # MEJORA #3 (06-may-26): cargar rho de DC para corregir matriz score.
     # rho es el parámetro tau de Dixon-Coles. SOLO se aplica si el fit
     # detectó señal (|rho| > 0.02). Si el fit dejó rho=0 (corner solution
@@ -624,1660 +2299,18 @@ def run_prediction_pipeline():
                 print(f"🔧 DC rho={_rho_fit:+.3f} (histéresis: tau sigue apagada, prev={_prev_rho:+.3f})")
     except Exception as _e:
         DC_RHO_GLOBAL = None
-        print(f"⚠️  DC rho no disponible ({_e}) → Poisson cruda")
-
-    # I1 (ronda 14): UN solo rho para la matriz de marcadores — 1x2, HT, AH
-    # y DNB valoran con la misma matriz. Antes: 1x2 con rho=-0.13 de la
-    # literatura y AH Poisson pura → el mismo suceso (AH -0.5 local ==
-    # victoria local) tenía dos precios (1.6pp) y sesgaba la selección.
-    DC_RHO_SCORE = DC_RHO_GLOBAL if DC_RHO_GLOBAL is not None else RHO_DC_LITERATURE
-
-    # ── Estado aprendido (weekly → DB) ─────────────────────────────────────
-    learned = load_learned_state()
-    blocked_markets = _BLOCKED_MARKETS | set(learned["blocked_markets"])
-    blocked_leagues = BLOCKED_LEAGUES | set(learned["blocked_leagues"])
-    reactivated     = set(learned["reactivated"])
-    anchor_state    = learned["anchor"] or {}
-    if learned["blocked_markets"]:
-        print(f"🚦 Mercados bloqueados por CLV gate: {sorted(learned['blocked_markets'])}")
-    if learned["blocked_leagues"]:
-        print(f"🚦 Ligas bloqueadas por CLV gate: {sorted(learned['blocked_leagues'])}")
-    if reactivated:
-        print(f"🔁 Reactivados por evidencia shadow: {sorted(reactivated)}")
-    _fams = (anchor_state.get("families") or {})
-    if _fams:
-        print("⚓ Peso del modelo aprendido: " + ", ".join(
-            f"{f}={n.get('weight', 0):.0%}" for f, n in _fams.items()))
-    else:
-        print("⚓ Peso del modelo: prior 35% (aún sin estado aprendido)")
-
-    elo = compute_elo()
-
-    # DISTINCT ON dedup: cuando un partido tiene 2 rows en upcoming_matches
-    # (típicamente un row stale con match_date vieja + uno nuevo con la fecha
-    # corregida), nos quedamos con el más reciente por updated_at. Esto evita
-    # generar predicciones sobre datos desactualizados — bug detectado el
-    # 8-may-2026 con Talleres/Belgrano y otros 10 partidos AR/PT/EPL.
-    df = pd.read_sql("""
-        SELECT * FROM (
-            SELECT DISTINCT ON (home_team_norm, away_team_norm, sport_key) *
-            FROM upcoming_matches
-            WHERE match_date::timestamp BETWEEN NOW() + INTERVAL '1 hour'
-                         AND NOW() + INTERVAL '3 days'
-            ORDER BY home_team_norm, away_team_norm, sport_key,
-                     updated_at DESC NULLS LAST
-        ) t
-        ORDER BY match_date
-    """, engine)
-
-    total_matches = len(df)
-    print(f"📊 Matches encontrados: {total_matches}")
-
-    if df.empty:
-        return
-
-    all_bets = []
-    # B2 (ronda 7): candidatas rechazadas con precio real — se registran en
-    # shadow_bets para medir CLV por banda de desvío SIN apostar. Responde
-    # si la ventana apostable [MIN_EDGE→desvío, MAX_MODEL_DEVIATION] está en
-    # el lado correcto (ver docs/AUDITORIA_RONDA7.md §3).
-    shadow_records: list = []
-    shadow_swept = 0
-    # D3 (ronda 9): ¿el sweep representa al slate o un rincón sesgado?
-    sweep_total = sweep_ref = 0
-
-    skipped_no_odds  = 0
-    fallback_used    = 0
-    xg_used          = 0
-    sharp_confirmed  = 0
-    sharp_rejected   = 0
-    h2h_used         = 0
-    corners_used     = 0
-    shots_used       = 0
-    fatigued_teams   = 0
-    weather_adjusted = 0
-    mc_diverged      = 0
-
-    # =========================
-    # LOOP MATCHES
-    # =========================
-
-    # Aislamiento por partido: una fila con datos corruptos ya no tumba el
-    # slate completo (pasó el 10-sep-26 con int(NaN) en corners_line). Cada
-    # partido se evalúa en su propio try; el fallo queda en el log con su
-    # traceback y el resto del slate sigue.
-    def _evaluate_match(row):
-        nonlocal skipped_no_odds, fallback_used, xg_used, h2h_used
-        nonlocal corners_used, shots_used, fatigued_teams, weather_adjusted
-        nonlocal mc_diverged, sharp_confirmed, sharp_rejected
-        nonlocal sweep_total, sweep_ref, shadow_swept
-
-
-        home = normalize_team(row.home_team)
-        away = normalize_team(row.away_team)
-        date = row.match_date
-
-        # =========================
-        # ODDS CHECK
-        # =========================
-
-        odds_available = any([
-            safe_odds(row.get("home_odds")),
-            safe_odds(row.get("over25_odds")),
-            safe_odds(row.get("btts_yes_odds"))
-        ])
-
-        if not odds_available:
-            skipped_no_odds += 1
-            return
-
-        # =========================
-        # TEAM FORM (SAFE + VENUE SPLIT)
-        # =========================
-        # Usamos forma LOCAL del equipo de casa y forma VISITANTE del equipo
-        # visitante. Si hay pocos partidos de venue, get_team_form() hace
-        # fallback automático a forma combinada.
-
-        home_form = get_safe_form(home, venue="home")
-        away_form = get_safe_form(away, venue="away")
-
-        # 🔥 FALLBACK DETECTION
-        home_fallback = home_form.get("is_fallback", False)
-        away_fallback = away_form.get("is_fallback", False)
-
-        # CAMBIO B: Skip partido si cualquier equipo es fallback (sin historial real)
-        if home_fallback or away_fallback:
-            fallback_used += 1
-            print(f"⚠️  Skip fallback: {home} vs {away} — datos insuficientes")
-            skipped_no_odds += 1
-            return
-
-        # 🔥 CONFIDENCE
-        min_matches = min(home_form["matches"], away_form["matches"])
-        confidence  = min(1.0, min_matches / 10)
-
-        # =========================
-        # TEAM STRENGTH
-        # =========================
-
-        # Factores calibrados por liga (calculados de 58k+ partidos reales)
-        HOME_ADVANTAGE, TEMPO = get_lambda_multipliers(
-            _row_league_of(row)
-        )
-        XG_WEIGHT  = 0.40   # 40% xG proxy, 60% goals-based form
-        H2H_WEIGHT = 0.15   # 15% H2H histórico sobre lambdas finales
-
-        home_attack  = home_form.get("attack_rating", 1.0)
-        home_defense = home_form.get("defense_rating", 1.0)
-        away_attack  = away_form.get("attack_rating", 1.0)
-        away_defense = away_form.get("defense_rating", 1.0)
-
-        # =========================
-        # xG PROXY BLEND
-        # =========================
-        # Reemplaza hasta 40% del ataque/defensa basado en goals
-        # con estimaciones xG más estables (menos varianza)
-
-        # xG REAL (Understat, semanal) tiene prioridad sobre el proxy de
-        # tiros — mismo contrato (xg_for/xg_against por partido).
-        home_xg = get_real_xg(home) or get_team_xg(home)
-        away_xg = get_real_xg(away) or get_team_xg(away)
-        _xg_source = "understat" if (home_xg and home_xg.get("source") == "understat"
-                                     and away_xg and away_xg.get("source") == "understat") else "proxy"
-
-        if home_xg:
-            home_attack  = home_attack  * (1 - XG_WEIGHT) + home_xg["xg_for"]     * XG_WEIGHT
-            home_defense = home_defense * (1 - XG_WEIGHT) + home_xg["xg_against"] * XG_WEIGHT
-            xg_used += 1
-
-        if away_xg:
-            away_attack  = away_attack  * (1 - XG_WEIGHT) + away_xg["xg_for"]     * XG_WEIGHT
-            away_defense = away_defense * (1 - XG_WEIGHT) + away_xg["xg_against"] * XG_WEIGHT
-
-        # =========================
-        # PENALIZACIÓN POR POCO DATA
-        # =========================
-
-        # =========================
-        # FILTRO: AMBOS EQUIPOS FALLBACK
-        # =========================
-        # Si ambos equipos usan valores de fallback (sin historial en DB),
-        # el modelo no tiene información real → los edges son falsos.
-        # Caso típico: selecciones nacionales (solo tenemos datos de clubes).
-        # Con ambos fallback → skip del partido para evitar apuestas incorrectas.
-
-        # Nota: el skip por fallback ya ocurrió arriba — este bloque ya no aplica
-
-        if min_matches < 3:
-            home_attack *= 0.9
-            away_attack *= 0.9
-
-        # =========================
-        # FIXTURE CONGESTION
-        # =========================
-        # Detecta fatiga por acumulación de partidos recientes.
-        # Un equipo con 3 días de descanso rinde ~8% menos en ataque.
-        # Usa fechas históricas de la DB → 0 créditos API.
-
-        home_cong = get_fixture_congestion(home, date)
-        away_cong = get_fixture_congestion(away, date)
-
-        home_attack  *= home_cong["attack_multiplier"]
-        home_defense *= home_cong["defense_multiplier"]
-        away_attack  *= away_cong["attack_multiplier"]
-        away_defense *= away_cong["defense_multiplier"]
-
-        if home_cong["is_fatigued"] or away_cong["is_fatigued"]:
-            fatigued_teams += 1
-            fatigued_info = []
-            if home_cong["is_fatigued"]:
-                fatigued_info.append(f"{home}({home_cong['days_rest']}d)")
-            if away_cong["is_fatigued"]:
-                fatigued_info.append(f"{away}({away_cong['days_rest']}d)")
-            print(f"  Fatiga: {' vs '.join(fatigued_info)}")
-
-        # =========================
-        # FACTOR DE MOTIVACIÓN
-        # =========================
-        # Ajusta ataque/defensa según situación en la tabla:
-        # campeon asegurado / descendido → menos motivado
-        # peleando descenso / título / Europa → más motivado
-
-        league_key = _row_league_of(row)
-        home_motiv = get_motivation_factor(home, league_key)
-        away_motiv = get_motivation_factor(away, league_key)
-
-        # I2 (ronda 14): defense_rating va en GOLES CONCEDIDOS — un equipo
-        # motivado marca más Y CONCEDE MENOS. El multiplicador aplicado en la
-        # misma dirección a attack y defense enrutaba ~80% del efecto a
-        # goles totales y solo ~20% a la probabilidad de victoria.
-        if home_motiv != 0.0:
-            home_attack  *= (1 + home_motiv)
-            home_defense /= (1 + home_motiv)
-            label = "MOTIVADO" if home_motiv > 0 else "sin motivacion"
-            print(f"  Motivacion {home}: {home_motiv:+.0%} ({label})")
-
-        if away_motiv != 0.0:
-            away_attack  *= (1 + away_motiv)
-            away_defense /= (1 + away_motiv)
-            label = "MOTIVADO" if away_motiv > 0 else "sin motivacion"
-            print(f"  Motivacion {away}: {away_motiv:+.0%} ({label})")
-
-        # =========================
-        # LAMBDAS BASE
-        # =========================
-        # (ELO blend eliminado 09-sep-26: promediaba una escala de goles
-        # (~0.75-2.5) con un ratio adimensional elo/1500 (~0.9-1.2) — no
-        # aportaba señal real, solo comprimía los ataques hacia la media.
-        # El ELO sí sigue usándose como señal independiente del ensemble.)
-
-        # ── FIX REPARTO (ronda 4, D4) ──
-        # La corrección dimensional (baada73) normalizó attack×defense pero
-        # dejó HOME_ADVANTAGE como multiplicador de solo λ_home. Producción
-        # post-fix: λ_total 4.05 vs 2.7-3.0 real (Q-B ronda 4) — el cap 2.5
-        # absorbía el exceso. La parametrización correcta reparte 2.5·tempo
-        # entre local y visitante según home_advantage (ver compute_lambdas).
-        lambda_home, lambda_away = compute_lambdas(
-            home_attack, home_defense, away_attack, away_defense,
-            HOME_ADVANTAGE, TEMPO,
-        )
-
-        # =========================
-        # H2H ADJUSTMENT
-        # =========================
-        # Blend 15% de los goles históricos directos sobre los lambdas finales
-        # Captura dinámicas específicas del enfrentamiento (derbies, estilos)
-
-        h2h = get_h2h_stats(home, away)
-
-        if h2h:
-            lambda_home = lambda_home * (1 - H2H_WEIGHT) + h2h["h2h_home_goals"] * H2H_WEIGHT
-            lambda_away = lambda_away * (1 - H2H_WEIGHT) + h2h["h2h_away_goals"] * H2H_WEIGHT
-            h2h_used += 1
-
-        # =========================
-        # CORNERS MODEL
-        # =========================
-        # Predice tiros de esquina usando Poisson simple.
-        # Ajusta la confianza en 1x2 si hay dominancia clara de córners.
-        # No consume créditos API — usa datos históricos de la DB.
-
-        corners_prediction = None
-        corners_confidence_delta = 0.0
-
-        home_corners_stats = get_team_corners(home)
-        away_corners_stats = get_team_corners(away)
-
-        if home_corners_stats and away_corners_stats:
-            corners_prediction = predict_corners(
-                home_attack    = home_corners_stats["attack_rating"],
-                home_defense   = home_corners_stats["defense_rating"],
-                away_attack    = away_corners_stats["attack_rating"],
-                away_defense   = away_corners_stats["defense_rating"],
-            )
-            corners_confidence_delta = corners_to_confidence_signal(corners_prediction)
-            corners_used += 1
-
-        # =========================
-        # SHOTS MODEL
-        # =========================
-        # Predice tiros al arco. Alta presión de tiros → partido más abierto.
-        # Se usa para calibrar la confianza en over/under goles.
-
-        shots_prediction = None
-        shots_confidence_delta = 0.0
-
-        home_shots_stats = get_team_shots(home)
-        away_shots_stats = get_team_shots(away)
-
-        if home_shots_stats and away_shots_stats:
-            shots_prediction = predict_shots(
-                home_attack    = home_shots_stats["attack_rating"],
-                home_defense   = home_shots_stats["defense_rating"],
-                away_attack    = away_shots_stats["attack_rating"],
-                away_defense   = away_shots_stats["defense_rating"],
-                expected_goals_total = lambda_home + lambda_away,
-            )
-            shots_confidence_delta = shots_to_confidence_signal(shots_prediction)
-            shots_used += 1
-
-        # =========================
-        # CARDS MODEL
-        # =========================
-        # Predice tarjetas totales usando Poisson.
-        # Requiere home_yellow/away_yellow en la tabla matches.
-        # Sin datos suficientes → silenciosamente se omite.
-
-        cards_prediction = None
-
-        home_cards_stats = get_team_cards(home)
-        away_cards_stats = get_team_cards(away)
-
-        if home_cards_stats and away_cards_stats:
-            cards_prediction = predict_cards(
-                home_attack    = home_cards_stats["attack_rating"],
-                home_defense   = home_cards_stats["defense_rating"],
-                away_attack    = away_cards_stats["attack_rating"],
-                away_defense   = away_cards_stats["defense_rating"],
-            )
-
-        # ─── Info por partido (corners + shots) ──────────────────────────
-        if corners_prediction or shots_prediction:
-            parts = []
-            if corners_prediction:
-                c = corners_prediction
-                parts.append(
-                    f"Corners exp: {c['lambda_home']:.1f}H / {c['lambda_away']:.1f}A"
-                    f"  (over9.5={c['over95']:.0%})"
-                )
-            if shots_prediction:
-                s = shots_prediction
-                parts.append(
-                    f"SOT exp: {s['lambda_home']:.1f}H / {s['lambda_away']:.1f}A"
-                    f"  (over5.5={s['over55']:.0%})"
-                )
-            print(f"  >> {home} vs {away}: {' | '.join(parts)}")
-
-        # =========================
-        # WEATHER IMPACT
-        # =========================
-        # Ajusta ambos lambdas según clima en el estadio local.
-        # Lluvia/viento/nieve reducen la tasa de goles.
-        # 0 créditos extra (OpenWeatherMap gratis 1,000 calls/día).
-        # Requiere WEATHER_API_KEY en .env — sin clave, no hay ajuste.
-
-        weather_mult = get_weather_multiplier(home)
-        if weather_mult < 1.0:
-            lambda_home *= weather_mult
-            lambda_away *= weather_mult
-            weather_adjusted += 1
-
-        # =========================
-        # BLEND DC-MLE (si disponible)
-        # =========================
-        # Los parámetros MLE ajustan lambdas por calidad del rival.
-        # Blend: 40% MLE + 60% forma actual → transición suave.
-        # Si algún equipo no está en los parámetros MLE → 100% forma actual.
-
-        _mle_w = 0.0   # peso DC-MLE efectivo usado (para el decision log)
-        if mle_fresh:
-            # Detectar venue neutral por liga — fundamental para Mundial,
-            # Euro, Copa América y otros torneos en sede única.
-            _league_for_neutral = _row_league_of(row)
-            _is_neutral_match   = _league_for_neutral in NEUTRAL_VENUE_LEAGUES
-            mle_result = get_dc_lambdas(home, away, is_neutral=_is_neutral_match)
-            if mle_result is not None:
-                mle_lh, mle_la = mle_result
-                # Peso adaptativo por volumen de datos del equipo: el MLE es
-                # más fiable que la forma simple cuando ambos equipos tienen
-                # historia suficiente; con poca data, mandar la forma actual.
-                _min_hist = min(
-                    int(home_form.get("matches", 0)),
-                    int(away_form.get("matches", 0)),
-                )
-                if _min_hist >= 30:
-                    _mle_w = 0.55
-                elif _min_hist >= 15:
-                    _mle_w = DC_MLE_WEIGHT
-                else:
-                    _mle_w = 0.25
-                lambda_home = lambda_home * (1 - _mle_w) + mle_lh * _mle_w
-                lambda_away = lambda_away * (1 - _mle_w) + mle_la * _mle_w
-
-        # =========================
-        # CAP GOALS
-        # =========================
-        # Guardia de cola, no calibración: con la parametrización de reparto
-        # los λ legítimos casi nunca superan 3.5 (simulado ~1%); el cap viejo
-        # de 2.5 existió para tapar el error dimensional y recortaba ~10% de
-        # favoritos reales (ronda 4, D8).
-
-        lambda_home = min(lambda_home, LAMBDA_CAP)
-        lambda_away = min(lambda_away, LAMBDA_CAP)
-
-        # =========================
-        # ASIAN HANDICAP + DNB
-        # =========================
-        # Calcula probabilidades AH usando la distribución Poisson bivariada.
-        # AH elimina el empate → mercado de 2 resultados → más fácil hallar edge.
-        # DNB: derivado de h2h odds existentes (sin API extra).
-
-        _ah_line = None
-        _ah_home_odds = None
-        _ah_away_odds = None
-        _raw_ah_line = row.get("ah_line")
-        if _raw_ah_line is not None and not pd.isna(_raw_ah_line):
-            _ah_line = float(_raw_ah_line)
-            _ah_home_odds = safe_odds(row.get("ah_home_odds"))
-            _ah_away_odds = safe_odds(row.get("ah_away_odds"))
-
-        # AH model probs (solo si tenemos línea y odds del mercado)
-        _p_ah_home = _p_ah_away = None
-        if _ah_line is not None and (_ah_home_odds or _ah_away_odds):
-            _p_ah_home, _p_ah_away = prob_ah(lambda_home, lambda_away, _ah_line, rho=DC_RHO_SCORE)
-
-        # DNB probs (siempre disponible desde Poisson)
-        _dnb = get_dnb_probs(lambda_home, lambda_away, rho=DC_RHO_SCORE)
-
-        # DNB odds: preferir las de API (draw_no_bet), fallback a derivadas de h2h
-        _dnb_home_api = safe_odds(row.get("dnb_home_odds"))
-        _dnb_away_api = safe_odds(row.get("dnb_away_odds"))
-
-        _dnb_home_odds = _dnb_away_odds = None
-        if _dnb_home_api and _dnb_away_api:
-            _dnb_home_odds = _dnb_home_api
-            _dnb_away_odds = _dnb_away_api
-        else:
-            # Fallback: derivar de h2h odds
-            _h_odds = safe_odds(row.home_odds)
-            _a_odds = safe_odds(row.away_odds)
-            if _h_odds and _a_odds:
-                _imp_h = 1.0 / _h_odds
-                _imp_a = 1.0 / _a_odds
-                _imp_sum = _imp_h + _imp_a
-                if _imp_sum > 0:
-                    _dnb_home_odds = round(_imp_sum / _imp_h, 3)
-                    _dnb_away_odds = round(_imp_sum / _imp_a, 3)
-
-        # ── Double Chance odds de API ────────────────────────────────────
-        _dc_1x_odds = safe_odds(row.get("dc_1x_odds"))
-        _dc_x2_odds = safe_odds(row.get("dc_x2_odds"))
-        _dc_12_odds = safe_odds(row.get("dc_12_odds"))
-
-        # ── Half-time odds de API ─────────────────────────────────────────
-        _h1_home_odds = safe_odds(row.get("h1_home_odds"))
-        _h1_draw_odds = safe_odds(row.get("h1_draw_odds"))
-        _h1_away_odds = safe_odds(row.get("h1_away_odds"))
-        _h2_home_odds = safe_odds(row.get("h2_home_odds"))
-        _h2_draw_odds = safe_odds(row.get("h2_draw_odds"))
-        _h2_away_odds = safe_odds(row.get("h2_away_odds"))
-
-        # ── Corners / Cards odds de API ───────────────────────────────────
-        _corners_over_api  = safe_odds(row.get("corners_over_odds") )
-        _corners_under_api = safe_odds(row.get("corners_under_odds"))
-        # NOTA: en pandas un NULL llega como NaN, no None. Normalizar a None
-        # aquí evita que int(NaN) reviente el pipeline en el cálculo de la
-        # cola de Poisson (fix del crash del morning 10-sep-26).
-        _raw_cl = row.get("corners_line")
-        _corners_line_api = None if (_raw_cl is None or (isinstance(_raw_cl, float) and pd.isna(_raw_cl))) else _raw_cl
-        _cards_over_api    = safe_odds(row.get("cards_over_odds")  )
-        _cards_under_api   = safe_odds(row.get("cards_under_odds") )
-        _raw_cl_c = row.get("cards_line")
-        _cards_line_api = None if (_raw_cl_c is None or (isinstance(_raw_cl_c, float) and pd.isna(_raw_cl_c))) else _raw_cl_c
-
-        # =========================
-        # 1X2 — DIXON-COLES
-        # =========================
-
-        dc_home, dc_draw, dc_away = match_outcomes(lambda_home, lambda_away, rho=DC_RHO_SCORE)
-
-        # Normalizar Dixon-Coles
-        dc_total = dc_home + dc_draw + dc_away
-        dc_home /= dc_total
-        dc_draw /= dc_total
-        dc_away /= dc_total
-
-        # =========================
-        # ENSEMBLE (3 señales)
-        # =========================
-        # Combina Dixon-Coles + ELO puro + Form puro con pesos adaptativos.
-        # agreement alto → más confianza en el modelo.
-
-        ensemble = ensemble_predict(
-            dc_probs        = (dc_home, dc_draw, dc_away),
-            elo_home        = elo.get(home, 1500),
-            elo_away        = elo.get(away, 1500),
-            home_attack     = home_attack,
-            home_defense    = home_defense,
-            away_attack     = away_attack,
-            away_defense    = away_defense,
-            home_advantage  = HOME_ADVANTAGE,
-            tempo           = TEMPO,
-            rho             = DC_RHO_SCORE,
-        )
-
-        home_win = clamp_prob(ensemble["home_win"])
-        draw     = clamp_prob(ensemble["draw"])
-        away_win = clamp_prob(ensemble["away_win"])
-
-        # =========================
-        # MONTE CARLO (4ª señal)
-        # =========================
-        # Simula 50,000 partidos con ruido en lambda (15% CV).
-        # Si MC coincide con ensemble → confianza alta.
-        # Si MC diverge → partido incierto → penalizar confianza.
-        # Blend MC: 15% MC + 85% ensemble (señal de corrección suave).
-
-        mc = simulate_match(lambda_home, lambda_away)
-
-        mc_agreement = mc_confidence_vs_analytical(
-            mc,
-            {"home_win": home_win, "draw": draw, "away_win": away_win}
-        )
-
-        # Blend suave MC → reduce extremos del ensemble
-        MC_WEIGHT = 0.15
-        home_win = clamp_prob(home_win * (1 - MC_WEIGHT) + mc["home_win"] * MC_WEIGHT)
-        draw     = clamp_prob(draw     * (1 - MC_WEIGHT) + mc["draw"]     * MC_WEIGHT)
-        away_win = clamp_prob(away_win * (1 - MC_WEIGHT) + mc["away_win"] * MC_WEIGHT)
-
-        # Ajuste de confianza según acuerdo MC ↔ ensemble
-        # mc_agreement < 0.85 → el partido es genuinamente incierto
-        if mc_agreement < 0.80:
-            confidence *= 0.88
-            mc_diverged += 1
-        elif mc_agreement > 0.95:
-            confidence = min(1.0, confidence * 1.03)   # ligero boost
-
-        # Ajustar confianza según acuerdo entre señales (ensemble)
-        confidence = min(1.0, max(0.0,
-            confidence + ensemble["confidence_boost"]
-        ))
-
-        # Ajuste adicional por dominancia de córners y tiros
-        # Ambas señales apuntan en la misma dirección → más confianza
-        corner_shot_delta = corners_confidence_delta + shots_confidence_delta
-        confidence = min(1.0, max(0.0, confidence + corner_shot_delta))
-
-        # =========================
-        # POISSON
-        # =========================
-
-        # MEJORA #3: pasar rho para usar Dixon-Coles tau-correction.
-        # Mejora calibración de BTTS (-30pp de bias en sample 90d).
-        # J3 (ronda 15): mismo rho que la matriz de marcadores (DC_RHO_SCORE).
-        # Antes: matriz → -0.13 si no había fit, BTTS → Poisson cruda —
-        # fallbacks distintos para el mismo tau (1.11pp de divergencia si el
-        # refit entregaba rho bajo). La nota r10 sobre "Poisson cruda" queda
-        # superada: r11 midió rho estable en el prior (-0.09±0.01) — el
-        # escenario de corner solution está muerto empíricamente.
-        poisson_probs = totals_and_btts(lambda_home, lambda_away,
-                                        rho=DC_RHO_SCORE)
-
-        # =========================
-        # HALF-TIME PREDICTIONS (h2h_h1 / h2h_h2)
-        # =========================
-        # Modelamos primer tiempo con λ/2 (misma forma, mitad de goles esperados)
-        # y segundo tiempo con λ * 0.55 (ligeramente más goles en el 2T que en el 1T)
-        # Solo generamos probs si la API nos dio odds para esos mercados.
-
-        # Modelamos cada tiempo con SU fracción medida de goles (44% / 56%,
-        # HT_FIRST_HALF_FRACTION) para que 1T + 2T sumen el partido completo.
-        # Antes: λ/2 + λ·0.55 = 105% de los goles del partido (D9, ronda 4).
-
-        lh_h1 = min(lambda_home * HT_FIRST_HALF_FRACTION, 2.0)
-        la_h1 = min(lambda_away * HT_FIRST_HALF_FRACTION, 2.0)
-        lh_h2 = min(lambda_home * (1 - HT_FIRST_HALF_FRACTION), 2.0)
-        la_h2 = min(lambda_away * (1 - HT_FIRST_HALF_FRACTION), 2.0)
-
-        # IMPORTANTE: inicializar model_probs ANTES de que h1/h2 le asigne keys.
-        # Si NO se inicializa aquí y un partido tiene _h1_*_odds o _h2_*_odds
-        # (viene del enrichment per-event), el `if` de abajo dispara
-        # UnboundLocalError porque `model_probs = {...}` está más adelante.
-        # Más adelante usamos .update(...) en vez de `=` para no perder estas keys.
-        model_probs: dict = {}
-
-        if _h1_home_odds or _h1_draw_odds or _h1_away_odds:
-            h1h, h1d, h1a = match_outcomes(lh_h1, la_h1, rho=DC_RHO_SCORE)
-            h1_total = h1h + h1d + h1a
-            model_probs["h1_home"] = clamp_prob(h1h / h1_total)
-            model_probs["h1_draw"] = clamp_prob(h1d / h1_total)
-            model_probs["h1_away"] = clamp_prob(h1a / h1_total)
-
-        if _h2_home_odds or _h2_draw_odds or _h2_away_odds:
-            h2h, h2d, h2a = match_outcomes(lh_h2, la_h2, rho=DC_RHO_SCORE)
-            h2_total = h2h + h2d + h2a
-            model_probs["h2_home"] = clamp_prob(h2h / h2_total)
-            model_probs["h2_draw"] = clamp_prob(h2d / h2_total)
-            model_probs["h2_away"] = clamp_prob(h2a / h2_total)
-
-        # =========================
-        # OVER/UNDER POR LIGA
-        # =========================
-        # Calibra over25 con la tasa histórica real de la liga.
-        # Eredivisie (62%) ≠ Ligue 1 (48%) ≠ Argentina (38%).
-        # Blend: 80% Poisson + 20% tasa histórica de liga.
-
-        league_key    = row.get("sport_key", "")
-        league_over25 = get_over25_rate(league_key)
-
-        poisson_probs["over25"] = (
-            poisson_probs["over25"]  * (1 - OVER25_SHRINK)
-            + league_over25          * OVER25_SHRINK
-        )
-        # J1 (ronda 15): shrink de BTTS a la tasa real de la liga —
-        # simétrico al de over25. La independencia de Poisson sesga el BTTS
-        # por liga (mide Q-BA: de −0.6pp en EPL a +6.7pp en Argentina, según
-        # tempo) y el ancla al 65% protege el dinero pero no la medición del
-        # shadow. Bandera btts_shrink en decision_log (R13).
-        league_btts = get_btts_rate(league_key)
-        poisson_probs["btts_yes"] = (
-            poisson_probs["btts_yes"] * (1 - BTTS_SHRINK)
-            + league_btts * BTTS_SHRINK
-        )
-        # 🔥 sanity caps — ANTES de derivar under25/btts_no para que sumen 1.
-        # over25 en 0.80: Poisson legítimo con λ_total≈4.0 da 0.76 (Bundesliga
-        # top vs colero); 0.75 recortaba ~13% de la masa válida (ronda 4, D8).
-        # btts se queda en 0.75: BTTS>0.75 exige ambos λ≥2.5, cola genuina.
-        poisson_probs["over25"]   = min(poisson_probs["over25"],   0.80)
-        poisson_probs["btts_yes"] = min(poisson_probs["btts_yes"], 0.75)
-        poisson_probs["btts_no"]  = 1.0 - poisson_probs["btts_yes"]
-        poisson_probs["under25"]  = 1.0 - poisson_probs["over25"]
-
-        totals_probs = totals_extended(lambda_home, lambda_away)
-
-        # .update() (no `=`) — preserva las keys h1_*/h2_* asignadas arriba.
-        # Antes del fix esto era `model_probs = {...}` que sobreescribía el dict
-        # y borraba silenciosamente cualquier predicción de half-time.
-        model_probs.update({
-            "home_win": home_win,
-            "draw": draw,
-            "away_win": away_win,
-            "over25": clamp_prob(poisson_probs["over25"]),
-            "under25": clamp_prob(poisson_probs["under25"]),
-            "btts": clamp_prob(poisson_probs["btts_yes"]),
-            "btts_no": clamp_prob(poisson_probs["btts_no"])
-        })
-
-        model_probs.update(totals_probs)
-
-        # =========================
-        # CORNERS COMO MERCADO
-        # =========================
-
-        # Gate de cobertura: si la liga no tiene >= 50% de partidos con
-        # córners/tarjetas en los últimos 30 días, NO generamos bets para
-        # ese mercado — quedarían 'unresolved' indefinidamente y ensuciarían
-        # la calibración + el bankroll en paper.
-        _league_for_gate = row.get("sport_key", "")
-
-        if corners_prediction and _has_coverage(_league_for_gate, "corners"):
-            # Usar la línea de la API si está disponible, fallback 9.5.
-            # La probabilidad debe calcularse en la línea REAL de la API:
-            # over95/under95 solo valen para 9.5; para otra línea usamos la
-            # cola de Poisson con lambda_total del modelo.
-            cl = float(_corners_line_api) if _corners_line_api is not None else 9.5
-            over_key  = f"corners_over_{cl}"
-            under_key = f"corners_under_{cl}"
-            if abs(cl - 9.5) < 1e-9:
-                p_over = corners_prediction["over95"]
-            else:
-                _k = int(cl)
-                p_over = float(1 - _poisson.cdf(_k, corners_prediction["lambda_total"]))
-            model_probs[over_key]  = clamp_prob(p_over)
-            model_probs[under_key] = clamp_prob(1.0 - p_over)
-
-        if cards_prediction and _has_coverage(_league_for_gate, "cards"):
-            cl_c = float(_cards_line_api) if _cards_line_api is not None else 4.5
-            if abs(cl_c - 4.5) < 1e-9:
-                p_over_c = cards_prediction["over45"]
-            else:
-                _kc = int(cl_c)
-                p_over_c = float(1 - _poisson.cdf(_kc, cards_prediction["lambda_total"]))
-            model_probs[f"cards_over_{cl_c}"]  = clamp_prob(p_over_c)
-            model_probs[f"cards_under_{cl_c}"] = clamp_prob(1.0 - p_over_c)
-
-        # =========================
-        # OVER 1.5 / OVER 3.5 GOLES
-        # =========================
-
-        # =========================
-        # TOTAL TIROS AL ARCO
-        # =========================
-        if shots_prediction:
-            model_probs["shots_over_5.5"]  = clamp_prob(shots_prediction["over55"])
-            model_probs["shots_under_5.5"] = clamp_prob(shots_prediction["under55"])
-
-        # =========================
-        # DOBLE OPORTUNIDAD (1X / X2 / 12)
-        # =========================
-        # Probabilidades derivadas de 1x2. Odds derivadas de cuotas 1x2 existentes.
-        model_probs["dc_1x"] = clamp_prob(home_win + draw)
-        model_probs["dc_x2"] = clamp_prob(draw + away_win)
-        model_probs["dc_12"] = clamp_prob(home_win + away_win)
-
-        # Agregar AH y DNB (clave con línea embebida para resolución automática)
-        if _p_ah_home is not None:
-            _ah_key_home = f"ah_home_{_ah_line:+.2f}"   # ej: "ah_home_-1.5"
-            _ah_key_away = f"ah_away_{_ah_line:+.2f}"   # ej: "ah_away_-1.5"
-            model_probs[_ah_key_home] = clamp_prob(_p_ah_home)
-            model_probs[_ah_key_away] = clamp_prob(_p_ah_away)
-
-        model_probs["dnb_home"] = clamp_prob(_dnb["dnb_home"])
-        model_probs["dnb_away"] = clamp_prob(_dnb["dnb_away"])
-
-        # =========================
-        # MARKET
-        # =========================
-        # market_probs: SOLO devig confiable (Shin 1x2, pares O/U-BTTS-DNB-AH-
-        # córners-tarjetas con booksum sano, tríos HT completos) → alimenta el
-        # ancla. market_probs_raw: prob implícita cruda (1/odds) de patas sueltas
-        # → solo sirve al blend simétrico, JAMÁS ancla (ronda 5, N1/N2).
-
-        market_probs = {}
-        market_probs_raw = {}
-
-        if safe_odds(row.home_odds) and safe_odds(row.away_odds):
-            mh, md, ma = market_probabilities(
-                row.home_odds,
-                row.draw_odds,
-                row.away_odds
-            )
-            # A3 (r6): si el booksum es incoherente, Shin devuelve None —
-            # sin ancla para 1x2 (la regla A2 hace el resto: no apostar).
-            if mh is not None:
-                market_probs.update({
-                    "home_win": mh,
-                    "draw": md,
-                    "away_win": ma
-                })
-
-        # Over/Under
-        _pair = _devig_two_way(safe_odds(row.over25_odds), safe_odds(row.under25_odds))
-        if _pair is not None:
-            market_probs["over25"]  = _pair
-            market_probs["under25"] = 1.0 - _pair
-        elif safe_odds(row.over25_odds):
-            market_probs_raw["over25"] = 1 / row.over25_odds
-        elif safe_odds(row.under25_odds):
-            market_probs_raw["under25"] = 1 / row.under25_odds
-
-        # BTTS
-        _pair = _devig_two_way(safe_odds(row.btts_yes_odds), safe_odds(row.btts_no_odds))
-        if _pair is not None:
-            market_probs["btts"]    = _pair
-            market_probs["btts_no"] = 1.0 - _pair
-        elif safe_odds(row.btts_yes_odds):
-            market_probs_raw["btts"] = 1 / row.btts_yes_odds
-        elif safe_odds(row.btts_no_odds):
-            market_probs_raw["btts_no"] = 1 / row.btts_no_odds
-
-        # AH: el par comparte línea; con guardia de booksum ancla, si no, crudo
-        if _p_ah_home is not None:
-            _pair = _devig_two_way(_ah_home_odds, _ah_away_odds)
-            if _pair is not None:
-                market_probs[f"ah_home_{_ah_line:+.2f}"] = _pair
-                market_probs[f"ah_away_{_ah_line:+.2f}"] = 1.0 - _pair
-            else:
-                if _ah_home_odds:
-                    market_probs_raw[f"ah_home_{_ah_line:+.2f}"] = 1.0 / _ah_home_odds
-                if _ah_away_odds:
-                    market_probs_raw[f"ah_away_{_ah_line:+.2f}"] = 1.0 / _ah_away_odds
-
-        # DNB: las cuotas derivadas de h2h ya salen sin margen (booksum 1.0,
-        # pasan la guardia solas); el par de API se devig con la misma guardia.
-        _pair = _devig_two_way(_dnb_home_odds, _dnb_away_odds)
-        if _pair is not None:
-            market_probs["dnb_home"] = _pair
-            market_probs["dnb_away"] = 1.0 - _pair
-        else:
-            if _dnb_home_odds:
-                market_probs_raw["dnb_home"] = 1.0 / _dnb_home_odds
-            if _dnb_away_odds:
-                market_probs_raw["dnb_away"] = 1.0 / _dnb_away_odds
-
-        # Double Chance: odds parciales (una pata) → nunca devig de trío → crudo
-        if _dc_1x_odds:
-            market_probs_raw["dc_1x"] = 1.0 / _dc_1x_odds
-        if _dc_x2_odds:
-            market_probs_raw["dc_x2"] = 1.0 / _dc_x2_odds
-        if _dc_12_odds:
-            market_probs_raw["dc_12"] = 1.0 / _dc_12_odds
-
-        # Half-time: ancla solo con el TRÍO completo (devig proporcional)
-        for _half, (_ho, _do, _ao) in (
-            ("h1", (_h1_home_odds, _h1_draw_odds, _h1_away_odds)),
-            ("h2", (_h2_home_odds, _h2_draw_odds, _h2_away_odds)),
-        ):
-            _tot = _devig_three_way(_ho, _do, _ao)
-            if _tot:
-                market_probs[f"{_half}_home"] = (1.0 / _ho) / _tot
-                market_probs[f"{_half}_draw"] = (1.0 / _do) / _tot
-                market_probs[f"{_half}_away"] = (1.0 / _ao) / _tot
-            else:
-                if _ho:
-                    market_probs_raw[f"{_half}_home"] = 1.0 / _ho
-                if _do:
-                    market_probs_raw[f"{_half}_draw"] = 1.0 / _do
-                if _ao:
-                    market_probs_raw[f"{_half}_away"] = 1.0 / _ao
-
-        # Corners / Cards: el par con booksum sano ancla; patas sueltas van crudas
-        _ccl = float(_corners_line_api) if _corners_line_api is not None else 9.5
-        _kcl = _cards_line_api is not None
-        _ccl_c = float(_cards_line_api) if _kcl else 4.5
-        _pair = _devig_two_way(_corners_over_api, _corners_under_api)
-        if _pair is not None:
-            market_probs[f"corners_over_{_ccl}"]  = _pair
-            market_probs[f"corners_under_{_ccl}"] = 1.0 - _pair
-        if _corners_over_api:
-            market_probs_raw[f"corners_over_{_ccl}"] = 1.0 / _corners_over_api
-        if _corners_under_api:
-            market_probs_raw[f"corners_under_{_ccl}"] = 1.0 / _corners_under_api
-
-        _pair = _devig_two_way(_cards_over_api, _cards_under_api)
-        if _pair is not None:
-            market_probs[f"cards_over_{_ccl_c}"]  = _pair
-            market_probs[f"cards_under_{_ccl_c}"] = 1.0 - _pair
-        if _cards_over_api:
-            market_probs_raw[f"cards_over_{_ccl_c}"] = 1.0 / _cards_over_api
-        if _cards_under_api:
-            market_probs_raw[f"cards_under_{_ccl_c}"] = 1.0 / _cards_under_api
-
-        # =========================
-        # CALIBRATION
-        # =========================
-
-        probabilities = {}
-        _model_deviation = {}   # |p_modelo − p_mercado de referencia| (A1, r6)
-        _signed_deviation = {}  # con signo: >0 modelo encima del precio (B2, r7)
-
-        for market, model_prob in model_probs.items():
-
-            # Ronda 5 (N1/N2): los mercados anclables combinan UNA sola vez,
-            # en el bloque de anclaje — el modelo entra crudo al 35%.
-            # Ronda 6 (A2): regla estructural — anclable SIN ancla disponible
-            # (devig de par falló, patas sueltas) ⇒ NO APOSTAR. Antes caía al
-            # camino más permisivo (prob cruda del modelo 100%) y con cuota
-            # fabricada generaba bets a precios inexistentes.
-            if _anchorable(market):
-                if market in market_probs:
-                    probabilities[market] = model_prob
-                    _signed_deviation[market] = model_prob - market_probs[market]
-                    _model_deviation[market] = abs(_signed_deviation[market])
-                continue
-
-            # Ronda 6 (A4): se pasa el edge para que la escalera
-            # blend_weight (decreciente en |desacuerdo|) se ejerza de verdad
-            # — antes se llamaba sin `edge` y el peso era plano 0.35.
-            _implied = market_probs_raw.get(market)
-            probabilities[market] = calibrate_probability(
-                model_prob,
-                _implied,
-                (model_prob - _implied) if _implied else None,
-            )
-            if _implied:
-                _signed_deviation[market] = model_prob - _implied
-                _model_deviation[market] = abs(_signed_deviation[market])
-
-        # =========================
-        # ODDS
-        # =========================
-
-        odds = {
-            "home_win": safe_odds(row.home_odds),
-            "draw": safe_odds(row.draw_odds),
-            "away_win": safe_odds(row.away_odds),
-            "over25": safe_odds(row.over25_odds),
-            "under25": safe_odds(row.under25_odds),
-            "btts": safe_odds(row.btts_yes_odds),
-            "btts_no": safe_odds(row.btts_no_odds),
-            "dnb_home": _dnb_home_odds,
-            "dnb_away": _dnb_away_odds,
-        }
-
-        if _p_ah_home is not None:
-            odds[f"ah_home_{_ah_line:+.2f}"] = _ah_home_odds
-            odds[f"ah_away_{_ah_line:+.2f}"] = _ah_away_odds
-
-        # Corners odds: SOLO si la API trae odds reales.
-        # Ronda 6 (A2): el fallback a CORNERS_DEFAULT_ODDS fabricaba un precio
-        # que no existía (21 bets a 1.80 inventado, Q-N) — sin pata under de
-        # la API no hay cuota y por tanto no hay apuesta.
-        if _corners_over_api and _corners_line_api is not None:
-            _cl = float(_corners_line_api)
-            odds[f"corners_over_{_cl}"]  = _corners_over_api
-            if _corners_under_api:
-                odds[f"corners_under_{_cl}"] = _corners_under_api
-
-        # Cards odds: SOLO si la API trae odds reales. Mismo motivo.
-        # Además: cards requiere datos históricos en la liga — get_team_cards
-        # ya retorna None si hay < 5 partidos con data, por lo que
-        # cards_prediction ya no se genera en esos casos.
-        if _cards_over_api and _cards_line_api is not None:
-            _cdl = float(_cards_line_api)
-            odds[f"cards_over_{_cdl}"]  = _cards_over_api
-            if _cards_under_api:
-                odds[f"cards_under_{_cdl}"] = _cards_under_api
-
-        # Over 1.5 / 3.5 odds de referencia fijas
-        odds["over_1.5"]  = OVER15_ODDS
-        odds["under_1.5"] = UNDER15_ODDS
-        odds["over_3.5"]  = OVER35_ODDS
-        odds["under_3.5"] = UNDER35_ODDS
-
-        # Total shots odds fijas
-        if shots_prediction:
-            odds["shots_over_5.5"]  = SHOTS_DEFAULT_ODDS
-            odds["shots_under_5.5"] = SHOTS_DEFAULT_ODDS
-
-        # Double Chance: preferir API, fallback a derivadas de 1x2
-        if _dc_1x_odds:
-            odds["dc_1x"] = _dc_1x_odds
-        if _dc_x2_odds:
-            odds["dc_x2"] = _dc_x2_odds
-        if _dc_12_odds:
-            odds["dc_12"] = _dc_12_odds
-        if not (_dc_1x_odds and _dc_x2_odds and _dc_12_odds):
-            _h = safe_odds(row.home_odds)
-            _d = safe_odds(row.draw_odds)
-            _a = safe_odds(row.away_odds)
-            if _h and _d and _a:
-                if not _dc_1x_odds:
-                    odds["dc_1x"] = round(1.0 / (1.0/_h + 1.0/_d), 3)
-                if not _dc_x2_odds:
-                    odds["dc_x2"] = round(1.0 / (1.0/_d + 1.0/_a), 3)
-                if not _dc_12_odds:
-                    odds["dc_12"] = round(1.0 / (1.0/_h + 1.0/_a), 3)
-
-        # Half-time odds (de API)
-        if _h1_home_odds:
-            odds["h1_home"] = _h1_home_odds
-        if _h1_draw_odds:
-            odds["h1_draw"] = _h1_draw_odds
-        if _h1_away_odds:
-            odds["h1_away"] = _h1_away_odds
-        if _h2_home_odds:
-            odds["h2_home"] = _h2_home_odds
-        if _h2_draw_odds:
-            odds["h2_draw"] = _h2_draw_odds
-        if _h2_away_odds:
-            odds["h2_away"] = _h2_away_odds
-
-        # =========================
-        # CALIBRACIÓN DE PROBABILIDADES
-        # =========================
-        # Mejora 3: Corrección global de sobrecalibración.
-        # Liga del partido — usado para calibración específica (Mundial/Euro/etc.)
-        _row_league = _row_league_of(row)
-        _is_paper_match = _row_league in PAPER_ONLY_LEAGUES
-
-        # =========================
-        # ANCLAJE AL MERCADO (arquitectura 14-sep-26)
-        # =========================
-        # Cambio de filosofía: la probabilidad FINAL se ancla a la cuota sin
-        # margen (el mejor predictor que existe) y el modelo estadístico
-        # aporta solo una fracción de la desviación. Antes: modelo absoluto
-        # comparado contra el mercado → sobreconfianza crónica (brecha +21%
-        # en las primeras 45 bets del modelo recalibrado). Ahora heredamos la
-        # precisión del mercado y solo añadimos la señal que el mercado no ve.
-        # Solo mercados con devig confiable (ronda 5: 1x2 Shin, O/U y BTTS
-        # por pares con guardia, AH/DNB/córners/tarjetas por pares, tríos HT
-        # completos). DC y patas sueltas siguen blend modelo-crudo.
-        #
-        # Peso del modelo APRENDIDO por familia de mercado (anchor_learner,
-        # weekly): la fracción de la desviación del modelo que el mercado
-        # confirma al cierre, medida sobre las candidatas shadow. Sin datos
-        # suficientes queda el prior 35% (el ancla 65/35 original).
-        _anchored_markets = set()
-        _anchor_w_by_family = {}
-        for _mkt in list(probabilities.keys()):
-            if not _anchorable(_mkt) or _mkt not in market_probs:
-                continue
-            _mp = market_probs[_mkt]
-            if _mp and 0.02 < _mp < 0.98:
-                _w_model = model_weight_for(_mkt, anchor_state)
-                probabilities[_mkt] = (
-                    _mp * (1 - _w_model)
-                    + probabilities[_mkt] * _w_model
-                )
-                _anchored_markets.add(_mkt)
-                _anchor_w_by_family[market_family(_mkt)] = _w_model
-        if _anchored_markets:
-            _w_desc = ", ".join(f"{f} {w:.0%}" for f, w in sorted(_anchor_w_by_family.items()))
-            print(f"  ⚓ Anclado al mercado: {sorted(_anchored_markets)} "
-                  f"(peso modelo: {_w_desc})")
-        # Snapshot post-anclaje: los shades de abajo corren DESPUÉS y su
-        # desviación conjunta se acota contra este valor (D12, más abajo).
-        _post_anchor_probs = dict(probabilities)
-
-        for market in list(probabilities.keys()):
-            if market in _anchored_markets:
-                # Los mercados anclados YA heredan la calibración implícita
-                # del mercado: aplicar el shrink global/por-mercato aquí sería
-                # doble corrección. Solo clamp.
-                probabilities[market] = min(0.95, max(0.05, probabilities[market]))
-                continue
-
-            # Paso 1: corrección global de sobreconfianza.
-            # Paso 1: corrección global de sobreconfianza.
-            # Para ligas paper-only (Mundial, etc.) NO aplicamos el descuento:
-            # está calibrado sobre datos de clubes europeos, no selecciones nacionales.
-            # El downside de sobre-calibración en papel es cero.
-            if not _is_paper_match:
-                probabilities[market] = probabilities[market] * GLOBAL_CALIBRATION
-
-            # Paso 2: calibración por mercado.
-            # MEJORA #5 — apply_calibration usa isotonic regression (curva
-            # no-paramétrica) cuando hay sample suficiente (n>=30); si no,
-            # cae al factor escalar suavizado bayesianamente. Para mercados
-            # sin sample, deja la prob sin tocar.
-            if cal_active:
-                probabilities[market] = apply_calibration(
-                    probabilities[market], market, league=_row_league
-                )
-
-            # Clamp final
-            probabilities[market] = min(0.95, max(0.05, probabilities[market]))
-
-        # =========================
-        # =========================
-        # TILDE FAVORITO-AZAR (sesgo documentado del mercado)
-        # =========================
-        # Anomalía más robusta de los mercados de apuestas: las cuotas largas
-        # están sistemáticamente sobrevaloradas (el público ama el longshot) y
-        # las cortas infravaloradas. Corregimos la probabilidad final según su
-        # propia cuota: cuotas > 2.8 → encoger; cuotas < 2.8 → levantar a la
-        # mitad de la intensidad. Nuestros datos lo confirman: away_win y
-        # líneas de underdogs acumulan las peores pérdidas del sistema.
-        _FLB_TILT = 0.12
-        _FLB_REF = 2.8
-        _HOME_SIDES = ("home_win", "dnb_home", "dc_1x", "h1_home", "h2_home")
-
-        def _flb_side(market: str) -> str:
-            m = str(market)
-            if m in _HOME_SIDES or m.startswith("ah_home"):
-                return "home"
-            if m in ("away_win", "dnb_away", "dc_x2", "h1_away", "h2_away") or m.startswith("ah_away"):
-                return "away"
-            return "neutral"
-
-        # 14-sep-26: asimetría por localía (CBS Business School) — el sesgo
-        # se concentra en longshots VISITANTES (sobrevalorados ×1.5) y
-        # favoritos LOCALES (infravalorados ×1.5).
-        for market in list(probabilities.keys()):
-            o = odds.get(market)
-            if not o or o <= 1.01:
-                continue
-            _side = _flb_side(market)
-            if o > _FLB_REF:
-                L = min((o - _FLB_REF) / _FLB_REF, 1.0)
-                _mult = 1.5 if _side == "away" else 1.0
-                probabilities[market] *= (1 - _FLB_TILT * _mult * L)
-            else:
-                L = min((_FLB_REF - o) / _FLB_REF, 1.0)
-                _mult = 1.5 if _side == "home" else (0.75 if _side == "away" else 1.0)
-                probabilities[market] *= (1 + _FLB_TILT * _mult * L)
-            probabilities[market] = min(0.95, max(0.05, probabilities[market]))
-
-        # =========================
-        # SHADE "LA TABLA MIENTE" (Flepp 2024) + EMPATES CONTEXTUALES
-        # =========================
-        # luck = puntos reales − puntos esperados por desempeño (xPts).
-        # El mercado infla a los que sobre-rinden la tabla y castiga de más
-        # a los desafortunados → ajustamos en sentido contrario y
-        # renormalizamos el trío 1X2.
-        _luck_home = get_luck(home, cutoff=date) or {}
-        _luck_away = get_luck(away, cutoff=date) or {}
-        _shades_applied = {
-            "luck_home": _luck_home.get("luck"),
-            "luck_away": _luck_away.get("luck"),
-        }
-        _sh_h = max(-0.08, min(0.08, _shades_applied["luck_home"] * 0.02 or 0))             if _luck_home else 0.0
-        _sh_a = max(-0.08, min(0.08, _shades_applied["luck_away"] * 0.02 or 0))             if _luck_away else 0.0
-        _trio = ("home_win", "draw", "away_win")
-        if any(m in probabilities for m in _trio) and (_sh_h or _sh_a):
-            _sum0 = sum(probabilities.get(m, 0) for m in _trio)
-            probabilities["home_win"] = probabilities.get("home_win", 0) * (1 - _sh_h)
-            probabilities["away_win"] = probabilities.get("away_win", 0) * (1 - _sh_a)
-            _s = sum(probabilities.get(m, 0) for m in _trio)
-            if _s > 0:
-                for m in _trio:
-                    probabilities[m] = probabilities.get(m, 0) * _sum0 / _s
-            _shades_applied["aplicado"] = round(_sh_h, 3)
-
-        # Empates contextuales: parejos + liga de pocos goles → el público
-        # infravalora el empate (sesgo recracional documentado)
-        try:
-            _ovrate = get_over25_rate(_row_league)
-        except Exception:
-            _ovrate = None
-        if (_ovrate is not None and _ovrate < 0.45
-                and abs(lambda_home - lambda_away) < 0.3
-                and "draw" in probabilities):
-            _draw_tilt = 0.06
-            _extra = probabilities["draw"] * _draw_tilt
-            probabilities["draw"] += _extra
-            _ded = _extra / 2
-            probabilities["home_win"] = max(probabilities["home_win"] - _ded, 0.02)
-            probabilities["away_win"] = max(probabilities["away_win"] - _ded, 0.02)
-            _shades_applied["draw_context"] = True
-
-        # ── D12 (ronda 4): tope conjunto de desviación sobre el ancla ──
-        # Los shades (FLB, tabla miente, empates contextuales) son señal
-        # deliberada que corre DESPUÉS del anclaje — legítimos, pero sin
-        # tope el peso efectivo del modelo supera el 35% declarado. Se acota
-        # la desviación TOTAL de cada mercado anclado a ±5pt del valor
-        # anclado; la señal que necesite más de eso no pasa el filtro de edge.
-        _ANCHOR_DEV_CAP = 0.05
-        for _m, _p0 in _post_anchor_probs.items():
-            if _m in _anchored_markets and _m in probabilities:
-                probabilities[_m] = max(_p0 - _ANCHOR_DEV_CAP,
-                                        min(_p0 + _ANCHOR_DEV_CAP, probabilities[_m]))
-
-        # ── GATE HT: mercados de primer/segundo tiempo solo en ligas cuya
-        # fuente de resultados publica el descanso (football-data). En el
-        # resto (MLS, Brasil, Argentina, Mexico...) quedarian "esperando
-        # datos" dias o para siempre (lecciones 13-17 sep).
-        _HT_COVERED = {
-            "soccer_epl", "soccer_efl_champ", "soccer_spain_la_liga",
-            "soccer_germany_bundesliga", "soccer_italy_serie_a",
-            "soccer_france_ligue_one", "soccer_netherlands_eredivisie",
-            "soccer_portugal_primeira_liga", "soccer_belgium_first_div",
-            "soccer_greece_super_league", "soccer_spl",
-            "soccer_turkey_super_league",
-        }
-        if _row_league_of(row) not in _HT_COVERED:
-            for _m in list(probabilities.keys()):
-                if _m.startswith(("h1_", "h2_")):
-                    del probabilities[_m]
-
-        # SANITY CHECK (🔥 NUEVO)
-        # =========================
-
-        clean_probabilities = {}
-
-        for market, p in probabilities.items():
-
-            # ❌ probabilidades irreales
-            if p is None:
-                continue
-
-            if p < 0.03 or p > 0.90:
-                continue
-
-            # ❌ evitar favoritos extremos en odds altas
-            odd = odds.get(market)
-            if odd and odd > 4 and p > 0.6:
-                continue
-
-            clean_probabilities[market] = p
-
-        # =========================
-        # SHADOW SWEEP (C1, ronda 8)
-        # =========================
-        # Barrido de TODAS las candidatas con precio real, ANTES de
-        # find_value_bets. La ronda 7 capturaba dentro del loop de bets,
-        # que ya perdió todo lo que edge_market < 0.02 (betting_engine) —
-        # el shadow medía solo una franja de ~8.6pt bajo el umbral de
-        # apuesta, no la región baja donde vive la decisión de bajar el
-        # piso (B2). R11 declarada: rango observable = desvío >= 2pt
-        # (SHADOW_MIN_DEV) con precio de referencia; banda [0-2) fuera por
-        # diseño (ruido de cuota). Los favoritos AH bloqueados TAMBIÉN
-        # pasan por aquí (la captura precede al filtro) — resuelve C3.
-        _sweep_n = 0
-        for _sm, _sp in clean_probabilities.items():
-            _sodd = odds.get(_sm)
-            if not _sodd or _sodd <= 1.01:
-                continue
-            sweep_total += 1
-            _spref = market_probs.get(_sm, market_probs_raw.get(_sm))
-            _sdev = _signed_deviation.get(_sm)
-            if _spref is None or _sdev is None:
-                continue
-            sweep_ref += 1
-            if abs(_sdev) < SHADOW_MIN_DEV:
-                continue
-            shadow_records.append({
-                "match":      f"{home} vs {away}",
-                "match_date": date,
-                "league":     _row_league,
-                "market":     _sm,
-                "p_final":    _sp,
-                "p_ref":      _spref,
-                "deviation":  _sdev,
-                "odds":       _sodd,
-                "edge_market": _sp - 1.0 / _sodd,
-                "reason":     "sweep",
-            })
-            _sweep_n += 1
-        shadow_swept += _sweep_n
-
-
-        # =========================
-        # LINE MOVEMENT
-        # =========================
-        # Detecta si hay dinero sharp entrando en algún lado.
-        # No consume créditos API — usa las opening_odds ya guardadas en DB.
-
-        match_key = row.get("match_key", "")
-        line = get_line_movement(match_key)
-
-        # =========================
-        # CONSENSO DE BOOKMAKERS
-        # =========================
-        # spread_pct alto (>15%) = mercado dividido = más incertidumbre real
-        # spread_pct bajo (<5%)  = mercado muy eficiente = bets más confiables
-        # soft line: nuestra mejor odd >> consenso (+10%) = edge potencial extra
-        # pocos bookmakers (<3)  = mercado poco líquido = más caution
-
-        spread_pct      = row.get("h2h_spread_pct")  
-        bk_count        = row.get("bookmaker_count")  
-        cons_home       = row.get("consensus_home_odds")
-        best_home_odd   = safe_odds(row.home_odds)
-
-        consensus_conf_adj = 1.0
-        soft_line_detected = False
-
-        if spread_pct is not None and spread_pct > 0:
-            if spread_pct > 20:
-                consensus_conf_adj *= 0.82     # mercado muy dividido
-            elif spread_pct > 15:
-                consensus_conf_adj *= 0.90
-            elif spread_pct > 10:
-                consensus_conf_adj *= 0.95
-            elif spread_pct < 5:
-                consensus_conf_adj *= 1.02     # mercado eficiente → ligero boost
-
-        if bk_count is not None and bk_count < 3:
-            consensus_conf_adj *= 0.88         # pocos bookmakers = mercado poco líquido
-
-        # ── FILTRO DURO: liquidez mínima ──────────────────────────────────
-        # Menos de 4 casas = mercado no tiene consenso suficiente → skip partido
-        if should_skip_low_liquidity(bk_count):
-            print(f"  Skip liquidez: {home} vs {away} ({bk_count} books < 4)")
-            skipped_no_odds += 1
-            return
-
-        # Detección de línea blanda: mejor precio >> consenso (+10%)
-        if best_home_odd and cons_home and cons_home > 0:
-            if best_home_odd > cons_home * 1.10:
-                soft_line_detected = True
-                # Soft line: potencial edge extra, pero también posible error del book
-                # Mantener el edge pero marcar para revisión (no cambia confianza)
-
-        if consensus_conf_adj != 1.0:
-            confidence = max(0.1, min(1.0, confidence * consensus_conf_adj))
-
-        if spread_pct and spread_pct > 15:
-            print(
-                f"  Spread {spread_pct:.1f}%  "
-                f"books={bk_count}  "
-                f"{'soft line!' if soft_line_detected else ''}"
-            )
-
-        # =========================
-        # VALUE BETS
-        # =========================
-
-        raw_bets = find_value_bets(clean_probabilities, odds)
-
-        # Aplicar señal de línea + filtro duro por apuesta
-        filtered_bets = []
-        for bet in raw_bets:
-            # ── FILTRO DURO: movimiento de línea en contra ─────────────────
-            # Si la línea cayó >8% en nuestra dirección, el edge ya fue
-            # absorbido por el mercado sharp antes de que apostemos
-            if line_moved_against(bet["market"], line):
-                mkt   = bet["market"]
-                delta = movement_for(mkt, line)
-                print(f"  Skip linea: {home} vs {away} | {mkt} | caida {delta*100:.1f}%")
-                sharp_rejected += 1
-                continue
-
-            _, adj_conf = apply_line_movement_signal(
-                bet["market"], bet["edge"], confidence, line
-            )
-            if adj_conf != confidence:
-                # La señal de línea ajusta la PROBABILIDAD y los dos edges se
-                # recalculan de ella. Antes se escalaban por separado y la bet
-                # quedaba incoherente (edge guardado ≠ prob − 1/odds), lo que
-                # ensuciaba la calibración y cualquier análisis por edge.
-                _p_adj = min(0.95, bet["probability"] * (1 + (adj_conf - confidence) * 0.3))
-                _em, _ev = calculate_edges(_p_adj, bet["odds"])
-                if _em > bet["edge_market"]:
-                    sharp_confirmed += 1
-                elif _em < bet["edge_market"]:
-                    sharp_rejected += 1
-                bet["probability"], bet["edge_market"], bet["edge"] = _p_adj, _em, _ev
-            filtered_bets.append(bet)
-
-        raw_bets = filtered_bets
-
-        # Sin fallback `or raw_bets`: un filtro que rechaza TODAS las bets de
-        # un partido significa "no apostar", no "ignorar el filtro". Antes, si
-        # el filtro vaciaba la lista, se apostaba la lista SIN filtrar — y
-        # los mercados que el filtro no conoce (AH, DNB, 1T, córners) solo
-        # entraban por esa puerta, cuando ningún mercado principal pasaba.
-        bets = bet_quality_filter(raw_bets)
-        bets = market_intelligence_filter(bets)
-        bets = add_market_score(bets)
-
-        if not bets:
-            return
-
-        # =========================
-        # FILTROS DE CALIDAD (optimizados con 332 bets walk-forward)
-        # =========================
-        # ⚠️  IMPORTANTE — bug detectado 04-may-26 por model-auditor:
-        # `bet["edge"]` es `edge_ev` ((prob*odds)-1), NO el edge real.
-        # `bet["edge_market"]` (prob - implied_prob) es el verdadero edge.
-        # Antes filtrábamos `bet["edge"] < 0.10` que con odds 5.0 dejaba
-        # pasar bets con solo 5% de edge real → bucket 15-20% edge tenía
-        # -23.7% ROI (overfit). Ahora filtramos sobre edge_market real.
-        _league = _row_league_of(row)
-        _is_paper = _league in PAPER_ONLY_LEAGUES
-        if _league in blocked_leagues:
-            return
-
-        # ── MEJORA #12: filtro de partidos "raros" ─────────────────
-        # Dead rubber (ambos en zona media, fin de temporada) o asimetría
-        # extrema de motivación → resultado impredecible. Saltar.
-        try:
-            _unreliable, _why = is_unreliable_match(
-                row.get("home_team",""), row.get("away_team",""), _league
-            )
-            if _unreliable:
-                return
-        except Exception:
-            pass   # si la feature falla, no bloquea
-
-        # ── Penalización Lun-Mié (ROI -27% a -60%) ──────────────────
-        # Partidos entre semana (copas, recuperaciones) tienen datos
-        # menos fiables y líneas más eficientes.
-        _match_dow = None
-        try:
-            _match_dow = pd.to_datetime(date).weekday()  # 0=Lun ... 6=Dom
-        except Exception as e:
-            # Si la fecha no parsea, no aplicamos penalización midweek.
-            # Loguear permite detectar formatos raros en upcoming_matches.
-            print(f"⚠️  No se pudo parsear match_date={date!r} para weekday: {e}")
-        _midweek = _match_dow in MIDWEEK_DAYS if _match_dow is not None else False
-
-        match_bets_count = 0
-        groups_used = set()
-
-        for bet in bets:
-            if match_bets_count >= MAX_BETS_PER_MATCH:
-                break
-
-            mkt = bet["market"]
-
-            # ── Mercados desactivados ─────────────────────────────────
-            if mkt in _DISABLED_MARKETS:
-                continue
-
-            # ── Mercados bloqueados por ROI negativo en clubes ────────
-            # Para paper-only (Mundial): estos bloqueos se basan en datos de
-            # clubes europeos y no aplican a selecciones nacionales en sede neutral.
-            if not _is_paper:
-                # away_win: bloqueo fijo desde abril-26 (peor mercado del
-                # histórico). La re-habilitación del 17-sep nunca aplicó
-                # porque esta línea seguía aquí; desde el 22-sep vuelve solo
-                # con evidencia shadow (clv_gate.run_shadow_reactivation).
-                if mkt == "away_win" and "away_win" not in reactivated:
-                    continue
-                if mkt in blocked_markets:
-                    continue
-                if mkt.startswith("corners_over_") or mkt.startswith("cards_over_"):
-                    continue
-            else:
-                # En paper: solo bloquear mercados sin odds reales
-                if mkt in _DISABLED_MARKETS:
-                    continue
-            # AH con línea 0 (pk): bloqueado siempre, paper o no. Se compara
-            # el número (no el texto) para no dejar pasar "-0.00".
-            if mkt.startswith("ah_"):
-                try:
-                    if abs(float(mkt.rsplit("_", 1)[-1])) < 1e-9:
-                        continue
-                except ValueError:
-                    continue
-
-            # ── B1(b) ronda 7: AH con el local favorito, bloqueados ──
-            # Los dos grupos peor calibrados del histórico (brecha +33-38pt
-            # en la era vieja) quedaron expuestos por la re-derivación de la
-            # ronda 6. El gate de CLV NO puede protegerlos (R10: con su tasa
-            # real jamás alcanza n para dispararse) y un piso estático más
-            # alto los mataría de nuevo por aritmética (desvío ≥40pt > techo
-            # 0.30). Son las dos patas de una línea con el local dando goles:
-            # el local favorito (ah_home_fav) y el visitante recibiendo
-            # (ah_away_dog). Hasta el 22-sep _ah_group rotulaba esta segunda
-            # como "ah_away_fav" (no invertía la línea del visitante); el
-            # conjunto bloqueado es el mismo de siempre, ahora bien nombrado.
-            # Reactivación: CLV shadow >= 0 con n >= 30 (run_shadow_reactivation).
-            _grp = _ah_group(mkt)
-            if (not _is_paper and _grp in ("ah_home_fav", "ah_away_dog")
-                    and _grp not in reactivated):
-                continue
-
-            # ── Mejora 4: Sweet spots de odds por mercado ────────────
-            # Rangos donde el modelo ha demostrado edge real:
-            #   home_win @1.5-2.0 → 81% WR, +42% ROI
-            #   over25   @2.0-2.5 → 53% WR, +16% ROI
-            #   draw     @2.5-4.0 → 100% WR (muestra chica, mantener amplio)
-            _odds = bet["odds"]
-            if mkt == "home_win" and not (1.3 <= _odds <= 3.80):
-                continue
-            if mkt == "over25" and not (1.50 <= _odds <= 3.00):
-                continue
-            if mkt == "draw" and not (2.5 <= _odds <= 5.0):
-                continue
-
-            # ── Edge mínimo dinámico (Mejora #3 — por mercado) ──────
-            # Usar `edge_market` (prob - implied) — el verdadero edge.
-            # `edge` (= edge_ev) infla con odds altas y rompe filtros.
-            _edge_real = bet.get("edge_market", bet["edge"])
-
-            # 1) Threshold base por mercado (Mejora #3)
-            # FIX 11-may-26: para mercados AH parametrizados (`ah_home_-0.5`,
-            # `ah_away_-1.0`, etc.), el lookup directo en MIN_EDGE_BY_MARKET
-            # FALLABA (el dict tiene `ah_home_fav` no `ah_home_-0.5`) y caía
-            # al default 0.05. Esto dejó pasar 41 ah_fav bets en 90d con
-            # edge=5-12% que en realidad tenían win rate 27%. Ahora hacemos
-            # fallback al grupo AH (ah_home_fav/pk/dog) antes del default.
-            _min_edge = MIN_EDGE_BY_MARKET.get(mkt)
-            if _min_edge is None:
-                grp = _ah_group(mkt)
-                if grp is not None:
-                    _min_edge = MIN_EDGE_BY_MARKET.get(grp, MIN_EDGE)
-                else:
-                    _min_edge = MIN_EDGE
-
-            # 2) Bump por liga problemática (Italia, MLS, Ligue 1)
-            if _league in TOUGH_LEAGUES:
-                _min_edge = max(_min_edge, 0.07)
-
-            # 2b) Bump por liquidez de bookmakers.
-            # Con pocas casas el consenso está mal estimado y el vig es más
-            # alto — el mismo "edge" es más ruido. <6 books → +2pt, <8 → +1pt.
-            if bk_count is not None and not _is_paper:
-                if bk_count < 6:
-                    _min_edge = max(_min_edge, _min_edge + 0.02)
-                elif bk_count < 8:
-                    _min_edge = max(_min_edge, _min_edge + 0.01)
-
-            # 3) Bump midweek — no aplica a paper (WC juega cualquier día)
-            if _midweek and not _is_paper:
-                _min_edge *= 1.4
-
-            if _edge_real < _min_edge:
-                continue
-
-            # 4) Techo de desvío del modelo (A1/R9, ronda 6). El piso de edge
-            # obliga al modelo a desviarse; este techo evita que se desvíe
-            # MÁS de la región donde la arquitectura anclada está medida
-            # (ver derivación en MAX_MODEL_DEVIATION). Sin desvío medido
-            # (mercado sin precio de referencia) no hay apuesta.
-            _dev = _model_deviation.get(mkt)
-            if _dev is None:
-                continue
-            if _dev > MAX_MODEL_DEVIATION:
-                continue
-
-            # MAX_ODDS: en paper usamos 6.0 para capturar underdogs del Mundial
-            # (ej. France @5.35 sería bloqueada con el límite de clubes de 3.80)
-            _max_odds = 6.0 if _is_paper else MAX_ODDS
-            if bet["odds"] > _max_odds:
-                continue
-
-            # ── Filtro de contradicción ───────────────────────────────
-            # Si ya apostamos en un grupo, no apostar en el mismo grupo
-            group = _exclusive_group(mkt)
-            if group and group in groups_used:
-                continue
-
-            # MEJORA #14: pasar market+league para que kelly_stake module la
-            # fracción según el CLV histórico (ver _adjusted_kelly_fraction).
-            stake = kelly_stake(
-                bet["probability"], bet["odds"],
-                bankroll=current_bankroll,
-                market=mkt,
-                league=_league,
-            )
-
-            # ── STAKES POR CONFIANZA (Constantinou 2013) ────────────────
-            # El Kalman expone la incertidumbre del rating: menos partidos
-            # observados → menos confianza → stake reducido (0.61-0.73x).
-            _unc = ((home_form.get("uncertainty") or 0.27)
-                    + (away_form.get("uncertainty") or 0.27)) / 2
-            _conf = max(0.0, min(1.0, 1.0 - _unc / 0.5))
-            stake = round(stake * (0.55 + 0.45 * _conf), 2)
-
-            # ── DECISION LOG ─────────────────────────────────────────────
-            # Snapshot del contexto completo en el momento de la decisión.
-            # Permite autopsia: cuando una bet pierde, saber QUÉ señales
-            # estaban activas y con qué versión de calibración/modelo se
-            # generó. Congela las odds vistas (para medir slippage después).
-            try:
-                import json as _json
-                from datetime import datetime as _dt, timezone as _tz
-                _decision_log = {
-                    "model": {
-                        "lambda_home": round(float(lambda_home), 3),
-                        "lambda_away": round(float(lambda_away), 3),
-                        "p_home": round(float(home_win), 4),
-                        "p_draw": round(float(draw), 4),
-                        "p_away": round(float(away_win), 4),
-                        "mc_agreement": float(mc_agreement),
-                        "confidence": round(float(confidence), 3),
-                        "mle_weight": _mle_w,
-                        "mle_converged": DC_CONVERGED,
-                        "dc_rho_global": DC_RHO_GLOBAL,
-                        "dc_rho_score": DC_RHO_SCORE,
-                        "btts_shrink": BTTS_SHRINK,
-                        "league_factors_version": LEAGUE_FACTORS_VERSION,
-                        "fit_fingerprint": DC_FIT_FINGERPRINT,
-                        "mle_final_grad": DC_FINAL_GRAD,
-                        "kalman_confidence": round(_conf, 3),
-                        "shades": _shades_applied,
-                        "anchored": sorted(_anchored_markets),
-                        "anchor_model_weight": _anchor_w_by_family,
-                        "xg_source": _xg_source,
-                    },
-                    "signals": {
-                        "h2h_used": bool(h2h),
-                        "xg_used": bool(home_xg and away_xg),
-                        "motivation": [home_motiv, away_motiv],
-                        "rest_days": [home_cong.get("days_rest"), away_cong.get("days_rest")],
-                        "fatigued": bool(home_cong.get("is_fatigued") or away_cong.get("is_fatigued")),
-                        "weather_mult": round(float(weather_mult), 3),
-                        "corners_lambda": (corners_prediction or {}).get("lambda_total"),
-                        "cards_lambda": (cards_prediction or {}).get("lambda_total"),
-                        "form_matches": [home_form.get("matches"), away_form.get("matches")],
-                    },
-                    "market_ctx": {
-                        "bookmakers": bk_count,
-                        "spread_pct": spread_pct,
-                        "soft_line": bool(soft_line_detected),
-                    },
-                    "meta": {
-                        "generated_at": _dt.now(_tz.utc).isoformat(),
-                        "calibration_updated_at": (cal_factors or {}).get("updated_at"),
-                        "anchor_updated_at": anchor_state.get("updated_at"),
-                        "model_version": MODEL_VERSION,
-                        "sha": os.environ.get("GITHUB_SHA", "local"),
-                    },
-                }
-                _decision_log = _json.dumps(_decision_log, ensure_ascii=False, default=str)
-            except Exception:
-                _decision_log = None
-
-            all_bets.append({
-                "match":       f"{home} vs {away}",
-                "match_date":  date,
-                "league":      _row_league_of(row),
-                "market":      bet["market"],
-                "probability": bet["probability"],
-                "odds":        bet["odds"],
-                # Guardamos `edge_market` (verdadero edge vs línea) en lugar
-                # de `edge_ev`. A partir de 04-may-26 bets_history.edge mide
-                # `prob - implied`, no `(prob*odds)-1` (que era inflado).
-                "edge":        bet.get("edge_market", bet["edge"]),
-                "stake":       stake,
-                "decision_log": _decision_log
-            })
-
-            match_bets_count += 1
-            if group:
-                groups_used.add(group)
-
-    failed_matches: list = []
-    for _, row in df.iterrows():
-        try:
-            _evaluate_match(row)
-        except Exception as _match_err:
-            failed_matches.append(f"{row.get('home_team')} vs {row.get('away_team')}")
-            print(f"❌ Partido omitido por error: {failed_matches[-1]} — "
-                  f"{type(_match_err).__name__}: {_match_err}")
-            traceback.print_exc()
-
-    if failed_matches:
-        # Todos fallaron → error sistémico (una feature rota, esquema de DB
-        # cambiado): se relanza para que el paso quede FALLIDO y el
-        # orchestrator alerte, en vez de mandar "sin value bets".
-        if len(failed_matches) == total_matches:
-            raise RuntimeError(
-                f"Los {total_matches} partidos fallaron al evaluarse — "
-                f"error sistémico, ver tracebacks arriba")
-        # Fallo parcial: el slate sigue, pero el usuario se entera.
-        try:
-            from scripts.notify_telegram import send_message
-            send_message(
-                f"⚠️ <b>Predicciones parciales</b>\n\n"
-                f"{len(failed_matches)} de {total_matches} partidos se omitieron por error:\n"
-                + "\n".join(f"• {m}" for m in failed_matches[:10])
-                + "\n\nEl resto del slate se evaluó normal. Revisa el log del run."
-            )
-        except Exception as e:
-            print(f"⚠️  No se pudo avisar por Telegram de los partidos omitidos: {e}")
-
-    # =========================
-    # DEBUG
-    # =========================
-
-    print("\n📊 DEBUG SUMMARY")
-    print("Partidos con error: ", len(failed_matches))
-    print("Sin odds:           ", skipped_no_odds)
-    print("Fallback usados:    ", fallback_used)
-    print("xG proxy usado:     ", xg_used)
-    print("H2H usado:          ", h2h_used)
-    print("Corners model:      ", corners_used)
-    print("Shots model:        ", shots_used)
-    print("Fatiga detectada:   ", fatigued_teams)
-    print("Weather ajustado:   ", weather_adjusted)
-    print("MC divergio:        ", mc_diverged)
-    print("Sharp confirmados:  ", sharp_confirmed)
-    print("Sharp rechazados:   ", sharp_rejected)
-    print("Bets generadas:     ", len(all_bets))
-
-    if all_bets:
-        print("\n  Signals: DC + ELO + Form(venue) + MC + Corners + Shots + Congestion + Weather")
-
-    if all_bets:
-        ranked = rank_bets(all_bets)
-
-        print("\n🔥 BEST BETS\n")
-
-        for _, bet in ranked.head(10).iterrows():
-            print(
-                bet["match"],
-                "|", bet["market"],
-                "| edge:", round(bet["edge"], 3),
-                "| odds:", bet["odds"],
-                "| stake:", round(bet["stake"], 2)
-            )
-
+        log.warning(f"⚠️  DC rho no disponible ({_e}) → Poisson cruda")
+    return DC_RHO_GLOBAL, DC_CONVERGED, DC_FIT_FINGERPRINT, DC_FINAL_GRAD
+
+
+def _apply_portfolio_limits(all_bets: list, current_bankroll: float) -> list:
+    """
+    Límites de la cartera del slate antes de guardar: ajuste por correlación
+    (1/√n por partido), fuera las sospechosas (edge en el tope o prob > 2x la
+    implícita), exposición ≤ 15% del bankroll con penalización al mercado
+    dominante, y tope ACUMULADO por fecha contando lo ya pendiente.
+    Devuelve la lista final (puede quitar bets).
+    """
     # =========================
     # PORTFOLIO EXPOSURE
     # =========================
@@ -2419,7 +2452,7 @@ def run_prediction_pipeline():
                     )
         except Exception as _e:
             # Sin acceso a DB, el cap por-run de arriba sigue protegiendo
-            print(f"  ⚠️  Cap por slate omitido (sin DB): {_e}")
+            log.warning(f"  ⚠️  Cap por slate omitido (sin DB): {_e}")
 
         print(
             f"\n💼 Portfolio: {len(all_bets)} bets | "
@@ -2427,6 +2460,277 @@ def run_prediction_pipeline():
             f"Bankroll: {current_bankroll:.2f}u | "
             f"Exposición: {sum(b['stake'] for b in all_bets)/current_bankroll*100:.1f}%"
         )
+
+    return all_bets
+
+
+LAST_RUN_SUMMARY: dict = {}   # resumen de la última corrida (observabilidad / ensayo)
+
+
+def run_prediction_pipeline(dry_run: bool = False):
+    """
+    dry_run=True (modo ENSAYO): hace exactamente el mismo cálculo contra los
+    datos reales pero no escribe apuestas, shadow ni papel y no manda
+    Telegram. Sirve para validar un cambio sobre producción antes de
+    desplegarlo (db_smoke_test lo corre sobre la rama).
+    """
+
+    print("\nRUNNING PREDICTION PIPELINE\n")
+    if dry_run:
+        print("🧪 MODO ENSAYO: se calcula todo; no se guarda ni se notifica nada\n")
+
+    # ── Bankroll real para Kelly Criterion ────────────────────────────────
+    # Asegura que la tabla existe y usa el balance actual.
+    # Si nunca se inicializó, usa INITIAL_BANKROLL de settings.py.
+    ensure_bankroll_schema()
+    current_bankroll = get_current_bankroll()
+    print(f"💰 Bankroll actual: {current_bankroll:.2f} unidades")
+
+    # ── Circuit Breaker: si el bankroll es < 10u, detener apuestas ────────
+    if current_bankroll < CIRCUIT_BREAKER_THRESHOLD:
+        print(f"🚨 CIRCUIT BREAKER ACTIVADO: bankroll ({current_bankroll:.2f}u) "
+              f"< umbral ({CIRCUIT_BREAKER_THRESHOLD}u)")
+        print("   ⛔ No se generarán apuestas hasta que se recargue el bankroll.")
+        LAST_RUN_SUMMARY.clear()
+        LAST_RUN_SUMMARY.update({"circuit_breaker": True, "dry_run": dry_run})
+        if dry_run:
+            return
+        try:
+            from scripts.notify_telegram import send_message
+            from src.models.bankroll_manager import get_bankroll_stats
+            stats = get_bankroll_stats()
+            send_message(
+                f"🚨 <b>CIRCUIT BREAKER ACTIVADO</b>\n\n"
+                f"Bankroll actual: <b>{current_bankroll:.2f}u</b>\n"
+                f"Umbral mínimo: {CIRCUIT_BREAKER_THRESHOLD}u\n"
+                f"Drawdown desde pico: {stats['drawdown_pct']:.1f}%\n\n"
+                f"⛔ Apuestas pausadas automáticamente.\n"
+                f"Recarga el bankroll o espera resultados pendientes."
+            )
+        except Exception as e:
+            # Si Telegram cae no rompemos el pipeline, pero AVISAMOS al log:
+            # antes este bloque silenciaba el alert de circuit breaker —
+            # podías quedarte sin enterar de que el bankroll cruzó el umbral.
+            log.warning(f"⚠️  Circuit breaker activo pero NO se pudo notificar a Telegram: {e}")
+        return
+
+    # ── Factores de calibración (Brier) ───────────────────────────────────
+    # Corrigen el sesgo sistemático del modelo (sobreconfianza / subconfianza)
+    # Si el archivo no existe aún, usa factores neutros (1.0 = sin ajuste)
+    cal_factors = load_calibration_factors()
+    cal_active  = any(
+        isinstance(v, dict) and v.get("n_bets", 0) >= MIN_BETS_FOR_CALIBRATION
+        for k, v in cal_factors.items()
+        if k not in ("updated_at", "window_days", "by_league")
+    )
+    if cal_active:
+        n_calibrated = sum(
+            1 for k, v in cal_factors.items()
+            if isinstance(v, dict) and v.get("n_bets", 0) >= MIN_BETS_FOR_CALIBRATION
+            and k not in ("updated_at", "window_days", "by_league")
+        )
+        print(f"📐 Factores de calibración activos ({n_calibrated} mercados, "
+              f"min_bets={MIN_BETS_FOR_CALIBRATION})")
+    else:
+        print(f"📐 Calibración: datos insuficientes (< {MIN_BETS_FOR_CALIBRATION} bets), "
+              f"usando factores neutros")
+
+    # ── Parámetros MLE Dixon-Coles ─────────────────────────────────────────
+    # Si existen parámetros ajustados recientes (<= 8 días), los usa.
+    # El ajuste se hace en el modo weekly (lunes 7AM).
+    mle_fresh = is_params_fresh(max_age_days=8)
+    if mle_fresh:
+        print("🔧 Parámetros DC-MLE cargados (ajuste reciente)")
+    else:
+        print("🔧 DC-MLE: sin parámetros frescos, usando solo forma actual")
+
+    # MEJORA #3 (06-may-26) + F1/F2 (ronda 11): rho de DC con histéresis
+    # y huella del fit — ver _resolve_dc_rho.
+    DC_RHO_GLOBAL, DC_CONVERGED, DC_FIT_FINGERPRINT, DC_FINAL_GRAD = _resolve_dc_rho()
+
+    # I1 (ronda 14): UN solo rho para la matriz de marcadores — 1x2, HT, AH
+    # y DNB valoran con la misma matriz. Antes: 1x2 con rho=-0.13 de la
+    # literatura y AH Poisson pura → el mismo suceso (AH -0.5 local ==
+    # victoria local) tenía dos precios (1.6pp) y sesgaba la selección.
+    DC_RHO_SCORE = DC_RHO_GLOBAL if DC_RHO_GLOBAL is not None else RHO_DC_LITERATURE
+
+    # ── Estado aprendido (weekly → DB) ─────────────────────────────────────
+    learned = load_learned_state()
+    blocked_markets = _BLOCKED_MARKETS | set(learned["blocked_markets"])
+    blocked_leagues = BLOCKED_LEAGUES | set(learned["blocked_leagues"])
+    reactivated     = set(learned["reactivated"])
+    anchor_state    = learned["anchor"] or {}
+    if learned["blocked_markets"]:
+        print(f"🚦 Mercados bloqueados por CLV gate: {sorted(learned['blocked_markets'])}")
+    if learned["blocked_leagues"]:
+        print(f"🚦 Ligas bloqueadas por CLV gate: {sorted(learned['blocked_leagues'])}")
+    if reactivated:
+        print(f"🔁 Reactivados por evidencia shadow: {sorted(reactivated)}")
+    _fams = (anchor_state.get("families") or {})
+    if _fams:
+        print("⚓ Peso del modelo aprendido: " + ", ".join(
+            f"{f}={n.get('weight', 0):.0%}" for f, n in _fams.items()))
+    else:
+        print("⚓ Peso del modelo: prior 35% (aún sin estado aprendido)")
+
+    elo = compute_elo()
+
+    # DISTINCT ON dedup: cuando un partido tiene 2 rows en upcoming_matches
+    # (típicamente un row stale con match_date vieja + uno nuevo con la fecha
+    # corregida), nos quedamos con el más reciente por updated_at. Esto evita
+    # generar predicciones sobre datos desactualizados — bug detectado el
+    # 8-may-2026 con Talleres/Belgrano y otros 10 partidos AR/PT/EPL.
+    df = pd.read_sql("""
+        SELECT * FROM (
+            SELECT DISTINCT ON (home_team_norm, away_team_norm, sport_key) *
+            FROM upcoming_matches
+            WHERE match_date::timestamp BETWEEN NOW() + INTERVAL '1 hour'
+                         AND NOW() + INTERVAL '3 days'
+            ORDER BY home_team_norm, away_team_norm, sport_key,
+                     updated_at DESC NULLS LAST
+        ) t
+        ORDER BY match_date
+    """, engine)
+
+    total_matches = len(df)
+    print(f"📊 Matches encontrados: {total_matches}")
+
+    if df.empty:
+        LAST_RUN_SUMMARY.clear()
+        LAST_RUN_SUMMARY.update({"dry_run": dry_run, "matches": 0, "failed_matches": 0,
+                                 "bets": 0, "paper_bets": 0, "shadow": 0, "markets": {}})
+        return
+
+    all_bets = []
+    # B2 (ronda 7): candidatas rechazadas con precio real — se registran en
+    # shadow_bets para medir CLV por banda de desvío SIN apostar. Responde
+    # si la ventana apostable [MIN_EDGE→desvío, MAX_MODEL_DEVIATION] está en
+    # el lado correcto (ver docs/AUDITORIA_RONDA7.md §3).
+    shadow_records: list = []
+    # Contadores del resumen (antes 14 variables nonlocal).
+    stats = Counter()
+
+
+    # Contexto compartido por las etapas de cada partido
+    ctx = SimpleNamespace(
+        elo=elo,
+        mle_fresh=mle_fresh,
+        cal_active=cal_active,
+        cal_factors=cal_factors,
+        anchor_state=anchor_state,
+        DC_RHO_SCORE=DC_RHO_SCORE,
+        DC_RHO_GLOBAL=DC_RHO_GLOBAL,
+        DC_CONVERGED=DC_CONVERGED,
+        DC_FIT_FINGERPRINT=DC_FIT_FINGERPRINT,
+        DC_FINAL_GRAD=DC_FINAL_GRAD,
+        blocked_markets=blocked_markets,
+        blocked_leagues=blocked_leagues,
+        reactivated=reactivated,
+        current_bankroll=current_bankroll,
+    )
+
+    # =========================
+    # LOOP MATCHES
+    # =========================
+
+    # Aislamiento por partido: una fila con datos corruptos ya no tumba el
+    # slate completo (pasó el 10-sep-26 con int(NaN) en corners_line). Cada
+    # partido se evalúa en su propio try; el fallo queda en el log con su
+    # traceback y el resto del slate sigue.
+    def _evaluate_match(row):
+        T = _stage_team_strengths(row, stats)
+        if T is None:
+            return
+        L = _stage_lambdas(row, T, ctx, stats)
+        M, Q = _stage_model_probabilities(row, T, L, ctx, stats)
+        market_probs, market_probs_raw = _stage_market_probabilities(row, Q, M.p_ah_home)
+        probabilities, model_deviation, signed_deviation = _stage_blend(
+            M.model_probs, market_probs, market_probs_raw)
+        odds = _stage_quote_table(row, Q, M.p_ah_home, L.shots_prediction)
+        F = _stage_final_probabilities(row, T, L, probabilities, market_probs, odds, ctx)
+        shadow_records.extend(_stage_shadow_sweep(
+            row, T, F, market_probs, market_probs_raw, signed_deviation, odds, stats))
+        C = _stage_market_context(row, T, M.confidence, stats)
+        if C is None:
+            return
+        bets = _stage_candidates(F.clean_probabilities, odds, C.line, C.confidence,
+                                 T.home, T.away, stats)
+        if not bets:
+            return
+        all_bets.extend(_stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation))
+
+
+    failed_matches: list = []
+    for _, row in df.iterrows():
+        try:
+            _evaluate_match(row)
+        except Exception as _match_err:
+            failed_matches.append(f"{row.get('home_team')} vs {row.get('away_team')}")
+            log.error(f"❌ Partido omitido por error: {failed_matches[-1]} — "
+                  f"{type(_match_err).__name__}: {_match_err}")
+            traceback.print_exc()
+
+    if failed_matches:
+        # Todos fallaron → error sistémico (una feature rota, esquema de DB
+        # cambiado): se relanza para que el paso quede FALLIDO y el
+        # orchestrator alerte, en vez de mandar "sin value bets".
+        if len(failed_matches) == total_matches:
+            raise RuntimeError(
+                f"Los {total_matches} partidos fallaron al evaluarse — "
+                f"error sistémico, ver tracebacks arriba")
+        # Fallo parcial: el slate sigue, pero el usuario se entera.
+        try:
+            if dry_run:
+                raise RuntimeError("modo ensayo: sin Telegram")
+            from scripts.notify_telegram import send_message
+            send_message(
+                f"⚠️ <b>Predicciones parciales</b>\n\n"
+                f"{len(failed_matches)} de {total_matches} partidos se omitieron por error:\n"
+                + "\n".join(f"• {m}" for m in failed_matches[:10])
+                + "\n\nEl resto del slate se evaluó normal. Revisa el log del run."
+            )
+        except Exception as e:
+            log.warning(f"⚠️  No se pudo avisar por Telegram de los partidos omitidos: {e}")
+
+    # =========================
+    # DEBUG
+    # =========================
+
+    print("\n📊 DEBUG SUMMARY")
+    print("Partidos con error: ", len(failed_matches))
+    print("Sin odds:           ", stats['skipped_no_odds'])
+    print("Fallback usados:    ", stats['fallback_used'])
+    print("xG proxy usado:     ", stats['xg_used'])
+    print("H2H usado:          ", stats['h2h_used'])
+    print("Corners model:      ", stats['corners_used'])
+    print("Shots model:        ", stats['shots_used'])
+    print("Fatiga detectada:   ", stats['fatigued_teams'])
+    print("Weather ajustado:   ", stats['weather_adjusted'])
+    print("MC divergio:        ", stats['mc_diverged'])
+    print("Sharp confirmados:  ", stats['sharp_confirmed'])
+    print("Sharp rechazados:   ", stats['sharp_rejected'])
+    print("Bets generadas:     ", len(all_bets))
+
+    if all_bets:
+        print("\n  Signals: DC + ELO + Form(venue) + MC + Corners + Shots + Congestion + Weather")
+
+    if all_bets:
+        ranked = rank_bets(all_bets)
+
+        print("\n🔥 BEST BETS\n")
+
+        for _, bet in ranked.head(10).iterrows():
+            print(
+                bet["match"],
+                "|", bet["market"],
+                "| edge:", round(bet["edge"], 3),
+                "| odds:", bet["odds"],
+                "| stake:", round(bet["stake"], 2)
+            )
+
+    # Límites de cartera: correlación, sospechosas, exposición, concentración
+    # y tope por slate — ver _apply_portfolio_limits.
+    all_bets = _apply_portfolio_limits(all_bets, current_bankroll)
 
     # =========================
     # PAPER-TRADING SPLIT (Kill-Switch Mundial)
@@ -2445,19 +2749,30 @@ def run_prediction_pipeline():
             b["is_paper"] = False
             real_bets.append(b)
 
-    if paper_bets:
+    if paper_bets and not dry_run:
         _persist_paper_bets(paper_bets)
         print(f"\n📝 PAPER-TRADING: {len(paper_bets)} bets de "
               f"{', '.join(sorted(PAPER_ONLY_LEAGUES))} → data/paper_trades.jsonl "
               f"(NO insertadas en bets_history)")
 
-    save_bets(real_bets)
+    if dry_run:
+        print(f"🧪 ENSAYO: {len(real_bets)} bets y {len(paper_bets)} de papel NO guardadas")
+    else:
+        save_bets(real_bets)
 
     # ── B2/C1 (ronda 8): candidatas no apostadas → shadow_bets ──
-    print(f"🌑 Shadow sweep: {shadow_swept} candidatas barridas en {total_matches} partidos | "
-          f"pares con cuota: {sweep_total} · con referencia: {sweep_ref} "
-          f"({sweep_ref}/{sweep_total}) · sobre piso 2pt: {shadow_swept}")
-    persist_shadow_bets(shadow_records)
+    print(f"🌑 Shadow sweep: {stats['shadow_swept']} candidatas barridas en {total_matches} partidos | "
+          f"pares con cuota: {stats['sweep_total']} · con referencia: {stats['sweep_ref']} "
+          f"({stats['sweep_ref']}/{stats['sweep_total']}) · sobre piso 2pt: {stats['shadow_swept']}")
+    if not dry_run:
+        persist_shadow_bets(shadow_records)
+
+    LAST_RUN_SUMMARY.clear()
+    LAST_RUN_SUMMARY.update({
+        "dry_run": dry_run, "matches": total_matches, "failed_matches": len(failed_matches),
+        "bets": len(real_bets), "paper_bets": len(paper_bets), "shadow": len(shadow_records),
+        "markets": dict(Counter(b["market"] for b in all_bets)),
+    })
 
     # Devolvemos TODAS (real + paper) para que notify_telegram las muestre
     return all_bets
@@ -2495,4 +2810,4 @@ def _persist_paper_bets(paper_bets: list[dict]) -> None:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
     except Exception as e:
         # No rompemos el pipeline si el log falla — solo avisamos
-        print(f"⚠️  No se pudo escribir paper_trades.jsonl: {e}")
+        log.warning(f"⚠️  No se pudo escribir paper_trades.jsonl: {e}")
