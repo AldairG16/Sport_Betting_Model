@@ -13,12 +13,9 @@ Uso:
 """
 
 import sys
-import os
 import argparse
 import requests
-import pandas as pd
 from pathlib import Path
-from datetime import datetime, timezone
 
 sys.path.append(str(Path(__file__).parent.parent))
 if hasattr(sys.stdout, "reconfigure"):
@@ -100,13 +97,18 @@ def insert_results(results: list) -> tuple[int, int]:
     with engine.begin() as conn:
         for r in results:
             try:
-                res = conn.execute(text("""
-                    INSERT INTO matches
-                        (date, home_team, away_team, home_goals, away_goals, league)
-                    VALUES
-                        (:date, :home_team, :away_team, :home_goals, :away_goals, :league)
-                    ON CONFLICT (date, home_team, away_team) DO NOTHING
-                """), r)
+                # Savepoint por fila: sin él, un INSERT fallido aborta la
+                # transacción, los siguientes fallan también y al final se
+                # revierte el lote entero (resultados que no llegan → bets
+                # que no se liquidan).
+                with conn.begin_nested():
+                    res = conn.execute(text("""
+                        INSERT INTO matches
+                            (date, home_team, away_team, home_goals, away_goals, league)
+                        VALUES
+                            (:date, :home_team, :away_team, :home_goals, :away_goals, :league)
+                        ON CONFLICT (date, home_team, away_team) DO NOTHING
+                    """), r)
                 if res.rowcount > 0:
                     inserted += 1
                 else:

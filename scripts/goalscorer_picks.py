@@ -146,6 +146,11 @@ def generate_goalscorer_picks(verbose: bool = True) -> int:
 
 def resolve_goalscorer_picks(verbose: bool = True) -> int:
     """Resuelve picks de partidos ya jugados usando match_events."""
+    # La tabla nace con el primer pick: si el morning aún no generó ninguno,
+    # la consulta fallaba cada noche (UndefinedTable) y ensuciaba el reporte
+    # de errores tolerados del evening.
+    with engine.begin() as conn:
+        _ensure_table(conn)
     pending = pd.read_sql(text("""
         SELECT id, match, player, match_date
         FROM goalscorer_picks

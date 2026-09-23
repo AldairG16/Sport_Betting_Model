@@ -257,6 +257,32 @@ revierte. Convierte a `None` antes de escribir (`_sql_value` en
 `scripts/weekly_sanity_audit.py`). Así estuvo roto el auto-fusionador de partidos
 duplicados al menos desde el 21-sep-2026: detectaba, fallaba y no fusionaba nada.
 
+**Un NULL leído con pandas puede ser `NaN`, no `None`.** Si otra fila de la misma
+columna tiene valor, la columna es `float64` y el NULL llega como `NaN`: `x is not None`
+es `True` y toda comparación con `NaN` da `False`. Así `resolve_market` liquidaba como
+**perdidas** (over y under a la vez) las apuestas de córners, tarjetas y tiros cuyo
+partido aún no tenía esos datos, hasta el 22-sep-2026. Para "¿hay dato?" usa `_has()` de
+`src/models/save_bets.py` (o `pd.isna`). `audit_stat_settlements()` (en el smoke test)
+cuenta, en solo lectura, cuántas se liquidaron así.
+
+**Un `try/except` dentro de una transacción no aísla nada.** En Postgres el primer
+`execute` fallido aborta la transacción: los siguientes fallan también y el COMMIT final
+se convierte en ROLLBACK de todo el lote, sin excepción visible. Aislar una fila exige
+un savepoint: `with conn.begin_nested():` alrededor del `execute`. Así estaban
+`fetch_results`, el respaldo de fbdata, las cargas del weekly y la creación de índices.
+
+**`conn.execute(text(...), lista_de_dicts)` NO agrupa.** Con SQL textual, psycopg2 hace
+un viaje a Neon por fila (~80 ms desde Actions): el weekly tardaba 25 min en 18k filas
+de ligas extra y 21 min en 15k eventos. Para cargas masivas usa
+`src/utils/db_batch.insert_ignore_conflicts`: una sentencia multi-VALUES por lote,
+cuenta exacta de filas nuevas (RETURNING) y aislamiento de filas malas.
+
+**Las `unresolved` se liquidan en cuanto llegan sus datos.** `update_bet_results`
+toma `pending` (kickoff hace >3 h) **y** `unresolved`, y las liquida en la misma
+pasada (`plan_bet_settlements`). Hasta el 22-sep-2026 las `unresolved` se re-marcaban
+`pending` y el timeout de 3 días las devolvía a `unresolved` en la misma corrida: nunca
+se liquidaban y terminaban `stale`, fuera del bankroll.
+
 **Los nombres de equipo pasan por `normalize_team()` antes de consultar.** `matches` y
 `upcoming_matches` guardan minúsculas normalizadas. Un desajuste deja bets en `pending`
 para siempre aunque `fetch_results` haya corrido.
@@ -422,6 +448,22 @@ python -m pytest tests/test_kelly.py::test_kelly_caps -v
 `pre_kickoff.yml` tiene una casilla `debug_mode` que corre el analista contra 1 bet
 futura, para verificar la integración sin gastar un ciclo de cron completo.
 
+### Dashboard local
+
+`python scripts/run_dashboard.py` → http://127.0.0.1:5050. Solo lectura. Es
+`dashboard/app.py` (Flask: página + API JSON) con `dashboard/ui_es5.js` y
+`dashboard/chart2.min.js`, servidos localmente. La ganancia sale de la columna
+`profit` de `bets_history` (la de la liquidación, la misma del bankroll). El `.exe`
+lo compila `release.yml`:
+
+- con un tag `v*` compila, prueba y publica el Release;
+- disparado a mano compila y prueba **sin publicar**.
+
+El `.exe` lleva dentro el JS, Chart.js y `VERSION`. Una copia de `ui_es5.js` junto al
+`.exe` tiene prioridad, para arreglos en vivo sin recompilar. Hasta el 22-sep-2026 el
+`.exe` en uso no se podía reconstruir desde el repo: `app.py` era una reescritura a
+medias, sin rutas.
+
 ---
 
 ## 9. Mundial 2026
@@ -458,6 +500,15 @@ ni APIs (dependencias sustituidas por datos fijos). Los cambios de lógica se pr
 `tests/golden/pipeline_baseline.json`; si un cambio intencional la altera, se regenera
 con `UPDATE_GOLDEN=1 python -m pytest tests/test_pipeline_end_to_end.py` y el diff va
 en el commit.
+
+Dos redes de seguridad corren con la suite:
+
+- `tests/test_static_analysis.py` exige cero hallazgos de pyflakes en `src/`,
+  `scripts/`, `config/` y `dashboard/`: nombres sin definir, imports o variables sin
+  uso.
+- `tests/test_entrypoints.py` resuelve cada `from src|scripts|config|dashboard import x`
+  del proyecto, también los que están dentro de funciones. Esos imports solo fallan
+  cuando se ejecuta su rama, a veces una vez por semana y en producción.
 
 ### Ramas
 

@@ -313,6 +313,23 @@ def slippage_report() -> dict:
 # UPDATE RESULTS (PRO)
 # =========================
 
+def _has(v) -> bool:
+    """¿Hay dato? Un NULL de la base llega como None o como NaN según el
+    dtype que pandas le dé a la columna: los dos son "falta el dato"."""
+    return v is not None and not pd.isna(v)
+
+
+def _over_under(total: float, market: str) -> str:
+    """Resultado de un over/under de córners, tarjetas o tiros. Con línea
+    ENTERA (cards_under_4.0) y el total justo en la línea, la casa devuelve
+    el stake: push. Hasta el 22-sep-26 el under la daba ganada y el over
+    perdida."""
+    line = float(market.split("_")[-1])
+    if abs(total - line) < 1e-9:
+        return "push"
+    return "win" if (total > line) == ("_over_" in market) else "loss"
+
+
 def resolve_market(market: str, _mrow, odds: float, stake: float) -> tuple[str, float]:
     """
     (outcome, profit) de una bet dado el resultado del partido — función
@@ -386,13 +403,13 @@ def resolve_market(market: str, _mrow, odds: float, stake: float) -> tuple[str, 
     elif market.startswith("shots_over_") or market.startswith("shots_under_"):
         hs = _mrow.get("home_shots_target") if _mrow is not None else None
         as_ = _mrow.get("away_shots_target") if _mrow is not None else None
-        if hs is not None and as_ is not None:
-            total_shots = float(hs) + float(as_)
-            line = float(market.split("_")[-1])
-            if market.startswith("shots_over_"):
-                outcome = "win" if total_shots > line else "loss"
-            else:
-                outcome = "win" if total_shots <= line else "loss"
+        # _has, no `is not None`: un NULL leído por pandas llega como NaN, y
+        # con NaN toda comparación es False → over Y under salían "loss"
+        # (se liquidaban como perdidas apuestas sin datos; fix 22-sep-26)
+        if _has(hs) and _has(as_):
+            outcome = _over_under(float(hs) + float(as_), market)
+            if outcome == "push":
+                profit = 0.0
         else:
             outcome = "unresolved"
             profit  = 0.0
@@ -469,13 +486,10 @@ def resolve_market(market: str, _mrow, odds: float, stake: float) -> tuple[str, 
     elif market.startswith("cards_over_") or market.startswith("cards_under_"):
         hy = _mrow.get("home_yellow") if _mrow is not None else None
         ay = _mrow.get("away_yellow") if _mrow is not None else None
-        if hy is not None and ay is not None:
-            total_cards = float(hy) + float(ay)
-            line = float(market.split("_")[-1])
-            if market.startswith("cards_over_"):
-                outcome = "win" if total_cards > line else "loss"
-            else:
-                outcome = "win" if total_cards <= line else "loss"
+        if _has(hy) and _has(ay):      # NaN = sin dato (ver shots)
+            outcome = _over_under(float(hy) + float(ay), market)
+            if outcome == "push":
+                profit = 0.0
         else:
             outcome = "unresolved"
             profit  = 0.0
@@ -507,13 +521,10 @@ def resolve_market(market: str, _mrow, odds: float, stake: float) -> tuple[str, 
     elif market.startswith("corners_over_") or market.startswith("corners_under_"):
         hc = _mrow.get("home_corners") if _mrow is not None else None
         ac = _mrow.get("away_corners") if _mrow is not None else None
-        if hc is not None and ac is not None:
-            total_corners = float(hc) + float(ac)
-            line = float(market.split("_")[-1])
-            if market.startswith("corners_over_"):
-                outcome = "win" if total_corners > line else "loss"
-            else:
-                outcome = "win" if total_corners <= line else "loss"
+        if _has(hc) and _has(ac):      # NaN = sin dato (ver shots)
+            outcome = _over_under(float(hc) + float(ac), market)
+            if outcome == "push":
+                profit = 0.0
         else:
             outcome = "unresolved"
             profit  = 0.0
@@ -578,17 +589,94 @@ def make_match_lookup(_all_matches: pd.DataFrame):
     return _lookup_match
 
 
-def update_bet_results():
+_MATCHES_PRELOAD_SQL = """
+    SELECT LOWER(home_team) AS home_team_l,
+           LOWER(away_team) AS away_team_l,
+           date,
+           home_goals, away_goals,
+           home_corners, away_corners,
+           home_yellow, away_yellow,
+           home_goals_ht, away_goals_ht,
+           home_goals_h2, away_goals_h2,
+           home_shots_target, away_shots_target
+    FROM matches
+    WHERE date BETWEEN :d_from AND :d_to
+"""
 
+
+def _preload_matches(dates: pd.Series) -> pd.DataFrame:
+    """Partidos de `matches` en la ventana de `dates` ±2 días (la misma
+    tolerancia del buscador): UNA consulta en vez de una por bet."""
+    d = _naive_utc(dates)
+    return pd.read_sql(text(_MATCHES_PRELOAD_SQL), engine, params={
+        "d_from": (d.min() - pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+        "d_to":   (d.max() + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+    })
+
+
+def plan_bet_settlements(bets: pd.DataFrame, all_matches: pd.DataFrame) -> list[dict]:
+    """
+    Función PURA: qué escribir para cada bet 'pending' o 'unresolved'.
+      - sin partido en `matches` o sin goles → nada (sigue esperando: fuente
+        tardía o el resolver con Claude)
+      - con goles pero sin los datos de SU mercado (córners, tarjetas,
+        1T/2T, tiros) → 'unresolved' (si no lo estaba ya)
+      - con todo → resultado final y profit (resolve_market)
+    Cada entrada: {id, match, market, was, result, profit}.
+
+    Las 'unresolved' se liquidan AQUÍ en cuanto llegan sus datos. Hasta el
+    22-sep-26 se re-marcaban 'pending' y, en la misma corrida, el timeout de
+    3 días las devolvía a 'unresolved' (toda unresolved tiene más de 3
+    días): nunca se liquidaban y terminaban 'stale', fuera del bankroll.
+    """
+    if bets.empty:
+        return []
+    lookup = make_match_lookup(all_matches)
+    found: dict = {}   # una búsqueda por partido (el shadow trae ~10 mercados c/u)
+    plan = []
+    for _, row in bets.iterrows():
+        match = str(row["match"])
+        if " vs " not in match:
+            continue
+        home, away = match.split(" vs ", 1)
+        market = str(row["market"])
+        try:
+            key = (match, str(row["match_date"]))
+            if key not in found:
+                found[key] = lookup(normalize_team(home).lower(), normalize_team(away).lower(),
+                                    row["match_date"])
+            mrow = found[key]
+            if mrow is None or not (_has(mrow["home_goals"]) and _has(mrow["away_goals"])):
+                continue
+            if all(_has(mrow.get(f)) for f in _market_required_match_fields(market)):
+                outcome, profit = resolve_market(market, mrow, float(row["odds"]),
+                                                 float(row["stake"]))
+            else:
+                outcome, profit = "unresolved", 0.0
+        except Exception as e:
+            log.error(f"❌ Liquidación {match} | {market}: {type(e).__name__}: {e}")
+            continue
+        if outcome == "unresolved" and row["result"] == "unresolved":
+            continue    # sigue esperando sus datos: nada que escribir
+        plan.append({"id": int(row["id"]), "match": match, "market": market,
+                     "was": str(row["result"]), "result": outcome, "profit": float(profit)})
+    return plan
+
+
+def update_bet_results():
+    """
+    Liquida las bets 'pending' con kickoff hace más de 3 h y las
+    'unresolved' cuyos datos de mercado ya llegaron (plan_bet_settlements).
+    Bet y bankroll se escriben en el mismo savepoint (N3, ronda 5).
+    """
     print("\n📡 UPDATING BET RESULTS...\n")
 
-    # Fix timezone: esperar 3h después del kickoff para asegurar que el
-    # partido terminó (match_date es el kickoff en UTC, 90+15 min + buffer).
+    # 3 h tras el kickoff (match_date en UTC) para asegurar que terminó.
     df = pd.read_sql("""
         SELECT *
         FROM bets_history
-        WHERE result = 'pending'
-        AND match_date < NOW() - INTERVAL '3 hours'
+        WHERE (result = 'pending' AND match_date < NOW() - INTERVAL '3 hours')
+           OR result = 'unresolved'
     """, engine)
 
     if df.empty:
@@ -599,164 +687,48 @@ def update_bet_results():
     # garantizar el esquema una sola vez antes del batch.
     ensure_bankroll_schema()
 
-    # ── Pre-carga de resultados (elimina N+1 queries) ─────────────────────
-    # En vez de hacer 1-5 pd.read_sql() por bet, traemos TODOS los partidos
-    # relevantes en UNA sola query y resolvemos en memoria.
-    _min_date = (df["match_date"].min() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    _max_date = (df["match_date"].max() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    _all_matches = pd.read_sql(text("""
-        SELECT LOWER(home_team) AS home_team_l,
-               LOWER(away_team) AS away_team_l,
-               date,
-               home_goals, away_goals,
-               home_corners, away_corners,
-               home_yellow, away_yellow,
-               home_goals_ht, away_goals_ht,
-               home_goals_h2, away_goals_h2,
-               home_shots_target, away_shots_target
-        FROM matches
-        WHERE date BETWEEN :d_from AND :d_to
-    """), engine, params={"d_from": _min_date, "d_to": _max_date})
+    # Pre-carga sobre las fechas de TODAS las candidatas: antes solo las de
+    # las pending, y las unresolved más viejas no encontraban su partido.
+    plan = plan_bet_settlements(df, _preload_matches(df["match_date"]))
 
-    _lookup_match = make_match_lookup(_all_matches)
-
-    updated = 0
-
+    settled = to_unresolved = late = 0
     with engine.begin() as conn:
-
-        for _, row in df.iterrows():
-
+        for p in plan:
+            final = p["result"] != "unresolved"
             try:
-                match = row["match"]
-                market = row["market"]
-                odds = row["odds"]
-                stake = row["stake"]
-
-                # =========================
-                # SAFE SPLIT
-                # =========================
-                if " vs " not in match:
-                    continue
-
-                home, away = match.split(" vs ")
-
-                home = normalize_team(home)
-                away = normalize_team(away)
-
-                # =========================
-                # FETCH RESULT (NORMALIZED)
-                # =========================
-                match_date = pd.to_datetime(row["match_date"])
-                _mrow = _lookup_match(home.lower(), away.lower(), match_date)
-
-                if _mrow is None:
-                    continue
-
-                hg = _mrow["home_goals"]
-                ag = _mrow["away_goals"]
-
-                # Fix: validar NULL antes de comparar (antes causaba TypeError
-                # silencioso → bet quedaba "pending" indefinidamente → profit
-                # real se perdía del learning)
-                if hg is None or ag is None or pd.isna(hg) or pd.isna(ag):
-                    continue
-
-                outcome, profit = resolve_market(market, _mrow, odds, stake)
-
-                # =========================
-                # UPDATE (+ SAVEPOINT por fila)
-                # =========================
-                # Ronda 5 (N3): bet + bankroll se escriben en el MISMO
-                # savepoint — si el bankroll falla, la bet no se marca final
-                # y reintenta el próximo ciclo (antes el try/except tragaba
-                # el fallo y la bet quedaba final con bankroll sin aplicar:
-                # drift de −7.54u medido en producción). El savepoint aísla
-                # el fallo a esta fila sin abortar la transacción del batch.
-
+                # Ronda 5 (N3): bet + bankroll en el MISMO savepoint — si el
+                # bankroll falla, la bet no queda final y reintenta el
+                # próximo ciclo, sin abortar el lote. `result = :was` evita
+                # aplicar dos veces el bankroll si otra corrida la liquidó
+                # entre la lectura y esta escritura.
                 with conn.begin_nested():
-                    conn.execute(text("""
+                    r = conn.execute(text("""
                         UPDATE bets_history
-                        SET result = :result,
-                            profit = :profit
-                        WHERE id = :id
-                    """), {
-                        "result": outcome,
-                        "profit": float(profit),
-                        "id": int(row["id"])
-                    })
-
-                    # ── Actualizar bankroll real ──────────────────────────
-                    # Cada vez que se resuelve una apuesta, el bankroll se
-                    # actualiza para que el Kelly del próximo ciclo use el
-                    # capital correcto. Una bet 'unresolved' (profit 0) ya no
-                    # genera fila de bankroll: 307 filas amount-0 contaminaban
-                    # el historial y desacomodaban la reconciliación.
-                    if outcome != "unresolved":
+                        SET result = :result, profit = :profit
+                        WHERE id = :id AND result = :was
+                    """), {"result": p["result"], "profit": p["profit"],
+                           "id": p["id"], "was": p["was"]})
+                    if r.rowcount != 1:
+                        continue
+                    # Una bet 'unresolved' (profit 0) no genera fila de
+                    # bankroll: 307 filas amount-0 contaminaban el historial.
+                    if final:
                         update_bankroll(
-                            profit=float(profit),
-                            notes=f"{match} | {market} | {outcome}",
+                            profit=p["profit"],
+                            notes=f"{p['match']} | {p['market']} | {p['result']}",
                             conn=conn,
                         )
-
-                updated += 1
-
+                if final:
+                    settled += 1
+                    late += p["was"] == "unresolved"
+                else:
+                    to_unresolved += 1
             except Exception as e:
-                print("❌ Error:", e)
+                log.error(f"❌ Error liquidando {p['match']} | {p['market']}: {e}")
 
-    print(f"✅ Updated {updated} bets")
-
-    # ── Re-check: intentar resolver bets 'unresolved' que ahora tengan resultado ──
-    # Los resultados pueden llegar tarde (fetch_results corre diario).
-    # Si ahora hay un resultado en matches, reclasificamos la bet.
-    unresolved_df = pd.read_sql("""
-        SELECT *
-        FROM bets_history
-        WHERE result = 'unresolved'
-    """, engine)
-    if not unresolved_df.empty:
-        recheck_count = 0
-        # Traemos TODAS las columnas que algún market puede necesitar en
-        # una sola query — antes traíamos sólo home_goals/away_goals y
-        # re-marcábamos como pending aunque los campos específicos
-        # (corners/cards/HT/shots) siguieran NULL, causando bouncing
-        # pending↔unresolved que disparaba Claude en cada cron.
-        with engine.begin() as conn:
-            for _, row in unresolved_df.iterrows():
-                try:
-                    match = row["match"]
-                    if " vs " not in match:
-                        continue
-                    home, away = match.split(" vs ")
-                    home = normalize_team(home)
-                    away = normalize_team(away)
-                    match_date = pd.to_datetime(row["match_date"])
-                    required = _market_required_match_fields(row["market"])
-                    _ur_row = _lookup_match(home.lower(), away.lower(), match_date)
-                    if _ur_row is None:
-                        continue
-                    # Validar que TODOS los campos requeridos por este market
-                    # estén presentes — no sólo goles. Sin esto un bet de
-                    # corners se re-marcaba como pending cuando home_goals
-                    # existían pero home_corners era NULL, generando el
-                    # loop infinito que costaba tokens.
-                    fields_ready = all(
-                        _ur_row.get(f) is not None and not pd.isna(_ur_row.get(f))
-                        for f in required
-                    )
-                    if not fields_ready:
-                        continue
-                    # Datos completos para ESTE market → re-pending para reevaluar
-                    conn.execute(text("""
-                        UPDATE bets_history
-                        SET result = 'pending'
-                        WHERE id = :id
-                    """), {"id": int(row["id"])})
-                    recheck_count += 1
-                except Exception as e:
-                    # Fix: logging para no perder errores silenciosamente
-                    log.error(f"⚠️  Recheck error ({row.get('match', '?')}): {e}")
-        if recheck_count > 0:
-            print(f"🔄 {recheck_count} bets 'unresolved' re-marcadas como 'pending' (datos market-specific ya completos)")
+    print(f"✅ Updated {settled} bets"
+          + (f" ({late} con datos que llegaron tarde)" if late else "")
+          + (f" · {to_unresolved} esperan datos de su mercado" if to_unresolved else ""))
 
     # ── Timeout escalado (2 etapas) ─────────────────────────────────────
     # Etapa 1: pending → unresolved después de 3 días sin resultado en DB.
@@ -785,6 +757,61 @@ def update_bet_results():
             print(f"🗑️  {r2.rowcount} bets 'unresolved' → 'stale' (tras 7 días sin datos fuente)")
 
 
+def audit_stat_settlements() -> dict:
+    """
+    SOLO LECTURA: re-evalúa con los datos actuales de `matches` las bets de
+    córners, tarjetas y tiros ya liquidadas. Hasta el 22-sep-26 un NULL
+    leído como NaN se liquidaba "loss" (ver _has): aquí se cuentan las que
+    se liquidaron SIN datos (hoy seguirían sin ellos) y las que hoy darían
+    otro resultado. No corrige nada — eso es decisión del dueño.
+    """
+    df = pd.read_sql("""
+        SELECT id, match, match_date, market, odds, stake, result, profit
+        FROM bets_history
+        WHERE result IN ('win', 'loss', 'push', 'half_win', 'half_loss')
+          AND split_part(market, '_', 1) IN ('corners', 'cards', 'shots')
+    """, engine)
+    out = {"checked": int(len(df)), "no_data": 0, "no_data_profit": 0.0,
+           "different": 0, "different_profit_delta": 0.0, "unverifiable": 0,
+           "details": []}
+    if df.empty:
+        return out
+    matches = _preload_matches(df["match_date"])
+    plan = {p["id"]: p for p in plan_bet_settlements(df.assign(result="pending"), matches)}
+    lookup = make_match_lookup(matches)
+    for _, row in df.iterrows():
+        p = plan.get(int(row["id"]))
+        if p is None:
+            out["unverifiable"] += 1          # sin partido o sin goles en matches
+            continue
+        recorded = float(row["profit"] or 0.0)
+        if p["result"] == "unresolved":
+            out["no_data"] += 1
+            out["no_data_profit"] += recorded
+        elif p["result"] != row["result"]:
+            out["different"] += 1
+            out["different_profit_delta"] += p["profit"] - recorded
+        else:
+            continue
+        if len(out["details"]) < 20:
+            home, away = str(row["match"]).split(" vs ", 1)
+            m = lookup(normalize_team(home).lower(), normalize_team(away).lower(),
+                       row["match_date"])
+            kind = str(row["market"]).split("_")[0]
+            cols = {"corners": ("home_corners", "away_corners"),
+                    "cards": ("home_yellow", "away_yellow"),
+                    "shots": ("home_shots_target", "away_shots_target")}[kind]
+            data = [None if m is None or not _has(m.get(c)) else float(m.get(c)) for c in cols]
+            out["details"].append(
+                f"#{int(row['id'])} {str(row['match_date'])[:10]} {row['match']} | "
+                f"{row['market']} @{float(row['odds']):.2f}: registrado {row['result']} "
+                f"{recorded:+.2f}u → hoy {p['result']} {p['profit']:+.2f}u "
+                f"({kind} {data[0]}+{data[1]})")
+    out["no_data_profit"] = round(out["no_data_profit"], 2)
+    out["different_profit_delta"] = round(out["different_profit_delta"], 2)
+    return out
+
+
 # ============================================================
 # RESULTADOS DE LAS CANDIDATAS SHADOW (22-sep-26)
 # ============================================================
@@ -801,42 +828,17 @@ SHADOW_STALE_DAYS = 10   # sin datos del partido tras 10 días → 'stale'
 def plan_shadow_resolutions(pending: pd.DataFrame, all_matches: pd.DataFrame) -> list[dict]:
     """
     Función PURA: {id, result, profit} por candidata que ya se puede
-    liquidar. Se salta (queda para la próxima corrida) la que no tiene
-    partido en `matches`, goles, o los datos propios de su mercado
-    (córners, tarjetas, 1T/2T, tiros) — mismo criterio que el re-check de
-    bets_history — y la que el resolver no sabe liquidar.
+    liquidar, con la MISMA lógica que las bets reales (plan_bet_settlements)
+    y stake 1. Queda para la próxima corrida la que no tiene partido,
+    goles, los datos propios de su mercado (córners, tarjetas, 1T/2T,
+    tiros) o un mercado que el resolver no sabe liquidar.
     """
     if pending.empty:
         return []
-    lookup = make_match_lookup(all_matches)
-    found: dict = {}   # un partido trae ~10 mercados: una búsqueda por partido
-    plan = []
-    for _, row in pending.iterrows():
-        match = str(row["match"])
-        if " vs " not in match:
-            continue
-        key = (match, str(row["match_date"]))
-        if key not in found:
-            home, away = match.split(" vs ", 1)
-            found[key] = lookup(normalize_team(home).lower(), normalize_team(away).lower(),
-                                row["match_date"])
-        mrow = found[key]
-        if mrow is None:
-            continue
-        ready = all(mrow.get(f) is not None and not pd.isna(mrow.get(f))
-                    for f in ("home_goals", "away_goals")
-                    + _market_required_match_fields(row["market"]))
-        if not ready:
-            continue
-        try:
-            odds = float(row["odds"])
-        except (TypeError, ValueError):
-            continue
-        outcome, profit = resolve_market(str(row["market"]), mrow, odds, 1.0)
-        if outcome == "unresolved":
-            continue
-        plan.append({"id": int(row["id"]), "result": outcome, "profit": round(float(profit), 6)})
-    return plan
+    as_bets = pending.assign(stake=1.0, result="pending")
+    return [{"id": p["id"], "result": p["result"], "profit": round(p["profit"], 6)}
+            for p in plan_bet_settlements(as_bets, all_matches)
+            if p["result"] != "unresolved"]
 
 
 def resolve_shadow_outcomes(dry_run: bool = False) -> dict:

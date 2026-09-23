@@ -23,7 +23,7 @@ import zipfile
 import requests
 import pandas as pd
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 from sqlalchemy import text
 
 sys.path.append(str(Path(__file__).parent.parent))

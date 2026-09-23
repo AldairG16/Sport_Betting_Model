@@ -26,6 +26,10 @@ import pandas as pd
 from sqlalchemy import text
 from config.database import engine
 from src.utils.team_normalizer import normalize_team
+from src.utils.db_batch import insert_ignore_conflicts, describe
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 GOALS_URL = "https://raw.githubusercontent.com/martj42/international_results/master/goalscorers.csv"
 
@@ -97,9 +101,7 @@ def collect_match_events(verbose: bool = True):
     # Agrupar por partido
     groups = df.groupby(["date", "home_team", "away_team"])
 
-    inserted = 0
-    skipped  = 0
-    rows     = []
+    rows = []
 
     for (date, home, away), group in groups:
             # Separar goles de cada equipo.
@@ -144,27 +146,21 @@ def collect_match_events(verbose: bool = True):
                 "penalty_in_match": penalty_in_match,
             })
 
-    # un solo viaje a Neon por lote (executemany) en vez de uno por partido
+    # Por lotes de verdad (src/utils/db_batch). El executemany de antes
+    # decía "un viaje por lote" pero con SQL textual psycopg2 hace uno por
+    # fila (21 min por semana), y contaba como insertadas las procesadas.
     with engine.begin() as conn:
-        CHUNK = 2000
-        for i in range(0, len(rows), CHUNK):
-            conn.execute(text("""
-                INSERT INTO match_events (
-                    date, home_team, away_team,
-                    home_scorers, away_scorers,
-                    penalty_in_match
-                ) VALUES (
-                    :date, :home_team, :away_team,
-                    :home_scorers, :away_scorers,
-                    :penalty_in_match
-                )
-                ON CONFLICT (date, home_team, away_team) DO NOTHING
-            """), rows[i:i + CHUNK])
-            inserted += len(rows[i:i + CHUNK])
+        res = insert_ignore_conflicts(
+            conn, "match_events",
+            ["date", "home_team", "away_team", "home_scorers", "away_scorers",
+             "penalty_in_match"],
+            rows, ["date", "home_team", "away_team"])
 
     if verbose:
-        print(f"   ✅ Insertados: {inserted:,}  |  Saltados: {skipped:,}")
-        print("   match_events actualizado")
+        print(f"   ✅ match_events: {describe(res)}")
+    if res["errors"]:
+        log.error(f"❌ match_events: {res['errors']} partidos no se pudieron "
+                  f"insertar — {res['first_error']}")
 
 
 if __name__ == "__main__":

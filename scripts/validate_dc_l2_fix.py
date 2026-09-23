@@ -98,7 +98,7 @@ def main():
     use_rho_old = rho_old if abs(rho_old) >= 0.02 else None
     use_rho_new = rho_new if abs(rho_new) >= 0.02 else None
 
-    print(f"\nGating de DC tau correction:")
+    print("\nGating de DC tau correction:")
     print(f"  OLD: |rho|={abs(rho_old):.4f}  →  {'ACTIVA' if use_rho_old else 'POISSON CRUDA'}")
     print(f"  NEW: |rho|={abs(rho_new):.4f}  →  {'ACTIVA' if use_rho_new else 'POISSON CRUDA'}")
 
@@ -197,7 +197,7 @@ def main():
     diff_lh = (p["lh_new"] - p["lh_old"]).abs().mean()
     diff_la = (p["la_new"] - p["la_old"]).abs().mean()
     print(f"\nLambdas: |Δlh|_avg={diff_lh:.4f}  |Δla|_avg={diff_la:.4f}")
-    print(f"  (no debe ser enorme — los teams cambian poco, solo rho cambió)")
+    print("  (no debe ser enorme — los teams cambian poco, solo rho cambió)")
 
 
 if __name__ == "__main__":

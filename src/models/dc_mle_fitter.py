@@ -46,7 +46,6 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
-from scipy.stats import poisson
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 

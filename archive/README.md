@@ -21,3 +21,4 @@ ningún archivo de producción, script ni test lo importaba (verificado con
 | `src/features/team_strength.py` | Fuerza de equipo por promedios | `src/features/team_form.py` (Kalman) | No |
 | `src/features/team_matcher.py`, `team_mapping_engine.py` | Emparejado difuso de nombres | `src/utils/team_normalizer.py` | No: escribía su propio mapeo |
 | `src/data/queries.py` | Vacío | — | — |
+| `src/dashboard/betting_dashboard.py` (retirado el 22-sep-2026, fase 5) | Imprimía en consola el detalle de un partido | `dashboard/app.py` (dashboard web local) | Sí, pero nadie lo llamaba: el pipeline lo importaba sin usarlo |

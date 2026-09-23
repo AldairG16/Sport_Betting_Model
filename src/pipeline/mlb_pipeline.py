@@ -19,9 +19,7 @@ Reutiliza:
 
 import sys
 import pandas as pd
-import numpy as np
 from pathlib import Path
-from datetime import datetime, timezone
 from scipy.stats import poisson
 from sqlalchemy import text
 
@@ -306,8 +304,6 @@ def run_mlb_pipeline():
         # ── Odds basicas ─────────────────────────────────────────────
         home_odds   = _safe_odds(row.get("home_odds"))
         away_odds   = _safe_odds(row.get("away_odds"))
-        over25_odds = _safe_odds(row.get("over25_odds"))   # linea de totals de la DB
-        under25_odds = _safe_odds(row.get("under25_odds"))
         ah_home_odds = _safe_odds(row.get("ah_home_odds"))
         ah_away_odds = _safe_odds(row.get("ah_away_odds"))
         ah_line      = row.get("ah_line")
@@ -359,14 +355,10 @@ def run_mlb_pipeline():
         # con punto != 2.5 (suele ser 8.5, 9, etc.)
         # El script update_upcoming_matches.py filtra solo over25_odds (point==2.5)
         # Para MLB no hay point 2.5 → over25_odds sera NULL
-        # Usamos ah_line como proxy de totals si esta disponible
-        # TODO: en la proxima iteracion parsear la linea correcta de totals para MLB
-        # Por ahora calculamos con lambda sum como total esperado
-        total_line = lambda_home + lambda_away  # linea implicita del modelo
-        if total_line > 1:
-            totals = _poisson_totals(lambda_home, lambda_away, total_line)
-            # Solo agregamos si tenemos odds reales de mercado
-            # (over25_odds sera None para MLB por la razon de arriba)
+        # TODO: parsear la linea correcta de totals para MLB. Sin ella no hay
+        # mercado de totals: calcularlo con la linea implicita del modelo
+        # (λ_local + λ_visita) no tenia cuota con que compararse y el
+        # resultado se descartaba.
 
         # Run line (Asian Handicap ±1.5 — mercado principal de MLB)
         if ah_line is not None:

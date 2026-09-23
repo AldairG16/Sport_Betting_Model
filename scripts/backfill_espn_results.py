@@ -166,7 +166,7 @@ def backfill_espn_results(verbose: bool = True) -> dict:
 
             # Upsert en matches (misma política que el resto del sistema)
             league_col = league if league else None
-            r = conn.execute(text("""
+            conn.execute(text("""
                 INSERT INTO matches (date, league, season, home_team, away_team,
                                      home_goals, away_goals,
                                      home_goals_ht, away_goals_ht)

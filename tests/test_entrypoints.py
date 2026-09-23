@@ -49,6 +49,51 @@ def _lazy_imports(path: Path) -> list[tuple[str, str, int]]:
     return found
 
 
+PROJECT_PACKAGES = ("src", "scripts", "config", "dashboard")
+
+
+def _project_from_imports() -> list[tuple[str, str, str]]:
+    """(archivo, módulo, nombre) de cada `from <paquete del proyecto> import
+    nombre` en el código de producción, a cualquier nivel (módulo o función)."""
+    import ast
+    found = []
+    for pkg in PROJECT_PACKAGES:
+        for path in sorted((ROOT / pkg).rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.ImportFrom) and node.level == 0 and node.module
+                        and node.module.split(".")[0] in PROJECT_PACKAGES):
+                    rel = str(path.relative_to(ROOT))
+                    found += [(f"{rel}:{node.lineno}", node.module, a.name) for a in node.names
+                              if a.name != "*"]
+    return found
+
+
+def test_every_project_import_resolves():
+    """
+    Cada `from src.x import y` del proyecto apunta a algo que existe. Un
+    import "sin uso" puede ser un re-export del que depende otro módulo, y
+    los imports dentro de funciones solo fallan cuando se ejecuta esa rama
+    (a veces una vez por semana, en producción).
+    """
+    import importlib
+    broken = []
+    for where, module, name in _project_from_imports():
+        try:
+            mod = importlib.import_module(module)
+        except ModuleNotFoundError as e:
+            if (e.name or "").split(".")[0] in PROJECT_PACKAGES:
+                broken.append(f"{where}: {module} ({e})")
+            continue   # dependencia opcional de terceros
+        if hasattr(mod, name):
+            continue
+        try:
+            importlib.import_module(f"{module}.{name}")   # submódulo
+        except ModuleNotFoundError:
+            broken.append(f"{where}: {module}.{name}")
+    assert not broken, "imports rotos:\n" + "\n".join(broken)
+
+
 def test_orchestrator_lazy_imports_resolve():
     """Los pasos del orchestrator importan dentro de la función (arranque
     rápido): un nombre renombrado o borrado no rompe ningún test y revienta

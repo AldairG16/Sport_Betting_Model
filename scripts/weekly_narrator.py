@@ -17,7 +17,7 @@ es la voz que explica lo que ya ocurrió.
 
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -26,7 +26,6 @@ from sqlalchemy import text
 sys.path.append(str(Path(__file__).parent.parent))
 
 from config.database import engine
-from config.settings import USER_TIMEZONE
 
 
 # ─────────────────────────────────────────────────────────────

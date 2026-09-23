@@ -14,6 +14,10 @@ import requests
 from sqlalchemy import text
 from config.database import engine
 from src.utils.team_normalizer import normalize_team
+from src.utils.db_batch import insert_ignore_conflicts, describe
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 
 def _ensure_cards_schema():
@@ -214,44 +218,22 @@ def load_historical_data():
                 "home_red","away_red",
             ]]
 
-            # Insertar por LOTES (executemany — un viaje a Neon, no uno por
-            # fila) con ON CONFLICT DO NOTHING para evitar duplicados
-            from sqlalchemy import text as _text
-            # to_json convierte numpy → nativos y NaN → null (psycopg2 no
-            # adapta np.float64 y un fallo aborta el lote entero — ronda 15)
-            rows = json.loads(df[[
-                "date","league","season",
-                "home_team","away_team",
-                "home_goals","away_goals",
-                "home_shots","away_shots",
-                "home_shots_target","away_shots_target",
-                "home_corners","away_corners",
-                "home_yellow","away_yellow",
-                "home_red","away_red",
-            ]].to_json(orient="records", date_format="iso"))
+            # Por LOTES de verdad (src/utils/db_batch): una sentencia
+            # multi-VALUES por lote. El executemany de antes hacía un viaje a
+            # Neon por fila. to_json convierte numpy → nativos y NaN → null
+            # (ronda 15).
+            cols = list(df.columns)
+            rows = json.loads(df.to_json(orient="records", date_format="iso"))
             with engine.begin() as conn:
-                conn.execute(_text("""
-                    INSERT INTO matches (
-                        date, league, season, home_team, away_team,
-                        home_goals, away_goals, home_shots, away_shots,
-                        home_shots_target, away_shots_target,
-                        home_corners, away_corners,
-                        home_yellow, away_yellow, home_red, away_red
-                    ) VALUES (
-                        :date, :league, :season, :home_team, :away_team,
-                        :home_goals, :away_goals, :home_shots, :away_shots,
-                        :home_shots_target, :away_shots_target,
-                        :home_corners, :away_corners,
-                        :home_yellow, :away_yellow, :home_red, :away_red
-                    )
-                    ON CONFLICT (date, home_team, away_team) DO NOTHING
-                """), rows)
-            print(f"✅ Procesados: {len(df)}")
+                res = insert_ignore_conflicts(conn, "matches", cols, rows,
+                                              ["date", "home_team", "away_team"])
+            print(f"✅ {league} {s}: {describe(res)}")
+            if res["errors"]:
+                log.error(f"❌ Histórico {league} {s}: {res['errors']} filas no se "
+                          f"pudieron insertar — {res['first_error']}")
 
     print("🔥 HISTORICAL READY")
 
 
 if __name__ == "__main__":
     load_historical_data()
-
-print("🔥 HISTORICAL READY")

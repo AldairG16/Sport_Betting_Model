@@ -30,7 +30,6 @@ import sys
 import os
 import requests
 import pandas as pd
-import numpy as np
 from io import StringIO
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -39,8 +38,11 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from config.database import engine
-from sqlalchemy import text
 from src.utils.team_normalizer import normalize_team
+from src.utils.db_batch import insert_ignore_conflicts, describe
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 
 # ── Mapeo de ligas extra ─────────────────────────────────────────────────────
@@ -136,35 +138,21 @@ def load_extra_leagues(leagues: dict = None):
         df["season"] = df["Season"].astype(str) if "Season" in df.columns else "unknown"
         df["league"] = sport_key
 
-        # Insertar con ON CONFLICT DO NOTHING
-        inserted = 0
+        # Por lotes con ON CONFLICT DO NOTHING (src/utils/db_batch). Antes:
+        # una sentencia por fila (24 min por semana para ~18k filas), un
+        # `except: pass` que dentro de la transacción revertía el lote
+        # entero en silencio, y "nuevas insertadas" contaba las procesadas.
+        cols = ["date", "league", "season", "home_team", "away_team",
+                "home_goals", "away_goals"]
         with engine.begin() as conn:
-            for _, row in df.iterrows():
-                try:
-                    conn.execute(text("""
-                        INSERT INTO matches (
-                            date, league, season, home_team, away_team,
-                            home_goals, away_goals
-                        ) VALUES (
-                            :date, :league, :season, :home_team, :away_team,
-                            :home_goals, :away_goals
-                        )
-                        ON CONFLICT (date, home_team, away_team) DO NOTHING
-                    """), {
-                        "date": row["date"],
-                        "league": sport_key,
-                        "season": row["season"],
-                        "home_team": row["home_team"],
-                        "away_team": row["away_team"],
-                        "home_goals": row["home_goals"],
-                        "away_goals": row["away_goals"],
-                    })
-                    inserted += 1
-                except Exception:
-                    pass
-
-        total_new += inserted
-        print(f"  {code}: {len(df)} rows procesadas, {inserted} nuevas insertadas")
+            res = insert_ignore_conflicts(conn, "matches", cols,
+                                          df[cols].to_dict("records"),
+                                          ["date", "home_team", "away_team"])
+        total_new += res["inserted"]
+        print(f"  {code}: {len(df)} filas — {describe(res)}")
+        if res["errors"]:
+            log.error(f"❌ Liga extra {code}: {res['errors']} filas no se pudieron "
+                      f"insertar — {res['first_error']}")
 
     print(f"\n  TOTAL: {total_new} registros nuevos")
     print("=" * 55)

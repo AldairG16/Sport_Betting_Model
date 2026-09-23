@@ -17,12 +17,9 @@ Parámetros que optimiza:
 """
 
 import sys
-import os
 import json
-import numpy as np
 import pandas as pd
 from pathlib import Path
-from sqlalchemy import text
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
@@ -237,8 +234,6 @@ def optimize_thresholds(min_sample: int = 200, verbose: bool = True) -> dict:
 
     print(f"  Partidos históricos disponibles: {len(df_matches):,}")
 
-    best_roi    = -99.0
-    best_params = {}
     results_log = []
 
     for edge_min in GRID["edge_min"]:
@@ -262,14 +257,6 @@ def optimize_thresholds(min_sample: int = 200, verbose: bool = True) -> dict:
                     "win_rate": win_rate,
                     "n":        n
                 })
-
-                if roi > best_roi:
-                    best_roi    = roi
-                    best_params = {
-                        "edge_min":        edge_min,
-                        "min_probability": min_prob,
-                        "max_odds":        max_odds,
-                    }
 
     if verbose and results_log:
         log_df = (pd.DataFrame(results_log)

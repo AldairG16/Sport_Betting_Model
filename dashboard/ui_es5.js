@@ -324,3 +324,31 @@ function genNarrative(){
   };
   x.send();
 }
+
+// ── ARRANQUE (fix 21-sep: el archivo definía todas las funciones pero nada
+// las invocaba — la página se quedaba en "Conectando…" para siempre) ──
+// ── Layout de gráficas (r14-fix): Chart.js v2 necesita contenedor con
+// altura fija y position:relative — sin esto el canvas se desborda sobre
+// las secciones de abajo (superposición reportada por el usuario) ──
+if (window.Chart && Chart.defaults && Chart.defaults.global) {
+  Chart.defaults.global.maintainAspectRatio = false;
+  Chart.defaults.global.responsive = true;
+}
+(function(){
+  var st = document.createElement('style');
+  st.textContent = '.chartbox{position:relative;height:300px;overflow:hidden}' +
+                   '.chartbox canvas{width:100%!important;height:280px!important}';
+  document.head.appendChild(st);
+})();
+
+loadVersion();
+loadKpis();
+loadEquity();
+loadBy();
+loadClv();
+loadBank();
+loadBets();
+loadScorers();
+loadGh();
+loadNarrativeSec();
+setRefresh(5);   // auto-refresco de KPIs/tablas cada 5 min

@@ -12,7 +12,6 @@ OPTIMIZACIONES DE CREDITOS:
 """
 
 import sys
-import os
 import time
 import json
 import requests
@@ -288,8 +287,6 @@ def fetch_event_specialty_markets(sport_key: str, event_id: str, cache: dict) ->
     'bookmakers' parseable por parse_match(). Usa cache con TTL corto.
     Si la API falla o no hay créditos, retorna [] (enrichment opcional).
     """
-    global _last_known_remaining
-
     cache_key = _enrich_cache_key(event_id)
     if cache_key in cache:
         try:
@@ -402,7 +399,7 @@ def enrich_events_with_specialty(sport_key: str, events: list, cache: dict) -> i
 
     Retorna el número de eventos enriquecidos.
     """
-    global _last_known_remaining, _enrichments_this_run
+    global _enrichments_this_run
 
     if not events:
         return 0

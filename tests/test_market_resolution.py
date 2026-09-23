@@ -10,10 +10,13 @@ una copia, no el código que liquida el dinero, e incluía tautologías como
 mismas tablas de casos. Sin DB real — datos 100% sintéticos.
 """
 
+from contextlib import contextmanager
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 
-from src.models.save_bets import resolve_market, make_match_lookup
+from src.models.save_bets import resolve_market, make_match_lookup, plan_bet_settlements
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -213,6 +216,21 @@ class TestStatsMarkets:
         assert _resolve("cards_over_4.5", 1, 0, home_yellow=3, away_yellow=2)[0] == "win"
         assert _resolve("cards_under_4.5", 1, 0, home_yellow=3, away_yellow=2)[0] == "loss"
 
+    @pytest.mark.parametrize("market,stats,expected", [
+        ("cards_under_4.0", dict(home_yellow=2, away_yellow=2), "push"),
+        ("cards_over_4.0", dict(home_yellow=2, away_yellow=2), "push"),
+        ("cards_under_4.0", dict(home_yellow=1, away_yellow=2), "win"),
+        ("corners_over_10.0", dict(home_corners=6, away_corners=4), "push"),
+        ("corners_under_10.0", dict(home_corners=7, away_corners=4), "loss"),
+        ("shots_over_7.0", dict(home_shots_target=3, away_shots_target=4), "push"),
+    ])
+    def test_whole_line_exactly_on_the_line_is_a_push(self, market, stats, expected):
+        """Línea entera y total justo en la línea: la casa devuelve el stake.
+        Hasta el 22-sep-26 el under se daba ganado y el over perdido."""
+        outcome, profit = _resolve(market, 1, 0, stake=2.0, odds=1.9, **stats)
+        assert outcome == expected
+        assert profit == pytest.approx({"push": 0.0, "win": 1.8, "loss": -2.0}[expected])
+
     def test_missing_stats_are_unresolved_without_profit(self):
         assert _resolve("cards_over_4.5", 1, 0) == ("unresolved", 0.0)
         assert _resolve("corners_over_9.5", 1, 0) == ("unresolved", 0.0)
@@ -241,3 +259,128 @@ class TestStatsMarkets:
 
     def test_half_time_goals_missing_is_unresolved(self):
         assert _resolve("h1_home", 1, 0, home_goals_ht=None, away_goals_ht=1) == ("unresolved", 0.0)
+
+    @pytest.mark.parametrize("market", ["corners_over_9.5", "corners_under_9.5",
+                                        "cards_over_4.5", "cards_under_4.5",
+                                        "shots_over_5.5", "shots_under_5.5"])
+    def test_missing_stats_as_nan_are_unresolved_not_a_loss(self, market):
+        """
+        Como llega de pd.read_sql: si otra fila de la precarga tiene córners,
+        la columna es float64 y el NULL es NaN, no None. Hasta el 22-sep-26
+        el resolver solo miraba `is not None`: con NaN toda comparación es
+        False y over Y under se liquidaban "loss" (−stake al bankroll).
+        """
+        stats = ["home_corners", "away_corners", "home_yellow", "away_yellow",
+                 "home_shots_target", "away_shots_target"]
+        m = pd.DataFrame([_match_row(home_goals=2, away_goals=1, **{c: 5 for c in stats}),
+                          _match_row(home_goals=1, away_goals=0)])
+        for c in stats:
+            m[c] = pd.to_numeric(m[c])          # float64 con NaN, como en producción
+        row = m.iloc[1]
+        assert pd.isna(row["home_corners"])
+        assert resolve_market(market, row, 1.9, 1.0) == ("unresolved", 0.0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Liquidación completa: plan puro + update_bet_results con base falsa
+# ─────────────────────────────────────────────────────────────────────────────
+
+STAT_COLS = ["home_corners", "away_corners", "home_yellow", "away_yellow",
+             "home_goals_ht", "away_goals_ht", "home_goals_h2", "away_goals_h2",
+             "home_shots_target", "away_shots_target"]
+
+
+def _matches_like_production(rows):
+    """DataFrame como el de la precarga: NULL numéricos → NaN (float64)."""
+    df = pd.DataFrame([_match_row(**r) for r in rows])
+    for c in ["home_goals", "away_goals"] + STAT_COLS:
+        df[c] = pd.to_numeric(df[c])
+    return df
+
+
+MATCHES = [
+    dict(home_team_l="alpha", away_team_l="beta", date="2026-09-20",
+         home_goals=2, away_goals=1, home_corners=6, away_corners=5),       # 11 córners
+    dict(home_team_l="gamma", away_team_l="delta", date="2026-09-14",
+         home_goals=0, away_goals=0, home_corners=3, away_corners=4),       # llegó tarde
+    dict(home_team_l="eps", away_team_l="zeta", date="2026-09-20",
+         home_goals=1, away_goals=1),                                       # sin tarjetas
+    dict(home_team_l="eta", away_team_l="theta", date="2026-09-20"),        # sin goles aún
+]
+
+
+def _bet(id_, match, market, result, day, odds=1.8, stake=1.0):
+    return {"id": id_, "match": match, "market": market, "result": result,
+            "odds": odds, "stake": stake,
+            "match_date": pd.Timestamp(f"2026-09-{day} 15:00")}   # TIMESTAMP sin zona
+
+
+BETS = pd.DataFrame([
+    _bet(1, "alpha vs beta", "home_win", "pending", 20),
+    _bet(2, "gamma vs delta", "corners_under_9.5", "unresolved", 14),   # 7 córners ≤ 9.5
+    _bet(3, "eps vs zeta", "cards_under_4.5", "pending", 20),
+    _bet(4, "eps vs zeta", "cards_over_4.5", "unresolved", 20),
+    _bet(5, "eta vs theta", "home_win", "pending", 20),
+    _bet(6, "iota vs kappa", "home_win", "pending", 20),                 # sin partido
+])
+
+
+class TestPlanBetSettlements:
+
+    def test_plan(self):
+        plan = {p["id"]: p for p in plan_bet_settlements(BETS, _matches_like_production(MATCHES))}
+        assert plan[1] == {"id": 1, "match": "alpha vs beta", "market": "home_win",
+                           "was": "pending", "result": "win", "profit": pytest.approx(0.8)}
+        # la unresolved con datos que llegaron tarde se liquida YA, no vuelve a pending
+        assert plan[2]["was"] == "unresolved" and plan[2]["result"] == "win"
+        # tarjetas NULL: espera sus datos — nunca "loss"
+        assert plan[3]["result"] == "unresolved" and plan[3]["profit"] == 0.0
+        # ya unresolved y sin datos, sin partido o sin goles: nada que escribir
+        assert set(plan) == {1, 2, 3}
+
+
+def test_update_bet_results_writes_plan_with_bankroll_guard(monkeypatch):
+    import src.models.save_bets as sb
+
+    def fake_read_sql(sql, con=None, params=None, **kw):
+        s = " ".join(str(sql).split())
+        if "FROM bets_history" in s:
+            assert "result = 'unresolved'" in s          # también las que esperan datos
+            return BETS.copy()
+        if "FROM matches" in s:
+            assert params["d_from"] <= "2026-09-12"      # ventana cubre la unresolved vieja
+            return _matches_like_production(MATCHES)
+        raise AssertionError(f"SQL inesperado: {s[:100]}")
+
+    executed = []
+
+    class FakeConn:
+        def execute(self, stmt, params=None):
+            executed.append((" ".join(str(stmt).split()), params))
+            # la bet 2 ya la liquidó otra corrida entre lectura y escritura
+            return SimpleNamespace(rowcount=0 if (params or {}).get("id") == 2 else 1)
+
+        @contextmanager
+        def begin_nested(self):
+            yield
+
+    class FakeEngine:
+        @contextmanager
+        def begin(self):
+            yield FakeConn()
+
+    bank = []
+    monkeypatch.setattr(sb.pd, "read_sql", fake_read_sql)
+    monkeypatch.setattr(sb, "engine", FakeEngine())
+    monkeypatch.setattr(sb, "ensure_bankroll_schema", lambda: None)
+    monkeypatch.setattr(sb, "update_bankroll",
+                        lambda profit, notes, conn: bank.append((round(profit, 6), notes)))
+
+    sb.update_bet_results()
+
+    updates = {p["id"]: p for s, p in executed if s.startswith("UPDATE bets_history SET result = :result")}
+    assert set(updates) == {1, 2, 3}
+    assert updates[1]["was"] == "pending" and updates[3]["result"] == "unresolved"
+    # bankroll: solo resultados finales que SÍ se escribieron (la 2 perdió la carrera)
+    assert bank == [(0.8, "alpha vs beta | home_win | win")]
+    assert any("SET result = 'stale'" in s for s, _ in executed)

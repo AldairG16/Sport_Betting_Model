@@ -232,7 +232,7 @@ def run_walkforward(verbose: bool = True) -> dict:
             bets_to_recover = dd["recovery_idx"] - dd["valley_idx"]
             print(f"  Recovery: bet #{dd['recovery_idx']} ({rec_date}) - {bets_to_recover} bets")
         else:
-            print(f"  Recovery: NOT YET RECOVERED")
+            print("  Recovery: NOT YET RECOVERED")
     print()
 
     # ── 3. ROLLING METRICS ───────────────────────────────────
