@@ -5,8 +5,6 @@ Verifica la matemática sin tocar la DB (rates inyectados).
 
 import math
 
-import pytest
-
 from src.models.scorer_model import anytime_scorer_prob, _parse_scorers
 
 

@@ -6,8 +6,6 @@ real (A2), guardias de booksum (A3), escalera ejercida (A4) y cuartos AH
 (A5).
 """
 
-import inspect
-import re
 import sys
 from pathlib import Path
 
@@ -18,16 +16,9 @@ from src.pipeline.prediction_pipeline import (
     MAX_MODEL_DEVIATION,
     MIN_EDGE,
     MIN_EDGE_BY_MARKET,
-    _anchorable,
     _devig_three_way,
-    _devig_two_way,
 )
 import src.pipeline.prediction_pipeline as pp
-import src.models.save_bets as sb
-
-
-def _source(module):
-    return inspect.getsource(module)
 
 
 # ============================================================
@@ -56,14 +47,23 @@ def test_no_threshold_above_floor():
 # A2 — sin precio real no hay apuesta
 # ============================================================
 
-def test_no_fabricated_odds_in_source():
+def test_markets_without_real_odds_are_never_quoted(monkeypatch):
     """
     El fallback `or CORNERS_DEFAULT_ODDS` fabricaba cuotas (21 bets a 1.80
-    inventado, Q-N). El patrón no puede volver al odds-dict.
+    inventado, Q-N). Con predicción de córners y tarjetas para TODOS los
+    partidos, solo el que trae cuotas reales (iota vs beta) puede aparecer.
     """
-    src = _source(pp)
-    assert "or CORNERS_DEFAULT_ODDS" not in src
-    assert "or CARDS_DEFAULT_ODDS" not in src
+    from tests.pipeline_harness import run_pipeline, extended_kwargs
+    kw = extended_kwargs()
+    ratings = {"attack_rating": 5.0, "defense_rating": 4.5}
+    kw["overrides"].update({"get_team_corners": lambda team: dict(ratings),
+                            "get_team_cards": lambda team: {"attack_rating": 2.0,
+                                                            "defense_rating": 1.9}})
+    out = run_pipeline(monkeypatch, **kw)
+    stat_rows = [r for r in out["bets"] + out["shadow"] + out["paper"]
+                 if r["market"].startswith(("corners_", "cards_"))]
+    assert stat_rows, "el escenario debe ejercitar córners/tarjetas"
+    assert {r["match"] for r in stat_rows} == {"iota vs beta"}
 
 
 def test_anchorable_without_anchor_is_not_bettable():
@@ -107,23 +107,43 @@ def test_shin_rejects_broken_books():
 # A4 — la escalera blend_weight se ejerce en producción
 # ============================================================
 
-def test_pipeline_passes_edge_to_calibration():
-    """La llamada del pipeline incluye el tercer argumento (edge)."""
-    src = _source(pp)
-    assert re.search(r"calibrate_probability\(\s*model_prob,\s*_implied,\s*\(model_prob - _implied\)", src), (
-        "calibrate_probability se llama sin edge: blend_weight vuelve a ser "
-        "código muerto (A4)")
+def test_pipeline_passes_edge_to_calibration(monkeypatch):
+    """calibrate_probability recibe el edge (tercer argumento): sin él la
+    escalera blend_weight vuelve a ser código muerto (A4)."""
+    from tests.pipeline_harness import run_pipeline
+    calls = []
+    real = pp.calibrate_probability
+
+    def spy(model_prob, market_prob, edge=None):
+        calls.append((model_prob, market_prob, edge))
+        return real(model_prob, market_prob, edge)
+
+    run_pipeline(monkeypatch, overrides={"calibrate_probability": spy})
+    priced = [c for c in calls if c[1]]
+    assert priced, "el escenario debe calibrar mercados sin ancla con precio"
+    assert all(e is not None and abs(e - (m - i)) < 1e-12 for m, i, e in priced)
 
 
 # ============================================================
 # A5 — las líneas AH conservan los cuartos
 # ============================================================
 
-def test_ah_line_format_preserves_quarters():
-    """El formato de clave AH usa dos decimales: -0.25 ya no se redondea a -0.2."""
-    src = _source(pp)
-    assert "{_ah_line:+.1f}" not in src
-    assert src.count("{_ah_line:+.2f}") == 8
+def test_ah_line_format_preserves_quarters(monkeypatch):
+    """Las claves AH llevan dos decimales: -0.25 ya no se redondea a -0.2
+    (y el resolver sí detecta el cuarto)."""
+    from tests.pipeline_harness import run_pipeline, default_matches
+    df = default_matches()
+    df.loc[0, "ah_line"] = -0.25            # M1 alpha vs beta
+    seen = set()
+    real = pp._stage_blend
+
+    def spy(model_probs, market_probs, market_probs_raw):
+        seen.update(m for m in model_probs if m.startswith("ah_"))
+        return real(model_probs, market_probs, market_probs_raw)
+
+    run_pipeline(monkeypatch, matches=df, overrides={"_stage_blend": spy})
+    assert {"ah_home_-0.25", "ah_away_-0.25"} <= seen
+    assert not any(m.endswith(("-0.2", "+0.2", "-0.8", "+0.8")) for m in seen)
 
 
 def test_resolver_parses_two_decimal_lines():

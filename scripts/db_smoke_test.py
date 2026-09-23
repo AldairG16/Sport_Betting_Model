@@ -256,6 +256,18 @@ def _anchor_dry():
     return f"{len(df)} candidatas shadow con cierre"
 
 
+@check("Aprendizaje: CLV shadow por (mercado × banda), cohorte y cierres válidos")
+def _shadow_bands():
+    from scripts.clv_gate import shadow_clv_bands
+    r = shadow_clv_bands(verbose=False)
+    assert r["status"] in ("ok", "no_data"), r
+    if r["status"] == "no_data":
+        return "sin candidatas en la cohorte"
+    cells = [n for bands in r["by_market"].values() for n in bands.values()]
+    return (f"{len(r['by_market'])} mercados · {sum(c['n_banda'] for c in cells)} candidatas · "
+            f"{sum(c['n_con_closing'] for c in cells)} con cierre válido")
+
+
 @check("Aprendizaje: reactivación por shadow (en seco)")
 def _reactivation_dry():
     from scripts.clv_gate import shadow_reactivation_stats

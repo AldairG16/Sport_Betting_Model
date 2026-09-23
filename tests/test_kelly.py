@@ -13,6 +13,9 @@ Verifica que:
 import sys
 import math
 from pathlib import Path
+
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.models.betting_engine import kelly_stake, calculate_edges, find_value_bets
@@ -76,13 +79,19 @@ def test_kelly_never_exceeds_max_bet():
 
 
 def test_kelly_high_odds_penalized():
-    """Odds altas (>5) reciben penalizacion → stake menor."""
-    stake_normal = kelly_stake(prob=0.60, odds=2.5, bankroll=100)
-    stake_high   = kelly_stake(prob=0.60, odds=6.0, bankroll=100)
-    # Con odds altas y misma prob, el kelly base es diferente,
-    # pero verificamos que no sea absurdamente grande
-    assert stake_high >= 0
-    assert stake_high <= 100 * 0.02
+    """Odds > 5 reciben ×0.8 sobre el Kelly y > 8 además ×0.6. Con el tope
+    alto para que no lo tape (antes el test solo comprobaba el tope: con
+    esas cuotas las dos apuestas lo tocaban y la penalización no se veía)."""
+    def fractional(p, o):   # Kelly fraccional 0.25 sin penalización
+        b = o - 1
+        return 100 * 0.25 * (p * b - (1 - p)) / b
+
+    assert kelly_stake(prob=0.45, odds=4.0, bankroll=100, max_bet_pct=1.0) == \
+        pytest.approx(round(fractional(0.45, 4.0), 2))
+    assert kelly_stake(prob=0.25, odds=6.0, bankroll=100, max_bet_pct=1.0) == \
+        pytest.approx(round(fractional(0.25, 6.0) * 0.8, 2))
+    assert kelly_stake(prob=0.25, odds=9.0, bankroll=100, max_bet_pct=1.0) == \
+        pytest.approx(round(fractional(0.25, 9.0) * 0.8 * 0.6, 2))
 
 
 # ============================================================

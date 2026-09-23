@@ -17,7 +17,6 @@ from src.features.team_form import KALMAN_BASELINE
 from src.models.ensemble_model import _form_probs, ensemble_predict
 from src.pipeline.prediction_pipeline import (
     ANCHOR_PARAMETRIC_PREFIXES,
-    MODEL_PROB_MARKETS,
     _anchorable,
     _devig_three_way,
     _devig_two_way,

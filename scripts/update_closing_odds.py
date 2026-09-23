@@ -163,6 +163,7 @@ def update_closing_odds(only_near_kickoff: bool = True):
 
     if bets.empty:
         print("✅ No hay bets pendientes de closing odds")
+        _close_shadow()     # las candidatas shadow se cierran igual
         return
 
     print(f"📊 Bets pendientes: {len(bets)}")
@@ -224,16 +225,24 @@ def update_closing_odds(only_near_kickoff: bool = True):
 
     print(f"✅ Closing odds actualizadas: {updates}")
 
-    # ── C1/D1 (rondas 8-9): closing de las candidatas shadow ──
-    # El gemelo de esta función en src/models/save_bets.py casi no corre en
-    # producción; el shadow se rellena AQUÍ, donde corre el hourly.
+    _close_shadow()
+    if not_found > 0:
+        log.warning(f"⚠️  Partidos no encontrados en DB (ya completados): {not_found}")
+
+
+def _close_shadow():
+    """
+    C1/D1 (rondas 8-9): closing de las candidatas shadow — el dato del que
+    aprende el peso del modelo. El gemelo en src/models/save_bets.py casi no
+    corre en producción; el shadow se rellena AQUÍ, donde corre el closing.
+    Corre SIEMPRE: hasta el 23-sep-26 quedaba después del `return` de "no
+    hay bets pendientes" y un slate sin apuestas no cerraba su shadow.
+    """
     try:
         from src.models.save_bets import _update_shadow_closing
         _update_shadow_closing()
     except Exception as e:
         log.warning(f"⚠️  shadow closing omitido: {type(e).__name__}")
-    if not_found > 0:
-        log.warning(f"⚠️  Partidos no encontrados en DB (ya completados): {not_found}")
 
 
 if __name__ == "__main__":
