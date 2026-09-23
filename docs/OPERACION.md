@@ -119,7 +119,9 @@ Trae cuotas de The Odds API, `src/pipeline/prediction_pipeline.py` puntúa cada 
 (partido, mercado), aplica calibración, filtros de edge y Kelly, e inserta en
 `bets_history` con `result='pending'`. El modo `evening` vuelve a pedir resultados,
 llama a `update_bet_results()` en `src/models/save_bets.py` para pasar pending →
-win/loss, calcula CLV y manda el resumen a Telegram.
+win/loss, liquida también las candidatas shadow (`resolve_shadow_outcomes()`, misma
+función de liquidación con stake 1 y sin bankroll), calcula CLV y manda el resumen a
+Telegram. `--mode results` (`late_results.yml`) hace lo mismo sin el resumen.
 
 **2 · Analista pre-kickoff** — `scripts/pre_kickoff_analyst.py`, `pre_kickoff.yml`.
 Cada 15 min busca bets con kickoff dentro de `[PRE_KICKOFF_WINDOW_MIN,
@@ -145,7 +147,8 @@ del evening, sin llamar a la LLM.
 **4 · Aprendizaje semanal** — el modo `weekly` recalcula todo lo que el sistema
 aprende de los datos que recolecta solo, y lo guarda en `model_state` (§7):
 calibración, CLV gate, caché de CLV para Kelly, **peso del modelo frente al
-mercado** y **reactivaciones por shadow**. Las corridas diarias lo leen de la DB
+mercado**, **reactivaciones por shadow**, **evidencia de las reglas contra resultados
+reales** y **escala de los ajustes manuales**. Las corridas diarias lo leen de la DB
 al arrancar (`load_learned_state()` en el pipeline). Solo aprende de datos de la
 cohorte actual (`LEARNING_SINCE`, §7). Estos pasos corren **al inicio** del weekly,
 antes de las cargas de datos: las cargas tardan ~62 min (histórico 11', eventos 21',
@@ -303,6 +306,8 @@ fuente de verdad; los archivos de `config/` y `data/` son espejo local.
 | `clv_cache` | `betting_engine.refresh_clv_cache` | fracción de Kelly por CLV |
 | `anchor_weights` | `anchor_learner.run_anchor_learning` | **peso del modelo** frente al mercado |
 | `shadow_reactivation` | `clv_gate.run_shadow_reactivation` | `away_win` y AH con local favorito |
+| `shade_scales` | `shade_learner.run_shade_learning` | **escala de los ajustes manuales** (FLB, tabla, empates) |
+| `rule_evidence` | `rule_evidence.run_rule_evidence` | solo reporte: veredicto de cada regla contra resultados |
 
 **Cierres válidos:** todo lo que aprende del CLV (gate, caché de Kelly, reactivación,
 peso del modelo) usa solo cierres descargados cerca del kickoff (§5). Los cierres
@@ -331,6 +336,37 @@ es el comportamiento correcto, y el shadow sigue midiendo.
 `away_win` y los AH con el local favorito están bloqueados de forma fija. Vuelven solos
 si sus candidatas shadow que se habrían apostado (desvío > 0, edge ≥ 5 pt) muestran
 CLV ≥ 0 con n ≥ 30; se re-bloquean con CLV significativamente negativo.
+
+### Reglas manuales contra resultados reales
+
+El CLV juzga bien el peso del modelo, pero **no** los ajustes escritos a mano (sesgo
+favorito-longshot, "la tabla miente", empates contextuales): esas reglas afirman que el
+precio está sesgado incluso al cierre, así que solo el resultado real puede
+confirmarlas. Por eso cada candidata shadow guarda la probabilidad anclada antes de los
+ajustes (`p_pre_shade`) y cuánto la movieron (`shade_delta`, ya acotado por el tope D12
+y **sin escalar**), y el evening la liquida (`result`, `profit` por unidad).
+
+- **Escala de los ajustes** (`shade_learner`): la probabilidad final de un mercado
+  anclado es `p = p_ancla + s·δ`. El weekly estima `s` por familia con la regresión sin
+  intercepto `y − p_ancla = s·δ` (la escala que minimiza el Brier), con la misma política
+  que el peso del modelo: prior `s = 1` (las reglas tal como se diseñaron, sd 0.5),
+  rango [0, 1] (puede apagarlas, no amplificarlas), ±0.25 por semana, mínimo 300
+  candidatas win/loss con δ ≠ 0 y 30 partidos por familia (si no, agregado; si no, 1).
+  Un win/loss es mucho más ruidoso que el CLV: con δ típico de 2-5 pt hacen falta
+  ~1,000 candidatas para que los datos pesen lo mismo que el prior. Se mueve despacio a
+  propósito.
+- **Evidencia por regla** (`rule_evidence`, solo reporte): modelo vs mercado (Brier),
+  ajustes con vs sin, sesgo favorito-longshot del propio mercado por lado y banda de
+  cuota, si el edge de las apostables es real (brecha prob. − acierto y ROI), y los
+  filtros de selección (entre semana, sweet spots, ligas duras) comparando la brecha de
+  su grupo penalizado contra el resto. IC 95% robusto por partido; sin veredicto con
+  n < 100 o < 30 partidos. Los filtros **no** se ajustan solos: son decisiones discretas
+  y quedan a criterio del dueño con esta evidencia a la vista.
+
+Llega a Telegram en el weekly solo si algún veredicto ya tiene datos suficientes o si
+la escala se movió. Push y medias (AH de cuarto, DNB con empate) cuentan en el ROI pero
+no en Brier ni calibración. Las candidatas sin datos del partido a los 10 días quedan
+`result = 'stale'`.
 
 ### Calibración por mercado
 

@@ -264,7 +264,7 @@ def run_pipeline(monkeypatch, matches: pd.DataFrame | None = None,
     """
     Corre el pipeline con dependencias sustituidas y devuelve lo capturado.
     `learned` sustituye el estado aprendido por el weekly (DB): claves
-    blocked_markets, blocked_leagues, reactivated, anchor.
+    blocked_markets, blocked_leagues, reactivated, anchor, shades.
     `pending`: {fecha 'YYYY-MM-DD': stake ya comprometido} (tope por slate).
     `calibration`: factores de calibración activos (por defecto, ninguno).
     `mle_lambdas`: fn(home, away, is_neutral) → (λh, λa) y activa DC-MLE.
@@ -307,7 +307,7 @@ def run_pipeline(monkeypatch, matches: pd.DataFrame | None = None,
     monkeypatch.setattr(pp, "_has_coverage", lambda league, kind: True)
     monkeypatch.setattr(be, "_load_clv_cache", lambda: {})
     state = {"blocked_markets": set(), "blocked_leagues": set(),
-             "reactivated": set(), "anchor": {}}
+             "reactivated": set(), "anchor": {}, "shades": {}}
     state.update(learned or {})
     monkeypatch.setattr(pp, "load_learned_state", lambda: dict(state))
 

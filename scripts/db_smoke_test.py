@@ -19,6 +19,9 @@ septiembre-2026 funcionan contra el esquema real de producción:
   11. DDL guards de save_bets (ADD COLUMN IF NOT EXISTS — idempotente)
   12. Ciclo de aprendizaje (22-sep-26): model_state, cohorte, peso del
       modelo y reactivación por shadow EN SECO, closing compartido y BTTS
+  13. Reglas contra resultados reales: columnas de resultado del shadow,
+      candidatas liquidables, evidencia por regla y escala de los ajustes
+      manuales, todo EN SECO (no liquida ni guarda estado)
 
 READ-ONLY sobre datos: no inserta, no actualiza ni borra bets. Los DDL
 guards son idempotentes (IF NOT EXISTS) y son los mismos que correría el
@@ -331,6 +334,54 @@ def _pipeline_dry_run():
     return (f"partidos={s.get('matches')} errores={s.get('failed_matches')} "
             f"bets={s.get('bets')} papel={s.get('paper_bets')} shadow={s.get('shadow')} "
             f"mercados={s.get('markets')}")
+
+
+@check("Reglas: columnas de resultado en shadow_bets (DDL idempotente)")
+def _shadow_result_columns():
+    from config.settings import LEARNING_SINCE
+    from src.models.save_bets import SHADOW_TABLE_SQL, SHADOW_ALTER_SQL
+    with engine.begin() as c:
+        c.execute(text(SHADOW_TABLE_SQL))
+        c.execute(text(SHADOW_ALTER_SQL))
+    with engine.connect() as c:
+        cols = {r[0] for r in c.execute(text("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'shadow_bets'
+        """))}
+    need = {"p_pre_shade", "shade_delta", "result", "profit", "resolved_at", "closing_fetched_at"}
+    assert need <= cols, f"faltan: {need - cols}"
+    r = pd.read_sql(text("""
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE match_date >= CAST(:since AS timestamptz)) AS cohort,
+               COUNT(*) FILTER (WHERE shade_delta IS NOT NULL) AS with_shade,
+               COUNT(*) FILTER (WHERE result IS NOT NULL) AS settled,
+               COUNT(*) FILTER (WHERE result IS NULL AND match_date < NOW()) AS played_open
+        FROM shadow_bets
+    """), engine, params={"since": LEARNING_SINCE}).iloc[0]
+    return (f"columnas presentes | shadow: total={int(r['total'])} cohorte={int(r['cohort'])} "
+            f"con shade={int(r['with_shade'])} liquidadas={int(r['settled'])} "
+            f"jugadas sin liquidar={int(r['played_open'])}")
+
+
+@check("Reglas: candidatas shadow liquidables ahora (en seco)")
+def _shadow_resolution_dry():
+    from src.models.save_bets import resolve_shadow_outcomes
+    s = resolve_shadow_outcomes(dry_run=True)
+    return f"{s['resolved']}/{s['pending']} liquidables {s['outcomes']}"
+
+
+@check("Reglas: evidencia por regla y escala de los ajustes (en seco)")
+def _rule_evidence_dry():
+    import json
+    from src.models.rule_evidence import read_resolved_shadow, build_rule_evidence, format_report
+    from src.models.shade_learner import (learn_shade_scales, load_shade_scales,
+                                          format_report as scale_report)
+    df = read_resolved_shadow()
+    ev = build_rule_evidence(df)                       # sin save_state
+    sc = learn_shade_scales(df, load_shade_scales())   # sin save_state
+    json.dumps(ev, allow_nan=False)                    # lo que guardaría en JSONB
+    print("\n" + format_report(ev) + "\n\n" + scale_report(sc) + "\n")
+    return f"{ev['n_settled']} liquidadas en {ev['n_matches']} partidos (cohorte desde {ev['since']})"
 
 
 @check("Closing: bets BTTS con cierre (antes 0 por clave 'btts_yes')")

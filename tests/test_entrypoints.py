@@ -36,6 +36,39 @@ def test_orchestrator_starts_as_a_script():
     assert "--mode" in r.stdout
 
 
+def _lazy_imports(path: Path) -> list[tuple[str, str, int]]:
+    """(módulo, nombre, línea) de cada `from X import y` DENTRO de funciones."""
+    import ast
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found = []
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for node in ast.walk(fn):
+                if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                    found += [(node.module, a.name, node.lineno) for a in node.names]
+    return found
+
+
+def test_orchestrator_lazy_imports_resolve():
+    """Los pasos del orchestrator importan dentro de la función (arranque
+    rápido): un nombre renombrado o borrado no rompe ningún test y revienta
+    recién en la corrida de producción. Aquí se resuelven todos."""
+    import importlib
+    missing = []
+    for module, name, line in _lazy_imports(ROOT / "scripts" / "orchestrator.py"):
+        try:
+            mod = importlib.import_module(module)
+        except ModuleNotFoundError as e:
+            # dependencia opcional de terceros (ej. soccerdata en CI): no es
+            # un nombre del proyecto roto
+            if (e.name or "").split(".")[0] in ("src", "scripts", "config"):
+                missing.append(f"línea {line}: {module} ({e})")
+            continue
+        if not hasattr(mod, name):
+            missing.append(f"línea {line}: {module}.{name}")
+    assert not missing, "imports rotos en orchestrator.py:\n" + "\n".join(missing)
+
+
 @pytest.mark.parametrize("name", SCRIPTS)
 def test_script_imports_with_actions_sys_path(name):
     """Ejecuta el nivel superior del script (imports) con sys.path[0] =
