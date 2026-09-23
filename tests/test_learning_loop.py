@@ -123,16 +123,19 @@ def test_load_learned_state_reads_every_source(monkeypatch):
     lee en cada corrida, de la DB, vía los loaders de cada módulo."""
     import scripts.clv_gate as cg
     import src.models.anchor_learner as al
+    import src.models.shade_learner as sl
     import src.pipeline.prediction_pipeline as pp
     monkeypatch.setattr(cg, "load_clv_blocked_markets", lambda: {"m1"})
     monkeypatch.setattr(cg, "load_clv_blocked_leagues", lambda: {"l1"})
     monkeypatch.setattr(cg, "load_shadow_reactivated", lambda: {"away_win"})
     monkeypatch.setattr(al, "load_anchor_weights", lambda: {"families": {"1x2": {"weight": 0.2}}})
+    monkeypatch.setattr(sl, "load_shade_scales", lambda: {"families": {"1x2": {"scale": 0.5}}})
     st = pp.load_learned_state()
     assert st["blocked_markets"] == {"m1"}
     assert st["blocked_leagues"] == {"l1"}
     assert st["reactivated"] == {"away_win"}
     assert st["anchor"]["families"]["1x2"]["weight"] == 0.2
+    assert st["shades"]["families"]["1x2"]["scale"] == 0.5
 
 
 def test_load_learned_state_survives_a_broken_loader(monkeypatch):

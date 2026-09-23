@@ -49,7 +49,7 @@ def baseline():
 @pytest.fixture(scope="module")
 def current():
     if not CURRENT_FILE.exists():
-        pytest.skip(f"calibration_factors.json no existe — correr monitor primero")
+        pytest.skip("calibration_factors.json no existe — correr monitor primero")
     return _load(CURRENT_FILE)
 
 

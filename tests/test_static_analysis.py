@@ -1,11 +1,14 @@
 """
-Gate de análisis estático sobre el código de producción (pyflakes).
+Gate de análisis estático (pyflakes) sobre el código de producción Y los
+tests.
 
 pyflakes no opina de estilo: solo reporta lo que casi siempre es un error
 — nombres sin definir, imports o variables sin uso, redefiniciones,
 f-strings sin marcadores. El 22-sep-26 dashboard/app.py tenía 29 nombres
-sin definir (NameError en cuanto se usara) y ningún test lo veía; la base
-quedó en cero hallazgos y este test la mantiene así.
+sin definir (NameError en cuanto se usara) y ningún test lo veía. En los
+tests, una variable calculada y nunca usada suele ser una aserción que
+falta (test_kelly_high_odds_penalized calculaba el stake "normal" y nunca
+lo comparaba). La base quedó en cero hallazgos y este test la mantiene así.
 """
 
 from pathlib import Path
@@ -13,7 +16,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).parent.parent
-PRODUCTION = ("src", "scripts", "config", "dashboard")
+PRODUCTION = ("src", "scripts", "config", "dashboard", "tests")
 
 
 def test_production_code_has_no_pyflakes_findings():

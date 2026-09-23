@@ -9,8 +9,6 @@ I2 — el signo de la motivación en la defensa.
 import sys
 from pathlib import Path
 
-import numpy as np
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.models.asian_handicap_model import prob_ah
@@ -75,11 +73,29 @@ def test_motivation_routes_to_win_prob_not_goals():
     assert motiv[1] < base[1], "λ_away debe BAJAR (motivado concede menos)"
 
 
-def test_motivation_mult_sign_in_source():
-    """El arreglo I2 en el pipeline: defensa dividida, ataque multiplicada."""
-    import inspect
-    src = inspect.getsource(__import__(
-        "src.pipeline.prediction_pipeline", fromlist=["x"]))
-    assert "home_defense /= (1 + home_motiv)" in src
-    assert "away_defense /= (1 + away_motiv)" in src
-    assert "home_defense *= (1 + home_motiv)" not in src
+def _lambdas_seen(monkeypatch, motivation: dict) -> tuple:
+    """λ que el pipeline le pasa a la matriz de marcadores para alpha vs beta
+    con la motivación dada (arnés; sin DC-MLE)."""
+    import src.pipeline.prediction_pipeline as pp
+    from tests.pipeline_harness import run_pipeline, default_matches
+    seen = []
+    real = pp.match_outcomes
+
+    def spy(lh, la, rho=None, **kw):
+        seen.append((lh, la))
+        return real(lh, la, rho=rho, **kw)
+
+    run_pipeline(monkeypatch, matches=default_matches().iloc[[0]],
+                 overrides={"match_outcomes": spy,
+                            "get_motivation_factor": lambda team, league: motivation.get(team, 0.0)})
+    return seen[0]
+
+
+def test_motivation_moves_lambdas_in_the_pipeline(monkeypatch):
+    """El arreglo I2 ejecutado: un local motivado marca más (λ_home ↑) y
+    concede menos (λ_away ↓); un visitante motivado, al revés."""
+    base = _lambdas_seen(monkeypatch, {})
+    home_up = _lambdas_seen(monkeypatch, {"alpha": 0.08})
+    away_up = _lambdas_seen(monkeypatch, {"beta": 0.08})
+    assert home_up[0] > base[0] and home_up[1] < base[1]
+    assert away_up[1] > base[1] and away_up[0] < base[0]

@@ -10,10 +10,8 @@ Estos tests habrían atrapado los dos bugs del Mundial (jun-2026):
 """
 
 import json
-import pytest
 from datetime import date, datetime, timezone
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 
 # ─────────────────────────────────────────────────────────────────────────────

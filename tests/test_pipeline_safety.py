@@ -163,14 +163,10 @@ def test_dixon_coles_zero_lambda():
     """Lambda 0 retorna resultado valido (no crash)."""
     from src.models.dixon_coles_model import match_outcomes
     import math
+    import pytest
 
-    result = match_outcomes(0.0, 1.5)
-    if isinstance(result, tuple):
-        home, draw, away = result
-    else:
-        home = result.get("home_win", 0)
-        draw = result.get("draw", 0)
-        away = result.get("away_win", 0)
+    home, draw, away = match_outcomes(0.0, 1.5)
 
-    assert not math.isnan(away)
-    assert away > 0  # Con lambda_home=0, away_win deberia ser alto
+    assert not any(math.isnan(p) for p in (home, draw, away))
+    assert home == pytest.approx(0.0, abs=1e-9)   # el local no puede marcar
+    assert away > draw > 0  # Con lambda_home=0, away_win deberia ser alto

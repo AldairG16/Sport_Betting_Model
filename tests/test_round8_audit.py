@@ -5,7 +5,6 @@ Tests de la Ronda 8: rango observable del shadow (C1/R11), histéresis del
 gate (C2) y cobertura de la reactivación AH (C3).
 """
 
-import inspect
 import sys
 from pathlib import Path
 
@@ -23,20 +22,16 @@ from scripts.clv_gate import (
 from src.pipeline.prediction_pipeline import SHADOW_MIN_DEV
 
 
-def _source(module):
-    return inspect.getsource(module)
-
-
 # ============================================================
 # C1 — el shadow observa la región que debe medir
 # ============================================================
 
-def test_sweep_runs_before_value_filter():
-    """El barrido vive ANTES de find_value_bets (que filtra edge<0.02)."""
-    src = _source(pp)
-    i_sweep = src.index("SHADOW SWEEP")
-    i_value = src.index("find_value_bets(clean_probabilities, odds)")
-    assert i_sweep < i_value
+def test_sweep_runs_before_value_filter(monkeypatch):
+    """El barrido no depende de find_value_bets (que filtra edge<0.02): aun
+    si el filtro de valor descarta TODO, el shadow se registra."""
+    from tests.pipeline_harness import run_pipeline
+    out = run_pipeline(monkeypatch, overrides={"find_value_bets": lambda probs, odds: []})
+    assert out["shadow"] and not out["bets"]
 
 
 def test_shadow_min_dev_declares_observable_range():
@@ -46,9 +41,24 @@ def test_shadow_min_dev_declares_observable_range():
 
 
 def test_sweep_requires_reference_price():
-    """Sin precio de referencia no hay desvío medible → no se registra."""
-    src = _source(pp)
-    assert "_spref is None or _sdev is None" in src
+    """Sin precio de referencia no hay desvío medible → no se registra; y
+    con desvío bajo el piso SHADOW_MIN_DEV tampoco (etapa 8, ejecutada)."""
+    from collections import Counter
+    from types import SimpleNamespace
+    T = SimpleNamespace(home="alpha", away="beta", date="2030-01-05T15:00:00+00:00")
+    F = SimpleNamespace(clean_probabilities={"home_win": 0.60, "btts": 0.55, "draw": 0.25},
+                        row_league="soccer_spain_la_liga", post_anchor={},
+                        shade_raw={}, anchored_markets=set())
+    stats = Counter()
+    recs = pp._stage_shadow_sweep(
+        {}, T, F,
+        {"home_win": 0.50, "draw": 0.24},             # btts sin precio de referencia
+        {},
+        {"home_win": 0.10, "draw": 0.01},             # draw: desvío < 2pt
+        {"home_win": 1.90, "btts": 1.80, "draw": 3.90},
+        stats)
+    assert [r["market"] for r in recs] == ["home_win"]
+    assert (stats["sweep_total"], stats["sweep_ref"], stats["shadow_swept"]) == (3, 2, 1)
 
 
 # ============================================================
