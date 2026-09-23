@@ -24,7 +24,6 @@ Uso en el pipeline:
   - Correlación con over/under de goles
 """
 
-import numpy as np
 from scipy.stats import poisson
 
 HOME_SHOT_ADVANTAGE = 1.08

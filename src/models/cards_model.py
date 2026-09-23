@@ -18,7 +18,6 @@ Uso en el pipeline:
   - Sin fetch de odds extra — ahorro de créditos API
 """
 
-import numpy as np
 from scipy.stats import poisson
 
 CARDS_BASELINE = 2.0    # promedio de amarillas por equipo por partido

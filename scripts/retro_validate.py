@@ -232,8 +232,8 @@ def run(limit=400, min_edge=0.05, verbose=True):
               f"({(old_n-new_n)/old_n:.0%})")
     else:
         print("  no habría apostado ninguna")
-    print(f"\n  Nota: muestra retrospectiva SIN MLE/clima/motivación y con H2H")
-    print(f"  sin corte temporal — es aproximación, no backtest perfecto.")
+    print("\n  Nota: muestra retrospectiva SIN MLE/clima/motivación y con H2H")
+    print("  sin corte temporal — es aproximación, no backtest perfecto.")
     return {"old_n": old_n, "new_n": new_n}
 
 

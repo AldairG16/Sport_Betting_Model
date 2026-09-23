@@ -16,7 +16,7 @@ porque la fatiga afecta más la capacidad ofensiva (pressing, sprints)
 que la organización defensiva.
 """
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pandas as pd
 from sqlalchemy import text

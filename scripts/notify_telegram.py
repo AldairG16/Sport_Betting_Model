@@ -16,7 +16,6 @@ Uso:
 """
 
 import sys
-import os
 import json
 import requests
 import pandas as pd
@@ -29,7 +28,6 @@ sys.path.append(str(Path(__file__).parent.parent))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from sqlalchemy import text
 from config.database import engine
 from config.settings import (
     TELEGRAM_BOT_TOKEN,
@@ -210,7 +208,7 @@ def _get_market_label(market: str, match: str = "") -> str:
         elif market == "dc_x2":
             return f"DC X2 ({away.title()} no pierde)"
         elif market == "dc_12":
-            return f"DC 12 (no empate)"
+            return "DC 12 (no empate)"
     if market in MARKET_LABELS:
         return MARKET_LABELS[market]
     # Asian Handicap: "ah_home_-1.5" → "AH Local -1.5"
@@ -1023,7 +1021,6 @@ def send_health_check(
     """
     from src.models.bankroll_manager import get_bankroll_stats
     from scripts.update_upcoming_matches import CREDITS_LOG
-    from pathlib import Path as _Path
 
     # Leer creditos restantes del log
     credits_remaining = "?"
@@ -1064,7 +1061,7 @@ def send_health_check(
         msg += f"\n⚠️ {steps_total - steps_ok} paso(s) con error — revisar log"
 
     send_message(msg)
-    print(f"📋 Health check enviado a Telegram")
+    print("📋 Health check enviado a Telegram")
 
 
 # ============================================================

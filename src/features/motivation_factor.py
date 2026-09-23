@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 import pandas as pd
 from sqlalchemy import text
-from datetime import datetime, timedelta
+from datetime import datetime
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 from config.database import engine

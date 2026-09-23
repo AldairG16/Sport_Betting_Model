@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 from config.database import engine
 from src.utils.team_normalizer import normalize_team
 from sqlalchemy import text
@@ -147,8 +146,6 @@ def get_team_form(team, venue: str = None, cutoff_date=None):
         # Incertidumbre expuesta: la usa el pipeline para escalar stakes por
         # confianza del modelo (Constantinou: apostar más cuando estás seguro)
         uncertainty = round((p_att + p_def) / 2, 3)
-
-        eff_weight = total_weight if total_weight > 0 else 1.0
 
         return {
             "matches":        matches,

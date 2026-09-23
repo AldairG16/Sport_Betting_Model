@@ -30,7 +30,6 @@ Mínimo recomendado: 50 bets por mercado para que los factores sean estables.
 
 import json
 import sys
-import os
 from pathlib import Path
 from datetime import datetime, timezone
 

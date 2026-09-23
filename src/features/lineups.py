@@ -21,7 +21,7 @@ cualquier error → no-op. Nunca rompe el closing.
 
 import unicodedata
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime
 
 BASE = "https://v3.football.api-sports.io"
 

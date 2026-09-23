@@ -79,7 +79,6 @@ def rank_bets(bets: list) -> pd.DataFrame:
 
         match_bets    = []
         groups_used   = set()
-        second_bet    = False
 
         for _, row in group.iterrows():
 
@@ -98,7 +97,6 @@ def rank_bets(bets: list) -> pd.DataFrame:
                 row["stake"] = row["stake"] * 0.80   # penalización por correlación
                 match_bets.append(row)
                 groups_used.add(g)
-                second_bet = True
                 continue
 
             # Tercer bet o mismo grupo → rechazado

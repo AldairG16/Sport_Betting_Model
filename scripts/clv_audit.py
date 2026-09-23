@@ -85,7 +85,7 @@ def main():
     print(f"  CLV-:  n={r['n_neg']}  WR={r['neg_wr']*100:.1f}%  P/L={r['neg_pnl']:+.2f}u")
 
     if r["status"] == "inverted":
-        print(f"\n❌ CLV INVERTIDO — modelo anti-predictivo vs línea de cierre")
+        print("\n❌ CLV INVERTIDO — modelo anti-predictivo vs línea de cierre")
         try:
             from scripts.notify_telegram import send_message
             send_message(

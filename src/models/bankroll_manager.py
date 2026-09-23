@@ -24,7 +24,6 @@ Configuración inicial:
 """
 
 import pandas as pd
-from datetime import datetime
 from sqlalchemy import text
 
 from config.database import engine

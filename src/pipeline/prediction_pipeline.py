@@ -3,7 +3,6 @@ import os
 import traceback
 from types import SimpleNamespace
 import pandas as pd
-import numpy as np
 from scipy.stats import poisson as _poisson
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -113,7 +112,6 @@ from src.models.bet_filters import bet_quality_filter
 from src.features.market_calibration import calibrate_probability
 from src.features.market_intelligence import market_intelligence_filter, add_market_score
 from src.features.line_movement import get_line_movement, apply_line_movement_signal, line_moved_against, movement_for, should_skip_low_liquidity
-from src.dashboard.betting_dashboard import mostrar_dashboard
 
 from src.features.corners_stats import get_team_corners
 from src.features.shots_stats import get_team_shots
@@ -132,7 +130,6 @@ from src.models.monte_carlo_simulator import simulate_match, mc_confidence_vs_an
 from src.models.bankroll_manager import get_current_bankroll, ensure_bankroll_schema
 from src.models.calibration_monitor import (
     load_calibration_factors,
-    get_calibration_factor,
     apply_calibration,
     MIN_BETS_FOR_CALIBRATION,
     _ah_group,
@@ -2334,7 +2331,7 @@ def _resolve_dc_rho():
         elif abs(_rho_fit) < 0.015 or _prev_rho is None:
             DC_RHO_GLOBAL = None
             print(f"🔧 DC rho fitteado={_rho_fit:+.3f} ≈0 → BTTS usa Poisson cruda")
-            print(f"   (calibración por mercado corrige bias residual)")
+            print("   (calibración por mercado corrige bias residual)")
         else:
             # zona de histéresis: estado anterior
             if abs(_prev_rho) >= 0.015:

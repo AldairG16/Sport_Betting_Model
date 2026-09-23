@@ -25,7 +25,6 @@ Uso en el pipeline:
   - Si hay cuotas de córners disponibles, se puede apostar directamente.
 """
 
-import numpy as np
 from scipy.stats import poisson
 
 HOME_CORNER_ADVANTAGE = 1.05    # local gana ~5% más córners

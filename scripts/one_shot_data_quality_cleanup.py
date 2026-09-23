@@ -95,7 +95,7 @@ def main():
               (SELECT COUNT(*) FROM upcoming_matches WHERE match_date::timestamptz < NOW() - INTERVAL '2 days') AS stale_upcoming
             FROM bets_history
         """)).fetchone()
-        print(f"\nEstado ANTES:")
+        print("\nEstado ANTES:")
         print(f"  bets pending:         {pre[0]}")
         print(f"  bets unresolved:      {pre[1]}")
         print(f"  bets stale:           {pre[2]}")
@@ -130,7 +130,7 @@ def main():
               (SELECT COUNT(*) FROM upcoming_matches WHERE match_date::timestamptz < NOW() - INTERVAL '2 days') AS stale_upcoming
             FROM bets_history
         """)).fetchone()
-        print(f"\nEstado DESPUÉS:")
+        print("\nEstado DESPUÉS:")
         print(f"  bets pending:         {post[0]}   (Δ {post[0]-pre[0]:+d})")
         print(f"  bets unresolved:      {post[1]}   (Δ {post[1]-pre[1]:+d})")
         print(f"  bets stale:           {post[2]}   (Δ {post[2]-pre[2]:+d})")

@@ -17,8 +17,7 @@ Las tres señales:
 """
 
 import numpy as np
-from scipy.stats import poisson
-from src.models.dixon_coles_model import match_outcomes, MAX_GOALS
+from src.models.dixon_coles_model import match_outcomes
 from src.features.team_form import KALMAN_BASELINE
 
 # =========================

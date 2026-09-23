@@ -60,7 +60,7 @@ def apply_manual_backfill():
     from sqlalchemy import text
     from config.database import engine
 
-    inserted = updated = 0
+    inserted = 0
     with engine.begin() as conn:
         for home, away, gh, ga, date, league in MANUAL_RESULTS:
             hht, aht = MANUAL_HT.get((home, away), (None, None))

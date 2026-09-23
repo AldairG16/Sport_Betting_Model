@@ -16,7 +16,6 @@ Default: $0.30/día → con $9.72 = 32 días de runway.
 Ajustable vía env var ANTHROPIC_DAILY_BUDGET_USD.
 """
 
-import os
 from sqlalchemy import text
 
 
