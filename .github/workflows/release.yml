@@ -3,14 +3,25 @@ name: Release
 # Publica una versión nueva del sistema:
 #   1. Actualiza el archivo VERSION (ej. "1.2.0")
 #   2. git tag v1.2.0 && git push origin v1.2.0
-#   3. Este workflow compila el dashboard .exe y lo publica como GitHub
-#      Release descargable (Releases → BettingDashboard-v1.2.0.exe)
+#   3. Este workflow compila el dashboard .exe, lo prueba y lo publica como
+#      GitHub Release descargable (Releases → BettingDashboard.exe)
+#
+# Disparo manual (workflow_dispatch): compila y prueba el .exe SIN publicar
+# — el paso de Release solo corre con un tag. Sirve para validar el build
+# antes de etiquetar.
+#
+# El .exe lleva dentro ui_es5.js, Chart.js y VERSION (--add-data). Hasta el
+# 22-sep-26 no los llevaba: un .exe descargado se quedaba en "Conectando…"
+# (sin JS) y el aviso de versión comparaba contra "dev". Una copia de
+# ui_es5.js o chart2.min.js JUNTO al .exe sigue teniendo prioridad (arreglos
+# en vivo sin recompilar).
 #
 # El dashboard local avisa al usuario cuando existe una versión más nueva.
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write   # necesario para crear el Release
@@ -40,13 +51,49 @@ jobs:
           DB_URL: postgresql://dummy:dummy@localhost/dummy
         run: python -m pytest tests -q
 
+      # Rutas absolutas en --add-data: con --specpath, PyInstaller resuelve
+      # las relativas contra la carpeta del .spec, no contra el repo.
       - name: Build dashboard executable
         run: |
           python -m PyInstaller --noconfirm --onefile --name BettingDashboard `
             --distpath installer/dist --workpath installer/build `
+            --add-data "${{ github.workspace }}\dashboard\ui_es5.js;dashboard" `
+            --add-data "${{ github.workspace }}\dashboard\chart2.min.js;dashboard" `
+            --add-data "${{ github.workspace }}\VERSION;." `
             --specpath installer dashboard/entry.py
 
+      # Arranca el .exe con una DB ficticia (la página y los archivos
+      # estáticos no la tocan) y comprueba que sirve lo que lleva dentro.
+      - name: Smoke test of the executable
+        run: |
+          Set-Content -Path installer/dist/.env -Value "DB_URL=postgresql://dummy:dummy@localhost/dummy" -Encoding ascii
+          $proc = Start-Process -FilePath "installer/dist/BettingDashboard.exe" -WorkingDirectory "installer/dist" -PassThru
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 45 -and -not $ready; $i++) {
+              Start-Sleep -Seconds 2
+              try {
+                $r = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:5050/" -TimeoutSec 5
+                $ready = ($r.StatusCode -eq 200)
+              } catch { }
+            }
+            if (-not $ready) { throw "El .exe no respondió en http://127.0.0.1:5050/" }
+            foreach ($path in @("/ui_es5.js", "/chartjs.js")) {
+              # sin redirecciones: /chartjs.js manda al CDN si Chart.js no viene dentro
+              $r = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:5050$path" -MaximumRedirection 0 -TimeoutSec 10
+              if ($r.StatusCode -ne 200 -or $r.RawContentLength -lt 1000) { throw "$path no viene empaquetado en el .exe" }
+              Write-Host "$path OK ($($r.RawContentLength) bytes)"
+            }
+            $v = Invoke-RestMethod -Uri "http://127.0.0.1:5050/api/version" -TimeoutSec 15
+            if ($v.current -eq "dev") { throw "VERSION no viene empaquetado (el .exe reporta 'dev')" }
+            Write-Host "Versión empaquetada: $($v.current)"
+          } finally {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            Remove-Item installer/dist/.env -ErrorAction SilentlyContinue
+          }
+
       - name: Create GitHub Release with artifacts
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           name: Betting Model v${{ github.ref_name }}
