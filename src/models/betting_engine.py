@@ -261,10 +261,14 @@ def refresh_clv_cache() -> dict:
         from config.database import engine
         from config.settings import LEARNING_SINCE
         from sqlalchemy import text
+        from src.utils.closing_quality import valid_closing_sql, ensure_closing_columns
         import pandas as pd
         from datetime import datetime
 
-        df = pd.read_sql(text("""
+        # Solo cierres VÁLIDOS (descargados poco antes del kickoff): un
+        # cierre igual a la apertura da CLV 0 falso (closing_quality).
+        ensure_closing_columns(engine)
+        df = pd.read_sql(text(f"""
             SELECT market, league, odds, closing_odds, result
             FROM bets_history
             WHERE result IN ('win','loss')
@@ -272,6 +276,7 @@ def refresh_clv_cache() -> dict:
               AND closing_odds > 0
               AND match_date >= NOW() - INTERVAL '120 days'
               AND match_date >= CAST(:since AS timestamptz)
+              AND {valid_closing_sql()}
         """), engine, params={"since": LEARNING_SINCE})
     except Exception as e:
         return {"error": str(e)}

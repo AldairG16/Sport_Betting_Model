@@ -84,10 +84,16 @@ SHADOW_TABLE_SQL = """
         edge_market  NUMERIC,
         reason       TEXT,
         closing_odds NUMERIC,
+        closing_fetched_at TIMESTAMPTZ,
         created_at   TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE (match, market, match_date)
     )
 """
+
+# Tablas creadas antes del 22-sep-26 no tienen closing_fetched_at
+# (cuándo se descargó la cuota usada como cierre — ver closing_quality).
+SHADOW_ALTER_SQL = "ALTER TABLE shadow_bets ADD COLUMN IF NOT EXISTS closing_fetched_at TIMESTAMPTZ"
+BETS_CLOSING_ALTER_SQL = "ALTER TABLE bets_history ADD COLUMN IF NOT EXISTS closing_fetched_at TIMESTAMPTZ"
 
 
 def persist_shadow_bets(records: list):
@@ -99,6 +105,7 @@ def persist_shadow_bets(records: list):
     try:
         with engine.begin() as conn:
             conn.execute(text(SHADOW_TABLE_SQL))
+            conn.execute(text(SHADOW_ALTER_SQL))
             inserted = 0
             for r in records:
                 if not r.get("odds") or r["odds"] <= 1.01:
@@ -182,6 +189,7 @@ def save_bets(bets):
             ALTER TABLE bets_history
             ADD COLUMN IF NOT EXISTS odds_placed NUMERIC
         """))
+        conn.execute(text(BETS_CLOSING_ALTER_SQL))
 
     with engine.begin() as conn:
         for _, row in df.iterrows():
@@ -753,7 +761,25 @@ def _same_line(market: str, row_line) -> bool:
 
 def _closing_odds_for(market, odds_row):
     """Mapeo mercado → cuota de cierre (compartido bets/shadow, ronda 7)."""
+    return closing_quote_for(market, odds_row)[0]
+
+
+# Mercados cuya cuota llega en el fetch "featured" (/odds: h2h, totals,
+# spreads). El resto (btts, DNB de la API, doble oportunidad, medio tiempo,
+# córners, tarjetas) llega por evento (/events/{id}/odds) y se refresca por
+# separado: su frescura es specialty_fetched_at, no odds_fetched_at.
+_FEATURED_MARKETS = frozenset({"home_win", "draw", "away_win", "over25", "under25"})
+
+
+def closing_quote_for(market, odds_row):
+    """
+    (cuota de cierre, cuándo se descargó) para un mercado, desde una fila
+    de upcoming_matches. La hora sale de la columna del fetch que trajo ESA
+    cuota: odds_fetched_at (featured) o specialty_fetched_at (por evento).
+    La hora es None en filas anteriores al 22-sep-26 (frescura desconocida).
+    """
     closing_odds = None
+    featured = market in _FEATURED_MARKETS or str(market).startswith(("ah_home_", "ah_away_"))
 
     # =========================
     # MAPEO MERCADOS
@@ -790,6 +816,7 @@ def _closing_odds_for(market, odds_row):
         if dh and da and dh == dh and da == da and dh > 1 and da > 1:
             closing_odds = dh if market == "dnb_home" else da
         else:
+            featured = True   # derivado del 1X2 → frescura del fetch featured
             h = odds_row.get("home_odds")
             a = odds_row.get("away_odds")
             if h and a and h > 1 and a > 1:
@@ -846,25 +873,45 @@ def _closing_odds_for(market, odds_row):
     try:
         v = float(closing_odds)
     except (TypeError, ValueError):
-        return None
-    return v if v == v and v > 1 else None
+        return None, None
+    if not (v == v and v > 1):
+        return None, None
+    fetched = odds_row.get("odds_fetched_at" if featured else "specialty_fetched_at")
+    try:
+        if fetched is not None and pd.isna(fetched):
+            fetched = None
+    except (TypeError, ValueError):
+        pass
+    return v, fetched
 
 
 
 def _update_shadow_closing():
     """Rellena closing_odds de shadow_bets con el MISMO lookup y mapeo que
-    bets_history (B2, ronda 7) — el CLV por bandas depende de esto."""
+    bets_history (B2, ronda 7) — el CLV por bandas depende de esto.
+
+    Desde el 22-sep-26 guarda closing_fetched_at (cuándo se descargó la
+    cuota usada) y REEMPLAZA el cierre si llega uno descargado más cerca del
+    kickoff: cada corrida del closing acerca el cierre al precio final en
+    vez de quedarse con la primera cuota vista (que solía ser la misma de
+    apertura → movimiento 0 falso). Solo el aprendizaje usa los cierres que
+    pasan closing_quality.is_valid_closing."""
+    from src.utils.closing_quality import should_update_closing
+    with engine.begin() as conn:
+        conn.execute(text(SHADOW_ALTER_SQL))
     sdf = pd.read_sql(text("""
-        SELECT id, match, market, match_date
+        SELECT id, match, market, match_date, closing_odds, closing_fetched_at
         FROM shadow_bets
-        WHERE closing_odds IS NULL
-          AND match_date BETWEEN NOW() - INTERVAL '10 days'
+        WHERE match_date BETWEEN NOW() - INTERVAL '10 days'
                              AND NOW() + INTERVAL '90 minutes'
+          AND (closing_odds IS NULL OR closing_fetched_at IS NULL
+               OR closing_fetched_at < match_date)
     """), engine)
     if sdf.empty:
         return
 
     s_updated = 0
+    rows_cache: dict = {}
     with engine.begin() as conn:
         for _, row in sdf.iterrows():
             match = row["match"]
@@ -875,83 +922,46 @@ def _update_shadow_closing():
             except ValueError:
                 continue
 
-            odds_df = _nearest_market_row(home, away, bet_match_date)
+            # una sola consulta por partido (el shadow trae ~10 mercados c/u)
+            key = (match, str(bet_match_date))
+            if key not in rows_cache:
+                rows_cache[key] = _nearest_market_row(home, away, bet_match_date)
+            odds_df = rows_cache[key]
             if odds_df.empty:
                 continue
 
-            closing_odds = _closing_odds_for(market, odds_df.iloc[0])
+            closing_odds, fetched_at = closing_quote_for(market, odds_df.iloc[0])
             if closing_odds is None:
+                continue
+            current = row["closing_fetched_at"]
+            if fetched_at is None:
+                # frescura desconocida (fila previa al 22-sep): solo si no
+                # había cierre, y sin hora — el aprendizaje no la usará
+                if not pd.isna(row["closing_odds"]):
+                    continue
+            elif not should_update_closing(current, fetched_at, bet_match_date):
                 continue
 
             conn.execute(text("""
                 UPDATE shadow_bets
-                SET closing_odds = :closing_odds
+                SET closing_odds = :closing_odds, closing_fetched_at = :fetched_at
                 WHERE id = :id
-            """), {"closing_odds": float(closing_odds), "id": int(row["id"])})
+            """), {"closing_odds": float(closing_odds),
+                   "fetched_at": pd.to_datetime(fetched_at, utc=True).to_pydatetime()
+                   if fetched_at is not None else None,
+                   "id": int(row["id"])})
             s_updated += 1
 
     print(f"🌑 Shadow closing: {s_updated}/{len(sdf)}")
 
 
 def update_closing_odds():
-
-    print("\n📡 UPDATING CLOSING ODDS...\n")
-
-    # Fix: incluir match_date para filtrar el partido correcto (antes
-    # un bet de hace 3 meses tomaba las odds de un partido FUTURO del
-    # mismo enfrentamiento → CLV completamente falso)
-    df = pd.read_sql("""
-        SELECT id, match, market, match_date
-        FROM bets_history
-        WHERE closing_odds IS NULL
-    """, engine)
-
-    if not df.empty:
-        updated = 0
-
-        with engine.begin() as conn:
-
-            for _, row in df.iterrows():
-
-                match = row["match"]
-                market = row["market"]
-                bet_match_date = pd.to_datetime(row["match_date"])
-
-                try:
-                    home, away = match.split(" vs ")
-                except ValueError:
-                    continue
-
-                    odds_df = _nearest_market_row(home, away, bet_match_date)
-
-                if odds_df.empty:
-                    continue
-
-                odds_row = odds_df.iloc[0]
-                closing_odds = _closing_odds_for(market, odds_row)
-
-
-                if closing_odds is None:
-                    continue
-
-                conn.execute(text("""
-                    UPDATE bets_history
-                    SET closing_odds = :closing_odds
-                    WHERE id = :id
-                """), {
-                    "closing_odds": float(closing_odds),
-                    "id": int(row["id"])
-                })
-
-                updated += 1
-
-            print(f"✅ Closing odds updated: {updated}")
-    else:
-        print("No bets need closing odds")
-
-    # ── B2 (ronda 7): closing de las candidatas shadow ──
-    try:
-        _update_shadow_closing()
-    except Exception as e:
-        # la tabla aún no existe en el primer ciclo → no es error
-        print(f"⚠️  shadow closing omitido: {type(e).__name__}")
+    """
+    Backfill de cierres (lo usa scripts/one_shot_data_quality_cleanup.py).
+    Delegado a scripts/update_closing_odds.py en modo backfill: hasta el
+    22-sep-26 esto era una segunda copia de esa lógica que nunca podía
+    funcionar (la búsqueda de la fila quedó indentada dentro del `except`,
+    así que `odds_df` no existía → UnboundLocalError en cada bet).
+    """
+    from scripts.update_closing_odds import update_closing_odds as _update
+    _update(only_near_kickoff=False)

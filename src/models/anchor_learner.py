@@ -35,6 +35,10 @@ Límites (decisión del dueño, 22-sep-26: automático con límites):
 Independencia: se usa una sola pata por par (la que el modelo favorece,
 d > 0) y el error estándar es robusto por partido (clusters), porque las
 candidatas de un mismo partido no son observaciones independientes.
+
+Calidad del cierre: solo cuentan cierres descargados poco antes del
+kickoff y después de la apertura (src/utils/closing_quality.py). Un
+"cierre" que es la misma cuota de apertura da Δ = 0 y sesga β hacia 0.
 """
 
 from datetime import datetime, timezone
@@ -198,14 +202,23 @@ def load_anchor_weights() -> dict:
 
 
 def read_shadow_with_closing() -> pd.DataFrame:
-    """Solo lectura: candidatas shadow de la cohorte que ya tienen cierre."""
+    """
+    Solo lectura: candidatas shadow de la cohorte con un cierre VÁLIDO —
+    cuota descargada poco antes del kickoff y después de la apertura
+    (closing_quality). Sin esa condición entraban cierres que eran la
+    misma cuota de apertura (Δ = 0 exacto), que aplastan β hacia 0.
+    """
     from config.database import engine
-    return pd.read_sql(text("""
+    from src.utils.closing_quality import valid_closing_sql, ensure_closing_columns
+    ensure_closing_columns(engine)
+    return pd.read_sql(text(f"""
         SELECT match, match_date, market, deviation, odds, closing_odds
         FROM shadow_bets
         WHERE closing_odds IS NOT NULL
           AND deviation IS NOT NULL
           AND match_date >= CAST(:since AS timestamptz)
+          AND {valid_closing_sql()}
+          AND closing_fetched_at > created_at
     """), engine, params={"since": LEARNING_SINCE})
 
 

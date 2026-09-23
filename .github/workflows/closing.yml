@@ -1,16 +1,18 @@
 name: Closing Odds Pipeline
 
 on:
-  # CRON HORARIO reactivado (09-sep-26): el closing ahora es un loop
-  # autónomo. Cada hora verifica si hay bets con kickoff en <75 min;
-  # solo en esas horas fuerza el refetch de odds (~45-90 créditos) y
-  # revalida las bets contra el mercado real. El resto de las horas el
-  # cache TTL evita llamadas. Cubre kickoffs a cualquier hora sin
-  # intervención manual.
-  # NOTA: si se vuelve a usar un dispatcher externo, quitar el schedule
-  # para no duplicar corridas.
+  # Captura de cierres (22-sep-26): recarga DIRIGIDA de las ligas con
+  # kickoff en la próxima hora que tengan bets o candidatas shadow, con tope
+  # de créditos por corrida (ver refresh_for_closing). Correr seguido es
+  # barato e idempotente: no recarga lo descargado hace <20 min, el cierre
+  # solo se reemplaza por uno más cercano al kickoff y las confirmaciones
+  # se marcan como enviadas.
+  # GitHub descarta muchos crons programados (medido: 18 de 73 horas el
+  # 20-22 sep), así que se intenta 2 veces por hora en minutos poco
+  # cargados y se recomienda ADEMÁS dispararlo cada 30 min desde el
+  # dispatcher externo (docs/OPERACION.md §2): los duplicados no dañan.
   schedule:
-    - cron: '5 * * * *'          # cada hora a la hora + 5 min
+    - cron: '7,37 * * * *'
   workflow_dispatch:
   push:
     branches: [ master ]
