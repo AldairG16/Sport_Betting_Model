@@ -5,7 +5,6 @@ Tests de la Ronda 7: gate de CLV estadístico y alcanzable (B1/R10),
 bloqueo explícito de favoritos AH, shadow logging (B2) y bandas.
 """
 
-import inspect
 import sys
 from pathlib import Path
 
@@ -18,10 +17,6 @@ from scripts.clv_gate import (
     _deviation_band,
     market_clv_blocked,
 )
-
-
-def _source(module):
-    return inspect.getsource(module)
 
 
 # ============================================================
@@ -68,10 +63,11 @@ def test_shadow_captures_before_edge_filter(monkeypatch):
     assert all(abs(s["deviation"]) >= pp.SHADOW_MIN_DEV for s in out["shadow"])
 
 
-def test_pipeline_persists_shadow_records():
-    src = _source(pp)
-    assert "persist_shadow_bets(shadow_records)" in src
-    assert "shadow_records: list = []" in src
+def test_pipeline_persists_shadow_records(monkeypatch):
+    """Todas las candidatas del barrido llegan a persist_shadow_bets."""
+    from tests.pipeline_harness import run_pipeline
+    out = run_pipeline(monkeypatch)
+    assert out["shadow"] and pp.LAST_RUN_SUMMARY["shadow"] == len(out["shadow"])
 
 
 def test_shadow_table_dedupes_reruns():
@@ -79,15 +75,74 @@ def test_shadow_table_dedupes_reruns():
     assert "UNIQUE (match, market, match_date)" in sb.SHADOW_TABLE_SQL
 
 
-def test_shadow_closing_reuses_same_mapping():
-    """El closing del shadow usa las MISMAS funciones que bets_history.
-    Desde el 22-sep-26 ambos pasan por closing_quote_for (cuota + hora de
-    descarga) y _nearest_market_row; se verifica con los propios módulos."""
+def _closing_world(monkeypatch, bets_rows):
+    """El closing de producción (scripts/update_closing_odds) con una base
+    falsa: una bet (opcional) y una candidata shadow del mismo partido, con
+    kickoff en 30 min y cuota descargada 20 min antes del kickoff."""
+    import pandas as pd
     import scripts.update_closing_odds as uco
-    assert "closing_quote_for(market, odds_df.iloc[0])" in _source(sb._update_shadow_closing)
-    assert "closing_quote_for(market, odds_df.iloc[0])" in _source(uco.update_closing_odds)
-    assert "_nearest_market_row(" in _source(sb._update_shadow_closing)
-    assert "_nearest_market_row(" in _source(uco.update_closing_odds)
+    from tests.fake_db import FakeEngine
+
+    kickoff = pd.Timestamp.now(tz="UTC").floor("min") + pd.Timedelta(minutes=30)
+    fetched = kickoff - pd.Timedelta(minutes=20)
+    bets = pd.DataFrame(bets_rows(kickoff), columns=["id", "match", "market", "odds",
+                                                     "match_date", "closing_odds",
+                                                     "closing_fetched_at"])
+    shadow = pd.DataFrame([{"id": 7, "match": "alpha vs beta", "market": "draw",
+                            "match_date": kickoff, "closing_odds": None,
+                            "closing_fetched_at": None}])
+    sql_seen, lookups, quotes = [], [], []
+
+    def fake_read_sql(sql, con=None, params=None, **kw):
+        s = " ".join(str(sql).split())
+        sql_seen.append(s)
+        if "FROM bets_history" in s:
+            return bets.copy()
+        if "FROM shadow_bets" in s:
+            return shadow.copy()
+        raise AssertionError(f"SQL inesperado: {s[:100]}")
+
+    def nearest(home, away, date):
+        lookups.append((home, away))
+        return pd.DataFrame([{"home_odds": 1.9}])
+
+    def quote(market, row):
+        quotes.append(market)
+        return 1.85, fetched
+
+    eng = FakeEngine()
+    monkeypatch.setattr(pd, "read_sql", fake_read_sql)
+    monkeypatch.setattr(uco, "engine", eng)
+    monkeypatch.setattr(sb, "engine", eng)
+    monkeypatch.setattr(sb, "_nearest_market_row", nearest)
+    monkeypatch.setattr(sb, "closing_quote_for", quote)
+    uco.update_closing_odds()
+    return eng, sql_seen, lookups, quotes, fetched
+
+
+def test_bets_and_shadow_closing_share_lookup_and_mapping(monkeypatch):
+    """El closing de bets_history y el del shadow usan LAS MISMAS funciones:
+    _nearest_market_row (fila más cercana al kickoff) y closing_quote_for
+    (mercado → cuota + hora de descarga). Se verifica ejecutándolos."""
+    eng, _, lookups, quotes, fetched = _closing_world(
+        monkeypatch, lambda k: [(1, "alpha vs beta", "home_win", 1.9,
+                                 k.tz_convert(None), None, None)])
+    assert quotes == ["home_win", "draw"]
+    assert lookups == [("alpha", "beta"), ("alpha", "beta")]
+    (_, bet_upd), = eng.statements("UPDATE bets_history SET closing_odds")
+    (_, sh_upd), = eng.statements("UPDATE shadow_bets SET closing_odds")
+    for upd in (bet_upd, sh_upd):
+        assert upd["closing_odds"] == 1.85
+        assert upd["fetched_at"] == fetched.to_pydatetime()
+
+
+def test_shadow_closing_runs_even_without_bets_to_close(monkeypatch):
+    """Un slate sin bets también cierra su shadow (el dato del aprendizaje).
+    Hasta el 23-sep-26 el cierre del shadow quedaba después del `return`
+    de "no hay bets pendientes"."""
+    eng, _, _, quotes, _ = _closing_world(monkeypatch, lambda k: [])
+    assert quotes == ["draw"]
+    assert len(eng.statements("UPDATE shadow_bets SET closing_odds")) == 1
 
 
 # ============================================================

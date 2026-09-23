@@ -45,6 +45,10 @@ Esto **no** es lo que uno esperaría, y confundirlo cuesta caro:
   `closing.yml` contra `master`, mismo PAT que los demás). Duplicar corridas no
   daña: no recarga lo descargado hace <20 min, el cierre solo se reemplaza por
   uno más cercano al kickoff y las confirmaciones se marcan como enviadas.
+  **Sin ese disparo, el aprendizaje del peso del modelo no recibe datos.** Un cierre
+  solo vale si se descargó entre 150 min antes y 2 min después del kickoff. Con
+  closings cada ~4 h, casi ningún partido cae en esa ventana: el 23-sep-2026 había
+  0 cierres válidos de 33 candidatas shadow, con 6 corridas en 20 h.
 - **Producción la dispara un agente externo** vía `workflow_dispatch` contra `master`,
   con un PAT de la cuenta dueña. Lanza `morning`, `closing`, `evening` y `weekly` a
   las 12:00 / 18:00 / 09:00 UTC y los lunes.
@@ -501,11 +505,17 @@ ni APIs (dependencias sustituidas por datos fijos). Los cambios de lógica se pr
 con `UPDATE_GOLDEN=1 python -m pytest tests/test_pipeline_end_to_end.py` y el diff va
 en el commit.
 
+Ningún test busca texto en el código fuente (el 23-sep-2026 se convirtieron los que
+quedaban). Uno de ellos exigía que `setdefault` y `player_club_goals` aparecieran en
+`load_scorer_rates`, y pasaba mientras los goleadores de clubes se descartaban siempre.
+Para el código que escribe en la base, `tests/fake_db.py` es un motor falso que
+registra cada sentencia; las consultas se verifican sobre el SQL que de verdad se envía.
+
 Dos redes de seguridad corren con la suite:
 
 - `tests/test_static_analysis.py` exige cero hallazgos de pyflakes en `src/`,
-  `scripts/`, `config/` y `dashboard/`: nombres sin definir, imports o variables sin
-  uso.
+  `scripts/`, `config/`, `dashboard/` y `tests/`: nombres sin definir, imports o
+  variables sin uso.
 - `tests/test_entrypoints.py` resuelve cada `from src|scripts|config|dashboard import x`
   del proyecto, también los que están dentro de funciones. Esos imports solo fallan
   cuando se ejecuta su rama, a veces una vez por semana y en producción.

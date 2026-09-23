@@ -252,6 +252,10 @@ def extended_kwargs() -> dict:
     }
 
 
+DC_PARAMS = {"rho": -0.09, "converged": True,
+             "fitted_at": "2030-01-01", "final_grad_max": 0.1}
+
+
 def run_pipeline(monkeypatch, matches: pd.DataFrame | None = None,
                  learned: dict | None = None,
                  line_moves: dict | None = None,
@@ -260,6 +264,7 @@ def run_pipeline(monkeypatch, matches: pd.DataFrame | None = None,
                  pending: dict | None = None,
                  calibration: dict | None = None,
                  mle_lambdas=None,
+                 dc_params: dict | None = None,
                  overrides: dict | None = None) -> dict:
     """
     Corre el pipeline con dependencias sustituidas y devuelve lo capturado.
@@ -268,7 +273,9 @@ def run_pipeline(monkeypatch, matches: pd.DataFrame | None = None,
     `pending`: {fecha 'YYYY-MM-DD': stake ya comprometido} (tope por slate).
     `calibration`: factores de calibración activos (por defecto, ninguno).
     `mle_lambdas`: fn(home, away, is_neutral) → (λh, λa) y activa DC-MLE.
+    `dc_params`: lo que devuelve el último fit DC-MLE (por defecto DC_PARAMS).
     `overrides`: {nombre en prediction_pipeline: sustituto}, al final.
+    En lo capturado, "sql" lista las consultas que el pipeline envió.
     """
     import src.pipeline.prediction_pipeline as pp
     import src.models.betting_engine as be
@@ -278,12 +285,13 @@ def run_pipeline(monkeypatch, matches: pd.DataFrame | None = None,
 
     df = default_matches() if matches is None else matches
     moves = LINE_MOVES if line_moves is None else line_moves
-    captured = {"bets": [], "shadow": [], "paper": []}
+    captured = {"bets": [], "shadow": [], "paper": [], "sql": []}
 
     pend = pending or {}
 
     def fake_read_sql(sql, con=None, params=None, **kw):
         s = str(sql)
+        captured["sql"].append(" ".join(s.split()))
         if "upcoming_matches" in s:
             return df.copy()
         if "bets_history" in s:
@@ -301,8 +309,7 @@ def run_pipeline(monkeypatch, matches: pd.DataFrame | None = None,
         monkeypatch.setattr(pp, "get_dc_lambdas",
                             lambda h, a, is_neutral=False: mle_lambdas(h, a, is_neutral))
     monkeypatch.setattr(dcf, "_load_params",
-                        lambda: {"rho": -0.09, "converged": True,
-                                 "fitted_at": "2030-01-01", "final_grad_max": 0.1})
+                        lambda: dict(DC_PARAMS if dc_params is None else dc_params))
     monkeypatch.setattr(pp, "_previous_fit_rho", lambda: -0.09)
     monkeypatch.setattr(pp, "_has_coverage", lambda league, kind: True)
     monkeypatch.setattr(be, "_load_clv_cache", lambda: {})

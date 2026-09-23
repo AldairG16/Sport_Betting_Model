@@ -61,6 +61,7 @@ def load_scorer_rates(force: bool = False) -> dict:
     Lee match_events y calcula por jugador:
       goals, team_matches (partidos de su equipo en la ventana),
       goals_per_team_match (decay-weighted), team, last_seen
+    y le suma los goleadores de clubes (player_club_goals).
 
     Returns: {player_lower: {...}}
     """
@@ -75,10 +76,6 @@ def load_scorer_rates(force: bool = False) -> dict:
         WHERE date >= CURRENT_DATE - {WINDOW_DAYS}
         ORDER BY date DESC
     """), engine)
-    if ev.empty:
-        _rates_cache = {}
-        _cache_ts = now
-        return _rates_cache
 
     # Partidos por equipo (para el denominador conservador)
     team_matches: dict = {}
@@ -102,58 +99,62 @@ def load_scorer_rates(force: bool = False) -> dict:
                 if p:
                     rows.append({"player": p, "team": team, "w": w})
 
-    if not rows:
-        _rates_cache = {}
-        _cache_ts = now
-        return _rates_cache
+    out: dict = {}
+    if rows:
+        gl = pd.DataFrame(rows).groupby("player").agg(
+            goals_w=("w", "sum"),        # goles ponderados
+            goals=("w", "size"),         # goles totales
+            team=("team", "first"),
+        ).reset_index()
+        for _, r in gl.iterrows():
+            tm = max(team_matches.get(r["team"], 1), 1)
+            out[r["player"]] = {
+                "team":          r["team"],
+                "goals":         int(r["goals"]),
+                "team_matches":  tm,
+                "rate_weighted": round(float(r["goals_w"]) / tm, 4),
+                "rate_raw":      round(int(r["goals"]) / tm, 4),
+            }
 
-    # ── GOLEADORES DE CLUBES (Understat, cargado en el weekly) ──────────
-    # match_events solo cubre selecciones; los goles de clubes vienen de
-    # player_club_goals. Se añaden como entradas adicionales (equipo
-    # normalizado) para que los picks de clubes funcionen.
+    _merge_club_scorers(out, team_matches)
+    _rates_cache = out
+    _cache_ts = now
+    return out
+
+
+def _merge_club_scorers(out: dict, team_matches: dict) -> None:
+    """
+    GOLEADORES DE CLUBES (Understat, cargado en el weekly): match_events
+    solo cubre selecciones; los goles de clubes vienen de player_club_goals
+    y se agregan a `out` con el equipo normalizado. Ante el mismo nombre
+    gana la entrada de selecciones (setdefault).
+
+    Hasta el 23-sep-26 se escribían en el caché ANTERIOR (_rates_cache) y
+    dos líneas después el caché se reemplazaba por el dict de selecciones:
+    ningún goleador de club llegaba a los picks. Tampoco se cargaban si no
+    había eventos de selecciones en la ventana.
+    """
     try:
         club = pd.read_sql(text("""
             SELECT player, team, goals, matches
             FROM player_club_goals
             WHERE updated_at >= NOW() - INTERVAL '60 days'
         """), engine)
-        for _, r in club.iterrows():
-            p = str(r["player"]).strip().lower()
-            if not p or pd.isna(r["goals"]) or int(r["goals"]) <= 0:
-                continue
-            t = normalize_team(str(r["team"]))
-            m_player = max(int(r["matches"]) if pd.notna(r["matches"]) else 1, 1)
-            g = int(r["goals"])
-            rate = g / m_player
-            _rates_cache.setdefault(p, {
-                "team": t, "goals": g, "team_matches": max(int(team_matches.get(t, 1)), 1),
-                "rate_weighted": round(rate, 4), "rate_raw": round(rate, 4),
-                "source": "club",
-            })
     except Exception:
-        pass  # tabla ausente o DB error → solo selecciones
-
-    gl = pd.DataFrame(rows).groupby("player").agg(
-        goals_w=("w", "sum"),        # goles ponderados
-        goals=("w", "size"),         # goles totales
-        team=("team", "first"),
-    ).reset_index()
-
-    out: dict = {}
-    for _, r in gl.iterrows():
-        tm = max(team_matches.get(r["team"], 1), 1)
-        rate_w = float(r["goals_w"]) / tm
-        rate_raw = int(r["goals"]) / tm
-        out[r["player"]] = {
-            "team":          r["team"],
-            "goals":         int(r["goals"]),
-            "team_matches":  tm,
-            "rate_weighted": round(rate_w, 4),
-            "rate_raw":      round(rate_raw, 4),
-        }
-    _rates_cache = out
-    _cache_ts = now
-    return out
+        return   # tabla ausente o DB error → solo selecciones
+    for _, r in club.iterrows():
+        p = str(r["player"]).strip().lower()
+        if not p or pd.isna(r["goals"]) or int(r["goals"]) <= 0:
+            continue
+        t = normalize_team(str(r["team"]))
+        m_player = max(int(r["matches"]) if pd.notna(r["matches"]) else 1, 1)
+        g = int(r["goals"])
+        rate = g / m_player
+        out.setdefault(p, {
+            "team": t, "goals": g, "team_matches": max(int(team_matches.get(t, 1)), 1),
+            "rate_weighted": round(rate, 4), "rate_raw": round(rate, 4),
+            "source": "club",
+        })
 
 
 def anytime_scorer_prob(player: str, team_expected_goals: float,

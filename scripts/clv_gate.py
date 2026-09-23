@@ -111,13 +111,23 @@ def shadow_clv_bands(verbose: bool = True) -> dict:
     del mercado que dominara la cobertura de closing, no el del nivel de
     desvío. Columnas separadas n_banda / n_con_closing: "hay filas" y "hay
     medición" no son el mismo dato (Q-S ronda 7: cobertura 0-97%).
+
+    Desde el 23-sep-26, con la misma política que el resto del aprendizaje:
+    solo la cohorte actual (LEARNING_SINCE) y solo cierres VÁLIDOS
+    (descargados cerca del kickoff y después de la apertura). Un "cierre"
+    que es la cuota de apertura da CLV 0 exacto y aplasta las bandas.
     """
+    from src.utils.closing_quality import valid_closing_sql, ensure_closing_columns
     try:
-        df = pd.read_sql(text("""
-            SELECT market, deviation, odds, closing_odds
+        ensure_closing_columns(engine)
+        df = pd.read_sql(text(f"""
+            SELECT market, deviation, odds,
+                   CASE WHEN {valid_closing_sql()} AND closing_fetched_at > created_at
+                        THEN closing_odds END AS closing_odds
             FROM shadow_bets
             WHERE deviation IS NOT NULL AND odds > 1
-        """), engine)
+              AND match_date >= CAST(:since AS timestamptz)
+        """), engine, params={"since": LEARNING_SINCE})
     except Exception as e:
         # tabla aún no creada → no es error en el primer ciclo
         if verbose:
@@ -129,26 +139,40 @@ def shadow_clv_bands(verbose: bool = True) -> dict:
             print("   ℹ️  shadow_clv_bands: sin filas todavía")
         return {"status": "no_data"}
 
+    out = aggregate_shadow_clv(df)
+    if verbose:
+        print("\n🌑 SHADOW CLV por (mercado × banda): n_banda · n_closing · CLV")
+        for mkt, bands in out.items():
+            for band, node in bands.items():
+                if node["n_banda"] >= 3:   # ruido mínimo fuera del log
+                    avg = node["avg_clv"]
+                    clv_s = f"{avg:+.4f}" if avg is not None else "  -  "
+                    print(f"   {mkt:<16} [{band:>5}] n={node['n_banda']:>3} - "
+                          f"n_closing={node['n_con_closing']:>3} - CLV={clv_s}")
+    return {"status": "ok", "by_market": out}
+
+
+def aggregate_shadow_clv(df: pd.DataFrame) -> dict:
+    """
+    Función PURA: {mercado: {banda: {n_banda, n_con_closing, avg_clv}}} a
+    partir de filas (market, deviation, odds, closing_odds). CLV en escala
+    de probabilidad (1/cierre − 1/apertura); sin cierre usable no mide.
+    """
+    df = df.copy()
+    for c in ("deviation", "odds", "closing_odds"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
     df["clv"] = 1.0 / df["closing_odds"] - 1.0 / df["odds"]
     df.loc[df["closing_odds"].isna() | (df["closing_odds"] <= 1), "clv"] = None
     df["band"] = df["deviation"].map(_deviation_band)
-
-    out = {}
-    if verbose:
-        print("\n🌑 SHADOW CLV por (mercado × banda): n_banda · n_closing · CLV")
+    out: dict = {}
     for (mkt, band), sub in df.groupby(["market", "band"]):
-        n_band = len(sub)
         measured = sub["clv"].dropna()
-        n_close = len(measured)
-        avg = float(measured.mean()) if n_close else None
+        avg = float(measured.mean()) if len(measured) else None
         out.setdefault(mkt, {})[band] = {
-            "n_banda": n_band, "n_con_closing": n_close,
+            "n_banda": int(len(sub)), "n_con_closing": int(len(measured)),
             "avg_clv": round(avg, 5) if avg is not None else None,
         }
-        if verbose and n_band >= 3:   # ruido mínimo fuera del log
-            clv_s = f"{avg:+.4f}" if avg is not None else "  -  "
-            print(f"   {mkt:<16} [{band:>5}] n={n_band:>3} - n_closing={n_close:>3} - CLV={clv_s}")
-    return {"status": "ok", "by_market": out}
+    return out
 
 
 
