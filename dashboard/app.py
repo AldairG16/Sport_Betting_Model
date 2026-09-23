@@ -18,13 +18,22 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-from flask import Flask, jsonify, request
-from sqlalchemy import text
+from flask import Flask, g, jsonify, request
+from sqlalchemy import create_engine, text
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from config.database import engine  # noqa: E402
+from config.database import DATABASE_URL  # noqa: E402
+
+# El dashboard es un proceso de larga vida: entre refrescos (5 min) Neon
+# cierra las conexiones inactivas y la laptop puede dormir. Con el motor
+# compartido del pipeline, la primera consulta sobre una conexión muerta
+# fallaba ("SSL connection has been closed unexpectedly", decenas de veces
+# en dash_start.log) y esa sección mostraba "sin datos" (23-sep-26).
+# pool_pre_ping prueba la conexión antes de usarla y reconecta sola;
+# pool_recycle la renueva antes de que el servidor la corte.
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=240)  # noqa: E402
 from dashboard.display import league_name, market_name, match_name, result_label  # noqa: E402
 
 app = Flask(__name__)
@@ -117,12 +126,24 @@ RESOLVED = ("win", "loss", "push", "half_win", "half_loss")
 WIN_LIKE = ("win", "half_win")
 
 
+DB_DOWN = "Sin conexión con la base de datos — se reintenta sola en el próximo refresco"
+
+
 def _q(sql: str, params: dict | None = None) -> pd.DataFrame:
     try:
         return pd.read_sql(text(sql), engine, params=params or {})
     except Exception as e:
         app.logger.warning(f"query falló: {e}")
+        # error de CONEXIÓN (no de datos): la respuesta lo dice en vez de
+        # un "sin datos" que parece que no hay apuestas
+        if "OperationalError" in f"{type(e).__name__} {e}":
+            g.db_down = True
         return pd.DataFrame()
+
+
+def _no_data(msg: str = "sin datos"):
+    """Respuesta vacía que distingue "no hay filas" de "no hubo conexión"."""
+    return jsonify({"ok": False, "msg": DB_DOWN if g.get("db_down") else msg})
 
 
 def _profit(df: pd.DataFrame) -> pd.Series:
@@ -131,9 +152,10 @@ def _profit(df: pd.DataFrame) -> pd.Series:
     (save_bets.resolve_market), la misma que mueve el bankroll.
 
     Hasta el 22-sep-26 se recalculaba como (odds − 1)·stake·factor, que en
-    una pérdida da −(odds − 1)·stake en vez de −stake: a cuota 1.80 cada
-    pérdida contaba −0.80u. El ROI del dashboard salía más optimista que el
-    real y no cuadraba con el bankroll.
+    una pérdida da −(odds − 1)·stake en vez de −stake: a cuota 1.80 una
+    pérdida contaba −0.80u y a cuota 3.00, −2.00u. Con las cuotas de este
+    sistema (muchas > 2) el ROI a 90 días salía −34% cuando el real era −16%,
+    y no cuadraba con el bankroll.
     """
     if df.empty:
         return pd.Series(dtype=float)
@@ -159,7 +181,7 @@ def kpis():
         """)
         window = "histórico"
     if df.empty:
-        return jsonify({"ok": False, "msg": "Sin datos en bets_history"})
+        return _no_data("Sin datos en bets_history")
 
     resolved = df[df["result"].isin(RESOLVED)]
     pending = df[df["result"] == "pending"]
@@ -168,7 +190,9 @@ def kpis():
     staked = float(resolved["stake"].sum())
     clv = df["clv"].dropna()
 
-    bank = _q("SELECT bankroll FROM bankroll ORDER BY updated_at DESC LIMIT 1")
+    # Misma lectura que bankroll_manager.get_current_bankroll. Antes pedía
+    # columnas que la tabla no tiene (bankroll, updated_at): el KPI salía "—".
+    bank = _q("SELECT current_bankroll AS bankroll FROM bankroll ORDER BY id LIMIT 1")
     bankroll = float(bank.iloc[0]["bankroll"]) if not bank.empty else None
 
     # Brier solo con bets resueltas binarias (excluye push)
@@ -200,7 +224,7 @@ def equity():
         ORDER BY match_date
     """)
     if df.empty:
-        return jsonify({"ok": False})
+        return _no_data()
     df["profit"] = _profit(df)
     df["cum"] = df["profit"].cumsum()
     return jsonify({
@@ -244,7 +268,7 @@ def bets():
         LIMIT {limit}
     """, params)
     if df.empty:
-        return jsonify({"ok": False})
+        return _no_data()
 
     for col, fn in (("match", match_name), ("league", league_name), ("market", market_name)):
         if col in df.columns:
@@ -270,7 +294,7 @@ def by_dim(dim):
           AND match_date >= NOW() - INTERVAL '180 days'
     """)
     if df.empty:
-        return jsonify({"ok": False})
+        return _no_data()
     df["profit"] = _profit(df)
     g = df.groupby(dim).agg(
         n=("profit", "size"),
@@ -301,7 +325,7 @@ def clv_scatter():
         ORDER BY match_date
     """)
     if df.empty:
-        return jsonify({"ok": False})
+        return _no_data()
     return jsonify({
         "ok": True,
         "x": list(range(1, len(df) + 1)),
@@ -321,7 +345,7 @@ def scorers():
         LIMIT 100
     """)
     if df.empty:
-        return jsonify({"ok": False})
+        return _no_data()
     if "league" in df.columns:
         df["league"] = df["league"].apply(lambda v: league_name(v) if v else v)
     if "match" in df.columns:
@@ -419,7 +443,7 @@ def api_narrative():
         FROM weekly_narrative ORDER BY created_at DESC LIMIT 1
     """)
     if df.empty:
-        return jsonify({"ok": False})
+        return _no_data()
     r = df.iloc[0]
     return jsonify({"ok": True, "narrative": r["narrative"],
                     "engine": r["engine"],
