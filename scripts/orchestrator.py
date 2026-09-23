@@ -431,6 +431,14 @@ def step_results():
     update_bet_results()
 
 
+def step_shadow_results():
+    """Liquida las candidatas shadow ya jugadas con la MISMA función que las
+    apuestas (stake 1, sin bankroll). Solo DB. Es el dato que juzga las
+    reglas manuales contra resultados reales (ver step_rule_evidence)."""
+    from src.models.save_bets import resolve_shadow_outcomes
+    resolve_shadow_outcomes()
+
+
 def step_mlb_predict():
     from src.pipeline.mlb_pipeline import run_mlb_pipeline
     run_mlb_pipeline()
@@ -580,6 +588,7 @@ def run_evening(logger: Logger):
     run_step(logger, "Fetch results",     step_fetch_results)
     run_step(logger, "Fetch results (fbdata backup)", step_fetch_results_backup)
     run_step(logger, "Results",           step_results)
+    run_step(logger, "Shadow results",    step_shadow_results)
     # Resolver bets pending (corners/cards/HT) ANTES del resumen, así el
     # usuario no ve "esperando data" en la noche para partidos ya jugados.
     run_step(logger, "Resolve pending (Claude)", step_resolve_pending)
@@ -739,6 +748,29 @@ def step_anchor_learning():
         send_message(format_report(state, html=True))
 
 
+def step_rule_evidence():
+    """Reglas manuales contra RESULTADOS reales: liquida las shadow
+    pendientes, arma la evidencia por regla (rule_evidence) y aprende la
+    escala de los ajustes manuales (shade_learner), que el pipeline lee de
+    la DB en la siguiente corrida. Telegram solo si algún veredicto ya
+    tiene datos suficientes o si la escala se movió: silencio = sin novedad."""
+    from src.models.save_bets import resolve_shadow_outcomes
+    from src.models.rule_evidence import (read_resolved_shadow, run_rule_evidence,
+                                          conclusive, format_report as evidence_report)
+    from src.models.shade_learner import (run_shade_learning, PRIOR_SCALE,
+                                          format_report as scale_report)
+    resolve_shadow_outcomes()
+    df = read_resolved_shadow()
+    evidence = run_rule_evidence(df, verbose=True)
+    scales = run_shade_learning(df, verbose=True)
+    moved = any(abs(n.get("scale", PRIOR_SCALE) - PRIOR_SCALE) > 1e-9
+                for n in scales.get("families", {}).values())
+    if conclusive(evidence) or moved:
+        from scripts.notify_telegram import send_message
+        send_message(evidence_report(evidence, html=True) + "\n\n"
+                     + scale_report(scales, html=True))
+
+
 def step_shadow_reactivation():
     """Mercados de bloqueo fijo (away_win, AH con el local favorito) que
     vuelven solo con evidencia shadow contra el cierre."""
@@ -832,6 +864,7 @@ def run_results_only(logger: Logger):
     run_step(logger, "Fetch results",                  step_fetch_results)
     run_step(logger, "Fetch results (fbdata backup)",  step_fetch_results_backup)
     run_step(logger, "Results",                        step_results)
+    run_step(logger, "Shadow results",                 step_shadow_results)
     run_step(logger, "CLV update",                     step_clv)
     run_step(logger, "Backtest",                       step_backtest)
 
@@ -894,6 +927,7 @@ def main():
             run_step(logger, "CLV gate (kill-switch)",   step_clv_gate)
             run_step(logger, "Reactivación por shadow",  step_shadow_reactivation)
             run_step(logger, "Peso del modelo (ancla)",  step_anchor_learning)
+            run_step(logger, "Evidencia de reglas",      step_rule_evidence)
             run_step(logger, "Refresh CLV cache",        step_refresh_clv_cache)   # Mejora #14
             run_step(logger, "Holdout evaluation",       step_evaluate_holdout)
             # 2) Cargas de datos (lentas) y el ajuste que depende de ellas

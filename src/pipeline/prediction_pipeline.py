@@ -138,7 +138,8 @@ from src.models.calibration_monitor import (
     _ah_group,
 )
 from src.models.dc_mle_fitter import get_dc_lambdas, is_params_fresh, DC_MLE_WEIGHT
-from src.models.anchor_learner import model_weight_for, market_family
+from src.models.anchor_learner import model_weight_for, market_family, FAMILIES as ANCHOR_FAMILIES
+from src.models.shade_learner import shade_scale_for, family_scale
 from config.settings import PAPER_ONLY_LEAGUES
 from collections import Counter
 
@@ -244,6 +245,33 @@ TOUGH_LEAGUES = {
     "soccer_france_ligue_one",
 }
 
+# Mejora 4: sweet spots de cuota por mercado (bandas inclusivas) — fuera de
+# la banda no se apuesta. Constante desde el 22-sep-26 para que
+# rule_evidence mida contra resultados la MISMA banda que aplica el filtro.
+SWEET_SPOTS = {
+    "home_win": (1.30, 3.80),
+    "over25":   (1.50, 3.00),
+    "draw":     (2.50, 5.00),
+}
+
+# Tilde favorito-longshot (etapa 7): cuotas > FLB_REF se encogen y < FLB_REF
+# se levantan, con asimetría por lado. A nivel de módulo desde el 22-sep-26
+# para que rule_evidence mida el sesgo con el mismo corte y los mismos lados.
+FLB_TILT = 0.12
+FLB_REF = 2.8
+_FLB_HOME_SIDES = ("home_win", "dnb_home", "dc_1x", "h1_home", "h2_home")
+_FLB_AWAY_SIDES = ("away_win", "dnb_away", "dc_x2", "h1_away", "h2_away")
+
+
+def flb_side(market: str) -> str:
+    """Lado del mercado para la asimetría por localía del FLB."""
+    m = str(market)
+    if m in _FLB_HOME_SIDES or m.startswith("ah_home"):
+        return "home"
+    if m in _FLB_AWAY_SIDES or m.startswith("ah_away"):
+        return "away"
+    return "neutral"
+
 # Ligas bloqueadas: ROI negativo consistente en walk-forward + producción
 # Auditoría 15-jun-2026 sobre 830 bets reales (90d):
 #   soccer_efl_champ:          67 bets, -31.9% ROI, -10.34u → BLOQUEADA
@@ -339,16 +367,19 @@ _BLOCKED_MARKETS = {
 #   blocked_markets / blocked_leagues: CLV gate (se suman a los estáticos)
 #   reactivated: grupos de bloqueo fijo que el shadow ya reactivó
 #   anchor: peso del modelo vs mercado por familia (anchor_learner)
+#   shades: escala de los ajustes manuales por familia (shade_learner)
 def load_learned_state() -> dict:
     from scripts.clv_gate import (load_clv_blocked_markets, load_clv_blocked_leagues,
                                   load_shadow_reactivated)
     from src.models.anchor_learner import load_anchor_weights
+    from src.models.shade_learner import load_shade_scales
     state = {"blocked_markets": set(), "blocked_leagues": set(),
-             "reactivated": set(), "anchor": {}}
+             "reactivated": set(), "anchor": {}, "shades": {}}
     loaders = (("blocked_markets", load_clv_blocked_markets),
                ("blocked_leagues", load_clv_blocked_leagues),
                ("reactivated", load_shadow_reactivated),
-               ("anchor", load_anchor_weights))
+               ("anchor", load_anchor_weights),
+               ("shades", load_shade_scales))
     for key, fn in loaders:
         try:
             state[key] = fn()
@@ -1621,18 +1652,8 @@ def _stage_final_probabilities(row, T, L, probabilities, market_probs, odds, ctx
     # propia cuota: cuotas > 2.8 → encoger; cuotas < 2.8 → levantar a la
     # mitad de la intensidad. Nuestros datos lo confirman: away_win y
     # líneas de underdogs acumulan las peores pérdidas del sistema.
-    _FLB_TILT = 0.12
-    _FLB_REF = 2.8
-    _HOME_SIDES = ("home_win", "dnb_home", "dc_1x", "h1_home", "h2_home")
-
-    def _flb_side(market: str) -> str:
-        m = str(market)
-        if m in _HOME_SIDES or m.startswith("ah_home"):
-            return "home"
-        if m in ("away_win", "dnb_away", "dc_x2", "h1_away", "h2_away") or m.startswith("ah_away"):
-            return "away"
-        return "neutral"
-
+    # (FLB_TILT, FLB_REF y flb_side viven a nivel de módulo.)
+    #
     # 14-sep-26: asimetría por localía (CBS Business School) — el sesgo
     # se concentra en longshots VISITANTES (sobrevalorados ×1.5) y
     # favoritos LOCALES (infravalorados ×1.5).
@@ -1640,15 +1661,16 @@ def _stage_final_probabilities(row, T, L, probabilities, market_probs, odds, ctx
         o = odds.get(market)
         if not o or o <= 1.01:
             continue
-        _side = _flb_side(market)
-        if o > _FLB_REF:
-            L = min((o - _FLB_REF) / _FLB_REF, 1.0)
+        _side = flb_side(market)
+        # _lev, no L: L es el namespace de lambdas que recibe esta etapa
+        if o > FLB_REF:
+            _lev = min((o - FLB_REF) / FLB_REF, 1.0)
             _mult = 1.5 if _side == "away" else 1.0
-            probabilities[market] *= (1 - _FLB_TILT * _mult * L)
+            probabilities[market] *= (1 - FLB_TILT * _mult * _lev)
         else:
-            L = min((_FLB_REF - o) / _FLB_REF, 1.0)
+            _lev = min((FLB_REF - o) / FLB_REF, 1.0)
             _mult = 1.5 if _side == "home" else (0.75 if _side == "away" else 1.0)
-            probabilities[market] *= (1 + _FLB_TILT * _mult * L)
+            probabilities[market] *= (1 + FLB_TILT * _mult * _lev)
         probabilities[market] = min(0.95, max(0.05, probabilities[market]))
 
     # =========================
@@ -1706,6 +1728,22 @@ def _stage_final_probabilities(row, T, L, probabilities, market_probs, odds, ctx
             probabilities[_m] = max(_p0 - _ANCHOR_DEV_CAP,
                                     min(_p0 + _ANCHOR_DEV_CAP, probabilities[_m]))
 
+    # ── Escala APRENDIDA de los shades (22-sep-26, shade_learner) ──
+    # δ = lo que movieron los shades al valor anclado (ya acotado por D12).
+    # El weekly estima con RESULTADOS reales qué fracción de δ conservar:
+    # 1 = las reglas tal como se diseñaron (prior, y valor sin evidencia),
+    # 0 = apagadas. δ se guarda SIN escalar en el shadow para que el
+    # aprendizaje mida siempre la escala absoluta, no la relativa a la actual.
+    _shade_raw = {}
+    _shade_scale_by_family = {}
+    for _m, _p0 in _post_anchor_probs.items():
+        if _m in _anchored_markets and _m in probabilities:
+            _shade_raw[_m] = probabilities[_m] - _p0
+            _s = shade_scale_for(_m, ctx.shade_state)
+            _shade_scale_by_family[market_family(_m)] = _s
+            if _s != 1.0:
+                probabilities[_m] = _p0 + _s * _shade_raw[_m]
+
     # ── GATE HT: mercados de primer/segundo tiempo solo en ligas cuya
     # fuente de resultados publica el descanso (football-data). En el
     # resto (MLS, Brasil, Argentina, Mexico...) quedarian "esperando
@@ -1747,7 +1785,8 @@ def _stage_final_probabilities(row, T, L, probabilities, market_probs, odds, ctx
     return SimpleNamespace(
         clean_probabilities=clean_probabilities, anchored_markets=_anchored_markets,
         anchor_w_by_family=_anchor_w_by_family, shades_applied=_shades_applied,
-        row_league=_row_league,
+        row_league=_row_league, post_anchor=_post_anchor_probs,
+        shade_raw=_shade_raw, shade_scale_by_family=_shade_scale_by_family,
     )
 
 
@@ -1786,6 +1825,12 @@ def _stage_shadow_sweep(row, T, F, market_probs, market_probs_raw, signed_deviat
         stats['sweep_ref'] += 1
         if abs(_sdev) < SHADOW_MIN_DEV:
             continue
+        # p_pre_shade / shade_delta (22-sep-26): la probabilidad anclada y
+        # cuánto la movieron las reglas manuales (FLB, tabla miente,
+        # empates, tope D12), sin escalar. Con el resultado real miden esas
+        # reglas (rule_evidence) y aprenden su escala (shade_learner) — el
+        # CLV no las juzga: dicen que el precio está sesgado aun al cierre.
+        _in_shade = _sm in F.shade_raw
         records.append({
             "match":      f"{home} vs {away}",
             "match_date": date,
@@ -1797,6 +1842,8 @@ def _stage_shadow_sweep(row, T, F, market_probs, market_probs_raw, signed_deviat
             "odds":       _sodd,
             "edge_market": _sp - 1.0 / _sodd,
             "reason":     "sweep",
+            "p_pre_shade": F.post_anchor[_sm] if _in_shade else None,
+            "shade_delta": F.shade_raw[_sm] if _in_shade else None,
         })
         _sweep_n += 1
     stats['shadow_swept'] += _sweep_n
@@ -1959,6 +2006,7 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation):
     mc_agreement = M.mc_agreement
     _anchored_markets = F.anchored_markets
     _anchor_w_by_family = F.anchor_w_by_family
+    _shade_scale_by_family = F.shade_scale_by_family
     _shades_applied = F.shades_applied
     bk_count = C.bk_count
     spread_pct = C.spread_pct
@@ -2078,11 +2126,8 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation):
         #   over25   @2.0-2.5 → 53% WR, +16% ROI
         #   draw     @2.5-4.0 → 100% WR (muestra chica, mantener amplio)
         _odds = bet["odds"]
-        if mkt == "home_win" and not (1.3 <= _odds <= 3.80):
-            continue
-        if mkt == "over25" and not (1.50 <= _odds <= 3.00):
-            continue
-        if mkt == "draw" and not (2.5 <= _odds <= 5.0):
+        _band = SWEET_SPOTS.get(mkt)
+        if _band and not (_band[0] <= _odds <= _band[1]):
             continue
 
         # ── Edge mínimo dinámico (Mejora #3 — por mercado) ──────
@@ -2194,6 +2239,7 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation):
                     "shades": _shades_applied,
                     "anchored": sorted(_anchored_markets),
                     "anchor_model_weight": _anchor_w_by_family,
+                    "shade_scale": _shade_scale_by_family,
                     "xg_source": _xg_source,
                 },
                 "signals": {
@@ -2560,6 +2606,7 @@ def run_prediction_pipeline(dry_run: bool = False):
     blocked_leagues = BLOCKED_LEAGUES | set(learned["blocked_leagues"])
     reactivated     = set(learned["reactivated"])
     anchor_state    = learned["anchor"] or {}
+    shade_state     = learned.get("shades") or {}
     if learned["blocked_markets"]:
         print(f"🚦 Mercados bloqueados por CLV gate: {sorted(learned['blocked_markets'])}")
     if learned["blocked_leagues"]:
@@ -2572,6 +2619,12 @@ def run_prediction_pipeline(dry_run: bool = False):
             f"{f}={n.get('weight', 0):.0%}" for f, n in _fams.items()))
     else:
         print("⚓ Peso del modelo: prior 35% (aún sin estado aprendido)")
+    _scales = {f: family_scale(f, shade_state) for f in ANCHOR_FAMILIES}
+    if any(s != 1.0 for s in _scales.values()):
+        print("🎚️ Escala de los ajustes manuales: " + ", ".join(
+            f"{f}={s:.0%}" for f, s in _scales.items()))
+    else:
+        print("🎚️ Ajustes manuales: escala 100% (sin evidencia para moverla)")
 
     elo = compute_elo()
 
@@ -2618,6 +2671,7 @@ def run_prediction_pipeline(dry_run: bool = False):
         cal_active=cal_active,
         cal_factors=cal_factors,
         anchor_state=anchor_state,
+        shade_state=shade_state,
         DC_RHO_SCORE=DC_RHO_SCORE,
         DC_RHO_GLOBAL=DC_RHO_GLOBAL,
         DC_CONVERGED=DC_CONVERGED,

@@ -948,6 +948,13 @@
      "corners_cards": 0.35,
      "ah_dnb": 0.35
     },
+    "shade_scale": {
+     "1x2": 1.0,
+     "totals": 1.0,
+     "btts": 1.0,
+     "corners_cards": 1.0,
+     "ah_dnb": 1.0
+    },
     "xg_source": "proxy"
    },
    "signals": {
@@ -1019,6 +1026,12 @@
      "totals": 0.35,
      "btts": 0.35,
      "ah_dnb": 0.35
+    },
+    "shade_scale": {
+     "1x2": 1.0,
+     "totals": 1.0,
+     "btts": 1.0,
+     "ah_dnb": 1.0
     },
     "xg_source": "proxy"
    },
@@ -1092,6 +1105,12 @@
      "btts": 0.35,
      "ah_dnb": 0.35
     },
+    "shade_scale": {
+     "1x2": 1.0,
+     "totals": 1.0,
+     "btts": 1.0,
+     "ah_dnb": 1.0
+    },
     "xg_source": "proxy"
    },
    "signals": {
@@ -1163,6 +1182,12 @@
      "totals": 0.35,
      "btts": 0.35,
      "ah_dnb": 0.35
+    },
+    "shade_scale": {
+     "1x2": 1.0,
+     "totals": 1.0,
+     "btts": 1.0,
+     "ah_dnb": 1.0
     },
     "xg_source": "proxy"
    },
@@ -1236,6 +1261,12 @@
      "btts": 0.35,
      "ah_dnb": 0.35
     },
+    "shade_scale": {
+     "1x2": 1.0,
+     "totals": 1.0,
+     "btts": 1.0,
+     "ah_dnb": 1.0
+    },
     "xg_source": "proxy"
    },
    "signals": {
@@ -1307,6 +1338,12 @@
      "totals": 0.35,
      "btts": 0.35,
      "ah_dnb": 0.35
+    },
+    "shade_scale": {
+     "1x2": 1.0,
+     "totals": 1.0,
+     "btts": 1.0,
+     "ah_dnb": 1.0
     },
     "xg_source": "proxy"
    },
@@ -1380,6 +1417,12 @@
      "totals": 0.35,
      "btts": 0.35,
      "ah_dnb": 0.35
+    },
+    "shade_scale": {
+     "1x2": 1.0,
+     "totals": 1.0,
+     "btts": 1.0,
+     "ah_dnb": 1.0
     },
     "xg_source": "proxy"
    },
