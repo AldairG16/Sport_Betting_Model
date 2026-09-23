@@ -42,6 +42,8 @@ def dash(monkeypatch):
     def fake_q(sql, params=None):
         s = " ".join(str(sql).split())
         if "FROM bankroll" in s:
+            # la tabla tiene current_bankroll (no bankroll/updated_at)
+            assert "current_bankroll" in s
             return pd.DataFrame({"bankroll": [57.9]})
         if "FROM goalscorer_picks" in s:
             return pd.DataFrame([{"match_date": "2026-09-21", "match": "alpha vs beta",
@@ -131,6 +133,42 @@ def test_version_comes_from_the_version_file(client):
     v = client.get("/api/version").get_json()
     expected = (ROOT / "VERSION").read_bytes().decode("utf-8", "ignore").replace("\x00", "").lstrip("﻿").strip()
     assert v["current"] == expected and v["latest"] is None and v["update_available"] is False
+
+
+def _failing_db(monkeypatch, message):
+    """El _q real, con pd.read_sql fallando como falla contra Neon."""
+    import dashboard.app as dash
+
+    def boom(sql, con=None, params=None, **kw):
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(dash.pd, "read_sql", boom)
+    return dash.app.test_client()
+
+
+def test_connection_errors_say_so_instead_of_no_data(monkeypatch):
+    """Una conexión que Neon cerró no debe verse como "no hay apuestas"
+    (23-sep-26: la tabla mostraba "sin datos" con 200 bets en la base)."""
+    import dashboard.app as dash
+    client = _failing_db(monkeypatch, "(psycopg2.OperationalError) SSL connection has "
+                                      "been closed unexpectedly")
+    for path in ("/api/bets", "/api/kpis", "/api/equity", "/api/by/market"):
+        d = client.get(path).get_json()
+        assert d == {"ok": False, "msg": dash.DB_DOWN}, path
+
+
+def test_missing_table_is_no_data_not_a_connection_problem(monkeypatch):
+    client = _failing_db(monkeypatch, "Execution failed on sql: (psycopg2.errors."
+                                      "UndefinedTable) relation \"goalscorer_picks\" does not exist")
+    assert client.get("/api/scorers").get_json() == {"ok": False, "msg": "sin datos"}
+
+
+def test_dashboard_engine_survives_idle_connections():
+    """Proceso de larga vida: prueba la conexión antes de usarla y la
+    renueva antes de que Neon la corte."""
+    import dashboard.app as dash
+    assert dash.engine.pool._pre_ping is True
+    assert 0 < dash.engine.pool._recycle <= 300
 
 
 def test_dispatch_needs_a_known_workflow_and_a_token(client):
