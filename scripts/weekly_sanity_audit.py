@@ -36,6 +36,86 @@ sys.path.append(str(Path(__file__).parent.parent))
 from config.database import engine
 
 
+_STAT_COLS = ("home_corners", "away_corners", "home_yellow", "away_yellow",
+              "home_shots", "away_shots", "home_shots_target", "away_shots_target")
+
+# Por encima de esto no se fusiona solo: tantos "duplicados" de golpe
+# indican que la heurística se descontroló (o una recarga masiva), y borrar
+# partidos reales es peor que dejar duplicados una semana más.
+MAX_AUTO_MERGE_PAIRS = 300
+
+
+def _sql_value(v):
+    """
+    Valor apto para una columna INTEGER. pandas convierte los NULL de una
+    columna entera en NaN (float); pasado tal cual, Postgres evaluaba
+    COALESCE(int, NaN) como double y al guardarlo en la columna entera
+    reventaba con "integer out of range" — la transacción entera se
+    revertía y los duplicados NO se fusionaban (al menos desde el 21-sep-26).
+    """
+    if v is None:
+        return None
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def find_duplicate_pairs(df: pd.DataFrame) -> list[tuple[dict, dict]]:
+    """
+    Pares candidatos a duplicado: misma fecha y marcador, nombres parecidos
+    (>0.62 en local y visitante). Nunca empareja dos ligas distintas cuando
+    ambas filas tienen liga: el mismo día y marcador en dos competiciones
+    con nombres parecidos son dos partidos, no uno. Función pura.
+    """
+    pairs = []
+    for _, g in df.groupby(["date", "home_goals", "away_goals"]):
+        if len(g) < 2:
+            continue
+        rows = g.to_dict("records")
+        for i in range(len(rows)):
+            for j in range(i + 1, len(rows)):
+                a, b = rows[i], rows[j]
+                la, lb = a.get("league"), b.get("league")
+                if (isinstance(la, str) and la and isinstance(lb, str) and lb
+                        and la != lb):
+                    continue
+                sh = difflib.SequenceMatcher(None, a["home_team"], b["home_team"]).ratio()
+                sa = difflib.SequenceMatcher(None, a["away_team"], b["away_team"]).ratio()
+                if sh > 0.62 and sa > 0.62:
+                    pairs.append((a, b))
+    return pairs
+
+
+def choose_keep(a: dict, b: dict) -> tuple[dict, dict]:
+    """(keep, donor): nombre limpio sobre variante con apóstrofe; si ambos
+    limpios, la fila con más stats."""
+    def stats_count(r):
+        return sum(1 for c in _STAT_COLS if _sql_value(r.get(c)) is not None)
+
+    def has_apostrophe(r):
+        return "'" in r["home_team"] or "'" in r["away_team"]
+
+    if has_apostrophe(a) and not has_apostrophe(b):
+        return b, a
+    if has_apostrophe(b) and not has_apostrophe(a):
+        return a, b
+    return (a, b) if stats_count(a) >= stats_count(b) else (b, a)
+
+
+def merge_params(keep: dict, donor: dict) -> dict:
+    """Parámetros del UPDATE de fusión, sin NaN (ver _sql_value)."""
+    keys = ("hc", "ac", "hy", "ay", "hs", "asx", "hst", "ast")
+    params = {k: _sql_value(donor.get(c)) for k, c in zip(keys, _STAT_COLS)}
+    params["kid"] = int(keep["id"])
+    return params
+
+
 def audit_duplicate_matches() -> tuple[str, str]:
     """
     AUTO-REPARADOR: detecta pares duplicados (misma fecha, mismo marcador,
@@ -44,49 +124,32 @@ def audit_duplicate_matches() -> tuple[str, str]:
     demostró recrearse en cada recarga de datasets (13-sep-26).
     """
     df = pd.read_sql(text("""
-        SELECT id, date, home_team, away_team, home_goals, away_goals,
+        SELECT id, date, league, home_team, away_team, home_goals, away_goals,
                home_corners, away_corners, home_yellow, away_yellow,
                home_shots, away_shots, home_shots_target, away_shots_target
         FROM matches
         WHERE date >= CURRENT_DATE - 60 AND home_goals IS NOT NULL
         ORDER BY date
     """), engine)
-    dups = []
-    for _, g in df.groupby(["date", "home_goals", "away_goals"]):
-        if len(g) < 2:
-            continue
-        rows = g.to_dict("records")
-        for i in range(len(rows)):
-            for j in range(i + 1, len(rows)):
-                a, b = rows[i], rows[j]
-                sh = difflib.SequenceMatcher(None, a["home_team"], b["home_team"]).ratio()
-                sa = difflib.SequenceMatcher(None, a["away_team"], b["away_team"]).ratio()
-                if sh > 0.62 and sa > 0.62:
-                    dups.append((a, b))
+    dups = find_duplicate_pairs(df)
 
     if not dups:
         return "ok", "sin duplicados ✓"
 
-    def stats_count(r):
-        cols = ("home_corners", "away_corners", "home_yellow", "away_yellow",
-                "home_shots", "away_shots", "home_shots_target", "away_shots_target")
-        return sum(1 for c in cols if pd.notna(r[c]))
+    sample = "; ".join(f"{a['home_team']} vs {a['away_team']} ({str(a['date'])[:10]})"
+                       for a, b in dups[:3])
+    if len(dups) > MAX_AUTO_MERGE_PAIRS:
+        return "alerta", (f"{len(dups)} pares duplicados — demasiados para fusionar "
+                          f"solo (tope {MAX_AUTO_MERGE_PAIRS}); revisar a mano (ej: {sample})")
 
-    def has_apostrophe(r):
-        return "'" in r["home_team"] or "'" in r["away_team"]
-
-    to_delete = []
+    to_delete: list[int] = []
     with engine.begin() as conn:
         for a, b in dups:
-            # keep = nombre limpio; si ambos limpios, el de más stats
-            if has_apostrophe(a) and not has_apostrophe(b):
-                keep, donor = b, a
-            elif has_apostrophe(b) and not has_apostrophe(a):
-                keep, donor = a, b
-            elif stats_count(a) >= stats_count(b):
-                keep, donor = a, b
-            else:
-                keep, donor = b, a
+            # Triplicados: una fila ya marcada para borrar no participa en
+            # otro par (ni como destino de stats ni como donante).
+            if int(a["id"]) in to_delete or int(b["id"]) in to_delete:
+                continue
+            keep, donor = choose_keep(a, b)
             # fusionar stats faltantes del donor hacia keep
             conn.execute(text("""
                 UPDATE matches k SET
@@ -99,38 +162,67 @@ def audit_duplicate_matches() -> tuple[str, str]:
                     home_shots_target = COALESCE(k.home_shots_target, :hst),
                     away_shots_target = COALESCE(k.away_shots_target, :ast)
                 WHERE k.id = :kid
-            """), {"hc": donor["home_corners"], "ac": donor["away_corners"],
-                   "hy": donor["home_yellow"], "ay": donor["away_yellow"],
-                   "hs": donor["home_shots"], "asx": donor["away_shots"],
-                   "hst": donor["home_shots_target"], "ast": donor["away_shots_target"],
-                   "kid": keep["id"]})
-            to_delete.append(donor["id"])
+            """), merge_params(keep, donor))
+            to_delete.append(int(donor["id"]))
         if to_delete:
             conn.execute(text("DELETE FROM matches WHERE id = ANY(:ids)"),
                          {"ids": to_delete})
 
-    sample = "; ".join(f"{a['home_team']} vs {a['away_team']} ({str(a['date'])[:10]})"
-                       for a, b in dups[:3])
-    return "ok", (f"{len(dups)} duplicados detectados y AUTO-FUSIONADOS "
+    return "ok", (f"{len(to_delete)} duplicados detectados y AUTO-FUSIONADOS "
                   f"(ej: {sample})")
 
 
+XG_RATIO_BAND = (0.90, 1.10)   # proxy / goles reales aceptable (±10%)
+
+
+def xg_proxy_vs_goals(hsot: float, asot: float, hsh: float, ash: float,
+                      hg: float, ag: float) -> tuple[float, float, float]:
+    """
+    (xG proxy por equipo, goles reales por equipo, ratio). Promedia LOCAL y
+    VISITANTE, igual que get_team_xg (que mira tiros a favor y en contra en
+    ambas condiciones). Función pura.
+    """
+    from src.features.xg_proxy import SHOT_ON_TARGET_RATE, SHOT_RATE
+
+    def proxy(sot, sh):
+        return sot * SHOT_ON_TARGET_RATE + max(sh - sot, 0.0) * SHOT_RATE
+
+    xg_team = (proxy(hsot, hsh) + proxy(asot, ash)) / 2
+    goals_team = (hg + ag) / 2
+    ratio = xg_team / goals_team if goals_team > 0 else float("nan")
+    return xg_team, goals_team, ratio
+
+
 def audit_xg_sanity() -> tuple[str, str]:
-    # El xG proxy del equipo PROMEDIO debe dar ~1.35-1.45 (promedio real liga).
-    # Si se sale de rango, las constantes de conversión se descalibraron.
+    """
+    El xG proxy promedio debe parecerse a los goles REALES del mismo periodo.
+    Hasta el 22-sep-26 este chequeo usaba solo los tiros del LOCAL (que tira
+    más que el visitante) y un rango fijo 1.35-1.45: alertaba "1.63" semana
+    tras semana por la ventaja de local, no por el proxy. Ahora compara
+    ambos lados contra los goles de los mismos partidos.
+    """
     df = pd.read_sql(text("""
-        SELECT AVG(home_shots_target) AS sot, AVG(home_shots) AS sh
+        SELECT AVG(home_shots_target) AS hsot, AVG(away_shots_target) AS asot,
+               AVG(home_shots) AS hsh, AVG(away_shots) AS ash,
+               AVG(home_goals) AS hg, AVG(away_goals) AS ag, COUNT(*) AS n
         FROM matches
-        WHERE date >= CURRENT_DATE - 90 AND home_shots_target IS NOT NULL
+        WHERE date >= CURRENT_DATE - 90
+          AND home_shots_target IS NOT NULL AND away_shots_target IS NOT NULL
+          AND home_shots IS NOT NULL AND away_shots IS NOT NULL
+          AND home_goals IS NOT NULL AND away_goals IS NOT NULL
     """), engine)
-    if df.empty or df.iloc[0]["sot"] is None:
+    if df.empty or not int(df.iloc[0]["n"] or 0):
         return "ok", "sin datos de tiros recientes"
-    sot = float(df.iloc[0]["sot"]); sh = float(df.iloc[0]["sh"])
-    xg_prom = sot * 0.28 + max(sh - sot, 0) * 0.03
-    if not (1.15 <= xg_prom <= 1.60):
-        return "alerta", (f"xG promedio del proxy = {xg_prom:.2f} "
-                          f"(esperado 1.35-1.45) — conversión descalibrada")
-    return "ok", f"xG promedio proxy = {xg_prom:.2f} ✓"
+    r = df.iloc[0]
+    xg_team, goals_team, ratio = xg_proxy_vs_goals(
+        float(r["hsot"]), float(r["asot"]), float(r["hsh"]), float(r["ash"]),
+        float(r["hg"]), float(r["ag"]))
+    msg = (f"xG proxy {xg_team:.2f} vs goles reales {goals_team:.2f} por equipo "
+           f"(ratio {ratio:.2f}, n={int(r['n'])}, 90d)")
+    lo, hi = XG_RATIO_BAND
+    if not (lo <= ratio <= hi):
+        return "alerta", msg + " — conversión descalibrada"
+    return "ok", msg + " ✓"
 
 
 def audit_calibration() -> tuple[str, str]:
@@ -235,23 +327,33 @@ def audit_via_negativa() -> tuple[str, str]:
 
 def audit_shades() -> tuple:
     """
-    JUICIO DE LAS SENALES: CLV y ROI de las apuestas que llevan los tiltes
-    nuevos (tabla miente, FLB asimetrico, empates contextuales). Informativo
-    hasta ~50 bets; despues, flag con CLV negativo sostenido = quitar la senal.
+    JUICIO DE LAS SENALES: CLV y ROI de las apuestas donde una señal manual
+    MOVIÓ la probabilidad: "la tabla miente" aplicada (shades.aplicado) o
+    empate contextual (shades.draw_context). Informativo hasta ~50 bets;
+    despues, flag con CLV negativo sostenido = quitar la senal.
+
+    Hasta el 22-sep-26 buscaba 'shades' en la raíz del decision_log, pero
+    vive en decision_log.model.shades: el chequeo nunca encontró una apuesta.
     """
     df = pd.read_sql(text("""
+        WITH b AS (
+            SELECT clv, result, profit,
+                   COALESCE(decision_log->'model'->'shades', '{}'::jsonb) AS s
+            FROM bets_history
+            WHERE match_date >= CURRENT_DATE - 60
+              AND jsonb_typeof(decision_log) = 'object'
+        )
         SELECT
-          COUNT(*) FILTER (WHERE COALESCE(decision_log,'{}'::jsonb) ? 'shades') AS n_shades,
-          AVG(clv) FILTER (WHERE COALESCE(decision_log,'{}'::jsonb) ? 'shades'
+          COUNT(*) FILTER (WHERE s ? 'aplicado' OR s ? 'draw_context') AS n_shades,
+          AVG(clv) FILTER (WHERE (s ? 'aplicado' OR s ? 'draw_context')
                            AND clv IS NOT NULL) AS clv_shades,
-          COUNT(*) FILTER (WHERE COALESCE(decision_log,'{}'::jsonb) ? 'shades'
+          COUNT(*) FILTER (WHERE (s ? 'aplicado' OR s ? 'draw_context')
                            AND result IN ('win','half_win')) AS w_shades,
-          COUNT(*) FILTER (WHERE COALESCE(decision_log,'{}'::jsonb) ? 'shades'
+          COUNT(*) FILTER (WHERE (s ? 'aplicado' OR s ? 'draw_context')
                            AND result IN ('win','loss','push','half_win','half_loss')) AS r_shades,
-          SUM(profit) FILTER (WHERE COALESCE(decision_log,'{}'::jsonb) ? 'shades'
+          SUM(profit) FILTER (WHERE (s ? 'aplicado' OR s ? 'draw_context')
                            AND result IN ('win','loss','push','half_win','half_loss')) AS pnl
-        FROM bets_history
-        WHERE match_date >= CURRENT_DATE - 60
+        FROM b
     """), engine)
     n = int(df.iloc[0]["n_shades"] or 0)
     clv = df.iloc[0]["clv_shades"]

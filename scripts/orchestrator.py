@@ -907,7 +907,9 @@ def main():
             # 3) Monitores y reportes
             run_step(logger, "Drift detection",          step_drift_detection)     # Mejora #15
             run_step(logger, "Market regime monitor",    step_market_regime)
-            run_step(logger, "Sanity audit",             step_sanity_audit)
+            # La auditoría de sanidad NO corre aquí: la ejecuta su propio paso
+            # en weekly.yml (if: always(), corre aunque el weekly falle).
+            # Correrla en los dos sitios mandaba el mismo mensaje dos veces.
             run_step(logger, "Optimize thresholds",      step_optimize_thresholds)
             run_step(logger, "Walk-forward backtest",    step_walkforward)
             run_step(logger, "Weekly Telegram report",   step_weekly_report)
