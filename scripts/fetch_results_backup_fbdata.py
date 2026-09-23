@@ -24,7 +24,7 @@ Uso:
 import sys
 import argparse
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 
 sys.path.append(str(Path(__file__).parent.parent))
 if hasattr(sys.stdout, "reconfigure"):
@@ -34,6 +34,9 @@ import pandas as pd
 from sqlalchemy import text
 from config.database import engine
 from src.utils.team_normalizer import normalize_team
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 
 # Mapeo code football-data.co.uk → sport_key de The Odds API.
@@ -149,53 +152,63 @@ def _upsert_matches(df: pd.DataFrame) -> tuple[int, int]:
     with engine.begin() as conn:
         for _, row in df.iterrows():
             try:
-                # INSERT si no existe
-                r = conn.execute(text("""
-                    INSERT INTO matches (
-                        date, league, season, home_team, away_team,
-                        home_goals, away_goals, home_shots, away_shots,
-                        home_shots_target, away_shots_target,
-                        home_corners, away_corners,
-                        home_yellow, away_yellow, home_red, away_red
-                    )
-                    VALUES (
-                        :date, :league, :season, :home_team, :away_team,
-                        :home_goals, :away_goals, :home_shots, :away_shots,
-                        :home_shots_target, :away_shots_target,
-                        :home_corners, :away_corners,
-                        :home_yellow, :away_yellow, :home_red, :away_red
-                    )
-                    ON CONFLICT (date, home_team, away_team) DO NOTHING
-                """), row.to_dict())
-                if r.rowcount > 0:
-                    inserted += 1
-                    continue
-
-                # UPDATE parcial: sólo setea columnas que están NULL en DB
-                # (rellena córners/tarjetas si The Odds API ya había insertado goles).
-                r = conn.execute(text("""
-                    UPDATE matches
-                    SET home_corners       = COALESCE(home_corners, :home_corners),
-                        away_corners       = COALESCE(away_corners, :away_corners),
-                        home_shots         = COALESCE(home_shots, :home_shots),
-                        away_shots         = COALESCE(away_shots, :away_shots),
-                        home_shots_target  = COALESCE(home_shots_target, :home_shots_target),
-                        away_shots_target  = COALESCE(away_shots_target, :away_shots_target),
-                        home_yellow        = COALESCE(home_yellow, :home_yellow),
-                        away_yellow        = COALESCE(away_yellow, :away_yellow),
-                        home_red           = COALESCE(home_red, :home_red),
-                        away_red           = COALESCE(away_red, :away_red),
-                        home_goals_ht      = COALESCE(home_goals_ht, :home_goals_ht),
-                        away_goals_ht      = COALESCE(away_goals_ht, :away_goals_ht)
-                    WHERE date = :date
-                      AND home_team = :home_team
-                      AND away_team = :away_team
-                """), row.to_dict())
-                if r.rowcount > 0:
-                    updated += 1
+                # Savepoint por fila: sin él, una fila con error aborta la
+                # transacción y todas las siguientes fallan — y el lote
+                # entero se revierte al final (córners/tarjetas que no llegan).
+                with conn.begin_nested():
+                    inserted_now, updated_now = _upsert_one(conn, row)
+                inserted += inserted_now
+                updated += updated_now
             except Exception as e:
-                print(f"      ⚠️ row error ({row.get('home_team')} vs {row.get('away_team')}): {e}")
+                log.warning(f"      ⚠️ fila con error ({row.get('home_team')} vs "
+                            f"{row.get('away_team')}): {type(e).__name__}: {str(e)[:160]}")
     return inserted, updated
+
+
+def _upsert_one(conn, row) -> tuple[int, int]:
+    """INSERT si no existe; si existe, UPDATE solo de los campos NULL.
+    Devuelve (insertadas, actualizadas) de esta fila."""
+    r = conn.execute(text("""
+        INSERT INTO matches (
+            date, league, season, home_team, away_team,
+            home_goals, away_goals, home_shots, away_shots,
+            home_shots_target, away_shots_target,
+            home_corners, away_corners,
+            home_yellow, away_yellow, home_red, away_red
+        )
+        VALUES (
+            :date, :league, :season, :home_team, :away_team,
+            :home_goals, :away_goals, :home_shots, :away_shots,
+            :home_shots_target, :away_shots_target,
+            :home_corners, :away_corners,
+            :home_yellow, :away_yellow, :home_red, :away_red
+        )
+        ON CONFLICT (date, home_team, away_team) DO NOTHING
+    """), row.to_dict())
+    if r.rowcount > 0:
+        return 1, 0
+
+    # UPDATE parcial: sólo setea columnas que están NULL en DB
+    # (rellena córners/tarjetas si The Odds API ya había insertado goles).
+    r = conn.execute(text("""
+        UPDATE matches
+        SET home_corners       = COALESCE(home_corners, :home_corners),
+            away_corners       = COALESCE(away_corners, :away_corners),
+            home_shots         = COALESCE(home_shots, :home_shots),
+            away_shots         = COALESCE(away_shots, :away_shots),
+            home_shots_target  = COALESCE(home_shots_target, :home_shots_target),
+            away_shots_target  = COALESCE(away_shots_target, :away_shots_target),
+            home_yellow        = COALESCE(home_yellow, :home_yellow),
+            away_yellow        = COALESCE(away_yellow, :away_yellow),
+            home_red           = COALESCE(home_red, :home_red),
+            away_red           = COALESCE(away_red, :away_red),
+            home_goals_ht      = COALESCE(home_goals_ht, :home_goals_ht),
+            away_goals_ht      = COALESCE(away_goals_ht, :away_goals_ht)
+        WHERE date = :date
+          AND home_team = :home_team
+          AND away_team = :away_team
+    """), row.to_dict())
+    return 0, (1 if r.rowcount > 0 else 0)
 
 
 def fetch_fbdata_backup(days: int = 10, verbose: bool = True) -> dict:
@@ -238,7 +251,7 @@ def fetch_fbdata_backup(days: int = 10, verbose: bool = True) -> dict:
         if df_recent.empty:
             totals["leagues_ok"] += 1
             if verbose:
-                print(f"— sin partidos en ventana (ventana=0)")
+                print("— sin partidos en ventana (ventana=0)")
             continue
 
         ins, upd = _upsert_matches(df_recent)

@@ -21,7 +21,6 @@ Dónde guarda:
 """
 
 import sys
-import os
 import io
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -35,6 +34,10 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from config.database import engine
+from src.utils.db_batch import insert_ignore_conflicts, describe
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 # ─── Fuente de datos ──────────────────────────────────────────────────────
 CSV_URL   = "https://raw.githubusercontent.com/martj42/international_results/master/results.csv"
@@ -255,7 +258,7 @@ def load_international_data(verbose: bool = True) -> int:
 
     cutoff = datetime.now() - timedelta(days=YEARS_BACK * 365)
     if verbose:
-        print(f"\n🌍 CARGANDO DATOS INTERNACIONALES...")
+        print("\n🌍 CARGANDO DATOS INTERNACIONALES...")
         print(f"   Fuente: {CSV_URL}")
         print(f"   Desde: {cutoff.strftime('%Y-%m-%d')}  ({YEARS_BACK} anos)")
 
@@ -313,42 +316,34 @@ def load_international_data(verbose: bool = True) -> int:
     df["away_goals"] = df["away_goals"].astype(int)
 
     # ── Insertar en DB ─────────────────────────────────────────────────────
-    inserted = 0
-    skipped  = 0
-
+    # Por lotes (src/utils/db_batch). Antes: una sentencia por fila (3 min
+    # para 2.4k partidos) y `except: skipped += 1`, que contaba cualquier
+    # error como "ya existía" — y en Postgres el primer error aborta la
+    # transacción, así que el lote entero se revertía en silencio.
+    rows = [{
+        "date":       row["date"].strftime("%Y-%m-%d"),
+        "home_team":  row["home_team"],
+        "away_team":  row["away_team"],
+        "home_goals": int(row["home_goals"]),
+        "away_goals": int(row["away_goals"]),
+        "league":     row["league"],
+        "neutral":    bool(row["neutral"]) if pd.notna(row["neutral"]) else False,
+    } for _, row in df.iterrows()]
     with engine.begin() as conn:
-        for _, row in df.iterrows():
-            try:
-                result = conn.execute(text("""
-                    INSERT INTO matches
-                        (date, home_team, away_team, home_goals, away_goals,
-                         league, neutral)
-                    VALUES
-                        (:date, :home_team, :away_team, :home_goals, :away_goals,
-                         :league, :neutral)
-                    ON CONFLICT (date, home_team, away_team) DO NOTHING
-                """), {
-                    "date":       row["date"].strftime("%Y-%m-%d"),
-                    "home_team":  row["home_team"],
-                    "away_team":  row["away_team"],
-                    "home_goals": int(row["home_goals"]),
-                    "away_goals": int(row["away_goals"]),
-                    "league":     row["league"],
-                    "neutral":    bool(row["neutral"]) if pd.notna(row["neutral"]) else False,
-                })
-                if result.rowcount > 0:
-                    inserted += 1
-                else:
-                    skipped += 1
-            except Exception as e:
-                skipped += 1
+        res = insert_ignore_conflicts(
+            conn, "matches",
+            ["date", "home_team", "away_team", "home_goals", "away_goals", "league", "neutral"],
+            rows, ["date", "home_team", "away_team"])
 
     if verbose:
-        print(f"\n   Insertados: {inserted:,} nuevos registros")
-        print(f"   Ya existian: {skipped:,}")
-        print(f"\n✅ Datos internacionales cargados correctamente")
+        print(f"\n   {describe(res)}")
+    if res["errors"]:
+        log.error(f"❌ Datos internacionales: {res['errors']} filas no se pudieron "
+                  f"insertar — {res['first_error']}")
+    elif verbose:
+        print("\n✅ Datos internacionales cargados correctamente")
 
-    return inserted
+    return res["inserted"]
 
 
 if __name__ == "__main__":

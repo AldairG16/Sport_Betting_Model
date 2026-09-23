@@ -201,17 +201,20 @@ def enrich_matches():
                 ):
                     continue
 
-                conn.execute(text("""
-                    UPDATE upcoming_matches
-                    SET 
-                        home_shots = COALESCE(:home_shots, home_shots),
-                        away_shots = COALESCE(:away_shots, away_shots),
-                        home_shots_target = COALESCE(:home_shots_target, home_shots_target),
-                        away_shots_target = COALESCE(:away_shots_target, away_shots_target),
-                        home_corners = COALESCE(:home_corners, home_corners),
-                        away_corners = COALESCE(:away_corners, away_corners)
-                    WHERE match_key = :match_key
-                """), params)
+                # savepoint por fila: un UPDATE fallido no aborta la
+                # transacción (ni revierte los partidos ya enriquecidos)
+                with conn.begin_nested():
+                    conn.execute(text("""
+                        UPDATE upcoming_matches
+                        SET
+                            home_shots = COALESCE(:home_shots, home_shots),
+                            away_shots = COALESCE(:away_shots, away_shots),
+                            home_shots_target = COALESCE(:home_shots_target, home_shots_target),
+                            away_shots_target = COALESCE(:away_shots_target, away_shots_target),
+                            home_corners = COALESCE(:home_corners, home_corners),
+                            away_corners = COALESCE(:away_corners, away_corners)
+                        WHERE match_key = :match_key
+                    """), params)
 
             except Exception as e:
                 print("❌ Error:", e)

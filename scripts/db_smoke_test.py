@@ -384,6 +384,41 @@ def _rule_evidence_dry():
     return f"{ev['n_settled']} liquidadas en {ev['n_matches']} partidos (cohorte desde {ev['since']})"
 
 
+@check("Liquidación: córners/tarjetas/tiros liquidados SIN datos (solo lectura)")
+def _stat_settlements():
+    from src.models.save_bets import audit_stat_settlements
+    a = audit_stat_settlements()
+    return (f"{a['checked']} revisadas | sin datos: {a['no_data']} "
+            f"(profit registrado {a['no_data_profit']:+.2f}u) | resultado distinto hoy: "
+            f"{a['different']} (Δ {a['different_profit_delta']:+.2f}u) | "
+            f"sin partido para verificar: {a['unverifiable']}")
+
+
+@check("Inserción por lotes contra Postgres real (tabla TEMPORAL)")
+def _batch_insert_real():
+    """Valida db_batch contra Postgres de verdad sin tocar datos: tabla
+    TEMP (vive solo en esta conexión y se descarta al cerrarla)."""
+    import time
+    from src.utils.db_batch import insert_ignore_conflicts
+    good = [{"a": i, "b": f"x{i}"} for i in range(1200)]
+    mixed = [{"a": 5000 + i, "b": "y"} for i in range(30)]
+    mixed[15]["a"] = "no-es-entero"
+    with engine.begin() as c:
+        c.execute(text("CREATE TEMP TABLE smoke_batch (a INT, b TEXT, UNIQUE (a)) ON COMMIT DROP"))
+        t0 = time.monotonic()
+        first = insert_ignore_conflicts(c, "smoke_batch", ["a", "b"], good, ["a"])
+        again = insert_ignore_conflicts(c, "smoke_batch", ["a", "b"], good[:500], ["a"])
+        secs = time.monotonic() - t0
+        bad = insert_ignore_conflicts(c, "smoke_batch", ["a", "b"], mixed, ["a"], chunk=10)
+        n = c.execute(text("SELECT COUNT(*) FROM smoke_batch")).scalar()
+    assert first["inserted"] == 1200 and first["errors"] == 0, first
+    assert again["inserted"] == 0 and again["existing"] == 500, again
+    assert bad["inserted"] == 29 and bad["errors"] == 1, bad
+    assert n == 1229, n
+    return (f"1,200 filas + 500 repetidas en {secs:.1f}s; fila mala aislada sin perder "
+            f"el resto ({bad['first_error'][:50]}…)")
+
+
 @check("Closing: bets BTTS con cierre (antes 0 por clave 'btts_yes')")
 def _btts_closing():
     df = pd.read_sql(text("""

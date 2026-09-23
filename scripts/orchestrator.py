@@ -26,7 +26,7 @@ import argparse
 import traceback
 import atexit
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -218,7 +218,10 @@ def _ensure_db_indexes():
         with _engine.begin() as conn:
             for stmt in ddl + indexes:
                 try:
-                    conn.execute(_text(stmt))
+                    # savepoint: sin él, un fallo abortaba la transacción y
+                    # todas las sentencias siguientes fallaban en silencio
+                    with conn.begin_nested():
+                        conn.execute(_text(stmt))
                 except Exception:
                     pass  # índice/tabla ya existe o tabla relacionada no existe aún
     except Exception:
@@ -538,7 +541,7 @@ def step_notify_evening():
     # resueltas, acotado a [ayer, hoy]. Inmune a los retrasos de GitHub (el
     # cron de 21:07 MX llegó a ejecutarse a las 02:13 MX del día siguiente,
     # y el anclaje por reloj resumía el día NUEVO — todo pendiente, inútil).
-    from datetime import datetime, timedelta, timezone as _tz
+    from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo as _ZI
     from config.settings import USER_TIMEZONE as _TZ
     import pandas as pd
@@ -725,7 +728,7 @@ def step_clv_gate():
         if result.get("blocked"):
             from scripts.notify_telegram import send_message
             send_message(
-                f"🚦 <b>CLV GATE</b>\n\nMercados bloqueados por CLV negativo:\n"
+                "🚦 <b>CLV GATE</b>\n\nMercados bloqueados por CLV negativo:\n"
                 + "\n".join(f"• {m}" for m in result["blocked"])
                 + "\n\nSe desbloquean solos si el CLV recupera."
             )
@@ -813,9 +816,7 @@ def step_sanity_audit():
     resolución estancada, integridad. Alerta Telegram solo si falla algo."""
     try:
         from scripts.weekly_sanity_audit import run_sanity_audit
-        result = run_sanity_audit(verbose=True)
-        if result.get("alerts"):
-            logger = None  # el mensaje ya lo manda el auditor
+        run_sanity_audit(verbose=True)   # el Telegram de alertas lo manda el auditor
     except Exception as e:
         log.error(f"⚠️  Sanity audit falló: {e}")
 
