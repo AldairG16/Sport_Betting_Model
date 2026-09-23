@@ -773,7 +773,7 @@ def audit_stat_settlements() -> dict:
     """, engine)
     out = {"checked": int(len(df)), "no_data": 0, "no_data_profit": 0.0,
            "different": 0, "different_profit_delta": 0.0, "unverifiable": 0,
-           "details": []}
+           "details": [], "corrections": []}
     if df.empty:
         return out
     matches = _preload_matches(df["match_date"])
@@ -791,6 +791,12 @@ def audit_stat_settlements() -> dict:
         elif p["result"] != row["result"]:
             out["different"] += 1
             out["different_profit_delta"] += p["profit"] - recorded
+            # con los datos de hoy SÍ hay resultado: la liquidación correcta
+            # la aplica scripts/fix_stat_settlements.py (con --apply)
+            out["corrections"].append({
+                "id": int(row["id"]), "match": str(row["match"]), "market": str(row["market"]),
+                "old_result": str(row["result"]), "old_profit": recorded,
+                "new_result": p["result"], "new_profit": round(p["profit"], 4)})
         else:
             continue
         if len(out["details"]) < 20:
