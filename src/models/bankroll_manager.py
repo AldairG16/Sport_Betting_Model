@@ -130,10 +130,15 @@ def update_bankroll(profit: float, notes: str = "", conn=None) -> float:
 
     Returns:
         Nuevo balance del bankroll
+
+    Con `conn`, un error SE PROPAGA: es lo que hace que el savepoint del
+    llamador revierta también la bet (N3). Hasta el 23-sep-26 el error se
+    tragaba aquí mismo — la bet quedaba final sin bankroll y el savepoint
+    en una transacción abortada.
     """
+    if conn is not None:
+        return _apply_bankroll_movement(conn, profit, notes)
     try:
-        if conn is not None:
-            return _apply_bankroll_movement(conn, profit, notes)
         ensure_bankroll_schema()
         with engine.begin() as c:
             return _apply_bankroll_movement(c, profit, notes)

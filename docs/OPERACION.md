@@ -267,7 +267,10 @@ es `True` y toda comparación con `NaN` da `False`. Así `resolve_market` liquid
 **perdidas** (over y under a la vez) las apuestas de córners, tarjetas y tiros cuyo
 partido aún no tenía esos datos, hasta el 22-sep-2026. Para "¿hay dato?" usa `_has()` de
 `src/models/save_bets.py` (o `pd.isna`). `audit_stat_settlements()` (en el smoke test)
-cuenta, en solo lectura, cuántas se liquidaron así.
+cuenta, en solo lectura, cuántas se liquidaron así. El 23-sep-2026 se corrigieron las 4 que
+encontró. Eran tarjetas del 12-sep, verificadas contra el CSV de football-data (+0.57u).
+Se usó `scripts/fix_stat_settlements.py`: en seco por defecto, con `--apply` escribe. Ajusta
+el bankroll por la diferencia y deja nota en `bankroll_history`.
 
 **Un `try/except` dentro de una transacción no aísla nada.** En Postgres el primer
 `execute` fallido aborta la transacción: los siguientes fallan también y el COMMIT final
@@ -442,6 +445,8 @@ python scripts/resolve_pending_bets.py --hours-lag 6 --limit 15
 # Salud y auditoría (sin gasto)
 python scripts/watchdog.py
 python scripts/audit_analyst_calibration.py --days 60
+python scripts/db_smoke_test.py                  # 29 checks contra la base real, solo lectura
+python scripts/fix_stat_settlements.py           # en seco; --apply corrige liquidaciones
 
 # Tests
 python -m pytest tests/ -v
