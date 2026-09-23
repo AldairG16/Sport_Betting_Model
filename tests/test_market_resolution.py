@@ -216,6 +216,21 @@ class TestStatsMarkets:
         assert _resolve("cards_over_4.5", 1, 0, home_yellow=3, away_yellow=2)[0] == "win"
         assert _resolve("cards_under_4.5", 1, 0, home_yellow=3, away_yellow=2)[0] == "loss"
 
+    @pytest.mark.parametrize("market,stats,expected", [
+        ("cards_under_4.0", dict(home_yellow=2, away_yellow=2), "push"),
+        ("cards_over_4.0", dict(home_yellow=2, away_yellow=2), "push"),
+        ("cards_under_4.0", dict(home_yellow=1, away_yellow=2), "win"),
+        ("corners_over_10.0", dict(home_corners=6, away_corners=4), "push"),
+        ("corners_under_10.0", dict(home_corners=7, away_corners=4), "loss"),
+        ("shots_over_7.0", dict(home_shots_target=3, away_shots_target=4), "push"),
+    ])
+    def test_whole_line_exactly_on_the_line_is_a_push(self, market, stats, expected):
+        """Línea entera y total justo en la línea: la casa devuelve el stake.
+        Hasta el 22-sep-26 el under se daba ganado y el over perdido."""
+        outcome, profit = _resolve(market, 1, 0, stake=2.0, odds=1.9, **stats)
+        assert outcome == expected
+        assert profit == pytest.approx({"push": 0.0, "win": 1.8, "loss": -2.0}[expected])
+
     def test_missing_stats_are_unresolved_without_profit(self):
         assert _resolve("cards_over_4.5", 1, 0) == ("unresolved", 0.0)
         assert _resolve("corners_over_9.5", 1, 0) == ("unresolved", 0.0)

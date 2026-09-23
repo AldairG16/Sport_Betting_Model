@@ -388,6 +388,9 @@ def _rule_evidence_dry():
 def _stat_settlements():
     from src.models.save_bets import audit_stat_settlements
     a = audit_stat_settlements()
+    if a["details"]:
+        print("\nLiquidaciones de córners/tarjetas/tiros a revisar:\n  "
+              + "\n  ".join(a["details"]) + "\n")
     return (f"{a['checked']} revisadas | sin datos: {a['no_data']} "
             f"(profit registrado {a['no_data_profit']:+.2f}u) | resultado distinto hoy: "
             f"{a['different']} (Δ {a['different_profit_delta']:+.2f}u) | "

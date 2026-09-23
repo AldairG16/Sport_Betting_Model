@@ -319,6 +319,17 @@ def _has(v) -> bool:
     return v is not None and not pd.isna(v)
 
 
+def _over_under(total: float, market: str) -> str:
+    """Resultado de un over/under de córners, tarjetas o tiros. Con línea
+    ENTERA (cards_under_4.0) y el total justo en la línea, la casa devuelve
+    el stake: push. Hasta el 22-sep-26 el under la daba ganada y el over
+    perdida."""
+    line = float(market.split("_")[-1])
+    if abs(total - line) < 1e-9:
+        return "push"
+    return "win" if (total > line) == ("_over_" in market) else "loss"
+
+
 def resolve_market(market: str, _mrow, odds: float, stake: float) -> tuple[str, float]:
     """
     (outcome, profit) de una bet dado el resultado del partido — función
@@ -396,12 +407,9 @@ def resolve_market(market: str, _mrow, odds: float, stake: float) -> tuple[str, 
         # con NaN toda comparación es False → over Y under salían "loss"
         # (se liquidaban como perdidas apuestas sin datos; fix 22-sep-26)
         if _has(hs) and _has(as_):
-            total_shots = float(hs) + float(as_)
-            line = float(market.split("_")[-1])
-            if market.startswith("shots_over_"):
-                outcome = "win" if total_shots > line else "loss"
-            else:
-                outcome = "win" if total_shots <= line else "loss"
+            outcome = _over_under(float(hs) + float(as_), market)
+            if outcome == "push":
+                profit = 0.0
         else:
             outcome = "unresolved"
             profit  = 0.0
@@ -479,12 +487,9 @@ def resolve_market(market: str, _mrow, odds: float, stake: float) -> tuple[str, 
         hy = _mrow.get("home_yellow") if _mrow is not None else None
         ay = _mrow.get("away_yellow") if _mrow is not None else None
         if _has(hy) and _has(ay):      # NaN = sin dato (ver shots)
-            total_cards = float(hy) + float(ay)
-            line = float(market.split("_")[-1])
-            if market.startswith("cards_over_"):
-                outcome = "win" if total_cards > line else "loss"
-            else:
-                outcome = "win" if total_cards <= line else "loss"
+            outcome = _over_under(float(hy) + float(ay), market)
+            if outcome == "push":
+                profit = 0.0
         else:
             outcome = "unresolved"
             profit  = 0.0
@@ -517,12 +522,9 @@ def resolve_market(market: str, _mrow, odds: float, stake: float) -> tuple[str, 
         hc = _mrow.get("home_corners") if _mrow is not None else None
         ac = _mrow.get("away_corners") if _mrow is not None else None
         if _has(hc) and _has(ac):      # NaN = sin dato (ver shots)
-            total_corners = float(hc) + float(ac)
-            line = float(market.split("_")[-1])
-            if market.startswith("corners_over_"):
-                outcome = "win" if total_corners > line else "loss"
-            else:
-                outcome = "win" if total_corners <= line else "loss"
+            outcome = _over_under(float(hc) + float(ac), market)
+            if outcome == "push":
+                profit = 0.0
         else:
             outcome = "unresolved"
             profit  = 0.0
@@ -770,21 +772,41 @@ def audit_stat_settlements() -> dict:
           AND split_part(market, '_', 1) IN ('corners', 'cards', 'shots')
     """, engine)
     out = {"checked": int(len(df)), "no_data": 0, "no_data_profit": 0.0,
-           "different": 0, "different_profit_delta": 0.0, "unverifiable": 0}
+           "different": 0, "different_profit_delta": 0.0, "unverifiable": 0,
+           "details": []}
     if df.empty:
         return out
-    plan = {p["id"]: p for p in plan_bet_settlements(df.assign(result="pending"),
-                                                     _preload_matches(df["match_date"]))}
+    matches = _preload_matches(df["match_date"])
+    plan = {p["id"]: p for p in plan_bet_settlements(df.assign(result="pending"), matches)}
+    lookup = make_match_lookup(matches)
     for _, row in df.iterrows():
         p = plan.get(int(row["id"]))
         if p is None:
             out["unverifiable"] += 1          # sin partido o sin goles en matches
-        elif p["result"] == "unresolved":
+            continue
+        recorded = float(row["profit"] or 0.0)
+        if p["result"] == "unresolved":
             out["no_data"] += 1
-            out["no_data_profit"] += float(row["profit"] or 0.0)
+            out["no_data_profit"] += recorded
         elif p["result"] != row["result"]:
             out["different"] += 1
-            out["different_profit_delta"] += p["profit"] - float(row["profit"] or 0.0)
+            out["different_profit_delta"] += p["profit"] - recorded
+        else:
+            continue
+        if len(out["details"]) < 20:
+            home, away = str(row["match"]).split(" vs ", 1)
+            m = lookup(normalize_team(home).lower(), normalize_team(away).lower(),
+                       row["match_date"])
+            kind = str(row["market"]).split("_")[0]
+            cols = {"corners": ("home_corners", "away_corners"),
+                    "cards": ("home_yellow", "away_yellow"),
+                    "shots": ("home_shots_target", "away_shots_target")}[kind]
+            data = [None if m is None or not _has(m.get(c)) else float(m.get(c)) for c in cols]
+            out["details"].append(
+                f"#{int(row['id'])} {str(row['match_date'])[:10]} {row['match']} | "
+                f"{row['market']} @{float(row['odds']):.2f}: registrado {row['result']} "
+                f"{recorded:+.2f}u → hoy {p['result']} {p['profit']:+.2f}u "
+                f"({kind} {data[0]}+{data[1]})")
     out["no_data_profit"] = round(out["no_data_profit"], 2)
     out["different_profit_delta"] = round(out["different_profit_delta"], 2)
     return out
