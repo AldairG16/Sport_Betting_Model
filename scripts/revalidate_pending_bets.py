@@ -318,7 +318,10 @@ def revalidate_pending_bets(verbose: bool = True) -> dict:
         print(f"   Bets evaluadas:        {len(bets)}")
         print(f"   Odd mejor/igual:       {kept_better} (actualizadas al número fresco)")
         print(f"   Odd peor, edge vive:   {kept_edge} (mantenidas a la odd nueva)")
-        log.error(f"   ❌ Canceladas:          {cancelled} (línea absorbió el edge)")
+        # print, no log.error: es un contador del resumen, no un fallo. Como
+        # ERROR entraba en los "errores tolerados" y mandaba un Telegram de
+        # alarma en CADA closing, aun con 0 canceladas (23-sep-26).
+        print(f"   ❌ Canceladas:          {cancelled} (línea absorbió el edge)")
         print(f"   Sin odd fresca:        {no_odds}  |  Partido no encontrado: {not_found}")
 
     return summary
