@@ -36,8 +36,15 @@ son *repository secrets*; en local, un `.env` (que está en `.gitignore`).
 Esto **no** es lo que uno esperaría, y confundirlo cuesta caro:
 
 - **El cron de GitHub casi no se usa.** Solo `watchdog.yml`, `late_results.yml` y
-  `closing.yml` (cada hora, `5 * * * *`) llevan `schedule:`. Los demás lo
-  perdieron a propósito.
+  `closing.yml` (`7,37 * * * *`) llevan `schedule:`. Los demás lo perdieron a
+  propósito.
+- **GitHub descarta muchos crons programados.** Medido el 20-22 sep: el closing
+  "cada hora" corrió 18 veces en 73 h (hueco medio 4.2 h). El closing captura el
+  precio de cierre y manda las confirmaciones oficiales, así que **debe
+  dispararlo también el dispatcher externo cada 30 min** (`workflow_dispatch` de
+  `closing.yml` contra `master`, mismo PAT que los demás). Duplicar corridas no
+  daña: no recarga lo descargado hace <20 min, el cierre solo se reemplaza por
+  uno más cercano al kickoff y las confirmaciones se marcan como enviadas.
 - **Producción la dispara un agente externo** vía `workflow_dispatch` contra `master`,
   con un PAT de la cuenta dueña. Lanza `morning`, `closing`, `evening` y `weekly` a
   las 12:00 / 18:00 / 09:00 UTC y los lunes.
@@ -187,6 +194,22 @@ otra corrida deba leer va a `model_state` con `src/utils/model_state.py`
 (`save_state` / `load_state`). Hasta el 22-sep-2026 la calibración y el caché de CLV
 de producción eran la copia commiteada del 7-may, y el CLV gate nunca aplicó.
 
+**Un cierre solo vale si se DESCARGÓ cerca del kickoff.** La cuota de una fila de
+`upcoming_matches` puede tener horas: sin una recarga cerca del partido, el "cierre"
+de una bet o candidata shadow era la misma cuota de apertura (CLV 0 exacto — se veía
+en tarjetas, DNB, 1T y AH). Desde el 22-sep-2026 cada fila guarda
+`odds_fetched_at` (fetch de la liga: h2h/totals/spreads) y `specialty_fetched_at`
+(fetch por evento: btts, DNB, DC, 1T/2T, córners, tarjetas); cada cierre guarda
+`closing_fetched_at`. El CLV gate, el caché de Kelly, la reactivación y el peso
+del modelo usan **solo** cierres descargados entre 150 min antes y 2 min después
+del kickoff (y después de la apertura): `src/utils/closing_quality.py`. El closing
+recarga de forma dirigida las ligas con kickoff en 10-80 min que tengan bets o
+shadow (`refresh_for_closing`), con topes por corrida: `CLOSING_MAX_LEAGUES_PER_RUN`
+(6 × 3 créditos), `CLOSING_MAX_EVENTS_PER_RUN` (5 × ~7) y `CLOSING_MIN_CREDITS`
+(1500). Los mercados por evento solo se recargan para eventos con **bets** (caros);
+sus candidatas shadow quedan sin cierre válido y el aprendizaje usa el estimado
+agregado para esas familias.
+
 **Cuotas de cierre: mismo mercado, misma línea.** Hay UN mapeo mercado → cierre
 (`_closing_odds_for` en `src/models/save_bets.py`) para apuestas y shadow. Si la línea
 se movió (AH −0.5 → −0.75, córners 9.5 → 10.5) no hay cierre comparable y devuelve
@@ -260,6 +283,11 @@ fuente de verdad; los archivos de `config/` y `data/` son espejo local.
 | `clv_cache` | `betting_engine.refresh_clv_cache` | fracción de Kelly por CLV |
 | `anchor_weights` | `anchor_learner.run_anchor_learning` | **peso del modelo** frente al mercado |
 | `shadow_reactivation` | `clv_gate.run_shadow_reactivation` | `away_win` y AH con local favorito |
+
+**Cierres válidos:** todo lo que aprende del CLV (gate, caché de Kelly, reactivación,
+peso del modelo) usa solo cierres descargados cerca del kickoff (§5). Los cierres
+anteriores al 22-sep-2026 no tienen hora de descarga y no cuentan: los learners
+arrancan con esa muestra en cero y se llenan con cada closing.
 
 **Cohorte:** todo aprende solo de datos desde `LEARNING_SINCE` (`config/settings.py`,
 default `2026-09-14`, inicio de la arquitectura anclada). Si la arquitectura vuelve a

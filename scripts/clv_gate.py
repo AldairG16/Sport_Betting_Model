@@ -209,7 +209,11 @@ def merge_gate_state(prev_blocked, prev_streaks, stats):
     return blocked, streaks, unblocked
 
 def run_clv_gate(verbose: bool = True) -> dict:
+    # Solo cierres VÁLIDOS (descargados poco antes del kickoff): un cierre
+    # que era la misma cuota de apertura da CLV 0 falso (closing_quality).
+    from src.utils.closing_quality import valid_closing_sql, ensure_closing_columns
     try:
+        ensure_closing_columns(engine)
         df = pd.read_sql(text(f"""
             SELECT market, odds, closing_odds
             FROM bets_history
@@ -219,6 +223,7 @@ def run_clv_gate(verbose: bool = True) -> dict:
               AND result IN ('win', 'loss', 'half_win', 'half_loss')
               AND match_date >= NOW() - INTERVAL '{LOOKBACK_DAYS} days'
               AND match_date >= CAST(:since AS timestamptz)
+              AND {valid_closing_sql()}
         """), engine, params={"since": LEARNING_SINCE})
     except Exception as e:
         if verbose:
@@ -273,6 +278,7 @@ def run_clv_gate(verbose: bool = True) -> dict:
               AND result IN ('win', 'loss', 'push', 'half_win', 'half_loss')
               AND match_date >= NOW() - INTERVAL '{LOOKBACK_DAYS} days'
               AND match_date >= CAST(:since AS timestamptz)
+              AND {valid_closing_sql()}
         """), engine, params={"since": LEARNING_SINCE})
         if not lg.empty:
             lg["clv"] = 1.0 / lg["closing_odds"] - 1.0 / lg["odds"]
@@ -409,15 +415,20 @@ def merge_reactivation_state(prev: dict, stats: dict) -> dict:
 def shadow_reactivation_stats() -> dict:
     """
     Solo lectura: {grupo: (n, CLV medio, sd)} de las candidatas shadow que
-    se habrían apostado, por grupo reactivable. Lanza si la DB falla.
+    se habrían apostado, por grupo reactivable, con cierre VÁLIDO. Lanza si
+    la DB falla.
     """
-    df = pd.read_sql(text("""
+    from src.utils.closing_quality import valid_closing_sql, ensure_closing_columns
+    ensure_closing_columns(engine)
+    df = pd.read_sql(text(f"""
         SELECT market, odds, closing_odds, deviation, edge_market
         FROM shadow_bets
         WHERE closing_odds > 1 AND odds > 1
           AND deviation > 0
           AND edge_market >= :min_edge
           AND match_date >= CAST(:since AS timestamptz)
+          AND {valid_closing_sql()}
+          AND closing_fetched_at > created_at
     """), engine, params={"min_edge": REACTIVATION_MIN_EDGE, "since": LEARNING_SINCE})
     stats = {}
     if not df.empty:

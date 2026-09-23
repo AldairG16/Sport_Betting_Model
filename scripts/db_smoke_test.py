@@ -277,6 +277,47 @@ def _closing_shared():
     return f"{b['match']} | {b['market']} → cierre {co}"
 
 
+@check("Cierres reales: columnas de frescura (DDL idempotente)")
+def _closing_columns():
+    from scripts.update_upcoming_matches import ensure_schema
+    from src.utils.closing_quality import ensure_closing_columns
+    ensure_schema()
+    ensure_closing_columns(engine)
+    with engine.connect() as c:
+        cols = {(t, col) for t, col in c.execute(text("""
+            SELECT table_name, column_name FROM information_schema.columns
+            WHERE column_name IN ('odds_fetched_at', 'specialty_fetched_at', 'closing_fetched_at')
+        """))}
+    need = {("upcoming_matches", "odds_fetched_at"), ("upcoming_matches", "specialty_fetched_at"),
+            ("bets_history", "closing_fetched_at"), ("shadow_bets", "closing_fetched_at")}
+    assert need <= cols, f"faltan: {need - cols}"
+    return "4 columnas presentes"
+
+
+@check("Cierres reales: partidos a recargar ahora (en seco)")
+def _closing_targets():
+    from scripts.update_closing_odds import select_closing_targets
+    t = select_closing_targets()
+    return f"{len(t)} partidos con kickoff en 10-80 min con bets/shadow"
+
+
+@check("Cierres reales: cierres VÁLIDOS disponibles para aprender")
+def _valid_closings():
+    from src.utils.closing_quality import valid_closing_sql
+    df = pd.read_sql(text(f"""
+        SELECT
+          (SELECT COUNT(*) FROM shadow_bets WHERE {valid_closing_sql()}
+             AND closing_fetched_at > created_at) AS shadow_ok,
+          (SELECT COUNT(*) FROM shadow_bets WHERE closing_odds IS NOT NULL) AS shadow_all,
+          (SELECT COUNT(*) FROM bets_history WHERE {valid_closing_sql()}) AS bets_ok,
+          (SELECT COUNT(*) FROM bets_history WHERE closing_odds IS NOT NULL
+             AND match_date >= NOW() - INTERVAL '30 days') AS bets_30d
+    """), engine)
+    r = df.iloc[0]
+    return (f"shadow {int(r['shadow_ok'])}/{int(r['shadow_all'])} válidos | "
+            f"bets {int(r['bets_ok'])} válidos (de {int(r['bets_30d'])} con cierre en 30d)")
+
+
 @check("Closing: bets BTTS con cierre (antes 0 por clave 'btts_yes')")
 def _btts_closing():
     df = pd.read_sql(text("""

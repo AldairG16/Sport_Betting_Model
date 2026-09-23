@@ -80,11 +80,14 @@ def test_shadow_table_dedupes_reruns():
 
 
 def test_shadow_closing_reuses_same_mapping():
-    """El closing del shadow usa las MISMAS funciones que bets_history."""
-    src = _source(sb)
-    assert src.count("_closing_odds_for(market, odds") >= 2
-    assert src.count("_nearest_market_row(home, away, bet_match_date)") >= 2
-    assert "_update_shadow_closing" in src
+    """El closing del shadow usa las MISMAS funciones que bets_history.
+    Desde el 22-sep-26 ambos pasan por closing_quote_for (cuota + hora de
+    descarga) y _nearest_market_row; se verifica con los propios módulos."""
+    import scripts.update_closing_odds as uco
+    assert "closing_quote_for(market, odds_df.iloc[0])" in _source(sb._update_shadow_closing)
+    assert "closing_quote_for(market, odds_df.iloc[0])" in _source(uco.update_closing_odds)
+    assert "_nearest_market_row(" in _source(sb._update_shadow_closing)
+    assert "_nearest_market_row(" in _source(uco.update_closing_odds)
 
 
 # ============================================================

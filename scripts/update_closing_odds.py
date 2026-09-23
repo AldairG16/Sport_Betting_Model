@@ -23,6 +23,85 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from config.database import engine
+from src.utils.team_normalizer import normalize_team
+
+
+# ============================================================
+# QUÉ PARTIDOS RECARGAR PARA EL CIERRE (22-sep-26)
+# ============================================================
+# Ventana de kickoff (minutos desde ahora) en la que vale la pena descargar
+# la cuota de cierre. Con el closing corriendo cada ~30 min, cada partido
+# cae en 2 corridas dentro de la ventana.
+CLOSING_WINDOW_MIN = (10, 80)
+
+# Mercados que llegan por evento: una bet en ellos necesita re-enriquecer
+# su evento (cuesta ~7 créditos) para tener un cierre real.
+_SPECIALTY_PREFIXES = ("btts", "dnb_", "dc_", "h1_", "h2_", "corners_", "cards_")
+
+
+def _norm(team: str) -> str:
+    return normalize_team(str(team)).lower().strip()
+
+
+def plan_closing_targets(upcoming: pd.DataFrame, bets: pd.DataFrame,
+                         shadow: pd.DataFrame) -> list[dict]:
+    """
+    Función pura. De los partidos de upcoming_matches en la ventana, los que
+    tienen bets pendientes o candidatas shadow; specialty=True si alguna bet
+    pendiente es de un mercado por evento.
+    """
+    wanted: dict[tuple, bool] = {}
+    for df, is_bet in ((bets, True), (shadow, False)):
+        for _, r in df.iterrows():
+            try:
+                h, a = str(r["match"]).split(" vs ")
+            except ValueError:
+                continue
+            key = (_norm(h), _norm(a))
+            spec = is_bet and str(r.get("market", "")).startswith(_SPECIALTY_PREFIXES)
+            wanted[key] = wanted.get(key, False) or spec
+    targets = []
+    for _, u in upcoming.iterrows():
+        key = (u["home_team_norm"], u["away_team_norm"])
+        if key in wanted:
+            targets.append({"sport_key": u["sport_key"], "home_norm": key[0],
+                            "away_norm": key[1], "match_date": u["match_date"],
+                            "specialty": wanted[key]})
+    return targets
+
+
+def select_closing_targets(window_min: tuple = CLOSING_WINDOW_MIN) -> list[dict]:
+    """Partidos con kickoff dentro de la ventana que tienen bets pendientes
+    o candidatas shadow (solo esos merecen gastar créditos)."""
+    lo, hi = window_min
+    params = {"lo": lo, "hi": hi}
+    upcoming = pd.read_sql(text("""
+        SELECT DISTINCT ON (home_team_norm, away_team_norm, sport_key)
+               sport_key, home_team_norm, away_team_norm, match_date
+        FROM upcoming_matches
+        WHERE match_date BETWEEN NOW() + make_interval(mins => :lo)
+                             AND NOW() + make_interval(mins => :hi)
+        ORDER BY home_team_norm, away_team_norm, sport_key, updated_at DESC NULLS LAST
+    """), engine, params=params)
+    if upcoming.empty:
+        return []
+    # bets_history.match_date es TIMESTAMP sin zona (UTC): mismo patrón que
+    # la consulta de update_closing_odds de abajo
+    bets = pd.read_sql(text("""
+        SELECT match, market FROM bets_history
+        WHERE result = 'pending'
+          AND match_date BETWEEN (NOW() AT TIME ZONE 'UTC') + make_interval(mins => :lo)
+                             AND (NOW() AT TIME ZONE 'UTC') + make_interval(mins => :hi)
+    """), engine, params=params)
+    try:
+        shadow = pd.read_sql(text("""
+            SELECT DISTINCT match FROM shadow_bets
+            WHERE match_date BETWEEN NOW() + make_interval(mins => :lo)
+                                 AND NOW() + make_interval(mins => :hi)
+        """), engine, params=params)
+    except Exception:
+        shadow = pd.DataFrame(columns=["match"])   # tabla aún no creada
+    return plan_closing_targets(upcoming, bets, shadow)
 
 
 # ============================================================
@@ -43,7 +122,14 @@ def update_closing_odds(only_near_kickoff: bool = True):
     """
     print("\n📡 ACTUALIZANDO CLOSING ODDS (desde DB, sin llamada API)...\n")
 
-    # Bets que aun no tienen closing odds y siguen pendientes.
+    from src.models.save_bets import BETS_CLOSING_ALTER_SQL
+    with engine.begin() as conn:
+        conn.execute(text(BETS_CLOSING_ALTER_SQL))
+
+    # Bets sin cierre, o con un cierre que puede mejorarse: sin hora de
+    # descarga conocida o descargado antes del kickoff (22-sep-26). Cada
+    # corrida acerca el cierre al precio final; closing_fetched_at dice
+    # cuándo se descargó (ver src/utils/closing_quality.py).
     # Nota: bets_history usa result='pending' (no NULL) — filtrar por NULL
     # dejaba el script sin trabajo y ningún closing odds se guardaba.
     if only_near_kickoff:
@@ -55,9 +141,10 @@ def update_closing_odds(only_near_kickoff: bool = True):
         # upcoming_matches), preservando el objetivo de capturar el precio
         # cercano al kickoff.
         bets = pd.read_sql(text("""
-            SELECT id, match, market, odds, match_date
+            SELECT id, match, market, odds, match_date, closing_odds, closing_fetched_at
             FROM bets_history
-            WHERE closing_odds IS NULL
+            WHERE (closing_odds IS NULL OR closing_fetched_at IS NULL
+                   OR closing_fetched_at < match_date)
               AND result IN ('pending','win','loss','half_win','half_loss','push')
               AND match_date <= NOW() AT TIME ZONE 'UTC' + INTERVAL '90 minutes'
               AND match_date >= NOW() AT TIME ZONE 'UTC' - INTERVAL '7 days'
@@ -65,7 +152,7 @@ def update_closing_odds(only_near_kickoff: bool = True):
     else:
         # Modo backfill (one_shot_data_quality_cleanup): TODO lo rellenable
         bets = pd.read_sql("""
-            SELECT id, match, market, odds, match_date
+            SELECT id, match, market, odds, match_date, closing_odds, closing_fetched_at
             FROM bets_history
             WHERE closing_odds IS NULL
               AND match_date >= NOW() AT TIME ZONE 'UTC' - INTERVAL '120 days'
@@ -86,12 +173,14 @@ def update_closing_odds(only_near_kickoff: bool = True):
     # ninguna apuesta BTTS recibía cierre ni CLV. Además tomaba la fila más
     # reciente de los dos equipos (podía ser OTRO partido entre ellos); la
     # compartida busca la más cercana al kickoff (±4h).
-    from src.models.save_bets import _nearest_market_row, _closing_odds_for
+    from src.models.save_bets import _nearest_market_row, closing_quote_for
+    from src.utils.closing_quality import should_update_closing
 
     with engine.begin() as conn:
         for _, bet in bets.iterrows():
             match   = bet["match"]
             market  = bet["market"]
+            match_date = pd.to_datetime(bet["match_date"], utc=True)
 
             try:
                 home_raw, away_raw = match.split(" vs ")
@@ -99,8 +188,7 @@ def update_closing_odds(only_near_kickoff: bool = True):
                 continue
 
             try:
-                odds_df = _nearest_market_row(home_raw, away_raw,
-                                              pd.to_datetime(bet["match_date"], utc=True))
+                odds_df = _nearest_market_row(home_raw, away_raw, match_date)
             except Exception as e:
                 print(f"⚠️  closing: no se pudo buscar {match}: {type(e).__name__}")
                 continue
@@ -109,15 +197,25 @@ def update_closing_odds(only_near_kickoff: bool = True):
                 not_found += 1
                 continue
 
-            closing_odds = _closing_odds_for(market, odds_df.iloc[0])
+            closing_odds, fetched_at = closing_quote_for(market, odds_df.iloc[0])
             if closing_odds is None:
+                continue
+            if fetched_at is None:
+                # frescura desconocida: solo rellena un hueco, sin hora (el
+                # CLV gate y el aprendizaje no usan cierres sin hora)
+                if not pd.isna(bet["closing_odds"]):
+                    continue
+            elif not should_update_closing(bet["closing_fetched_at"], fetched_at, match_date):
                 continue
 
             conn.execute(text("""
                 UPDATE bets_history
-                SET closing_odds = :closing_odds
+                SET closing_odds = :closing_odds, closing_fetched_at = :fetched_at
                 WHERE id = :id
-            """), {"closing_odds": float(closing_odds), "id": int(bet["id"])})
+            """), {"closing_odds": float(closing_odds),
+                   "fetched_at": pd.to_datetime(fetched_at, utc=True).to_pydatetime()
+                   if fetched_at is not None else None,
+                   "id": int(bet["id"])})
 
             updates += 1
 

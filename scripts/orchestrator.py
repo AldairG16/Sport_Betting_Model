@@ -326,45 +326,36 @@ def step_closing_odds():
 
 def step_pre_kickoff_closing():
     """
-    Mejora 6: Fetch closing odds justo antes del kickoff.
-    Actualiza upcoming_matches con odds frescas (que seran las closing odds reales)
-    y luego ejecuta update_closing_odds para asociarlas a bets_history.
-    Diseñado para correr 30-60 min antes de los primeros partidos del dia.
-
-    IMPORTANTE: respeta el cache TTL. No usa force=True porque los picks
-    del morning (~6h antes) ya quedaron registrados en bets_history con
-    sus odds; re-fetchear con force tira ~600 créditos extra por día y
-    mueve poco la aguja de CLV vs dejar que el cache TTL expire natural.
+    Captura de cierres antes del kickoff (corre cada ~30 min).
+    1. Refresco normal por TTL (sin créditos si el caché está vigente).
+    2. Recarga dirigida: solo ligas/eventos con kickoff en la próxima hora
+       y bets o candidatas shadow (refresh_for_closing, con tope de créditos).
+    3. update_closing_odds: cierre + hora de descarga para bets y shadow; el
+       cierre se reemplaza si llega uno más cercano al kickoff.
+    Luego revalidación y confirmaciones oficiales pre-kickoff.
     """
-    from scripts.update_upcoming_matches import update_all
+    from scripts.update_upcoming_matches import update_all, refresh_for_closing
+    from scripts.update_closing_odds import update_closing_odds, select_closing_targets
 
-    # ¿Hay bets pendientes que arranquen en los próximos 75 min? Si sí,
-    # FORZAR el refetch: el cache TTL (12h default) haría que el closing
-    # lea las MISMAS odds del morning. Con el closing corriendo cada hora
-    # (cron), este gate hace que solo se gaste (~45-90 créditos) en las
-    # horas donde de verdad hay kickoff próximo — el resto de las horas
-    # el cache evita cualquier llamada.
-    _force = False
+    # Refresco normal por TTL: sin créditos si el caché está vigente.
+    update_all(force=False)
+
+    # Recarga DIRIGIDA (22-sep-26): solo las ligas con kickoff en la próxima
+    # hora que tengan bets pendientes o candidatas shadow (+ re-enrichment de
+    # los eventos con bets en mercados por evento), con tope de créditos por
+    # corrida. Antes: refetch de las 19 ligas si alguna BET arrancaba en
+    # <75 min, y nada en el resto — el shadow casi nunca tenía una cuota
+    # posterior a la de apertura, y su "cierre" era esa misma cuota.
+    refresh_error = None
     try:
-        import pandas as pd
-        from sqlalchemy import text as _t
-        from config.database import engine as _eng
-        _n = pd.read_sql(_t("""
-            SELECT COUNT(*) AS n FROM bets_history
-            WHERE result = 'pending'
-              AND match_date BETWEEN NOW() AND NOW() + INTERVAL '75 minutes'
-        """), _eng).iloc[0]["n"]
-        _force = int(_n) > 0
-        if _force:
-            print(f"   Closing: {int(_n)} bets con kickoff en <75min → refetch FORZADO "
-                  f"(revalidación contra odds reales)")
-        else:
-            print("   Closing: ningún kickoff en <75min — sin refetch forzado")
+        targets = select_closing_targets()
+        refresh_for_closing(targets)
     except Exception as e:
-        print(f"   ⚠️  No se pudo verificar pendientes ({e}) — usando cache TTL normal")
+        # No se corta el closing (revalidación y confirmaciones siguen), pero
+        # el paso termina FALLIDO al final para que se vea (run en rojo).
+        refresh_error = e
+        print(f"   ❌ Recarga dirigida de cierre falló: {type(e).__name__}: {e}")
 
-    update_all(force=_force)
-    from scripts.update_closing_odds import update_closing_odds
     update_closing_odds()
 
     # Fotografía de cuotas post-refetch (dataset de movimientos de línea)
@@ -402,6 +393,9 @@ def step_pre_kickoff_closing():
         send_kickoff_confirmations(verbose=True)
     except Exception as e:
         print(f"⚠️  Confirmaciones pre-kickoff falló: {e}")
+
+    if refresh_error is not None:
+        raise RuntimeError(f"recarga dirigida de cierre: {refresh_error}")
 
 
 def step_fetch_results():
