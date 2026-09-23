@@ -1,0 +1,1418 @@
+{
+ "bets": [
+  {
+   "match": "iota vs beta",
+   "market": "home_win",
+   "league": "soccer_germany_bundesliga",
+   "odds": 1.65,
+   "probability": 0.678138,
+   "edge": 0.072077,
+   "stake": 1.23
+  },
+  {
+   "match": "lam vs mu",
+   "market": "home_win",
+   "league": "soccer_spain_la_liga",
+   "odds": 1.8,
+   "probability": 0.657875,
+   "edge": 0.102319,
+   "stake": 0.43
+  },
+  {
+   "match": "lam vs mu",
+   "market": "over25",
+   "league": "soccer_spain_la_liga",
+   "odds": 2.45,
+   "probability": 0.465969,
+   "edge": 0.057806,
+   "stake": 0.57
+  },
+  {
+   "match": "phi vs khi",
+   "market": "home_win",
+   "league": "soccer_belgium_first_div",
+   "odds": 1.8,
+   "probability": 0.641766,
+   "edge": 0.08621,
+   "stake": 0.6
+  },
+  {
+   "match": "rho vs sig",
+   "market": "home_win",
+   "league": "soccer_portugal_primeira_liga",
+   "odds": 1.8,
+   "probability": 0.629747,
+   "edge": 0.074192,
+   "stake": 1.23
+  },
+  {
+   "match": "zeta vs theta",
+   "market": "home_win",
+   "league": "soccer_brazil_campeonato",
+   "odds": 1.95,
+   "probability": 0.562826,
+   "edge": 0.050005,
+   "stake": 0.6
+  }
+ ],
+ "shadow": [
+  {
+   "match": "alpha vs kappa",
+   "market": "away_win",
+   "p_final": 0.143106,
+   "p_ref": 0.204383,
+   "deviation": -0.121573,
+   "odds": 4.6,
+   "edge_market": -0.074285
+  },
+  {
+   "match": "alpha vs kappa",
+   "market": "btts",
+   "p_final": 0.469815,
+   "p_ref": 0.467532,
+   "deviation": -0.035282,
+   "odds": 2.05,
+   "edge_market": -0.01799
+  },
+  {
+   "match": "alpha vs kappa",
+   "market": "btts_no",
+   "p_final": 0.568165,
+   "p_ref": 0.532468,
+   "deviation": 0.035282,
+   "odds": 1.8,
+   "edge_market": 0.01261
+  },
+  {
+   "match": "alpha vs kappa",
+   "market": "dnb_away",
+   "p_final": 0.202522,
+   "p_ref": 0.281181,
+   "deviation": -0.195181,
+   "odds": 3.556,
+   "edge_market": -0.078693
+  },
+  {
+   "match": "alpha vs kappa",
+   "market": "dnb_home",
+   "p_final": 0.837133,
+   "p_ref": 0.718819,
+   "deviation": 0.195181,
+   "odds": 1.391,
+   "edge_market": 0.118225
+  },
+  {
+   "match": "alpha vs kappa",
+   "market": "draw",
+   "p_final": 0.217424,
+   "p_ref": 0.25667,
+   "deviation": -0.08721,
+   "odds": 3.7,
+   "edge_market": -0.052846
+  },
+  {
+   "match": "alpha vs kappa",
+   "market": "home_win",
+   "p_final": 0.65136,
+   "p_ref": 0.538947,
+   "deviation": 0.208768,
+   "odds": 1.8,
+   "edge_market": 0.095804
+  },
+  {
+   "match": "alpha vs kappa",
+   "market": "over25",
+   "p_final": 0.532358,
+   "p_ref": 0.493506,
+   "deviation": 0.057542,
+   "odds": 1.95,
+   "edge_market": 0.019537
+  },
+  {
+   "match": "alpha vs kappa",
+   "market": "under25",
+   "p_final": 0.505113,
+   "p_ref": 0.506494,
+   "deviation": -0.057542,
+   "odds": 1.9,
+   "edge_market": -0.021203
+  },
+  {
+   "match": "eqa vs eqb",
+   "market": "away_win",
+   "p_final": 0.28656,
+   "p_ref": 0.314622,
+   "deviation": -0.042142,
+   "odds": 3.0,
+   "edge_market": -0.046774
+  },
+  {
+   "match": "eqa vs eqb",
+   "market": "btts",
+   "p_final": 0.460899,
+   "p_ref": 0.460526,
+   "deviation": -0.039945,
+   "odds": 2.05,
+   "edge_market": -0.026906
+  },
+  {
+   "match": "eqa vs eqb",
+   "market": "btts_no",
+   "p_final": 0.57836,
+   "p_ref": 0.539474,
+   "deviation": 0.039945,
+   "odds": 1.75,
+   "edge_market": 0.006931
+  },
+  {
+   "match": "eqa vs eqb",
+   "market": "dnb_away",
+   "p_final": 0.45137,
+   "p_ref": 0.464312,
+   "deviation": -0.063212,
+   "odds": 2.154,
+   "edge_market": -0.012883
+  },
+  {
+   "match": "eqa vs eqb",
+   "market": "dnb_home",
+   "p_final": 0.591269,
+   "p_ref": 0.535688,
+   "deviation": 0.063212,
+   "odds": 1.867,
+   "edge_market": 0.05565
+  },
+  {
+   "match": "eqa vs eqb",
+   "market": "home_win",
+   "p_final": 0.378315,
+   "p_ref": 0.365186,
+   "deviation": 0.050469,
+   "odds": 2.6,
+   "edge_market": -0.0063
+  },
+  {
+   "match": "eqa vs eqb",
+   "market": "over25",
+   "p_final": 0.393821,
+   "p_ref": 0.413265,
+   "deviation": -0.079161,
+   "odds": 2.3,
+   "edge_market": -0.040962
+  },
+  {
+   "match": "eqa vs eqb",
+   "market": "under25",
+   "p_final": 0.645514,
+   "p_ref": 0.586735,
+   "deviation": 0.079161,
+   "odds": 1.62,
+   "edge_market": 0.02823
+  },
+  {
+   "match": "gamma vs kappa",
+   "market": "away_win",
+   "p_final": 0.173745,
+   "p_ref": 0.204383,
+   "deviation": -0.022578,
+   "odds": 4.6,
+   "edge_market": -0.043646
+  },
+  {
+   "match": "gamma vs kappa",
+   "market": "dnb_away",
+   "p_final": 0.250473,
+   "p_ref": 0.281181,
+   "deviation": -0.051181,
+   "odds": 3.556,
+   "edge_market": -0.030742
+  },
+  {
+   "match": "gamma vs kappa",
+   "market": "dnb_home",
+   "p_final": 0.786733,
+   "p_ref": 0.718819,
+   "deviation": 0.051181,
+   "odds": 1.391,
+   "edge_market": 0.067825
+  },
+  {
+   "match": "gamma vs kappa",
+   "market": "home_win",
+   "p_final": 0.585759,
+   "p_ref": 0.538947,
+   "deviation": 0.032658,
+   "odds": 1.8,
+   "edge_market": 0.030203
+  },
+  {
+   "match": "gamma vs kappa",
+   "market": "over25",
+   "p_final": 0.504033,
+   "p_ref": 0.493506,
+   "deviation": -0.02054,
+   "odds": 1.95,
+   "edge_market": -0.008787
+  },
+  {
+   "match": "gamma vs kappa",
+   "market": "under25",
+   "p_final": 0.533496,
+   "p_ref": 0.506494,
+   "deviation": 0.02054,
+   "odds": 1.9,
+   "edge_market": 0.00718
+  },
+  {
+   "match": "iota vs beta",
+   "market": "away_win",
+   "p_final": 0.123883,
+   "p_ref": 0.1731,
+   "deviation": -0.069585,
+   "odds": 5.4,
+   "edge_market": -0.061302
+  },
+  {
+   "match": "iota vs beta",
+   "market": "btts",
+   "p_final": 0.51239,
+   "p_ref": 0.513158,
+   "deviation": -0.059467,
+   "odds": 1.85,
+   "edge_market": -0.028151
+  },
+  {
+   "match": "iota vs beta",
+   "market": "btts_no",
+   "p_final": 0.526149,
+   "p_ref": 0.486842,
+   "deviation": 0.059467,
+   "odds": 1.95,
+   "edge_market": 0.013328
+  },
+  {
+   "match": "iota vs beta",
+   "market": "cards_over_4.5",
+   "p_final": 0.672588,
+   "p_ref": 0.486842,
+   "deviation": 0.463158,
+   "odds": 1.95,
+   "edge_market": 0.159767
+  },
+  {
+   "match": "iota vs beta",
+   "market": "cards_under_4.5",
+   "p_final": 0.350775,
+   "p_ref": 0.513158,
+   "deviation": -0.503158,
+   "odds": 1.85,
+   "edge_market": -0.189765
+  },
+  {
+   "match": "iota vs beta",
+   "market": "corners_over_10.5",
+   "p_final": 0.69317,
+   "p_ref": 0.513158,
+   "deviation": 0.436842,
+   "odds": 1.85,
+   "edge_market": 0.15263
+  },
+  {
+   "match": "iota vs beta",
+   "market": "corners_under_10.5",
+   "p_final": 0.331603,
+   "p_ref": 0.486842,
+   "deviation": -0.476842,
+   "odds": 1.95,
+   "edge_market": -0.181218
+  },
+  {
+   "match": "iota vs beta",
+   "market": "dc_1x",
+   "p_final": 0.734457,
+   "p_ref": 0.847458,
+   "deviation": 0.049027,
+   "odds": 1.18,
+   "edge_market": -0.113001
+  },
+  {
+   "match": "iota vs beta",
+   "market": "dc_x2",
+   "p_final": 0.311835,
+   "p_ref": 0.384615,
+   "deviation": -0.09363,
+   "odds": 2.6,
+   "edge_market": -0.07278
+  },
+  {
+   "match": "iota vs beta",
+   "market": "dnb_away",
+   "p_final": 0.173493,
+   "p_ref": 0.234092,
+   "deviation": -0.121292,
+   "odds": 4.273,
+   "edge_market": -0.060535
+  },
+  {
+   "match": "iota vs beta",
+   "market": "dnb_home",
+   "p_final": 0.85836,
+   "p_ref": 0.765908,
+   "deviation": 0.121292,
+   "odds": 1.306,
+   "edge_market": 0.092663
+  },
+  {
+   "match": "iota vs beta",
+   "market": "draw",
+   "p_final": 0.208496,
+   "p_ref": 0.237208,
+   "deviation": -0.049738,
+   "odds": 4.0,
+   "edge_market": -0.041504
+  },
+  {
+   "match": "iota vs beta",
+   "market": "home_win",
+   "p_final": 0.678138,
+   "p_ref": 0.589692,
+   "deviation": 0.119323,
+   "odds": 1.65,
+   "edge_market": 0.072077
+  },
+  {
+   "match": "iota vs beta",
+   "market": "over25",
+   "p_final": 0.577343,
+   "p_ref": 0.558442,
+   "deviation": -0.02026,
+   "odds": 1.7,
+   "edge_market": -0.010893
+  },
+  {
+   "match": "iota vs beta",
+   "market": "under25",
+   "p_final": 0.461148,
+   "p_ref": 0.441558,
+   "deviation": 0.02026,
+   "odds": 2.15,
+   "edge_market": -0.003969
+  },
+  {
+   "match": "lam vs mu",
+   "market": "away_win",
+   "p_final": 0.141156,
+   "p_ref": 0.204383,
+   "deviation": -0.127873,
+   "odds": 4.6,
+   "edge_market": -0.076235
+  },
+  {
+   "match": "lam vs mu",
+   "market": "dnb_away",
+   "p_final": 0.204087,
+   "p_ref": 0.281181,
+   "deviation": -0.190481,
+   "odds": 3.556,
+   "edge_market": -0.077128
+  },
+  {
+   "match": "lam vs mu",
+   "market": "dnb_home",
+   "p_final": 0.835488,
+   "p_ref": 0.718819,
+   "deviation": 0.190481,
+   "odds": 1.391,
+   "edge_market": 0.11658
+  },
+  {
+   "match": "lam vs mu",
+   "market": "draw",
+   "p_final": 0.213692,
+   "p_ref": 0.25667,
+   "deviation": -0.0983,
+   "odds": 3.7,
+   "edge_market": -0.056578
+  },
+  {
+   "match": "lam vs mu",
+   "market": "home_win",
+   "p_final": 0.657875,
+   "p_ref": 0.538947,
+   "deviation": 0.226258,
+   "odds": 1.8,
+   "edge_market": 0.102319
+  },
+  {
+   "match": "lam vs mu",
+   "market": "over25",
+   "p_final": 0.465969,
+   "p_ref": 0.39206,
+   "deviation": 0.191496,
+   "odds": 2.45,
+   "edge_market": 0.057806
+  },
+  {
+   "match": "lam vs mu",
+   "market": "under25",
+   "p_final": 0.569199,
+   "p_ref": 0.60794,
+   "deviation": -0.191496,
+   "odds": 1.58,
+   "edge_market": -0.063712
+  },
+  {
+   "match": "nu vs xi",
+   "market": "away_win",
+   "p_final": 0.165082,
+   "p_ref": 0.204383,
+   "deviation": -0.050568,
+   "odds": 4.6,
+   "edge_market": -0.052309
+  },
+  {
+   "match": "nu vs xi",
+   "market": "dnb_away",
+   "p_final": 0.240749,
+   "p_ref": 0.281181,
+   "deviation": -0.080381,
+   "odds": 3.556,
+   "edge_market": -0.040466
+  },
+  {
+   "match": "nu vs xi",
+   "market": "dnb_home",
+   "p_final": 0.796953,
+   "p_ref": 0.718819,
+   "deviation": 0.080381,
+   "odds": 1.391,
+   "edge_market": 0.078045
+  },
+  {
+   "match": "nu vs xi",
+   "market": "draw",
+   "p_final": 0.237609,
+   "p_ref": 0.25667,
+   "deviation": -0.027225,
+   "odds": 3.7,
+   "edge_market": -0.032661
+  },
+  {
+   "match": "nu vs xi",
+   "market": "home_win",
+   "p_final": 0.602571,
+   "p_ref": 0.538947,
+   "deviation": 0.077793,
+   "odds": 1.8,
+   "edge_market": 0.047016
+  },
+  {
+   "match": "omi vs pi",
+   "market": "away_win",
+   "p_final": 0.232373,
+   "p_ref": 0.254745,
+   "deviation": -0.02315,
+   "odds": 3.7,
+   "edge_market": -0.037898
+  },
+  {
+   "match": "omi vs pi",
+   "market": "dnb_away",
+   "p_final": 0.348787,
+   "p_ref": 0.362125,
+   "deviation": -0.039325,
+   "odds": 2.762,
+   "edge_market": -0.01327
+  },
+  {
+   "match": "omi vs pi",
+   "market": "dnb_home",
+   "p_final": 0.701639,
+   "p_ref": 0.637875,
+   "deviation": 0.039325,
+   "odds": 1.568,
+   "edge_market": 0.063884
+  },
+  {
+   "match": "omi vs pi",
+   "market": "home_win",
+   "p_final": 0.494555,
+   "p_ref": 0.45816,
+   "deviation": 0.04314,
+   "odds": 2.1,
+   "edge_market": 0.018365
+  },
+  {
+   "match": "omi vs pi",
+   "market": "over25",
+   "p_final": 0.489168,
+   "p_ref": 0.480519,
+   "deviation": -0.02162,
+   "odds": 2.0,
+   "edge_market": -0.010832
+  },
+  {
+   "match": "omi vs pi",
+   "market": "under25",
+   "p_final": 0.548506,
+   "p_ref": 0.519481,
+   "deviation": 0.02162,
+   "odds": 1.85,
+   "edge_market": 0.007966
+  },
+  {
+   "match": "phi vs khi",
+   "market": "away_win",
+   "p_final": 0.146381,
+   "p_ref": 0.204383,
+   "deviation": -0.110993,
+   "odds": 4.6,
+   "edge_market": -0.071011
+  },
+  {
+   "match": "phi vs khi",
+   "market": "btts",
+   "p_final": 0.468776,
+   "p_ref": 0.467532,
+   "deviation": -0.038158,
+   "odds": 2.05,
+   "edge_market": -0.019029
+  },
+  {
+   "match": "phi vs khi",
+   "market": "btts_no",
+   "p_final": 0.569215,
+   "p_ref": 0.532468,
+   "deviation": 0.038158,
+   "odds": 1.8,
+   "edge_market": 0.01366
+  },
+  {
+   "match": "phi vs khi",
+   "market": "dnb_away",
+   "p_final": 0.207417,
+   "p_ref": 0.281181,
+   "deviation": -0.180481,
+   "odds": 3.556,
+   "edge_market": -0.073798
+  },
+  {
+   "match": "phi vs khi",
+   "market": "dnb_home",
+   "p_final": 0.831988,
+   "p_ref": 0.718819,
+   "deviation": 0.180481,
+   "odds": 1.391,
+   "edge_market": 0.11308
+  },
+  {
+   "match": "phi vs khi",
+   "market": "draw",
+   "p_final": 0.222535,
+   "p_ref": 0.25667,
+   "deviation": -0.07202,
+   "odds": 3.7,
+   "edge_market": -0.047735
+  },
+  {
+   "match": "phi vs khi",
+   "market": "home_win",
+   "p_final": 0.641766,
+   "p_ref": 0.538947,
+   "deviation": 0.183013,
+   "odds": 1.8,
+   "edge_market": 0.08621
+  },
+  {
+   "match": "phi vs khi",
+   "market": "over25",
+   "p_final": 0.522234,
+   "p_ref": 0.493506,
+   "deviation": 0.029635,
+   "odds": 1.95,
+   "edge_market": 0.009414
+  },
+  {
+   "match": "phi vs khi",
+   "market": "under25",
+   "p_final": 0.515257,
+   "p_ref": 0.506494,
+   "deviation": -0.029635,
+   "odds": 1.9,
+   "edge_market": -0.011058
+  },
+  {
+   "match": "psi vs ome",
+   "market": "over25",
+   "p_final": 0.497905,
+   "p_ref": 0.493506,
+   "deviation": -0.037433,
+   "odds": 1.95,
+   "edge_market": -0.014915
+  },
+  {
+   "match": "psi vs ome",
+   "market": "under25",
+   "p_final": 0.539637,
+   "p_ref": 0.506494,
+   "deviation": 0.037433,
+   "odds": 1.9,
+   "edge_market": 0.013321
+  },
+  {
+   "match": "rho vs sig",
+   "market": "away_win",
+   "p_final": 0.151794,
+   "p_ref": 0.204383,
+   "deviation": -0.093503,
+   "odds": 4.6,
+   "edge_market": -0.065598
+  },
+  {
+   "match": "rho vs sig",
+   "market": "btts",
+   "p_final": 0.474268,
+   "p_ref": 0.467532,
+   "deviation": -0.022955,
+   "odds": 2.05,
+   "edge_market": -0.013537
+  },
+  {
+   "match": "rho vs sig",
+   "market": "btts_no",
+   "p_final": 0.563666,
+   "p_ref": 0.532468,
+   "deviation": 0.022955,
+   "odds": 1.8,
+   "edge_market": 0.008111
+  },
+  {
+   "match": "rho vs sig",
+   "market": "dnb_away",
+   "p_final": 0.215042,
+   "p_ref": 0.281181,
+   "deviation": -0.157581,
+   "odds": 3.556,
+   "edge_market": -0.066172
+  },
+  {
+   "match": "rho vs sig",
+   "market": "dnb_home",
+   "p_final": 0.823973,
+   "p_ref": 0.718819,
+   "deviation": 0.157581,
+   "odds": 1.391,
+   "edge_market": 0.105065
+  },
+  {
+   "match": "rho vs sig",
+   "market": "draw",
+   "p_final": 0.227478,
+   "p_ref": 0.25667,
+   "deviation": -0.05733,
+   "odds": 3.7,
+   "edge_market": -0.042792
+  },
+  {
+   "match": "rho vs sig",
+   "market": "home_win",
+   "p_final": 0.629747,
+   "p_ref": 0.538947,
+   "deviation": 0.150748,
+   "odds": 1.8,
+   "edge_market": 0.074192
+  },
+  {
+   "match": "tau vs ups",
+   "market": "away_win",
+   "p_final": 0.194447,
+   "p_ref": 0.244484,
+   "deviation": -0.100689,
+   "odds": 3.9,
+   "edge_market": -0.061964
+  },
+  {
+   "match": "tau vs ups",
+   "market": "btts",
+   "p_final": 0.493543,
+   "p_ref": 0.486842,
+   "deviation": -0.030417,
+   "odds": 1.95,
+   "edge_market": -0.019277
+  },
+  {
+   "match": "tau vs ups",
+   "market": "btts_no",
+   "p_final": 0.54513,
+   "p_ref": 0.513158,
+   "deviation": 0.030417,
+   "odds": 1.85,
+   "edge_market": 0.00459
+  },
+  {
+   "match": "tau vs ups",
+   "market": "dnb_away",
+   "p_final": 0.279457,
+   "p_ref": 0.344625,
+   "deviation": -0.180925,
+   "odds": 2.902,
+   "edge_market": -0.065133
+  },
+  {
+   "match": "tau vs ups",
+   "market": "dnb_home",
+   "p_final": 0.768699,
+   "p_ref": 0.655375,
+   "deviation": 0.180925,
+   "odds": 1.526,
+   "edge_market": 0.113391
+  },
+  {
+   "match": "tau vs ups",
+   "market": "draw",
+   "p_final": 0.255133,
+   "p_ref": 0.281826,
+   "deviation": -0.057026,
+   "odds": 3.4,
+   "edge_market": -0.038985
+  },
+  {
+   "match": "tau vs ups",
+   "market": "home_win",
+   "p_final": 0.55439,
+   "p_ref": 0.47369,
+   "deviation": 0.157715,
+   "odds": 2.05,
+   "edge_market": 0.066585
+  },
+  {
+   "match": "wca vs wcb",
+   "market": "away_win",
+   "p_final": 0.125845,
+   "p_ref": 0.179435,
+   "deviation": -0.08752,
+   "odds": 5.2,
+   "edge_market": -0.066463
+  },
+  {
+   "match": "wca vs wcb",
+   "market": "btts",
+   "p_final": 0.475789,
+   "p_ref": 0.473684,
+   "deviation": -0.039049,
+   "odds": 2.0,
+   "edge_market": -0.024211
+  },
+  {
+   "match": "wca vs wcb",
+   "market": "btts_no",
+   "p_final": 0.563125,
+   "p_ref": 0.526316,
+   "deviation": 0.039049,
+   "odds": 1.8,
+   "edge_market": 0.007569
+  },
+  {
+   "match": "wca vs wcb",
+   "market": "dnb_away",
+   "p_final": 0.182022,
+   "p_ref": 0.24638,
+   "deviation": -0.13808,
+   "odds": 4.059,
+   "edge_market": -0.064344
+  },
+  {
+   "match": "wca vs wcb",
+   "market": "dnb_home",
+   "p_final": 0.851948,
+   "p_ref": 0.75362,
+   "deviation": 0.13808,
+   "odds": 1.327,
+   "edge_market": 0.098369
+  },
+  {
+   "match": "wca vs wcb",
+   "market": "draw",
+   "p_final": 0.216599,
+   "p_ref": 0.249472,
+   "deviation": -0.066212,
+   "odds": 3.8,
+   "edge_market": -0.046559
+  },
+  {
+   "match": "wca vs wcb",
+   "market": "home_win",
+   "p_final": 0.669089,
+   "p_ref": 0.571093,
+   "deviation": 0.153732,
+   "odds": 1.7,
+   "edge_market": 0.080853
+  },
+  {
+   "match": "zeta vs theta",
+   "market": "away_win",
+   "p_final": 0.191545,
+   "p_ref": 0.235014,
+   "deviation": -0.105924,
+   "odds": 4.0,
+   "edge_market": -0.058455
+  },
+  {
+   "match": "zeta vs theta",
+   "market": "dnb_away",
+   "p_final": 0.260578,
+   "p_ref": 0.327826,
+   "deviation": -0.179926,
+   "odds": 3.051,
+   "edge_market": -0.067183
+  },
+  {
+   "match": "zeta vs theta",
+   "market": "dnb_home",
+   "p_final": 0.785148,
+   "p_ref": 0.672174,
+   "deviation": 0.179926,
+   "odds": 1.488,
+   "edge_market": 0.113105
+  },
+  {
+   "match": "zeta vs theta",
+   "market": "draw",
+   "p_final": 0.253122,
+   "p_ref": 0.270285,
+   "deviation": -0.06121,
+   "odds": 3.5,
+   "edge_market": -0.032592
+  },
+  {
+   "match": "zeta vs theta",
+   "market": "home_win",
+   "p_final": 0.562826,
+   "p_ref": 0.4947,
+   "deviation": 0.167135,
+   "odds": 1.95,
+   "edge_market": 0.050005
+  }
+ ],
+ "paper": [
+  {
+   "match": "wca vs wcb",
+   "market": "dnb_home",
+   "odds": 1.327,
+   "probability": 0.851948,
+   "stake": 0.8
+  }
+ ],
+ "decision_logs": {
+  "iota vs beta|home_win": {
+   "model": {
+    "lambda_home": 2.202,
+    "lambda_away": 0.671,
+    "p_home": 0.709,
+    "p_draw": 0.1875,
+    "p_away": 0.1035,
+    "mc_agreement": 0.984,
+    "confidence": 0.82,
+    "mle_weight": 0.0,
+    "mle_converged": true,
+    "dc_rho_global": -0.09,
+    "dc_rho_score": -0.09,
+    "btts_shrink": 0.2,
+    "league_factors_version": "r16",
+    "fit_fingerprint": "2030-01-01|g0.1",
+    "mle_final_grad": 0.1,
+    "kalman_confidence": 0.6,
+    "shades": {
+     "luck_home": null,
+     "luck_away": null
+    },
+    "anchored": [
+     "away_win",
+     "btts",
+     "btts_no",
+     "cards_over_4.5",
+     "cards_under_4.5",
+     "corners_over_10.5",
+     "corners_under_10.5",
+     "dnb_away",
+     "dnb_home",
+     "draw",
+     "home_win",
+     "over25",
+     "under25"
+    ],
+    "anchor_model_weight": {
+     "1x2": 0.35,
+     "totals": 0.35,
+     "btts": 0.35,
+     "corners_cards": 0.35,
+     "ah_dnb": 0.35
+    },
+    "xg_source": "proxy"
+   },
+   "signals": {
+    "h2h_used": false,
+    "xg_used": false,
+    "motivation": [
+     0.0,
+     0.0
+    ],
+    "rest_days": [
+     7,
+     7
+    ],
+    "fatigued": false,
+    "weather_mult": 1.0,
+    "corners_lambda": 22.0,
+    "cards_lambda": 15.58,
+    "form_matches": [
+     20,
+     20
+    ]
+   },
+   "market_ctx": {
+    "bookmakers": 12,
+    "spread_pct": 22.0,
+    "soft_line": true
+   },
+   "meta": {
+    "calibration_updated_at": null,
+    "anchor_updated_at": null,
+    "model_version": "2026-09-22-aprendizaje"
+   }
+  },
+  "lam vs mu|home_win": {
+   "model": {
+    "lambda_home": 2.453,
+    "lambda_away": 0.673,
+    "p_home": 0.7652,
+    "p_draw": 0.1584,
+    "p_away": 0.0765,
+    "mc_agreement": 0.993,
+    "confidence": 1.0,
+    "mle_weight": 0.55,
+    "mle_converged": true,
+    "dc_rho_global": -0.09,
+    "dc_rho_score": -0.09,
+    "btts_shrink": 0.2,
+    "league_factors_version": "r16",
+    "fit_fingerprint": "2030-01-01|g0.1",
+    "mle_final_grad": 0.1,
+    "kalman_confidence": 0.6,
+    "shades": {
+     "luck_home": null,
+     "luck_away": null
+    },
+    "anchored": [
+     "away_win",
+     "btts",
+     "btts_no",
+     "dnb_away",
+     "dnb_home",
+     "draw",
+     "home_win",
+     "over25",
+     "under25"
+    ],
+    "anchor_model_weight": {
+     "1x2": 0.35,
+     "totals": 0.35,
+     "btts": 0.35,
+     "ah_dnb": 0.35
+    },
+    "xg_source": "proxy"
+   },
+   "signals": {
+    "h2h_used": false,
+    "xg_used": false,
+    "motivation": [
+     0.0,
+     0.0
+    ],
+    "rest_days": [
+     7,
+     7
+    ],
+    "fatigued": false,
+    "weather_mult": 1.0,
+    "corners_lambda": null,
+    "cards_lambda": null,
+    "form_matches": [
+     35,
+     35
+    ]
+   },
+   "market_ctx": {
+    "bookmakers": 12,
+    "spread_pct": 6.0,
+    "soft_line": false
+   },
+   "meta": {
+    "calibration_updated_at": null,
+    "anchor_updated_at": null,
+    "model_version": "2026-09-22-aprendizaje"
+   }
+  },
+  "lam vs mu|over25": {
+   "model": {
+    "lambda_home": 2.453,
+    "lambda_away": 0.673,
+    "p_home": 0.7652,
+    "p_draw": 0.1584,
+    "p_away": 0.0765,
+    "mc_agreement": 0.993,
+    "confidence": 1.0,
+    "mle_weight": 0.55,
+    "mle_converged": true,
+    "dc_rho_global": -0.09,
+    "dc_rho_score": -0.09,
+    "btts_shrink": 0.2,
+    "league_factors_version": "r16",
+    "fit_fingerprint": "2030-01-01|g0.1",
+    "mle_final_grad": 0.1,
+    "kalman_confidence": 0.6,
+    "shades": {
+     "luck_home": null,
+     "luck_away": null
+    },
+    "anchored": [
+     "away_win",
+     "btts",
+     "btts_no",
+     "dnb_away",
+     "dnb_home",
+     "draw",
+     "home_win",
+     "over25",
+     "under25"
+    ],
+    "anchor_model_weight": {
+     "1x2": 0.35,
+     "totals": 0.35,
+     "btts": 0.35,
+     "ah_dnb": 0.35
+    },
+    "xg_source": "proxy"
+   },
+   "signals": {
+    "h2h_used": false,
+    "xg_used": false,
+    "motivation": [
+     0.0,
+     0.0
+    ],
+    "rest_days": [
+     7,
+     7
+    ],
+    "fatigued": false,
+    "weather_mult": 1.0,
+    "corners_lambda": null,
+    "cards_lambda": null,
+    "form_matches": [
+     35,
+     35
+    ]
+   },
+   "market_ctx": {
+    "bookmakers": 12,
+    "spread_pct": 6.0,
+    "soft_line": false
+   },
+   "meta": {
+    "calibration_updated_at": null,
+    "anchor_updated_at": null,
+    "model_version": "2026-09-22-aprendizaje"
+   }
+  },
+  "phi vs khi|home_win": {
+   "model": {
+    "lambda_home": 2.185,
+    "lambda_away": 0.608,
+    "p_home": 0.722,
+    "p_draw": 0.1847,
+    "p_away": 0.0934,
+    "mc_agreement": 0.99,
+    "confidence": 1.0,
+    "mle_weight": 0.0,
+    "mle_converged": true,
+    "dc_rho_global": -0.09,
+    "dc_rho_score": -0.09,
+    "btts_shrink": 0.2,
+    "league_factors_version": "r16",
+    "fit_fingerprint": "2030-01-01|g0.1",
+    "mle_final_grad": 0.1,
+    "kalman_confidence": 0.6,
+    "shades": {
+     "luck_home": null,
+     "luck_away": null
+    },
+    "anchored": [
+     "away_win",
+     "btts",
+     "btts_no",
+     "dnb_away",
+     "dnb_home",
+     "draw",
+     "home_win",
+     "over25",
+     "under25"
+    ],
+    "anchor_model_weight": {
+     "1x2": 0.35,
+     "totals": 0.35,
+     "btts": 0.35,
+     "ah_dnb": 0.35
+    },
+    "xg_source": "proxy"
+   },
+   "signals": {
+    "h2h_used": false,
+    "xg_used": false,
+    "motivation": [
+     0.0,
+     0.0
+    ],
+    "rest_days": [
+     7,
+     7
+    ],
+    "fatigued": false,
+    "weather_mult": 1.0,
+    "corners_lambda": null,
+    "cards_lambda": null,
+    "form_matches": [
+     20,
+     20
+    ]
+   },
+   "market_ctx": {
+    "bookmakers": 5,
+    "spread_pct": 6.0,
+    "soft_line": false
+   },
+   "meta": {
+    "calibration_updated_at": null,
+    "anchor_updated_at": null,
+    "model_version": "2026-09-22-aprendizaje"
+   }
+  },
+  "rho vs sig|home_win": {
+   "model": {
+    "lambda_home": 2.079,
+    "lambda_away": 0.66,
+    "p_home": 0.6897,
+    "p_draw": 0.1993,
+    "p_away": 0.1109,
+    "mc_agreement": 0.987,
+    "confidence": 1.0,
+    "mle_weight": 0.0,
+    "mle_converged": true,
+    "dc_rho_global": -0.09,
+    "dc_rho_score": -0.09,
+    "btts_shrink": 0.2,
+    "league_factors_version": "r16",
+    "fit_fingerprint": "2030-01-01|g0.1",
+    "mle_final_grad": 0.1,
+    "kalman_confidence": 0.6,
+    "shades": {
+     "luck_home": null,
+     "luck_away": null
+    },
+    "anchored": [
+     "away_win",
+     "btts",
+     "btts_no",
+     "dnb_away",
+     "dnb_home",
+     "draw",
+     "home_win",
+     "over25",
+     "under25"
+    ],
+    "anchor_model_weight": {
+     "1x2": 0.35,
+     "totals": 0.35,
+     "btts": 0.35,
+     "ah_dnb": 0.35
+    },
+    "xg_source": "proxy"
+   },
+   "signals": {
+    "h2h_used": true,
+    "xg_used": false,
+    "motivation": [
+     0.0,
+     0.0
+    ],
+    "rest_days": [
+     7,
+     7
+    ],
+    "fatigued": false,
+    "weather_mult": 1.0,
+    "corners_lambda": null,
+    "cards_lambda": null,
+    "form_matches": [
+     20,
+     20
+    ]
+   },
+   "market_ctx": {
+    "bookmakers": 12,
+    "spread_pct": 6.0,
+    "soft_line": false
+   },
+   "meta": {
+    "calibration_updated_at": null,
+    "anchor_updated_at": null,
+    "model_version": "2026-09-22-aprendizaje"
+   }
+  },
+  "wca vs wcb|dnb_home": {
+   "model": {
+    "lambda_home": 2.147,
+    "lambda_away": 0.626,
+    "p_home": 0.7248,
+    "p_draw": 0.1833,
+    "p_away": 0.0919,
+    "mc_agreement": 0.992,
+    "confidence": 1.0,
+    "mle_weight": 0.4,
+    "mle_converged": true,
+    "dc_rho_global": -0.09,
+    "dc_rho_score": -0.09,
+    "btts_shrink": 0.2,
+    "league_factors_version": "r16",
+    "fit_fingerprint": "2030-01-01|g0.1",
+    "mle_final_grad": 0.1,
+    "kalman_confidence": 0.6,
+    "shades": {
+     "luck_home": null,
+     "luck_away": null
+    },
+    "anchored": [
+     "away_win",
+     "btts",
+     "btts_no",
+     "dnb_away",
+     "dnb_home",
+     "draw",
+     "home_win",
+     "over25",
+     "under25"
+    ],
+    "anchor_model_weight": {
+     "1x2": 0.35,
+     "totals": 0.35,
+     "btts": 0.35,
+     "ah_dnb": 0.35
+    },
+    "xg_source": "proxy"
+   },
+   "signals": {
+    "h2h_used": false,
+    "xg_used": false,
+    "motivation": [
+     0.0,
+     0.0
+    ],
+    "rest_days": [
+     7,
+     7
+    ],
+    "fatigued": false,
+    "weather_mult": 1.0,
+    "corners_lambda": null,
+    "cards_lambda": null,
+    "form_matches": [
+     20,
+     20
+    ]
+   },
+   "market_ctx": {
+    "bookmakers": 12,
+    "spread_pct": 6.0,
+    "soft_line": false
+   },
+   "meta": {
+    "calibration_updated_at": null,
+    "anchor_updated_at": null,
+    "model_version": "2026-09-22-aprendizaje"
+   }
+  },
+  "zeta vs theta|home_win": {
+   "model": {
+    "lambda_home": 2.027,
+    "lambda_away": 0.732,
+    "p_home": 0.6618,
+    "p_draw": 0.2091,
+    "p_away": 0.1291,
+    "mc_agreement": 0.989,
+    "confidence": 1.0,
+    "mle_weight": 0.0,
+    "mle_converged": true,
+    "dc_rho_global": -0.09,
+    "dc_rho_score": -0.09,
+    "btts_shrink": 0.2,
+    "league_factors_version": "r16",
+    "fit_fingerprint": "2030-01-01|g0.1",
+    "mle_final_grad": 0.1,
+    "kalman_confidence": 0.6,
+    "shades": {
+     "luck_home": 4.0,
+     "luck_away": null,
+     "aplicado": 0.08
+    },
+    "anchored": [
+     "away_win",
+     "btts",
+     "btts_no",
+     "dnb_away",
+     "dnb_home",
+     "draw",
+     "home_win",
+     "over25",
+     "under25"
+    ],
+    "anchor_model_weight": {
+     "1x2": 0.35,
+     "totals": 0.35,
+     "btts": 0.35,
+     "ah_dnb": 0.35
+    },
+    "xg_source": "proxy"
+   },
+   "signals": {
+    "h2h_used": false,
+    "xg_used": false,
+    "motivation": [
+     0.0,
+     0.0
+    ],
+    "rest_days": [
+     7,
+     7
+    ],
+    "fatigued": false,
+    "weather_mult": 1.0,
+    "corners_lambda": null,
+    "cards_lambda": null,
+    "form_matches": [
+     20,
+     20
+    ]
+   },
+   "market_ctx": {
+    "bookmakers": 12,
+    "spread_pct": 6.0,
+    "soft_line": false
+   },
+   "meta": {
+    "calibration_updated_at": null,
+    "anchor_updated_at": null,
+    "model_version": "2026-09-22-aprendizaje"
+   }
+  }
+ }
+}

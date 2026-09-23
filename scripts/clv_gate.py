@@ -42,6 +42,9 @@ sys.path.append(str(Path(__file__).parent.parent))
 from config.database import engine
 from config.settings import LEARNING_SINCE
 from src.utils.model_state import load_state, save_state
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 ROOT = Path(__file__).parent.parent
 BLOCKED_FILE = ROOT / "config" / "clv_blocked_markets.json"
@@ -227,7 +230,7 @@ def run_clv_gate(verbose: bool = True) -> dict:
         """), engine, params={"since": LEARNING_SINCE})
     except Exception as e:
         if verbose:
-            print(f"❌ clv_gate: no se pudo leer bets_history: {e}")
+            log.error(f"❌ clv_gate: no se pudo leer bets_history: {e}")
         return {"status": "error", "error": str(e)}
 
     if df.empty:
@@ -289,7 +292,7 @@ def run_clv_gate(verbose: bool = True) -> dict:
                 if avg <= _LEAGUE_CLV_FLOOR:
                     blocked_leagues.append(str(l))
     except Exception as e:
-        print(f"   ⚠️  League gate omitido: {e}")
+        log.warning(f"   ⚠️  League gate omitido: {e}")
     _write_league_blocked(blocked_leagues, verbose=verbose)
 
     # blocked_since: conservar el existente; fecha nueva para los recién bloqueados

@@ -33,6 +33,12 @@ if hasattr(sys.stdout, "reconfigure"):
 
 sys.path.append(str(Path(__file__).parent.parent))
 
+# después del sys.path.append: al correr `python scripts/orchestrator.py`
+# la raíz del repo (paquete src) no está en el path hasta aquí
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
+
 LOG_DIR = Path(__file__).parent.parent / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -81,7 +87,7 @@ def _acquire_lock(mode: str) -> bool:
                 print(f"   Lock file: {LOCK_FILE} (age: {age_sec/60:.0f} min)")
                 return False
             else:
-                print(f"⚠️  Lock file stale ({age_sec/60:.0f} min > {LOCK_STALE_MINUTES} min), forzando...")
+                log.warning(f"⚠️  Lock file stale ({age_sec/60:.0f} min > {LOCK_STALE_MINUTES} min), forzando...")
                 LOCK_FILE.unlink()
         except OSError:
             pass
@@ -292,7 +298,7 @@ def step_goalscorer_picks():
         generate_goalscorer_picks(verbose=True)
     except Exception as e:
         # Papel/informativo — no debe romper el morning
-        print(f"⚠️  Goalscorer picks falló: {e}")
+        log.error(f"⚠️  Goalscorer picks falló: {e}")
 
 
 def step_goalscorer_resolve():
@@ -301,7 +307,7 @@ def step_goalscorer_resolve():
         from scripts.goalscorer_picks import resolve_goalscorer_picks
         resolve_goalscorer_picks(verbose=True)
     except Exception as e:
-        print(f"⚠️  Goalscorer resolve falló: {e}")
+        log.error(f"⚠️  Goalscorer resolve falló: {e}")
 
 
 def step_notify():
@@ -354,7 +360,7 @@ def step_pre_kickoff_closing():
         # No se corta el closing (revalidación y confirmaciones siguen), pero
         # el paso termina FALLIDO al final para que se vea (run en rojo).
         refresh_error = e
-        print(f"   ❌ Recarga dirigida de cierre falló: {type(e).__name__}: {e}")
+        log.error(f"   ❌ Recarga dirigida de cierre falló: {type(e).__name__}: {e}")
 
     update_closing_odds()
 
@@ -363,7 +369,7 @@ def step_pre_kickoff_closing():
         from scripts.odds_history import capture_snapshot
         capture_snapshot(verbose=False)
     except Exception as e:
-        print(f"   ⚠️  odds_history: {e}")
+        log.warning(f"   ⚠️  odds_history: {e}")
 
     # Revalidar bets del día contra las odds frescas recién descargadas:
     # si la línea se movió en contra y el edge murió, cancelar la bet ANTES
@@ -382,7 +388,7 @@ def step_pre_kickoff_closing():
     except Exception as e:
         # La revalidación es un filtro de protección — un fallo no debe
         # romper el closing, pero sí debe verse en el log.
-        print(f"⚠️  Revalidación pre-kickoff falló: {e}")
+        log.error(f"⚠️  Revalidación pre-kickoff falló: {e}")
 
     # ── CONFIRMACIONES PRE-KICKOFF (flujo de dos fases, 14-sep-26) ──────
     # Las apuestas OFICIALES llegan aquí: ya con cuota revalidada, lineup
@@ -392,7 +398,7 @@ def step_pre_kickoff_closing():
         from scripts.revalidate_pending_bets import send_kickoff_confirmations
         send_kickoff_confirmations(verbose=True)
     except Exception as e:
-        print(f"⚠️  Confirmaciones pre-kickoff falló: {e}")
+        log.error(f"⚠️  Confirmaciones pre-kickoff falló: {e}")
 
     if refresh_error is not None:
         raise RuntimeError(f"recarga dirigida de cierre: {refresh_error}")
@@ -417,7 +423,7 @@ def step_fetch_results_backup():
         from scripts.fetch_results_backup_fbdata import fetch_fbdata_backup
         fetch_fbdata_backup(days=10, verbose=True)
     except Exception as e:
-        print(f"⚠️  fbdata backup skipped: {e}")
+        log.warning(f"⚠️  fbdata backup skipped: {e}")
 
 
 def step_results():
@@ -480,7 +486,7 @@ def run_morning(logger: Logger, force_fetch: bool = False):
         from scripts.odds_history import capture_snapshot
         capture_snapshot(verbose=True)
     except Exception as e:
-        print(f"⚠️  odds_history falló: {e}")
+        log.error(f"⚠️  odds_history falló: {e}")
 
     predict_ok = run_step(logger, "Predictions", step_predict)
     # run_step(logger, "MLB Predictions",   step_mlb_predict)  # desactivado — sin creditos MLB
@@ -515,7 +521,7 @@ def step_resolve_pending():
         resolve_main(hours_lag=3, limit_matches=10, silent_telegram=True)
     except Exception as e:
         # Nunca tiramos el evening pipeline por esto — es housekeeping.
-        print(f"⚠️  resolve_pending (chained) error non-fatal: {e}")
+        log.error(f"⚠️  resolve_pending (chained) error non-fatal: {e}")
 
 
 def step_notify_evening():
@@ -548,7 +554,7 @@ def step_notify_evening():
                 target_day = d                    # hoy aún no resuelve nada
             # d más viejo → default ayer
     except Exception as e:
-        print(f"   ⚠️  No se pudo anclar por datos ({e}) — usando ayer")
+        log.warning(f"   ⚠️  No se pudo anclar por datos ({e}) — usando ayer")
     print(f"   Resumen nocturno anclado al día local: {target_day}")
     send_evening_summary(target_date=target_day)
 
@@ -665,7 +671,7 @@ def step_soccerdata_refresh():
         refresh_understat(verbose=True)
         refresh_club_elo(verbose=True)
     except Exception as e:
-        print(f"⚠️  Soccerdata refresh falló: {e}")
+        log.error(f"⚠️  Soccerdata refresh falló: {e}")
 
 
 def step_fit_dc_mle():
@@ -692,7 +698,7 @@ def step_drift_detection():
             print("✅ Sin drift detectado")
     except Exception as e:
         # Drift es informativo — un error no debe bloquear el weekly
-        print(f"⚠️  Drift detection falló: {e}")
+        log.error(f"⚠️  Drift detection falló: {e}")
 
 
 def step_clv_gate():
@@ -716,7 +722,7 @@ def step_clv_gate():
             )
     except Exception as e:
         # Informativo — no debe bloquear el weekly
-        print(f"⚠️  CLV gate falló: {e}")
+        log.error(f"⚠️  CLV gate falló: {e}")
 
 
 def step_anchor_learning():
@@ -757,7 +763,7 @@ def step_evaluate_holdout():
         from scripts.evaluate_holdout import evaluate_holdout
         evaluate_holdout()
     except Exception as e:
-        print(f"⚠️  Holdout evaluation falló: {e}")
+        log.error(f"⚠️  Holdout evaluation falló: {e}")
     try:
         from src.models.save_bets import slippage_report
         rep = slippage_report()
@@ -767,7 +773,7 @@ def step_evaluate_holdout():
         else:
             print("   Slippage: sin bets con odds_placed registrado aún")
     except Exception as e:
-        print(f"⚠️  Slippage report falló: {e}")
+        log.error(f"⚠️  Slippage report falló: {e}")
 
 
 def step_sanity_audit():
@@ -779,7 +785,7 @@ def step_sanity_audit():
         if result.get("alerts"):
             logger = None  # el mensaje ya lo manda el auditor
     except Exception as e:
-        print(f"⚠️  Sanity audit falló: {e}")
+        log.error(f"⚠️  Sanity audit falló: {e}")
 
 
 def step_market_regime():
@@ -798,7 +804,7 @@ def step_market_regime():
             )
     except Exception as e:
         # Informativo — no debe bloquear el weekly
-        print(f"⚠️  Market regime monitor falló: {e}")
+        log.error(f"⚠️  Market regime monitor falló: {e}")
 
 
 def step_refresh_clv_cache():
@@ -811,11 +817,11 @@ def step_refresh_clv_cache():
         result = refresh_clv_cache()
         n_markets = len(result.get("by_market", {}))
         if "error" in result:
-            print(f"⚠️  CLV refresh falló: {result['error']}")
+            log.error(f"⚠️  CLV refresh falló: {result['error']}")
         else:
             print(f"✅ CLV cache refrescado: {n_markets} mercados")
     except Exception as e:
-        print(f"⚠️  CLV refresh falló: {e}")
+        log.error(f"⚠️  CLV refresh falló: {e}")
 
 
 def run_results_only(logger: Logger):
@@ -854,7 +860,7 @@ def main():
 
     # ── Task locking: prevenir ejecuciones concurrentes ──────────────────
     if not _acquire_lock(args.mode):
-        print("❌ Abortando: otra instancia del orchestrator está corriendo.")
+        log.error("❌ Abortando: otra instancia del orchestrator está corriendo.")
         sys.exit(1)
     atexit.register(_release_lock)  # liberar lock al terminar (incluso en crash)
 
@@ -998,6 +1004,8 @@ def main():
         logger.close()
         _release_lock()
 
+    _report_tolerated_errors(args.mode)
+
     # Un paso fallido deja el run en ROJO en Actions. Antes salía verde
     # aunque fallara ("un fallo verde se ve igual que un día normal",
     # docs/OPERACION.md §2). Se evalúa al final: todos los pasos corren y
@@ -1006,6 +1014,33 @@ def main():
         print(f"::error::{len(logger.failed_steps)} de {logger.steps_total} pasos "
               f"fallaron en modo {args.mode}: {', '.join(logger.failed_steps)}")
         sys.exit(1)
+
+
+def _report_tolerated_errors(mode: str) -> None:
+    """
+    Errores TOLERADOS: los que el código atrapa, registra como ERROR y deja
+    seguir (sin tumbar el paso). Antes solo quedaban en el log — el apagón
+    de 82 días de The Odds API fue una línea "❌ API error 401" por liga
+    dentro de pasos que terminaban OK. Ahora se reportan en cada corrida:
+    anotación ::warning:: en Actions + un Telegram con los primeros.
+    """
+    from src.utils.log import RUN_ISSUES
+    tolerated = [m.strip() for m in RUN_ISSUES.errors()]
+    if not tolerated:
+        return
+    print(f"::warning::{len(tolerated)} errores tolerados en modo {mode}: "
+          + " | ".join(m[:140] for m in tolerated[:5]))
+    try:
+        import html
+        from scripts.notify_telegram import send_message
+        send_message(
+            f"⚠️ <b>{mode}: {len(tolerated)} errores tolerados</b>\n"
+            f"(la corrida siguió, pero algo falló)\n\n"
+            + "\n".join(f"• {html.escape(m[:180])}" for m in tolerated[:8])
+            + ("\n…" if len(tolerated) > 8 else "")
+        )
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

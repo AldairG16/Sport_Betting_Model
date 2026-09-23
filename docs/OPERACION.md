@@ -77,6 +77,19 @@ weekly del 21-sep perdió "Load historical data" sin que nadie se enterara).
 El caché de cuotas se guarda aunque el run falle (`actions/cache/save` con
 `if: always()`).
 
+**Errores tolerados.** Los módulos centrales registran avisos y errores con nivel
+(`src/utils/log.py`: `log.warning` / `log.error`, mismo texto en consola). Un error
+que el código atrapa y deja pasar ya no se pierde en el log: al final de cada corrida
+el orchestrator lo reporta como `::warning::` en Actions y por Telegram
+("N errores tolerados"). Así se habría visto el primer día el apagón de 82 días
+(`❌ API error 401` en cada liga dentro de un paso "OK"). Un `except` que atrapa un
+fallo real debe usar `log.error`, no `print`.
+
+**Los scripts se lanzan como `python scripts/X.py`.** En ese modo la raíz del repo no
+está en `sys.path` hasta que el script la agrega: todo `from src...`/`from config...`
+va DESPUÉS del `sys.path.append`. pytest agrega la raíz por su cuenta y no lo detecta;
+`tests/test_entrypoints.py` lanza cada entrypoint como lo hace Actions.
+
 Dentro de las predicciones, cada partido se evalúa aislado: una fila corrupta
 se omite (con traceback en el log y aviso "Predicciones parciales") y el resto
 del slate sigue. Si fallan **todos**, el paso falla.
@@ -95,6 +108,13 @@ Cooperan a través de PostgreSQL; entre corridas no sobrevive estado en memoria.
 Cada uno es su propio workflow.
 
 **1 · Pipeline diario** — `orchestrator.py`, modos `morning` / `closing` / `evening` / `weekly`.
+`run_prediction_pipeline()` evalúa cada partido en 11 etapas con entradas y salidas
+explícitas (`_stage_*` en `src/pipeline/prediction_pipeline.py`): fuerzas → λ →
+probabilidades del modelo → mercado sin margen → combinación → cuotas → probabilidad
+final (ancla, calibración, sesgos) → shadow → contexto de mercado → candidatas →
+selección y stake. Después, `_apply_portfolio_limits` (correlación, sospechosas,
+exposición y tope por slate). Cada etapa es la misma lógica de antes del 22-sep-2026
+(verificado con dos goldens); cambiarla exige regenerar el golden con el diff a la vista.
 Trae cuotas de The Odds API, `src/pipeline/prediction_pipeline.py` puntúa cada par
 (partido, mercado), aplica calibración, filtros de edge y Kelly, e inserta en
 `bets_history` con `result='pending'`. El modo `evening` vuelve a pedir resultados,

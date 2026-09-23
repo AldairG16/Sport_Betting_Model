@@ -51,6 +51,9 @@ from scipy.stats import poisson
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from config.database import engine
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 DC_PARAMS_FILE = Path(__file__).parent.parent.parent / "data" / "dc_params.json"
 DC_PARAMS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -177,11 +180,11 @@ def fit_dc_parameters(verbose: bool = True) -> dict:
             ORDER BY date ASC
         """, engine)
     except Exception as e:
-        print(f"❌ dc_mle_fitter: error leyendo matches: {e}")
+        log.error(f"❌ dc_mle_fitter: error leyendo matches: {e}")
         return {}
 
     if len(df) < 500:
-        print(f"⚠️  Solo {len(df)} partidos — mínimo 500 para MLE confiable")
+        log.warning(f"⚠️  Solo {len(df)} partidos — mínimo 500 para MLE confiable")
         return {}
 
     if verbose:
@@ -319,7 +322,7 @@ def fit_dc_parameters(verbose: bool = True) -> dict:
         )
 
     if not result.success and verbose:
-        print(f"   ⚠️  Optimizador no convergió perfectamente: {result.message}")
+        log.warning(f"   ⚠️  Optimizador no convergió perfectamente: {result.message}")
 
     params   = result.x
     attacks  = params[:n_teams].copy()
@@ -422,7 +425,7 @@ def _load_params_from_db() -> dict:
         if row and row[0]:
             return json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
     except Exception as e:
-        print(f"⚠️  model_state/dc_params ilegible en Neon: {type(e).__name__}: {str(e)[:100]}")
+        log.warning(f"⚠️  model_state/dc_params ilegible en Neon: {type(e).__name__}: {str(e)[:100]}")
     return {}
 
 
@@ -467,7 +470,7 @@ def _save_params_to_db(params: dict) -> bool:
                    "fa": params.get("fitted_at", datetime.now().isoformat())})
         return True
     except Exception as e:
-        print(f"⚠️  No se pudo persistir dc_params en Neon: {type(e).__name__}: {str(e)[:120]}")
+        log.warning(f"⚠️  No se pudo persistir dc_params en Neon: {type(e).__name__}: {str(e)[:120]}")
         return False
 
 
@@ -492,7 +495,7 @@ def _load_params() -> dict:
             # El silencio era peligroso: el pipeline corría con λ=1.5 sin
             # avisar que los params MLE no se cargaron. Loguear es esencial
             # para detectar corrupción de DC_PARAMS_FILE.
-            print(f"⚠️  No se pudo cargar DC_PARAMS_FILE ({DC_PARAMS_FILE}): {e}. "
+            log.warning(f"⚠️  No se pudo cargar DC_PARAMS_FILE ({DC_PARAMS_FILE}): {e}. "
                   f"Pipeline correrá con λ defaults — re-ejecutar weekly fit.")
 
     return {}

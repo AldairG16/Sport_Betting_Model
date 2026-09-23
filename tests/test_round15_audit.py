@@ -92,12 +92,21 @@ def test_ensemble_signal3_coheres_with_signal1():
 # J3 — fallback de tau unificado
 # ============================================================
 
-def test_totals_and_btts_uses_score_rho():
+def test_totals_and_btts_uses_score_rho(monkeypatch):
     """BTTS y la matriz comparten DC_RHO_SCORE: sin fallbacks distintos
     para el mismo tau (era 1.11pp de divergencia si el refit entregaba
-    rho bajo)."""
-    src = _source(pp)
-    assert "totals_and_btts(lambda_home, lambda_away,\n                                        rho=DC_RHO_SCORE)" in src
+    rho bajo). Verificado ejecutando el pipeline (22-sep-26)."""
+    from tests.pipeline_harness import run_pipeline
+    seen = []
+    real = pp.totals_and_btts
+
+    def spy(lh, la, rho=None, **kw):
+        seen.append(rho)
+        return real(lh, la, rho=rho, **kw)
+
+    run_pipeline(monkeypatch, overrides={"totals_and_btts": spy})
+    # el arnés ajusta rho=-0.09 (> 0.03 → tau activa): matriz y BTTS igual
+    assert seen and all(r == -0.09 for r in seen)
 
 
 def test_dc_rho_score_falls_back_to_literature():

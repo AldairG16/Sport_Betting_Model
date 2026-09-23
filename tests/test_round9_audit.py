@@ -66,13 +66,19 @@ def test_shadow_closing_has_kickoff_guard():
 # D3/R17 — población declarada del sweep
 # ============================================================
 
-def test_sweep_reports_population_counters():
+def test_sweep_reports_population_counters(monkeypatch, capsys):
     """Tres contadores: pares con cuota, con referencia, sobre el piso.
-    Sin ellos la muestra no declara qué fracción del slate representa."""
-    src = _source(pp)
-    assert "sweep_total" in src
-    assert "sweep_ref" in src
-    assert "sweep_ref}/{sweep_total" in src
+    Sin ellos la muestra no declara qué fracción del slate representa.
+    Verificado ejecutando el pipeline (22-sep-26)."""
+    import re
+    from tests.pipeline_harness import run_pipeline
+    out = run_pipeline(monkeypatch)
+    log = capsys.readouterr().out
+    m = re.search(r"pares con cuota: (\d+) · con referencia: (\d+) \((\d+)/(\d+)\) · sobre piso 2pt: (\d+)", log)
+    assert m, "falta la línea de población del sweep"
+    total, ref, ref2, total2, swept = map(int, m.groups())
+    assert (ref, total) == (ref2, total2) and swept <= ref <= total
+    assert swept == len(out["shadow"])
 
 
 # ============================================================

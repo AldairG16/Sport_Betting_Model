@@ -39,6 +39,9 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from config.database import engine
 from src.utils.team_normalizer import normalize_team
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 # Edge mínimo para MANTENER una bet cuya odd se movió en contra
 KEEP_EDGE = 0.02
@@ -297,7 +300,7 @@ def revalidate_pending_bets(verbose: bool = True) -> dict:
     try:
         cancelled_ln = lineup_guard(verbose=verbose)
     except Exception as e:
-        print(f"   ⚠️  Lineup guard falló: {e}")
+        log.error(f"   ⚠️  Lineup guard falló: {e}")
 
     summary = {
         "status": "ok",
@@ -315,7 +318,7 @@ def revalidate_pending_bets(verbose: bool = True) -> dict:
         print(f"   Bets evaluadas:        {len(bets)}")
         print(f"   Odd mejor/igual:       {kept_better} (actualizadas al número fresco)")
         print(f"   Odd peor, edge vive:   {kept_edge} (mantenidas a la odd nueva)")
-        print(f"   ❌ Canceladas:          {cancelled} (línea absorbió el edge)")
+        log.error(f"   ❌ Canceladas:          {cancelled} (línea absorbió el edge)")
         print(f"   Sin odd fresca:        {no_odds}  |  Partido no encontrado: {not_found}")
 
     return summary
@@ -373,7 +376,7 @@ def send_kickoff_confirmations(verbose: bool = True) -> int:
     from scripts.notify_telegram import send_message
     if not send_message(msg):
         if verbose:
-            print("   ⚠️  Telegram falló — se reintentará en la próxima corrida")
+            log.error("   ⚠️  Telegram falló — se reintentará en la próxima corrida")
         return 0
 
     ids = [int(r["id"]) for r in rows.to_dict("records")]

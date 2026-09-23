@@ -72,12 +72,14 @@ def test_anchorable_without_anchor_is_not_bettable():
     si hay entrada en market_probs; el `continue` cubre el resto. Verificado
     por lectura del bloque de combinación (la rama sin ancla no asigna).
     """
-    src = _source(pp)
-    m = re.search(r"if _anchorable\(market\):\n(.*?)\n            if _implied:", src, re.S)
-    assert m, "bloque de combinación no encontrado"
-    block = m.group(1)
-    assert "continue" in block
-    assert re.search(r"if market in market_probs:\n\s+probabilities\[market\]", block)
+    # Desde el 22-sep-26 el bloque es la etapa _stage_blend: se ejecuta.
+    probs, _, _ = pp._stage_blend(
+        {"over25": 0.60, "home_win": 0.55, "dc_1x": 0.80},
+        {"home_win": 0.50},                       # solo 1X2 tiene ancla
+        {"over25": 0.52, "dc_1x": 0.75})          # over25: pata suelta
+    assert "over25" not in probs                  # anclable sin ancla → fuera
+    assert probs["home_win"] == 0.55              # anclable con ancla → modelo crudo
+    assert "dc_1x" in probs                       # no anclable → blend simétrico
 
 
 # ============================================================

@@ -34,6 +34,9 @@ from config.settings import (
     env_int,
 )
 from src.utils.team_normalizer import normalize_team
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 # ============================================================
 # AUTO-STOP: umbral mínimo de créditos para detener fetch
@@ -143,7 +146,7 @@ def log_credits(sport_key: str, used: str, remaining: str):
     if remaining.isdigit():
         _last_known_remaining = int(remaining)
     elif _last_known_remaining is None:
-        print(f"  ⚠️  Header x-requests-remaining inválido/ausente ({remaining!r}) — guards de créditos desactivados hasta el próximo header válido.")
+        log.warning(f"  ⚠️  Header x-requests-remaining inválido/ausente ({remaining!r}) — guards de créditos desactivados hasta el próximo header válido.")
         return
     remaining_int = _last_known_remaining
     # Capturar remaining inicial (para enforcar MAX_CREDITS_PER_RUN)
@@ -151,7 +154,7 @@ def log_credits(sport_key: str, used: str, remaining: str):
         _initial_remaining = remaining_int
 
     if remaining_int < API_CREDITS_ALERT_THRESHOLD:
-        print(f"  ⚠️  ALERTA: solo quedan {remaining} creditos en la API!")
+        log.warning(f"  ⚠️  ALERTA: solo quedan {remaining} creditos en la API!")
 
     # Detector de fuga: si gastamos más de MAX_CREDITS_PER_RUN en esta
     # invocación, matar todo. Protege contra bugs que disparen loops.
@@ -204,7 +207,7 @@ def fetch_data(sport_key: str, cache: dict, force: bool = False) -> list:
         age_min = age_sec / 60
         age_hrs = age_sec / 3600
         if age_hrs > 24:
-            print(f"  ⚠️  Cache STALE ({age_hrs:.1f}h) — odds pueden estar desactualizadas")
+            log.warning(f"  ⚠️  Cache STALE ({age_hrs:.1f}h) — odds pueden estar desactualizadas")
         else:
             print(f"  📦 Cache valido ({age_min:.0f} min) — omitiendo llamada API")
         return cache[sport_key]["data"]
@@ -224,7 +227,7 @@ def fetch_data(sport_key: str, cache: dict, force: bool = False) -> list:
     try:
         r = requests.get(url, params=params, timeout=15)
     except requests.RequestException as e:
-        print(f"  ❌ Error de red: {e}")
+        log.error(f"  ❌ Error de red: {e}")
         return cache.get(sport_key, {}).get("data", [])
 
     # --- Tracking de creditos ---
@@ -234,12 +237,12 @@ def fetch_data(sport_key: str, cache: dict, force: bool = False) -> list:
     log_credits(sport_key, used, remaining)
 
     if r.status_code != 200:
-        print(f"  ❌ API error {r.status_code}: {r.text[:200]}")
+        log.error(f"  ❌ API error {r.status_code}: {r.text[:200]}")
         return cache.get(sport_key, {}).get("data", [])
 
     data = r.json()
     if isinstance(data, dict):  # error JSON
-        print(f"  ❌ API devolvio error: {data}")
+        log.error(f"  ❌ API devolvio error: {data}")
         return cache.get(sport_key, {}).get("data", [])
 
     # --- Actualizar cache ---
@@ -811,7 +814,7 @@ def parse_match(m: dict, sport: str) -> dict | None:
         }
 
     except Exception as e:
-        print(f"  ❌ Error parseando partido: {e}")
+        log.error(f"  ❌ Error parseando partido: {e}")
         return None
 
 
@@ -1027,7 +1030,7 @@ def _cleanup_old_matches():
             if r.rowcount > 0:
                 print(f"🗑️  Cleanup: {r.rowcount} partidos antiguos eliminados de upcoming_matches")
     except Exception as e:
-        print(f"⚠️  Cleanup error: {e}")
+        log.error(f"⚠️  Cleanup error: {e}")
 
 
 def _cleanup_stale_duplicates():
@@ -1085,7 +1088,7 @@ def _cleanup_stale_duplicates():
                 print(f"🗑️  Cleanup duplicados: {r.rowcount} rows stale eliminadas "
                       f"(misma combinación de equipos con updated_at más reciente)")
     except Exception as e:
-        print(f"⚠️  Cleanup duplicados error: {e}")
+        log.error(f"⚠️  Cleanup duplicados error: {e}")
 
 
 def _preflight_credits_check() -> int | None:
@@ -1109,7 +1112,7 @@ def _preflight_credits_check() -> int | None:
             print(f"💳 Preflight: {rem} créditos disponibles")
             return rem
     except Exception as e:
-        print(f"⚠️  Preflight falló: {e}")
+        log.error(f"⚠️  Preflight falló: {e}")
     return None
 
 
@@ -1140,6 +1143,7 @@ def refresh_for_closing(targets: list[dict]) -> dict:
     """
     stats = {"leagues": 0, "events": 0, "skipped_fresh": 0, "targets": len(targets)}
     if not targets:
+        print("   🎯 Recarga de cierre: ningún partido con bets/shadow en la ventana — sin gasto")
         return stats
 
     remaining = _preflight_credits_check()
