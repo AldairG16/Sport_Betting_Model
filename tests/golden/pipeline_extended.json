@@ -980,7 +980,8 @@
    "market_ctx": {
     "bookmakers": 12,
     "spread_pct": 22.0,
-    "soft_line": true
+    "soft_line": true,
+    "pin_prob": null
    },
    "meta": {
     "calibration_updated_at": null,
@@ -1058,7 +1059,8 @@
    "market_ctx": {
     "bookmakers": 12,
     "spread_pct": 6.0,
-    "soft_line": false
+    "soft_line": false,
+    "pin_prob": null
    },
    "meta": {
     "calibration_updated_at": null,
@@ -1136,7 +1138,8 @@
    "market_ctx": {
     "bookmakers": 12,
     "spread_pct": 6.0,
-    "soft_line": false
+    "soft_line": false,
+    "pin_prob": null
    },
    "meta": {
     "calibration_updated_at": null,
@@ -1214,7 +1217,8 @@
    "market_ctx": {
     "bookmakers": 5,
     "spread_pct": 6.0,
-    "soft_line": false
+    "soft_line": false,
+    "pin_prob": null
    },
    "meta": {
     "calibration_updated_at": null,
@@ -1292,7 +1296,8 @@
    "market_ctx": {
     "bookmakers": 12,
     "spread_pct": 6.0,
-    "soft_line": false
+    "soft_line": false,
+    "pin_prob": null
    },
    "meta": {
     "calibration_updated_at": null,
@@ -1370,7 +1375,8 @@
    "market_ctx": {
     "bookmakers": 12,
     "spread_pct": 6.0,
-    "soft_line": false
+    "soft_line": false,
+    "pin_prob": null
    },
    "meta": {
     "calibration_updated_at": null,
@@ -1449,7 +1455,8 @@
    "market_ctx": {
     "bookmakers": 12,
     "spread_pct": 6.0,
-    "soft_line": false
+    "soft_line": false,
+    "pin_prob": null
    },
    "meta": {
     "calibration_updated_at": null,

@@ -396,6 +396,27 @@ def _rule_evidence_dry():
     return f"{ev['n_settled']} liquidadas en {ev['n_matches']} partidos (cohorte desde {ev['since']})"
 
 
+@check("Pinnacle: columnas (DDL idempotente) y reporte de referencia (en seco)")
+def _sharp_reference_dry():
+    import json
+    from scripts.update_upcoming_matches import ensure_schema
+    from src.features.pinnacle import PIN_COLS
+    from src.models.sharp_reference import build_sharp_report, format_report, read_rows
+    ensure_schema()                                    # pin_* en upcoming_matches
+    shadow, bets = read_rows()                         # + ALTER de shadow_bets/bets_history
+    rep = build_sharp_report(shadow, bets)             # sin save_state
+    json.dumps(rep, allow_nan=False)                   # lo que guardaría en JSONB
+    pin = pd.read_sql(text(f"""
+        SELECT COUNT(*) AS total, COUNT({PIN_COLS[0]}) AS con_pinnacle
+        FROM upcoming_matches WHERE match_date >= NOW()
+    """), engine).iloc[0]
+    print("\n" + format_report(rep) + "\n")
+    cov = rep["coverage"]
+    return (f"partidos próximos con precio Pinnacle: {int(pin['con_pinnacle'])}/{int(pin['total'])} | "
+            f"shadow con Pinnacle: {cov['shadow_with_pin']}/{cov['shadow']} | cierres válidos: "
+            f"{cov['shadow_valid_close']} shadow, {cov['bets_valid_close']} bets")
+
+
 @check("Liquidación: córners/tarjetas/tiros liquidados SIN datos (solo lectura)")
 def _stat_settlements():
     from src.models.save_bets import audit_stat_settlements

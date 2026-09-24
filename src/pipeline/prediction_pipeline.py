@@ -105,6 +105,7 @@ from src.models.ensemble_model import ensemble_predict
 from src.models.betting_engine import find_value_bets, kelly_stake, calculate_edges
 
 from src.features.market_odds import market_probabilities
+from src.features.pinnacle import pinnacle_prob
 from src.models.bet_ranker import rank_bets
 from src.models.save_bets import save_bets, persist_shadow_bets
 from src.models.bet_filters import bet_quality_filter
@@ -1841,6 +1842,9 @@ def _stage_shadow_sweep(row, T, F, market_probs, market_probs_raw, signed_deviat
             "reason":     "sweep",
             "p_pre_shade": F.post_anchor[_sm] if _in_shade else None,
             "shade_delta": F.shade_raw[_sm] if _in_shade else None,
+            # Referencia sharp (24-sep-26): Pinnacle sin margen al registrar.
+            # Solo mide (src/models/sharp_reference.py).
+            "pin_prob":    pinnacle_prob(_sm, row),
         })
         _sweep_n += 1
     stats['shadow_swept'] += _sweep_n
@@ -2254,6 +2258,9 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation):
                     "bookmakers": bk_count,
                     "spread_pct": spread_pct,
                     "soft_line": bool(soft_line_detected),
+                    # Pinnacle sin margen al apostar (solo mide; su cierre
+                    # queda en bets_history.pin_close_prob)
+                    "pin_prob": pinnacle_prob(bet["market"], row),
                 },
                 "meta": {
                     "generated_at": _dt.now(_tz.utc).isoformat(),

@@ -233,9 +233,15 @@ del kickoff (y después de la apertura): `src/utils/closing_quality.py`. El clos
 recarga de forma dirigida las ligas con kickoff en 10-80 min que tengan bets o
 shadow (`refresh_for_closing`), con topes por corrida: `CLOSING_MAX_LEAGUES_PER_RUN`
 (6 × 3 créditos), `CLOSING_MAX_EVENTS_PER_RUN` (5 × ~7) y `CLOSING_MIN_CREDITS`
-(1500). Los mercados por evento solo se recargan para eventos con **bets** (caros);
-sus candidatas shadow quedan sin cierre válido y el aprendizaje usa el estimado
-agregado para esas familias.
+(1500). Los mercados por evento (btts, DNB, DC, 1T/2T, córners, tarjetas) se recargan
+en **cada** corrida para los eventos con **bets** en ellos. Para los que solo tienen
+candidatas **shadow** en esos mercados, desde el 24-sep-2026 hay **una** recarga por
+evento: si su último enrichment ya cae en la ventana de cierre no paga otra vez. Tiene
+tope propio (`CLOSING_MAX_SHADOW_EVENTS_PER_RUN`, 6) y solo corre con más de
+`CLOSING_SHADOW_MIN_CREDITS` (3000) créditos. Antes quedaban sin cierre válido: el
+24-sep, ambos anotan y empate anulado de Seattle–Salt Lake tenían "cierre" de 12 h
+antes, y así el aprendizaje de esas familias nunca recibía datos. Costo medido: 8-12
+eventos por día de fin de semana × ~5-7 créditos.
 
 **Cuotas de cierre: mismo mercado, misma línea.** Hay UN mapeo mercado → cierre
 (`_closing_odds_for` en `src/models/save_bets.py`) para apuestas y shadow. Si la línea
@@ -341,6 +347,7 @@ fuente de verdad; los archivos de `config/` y `data/` son espejo local.
 | `shadow_reactivation` | `clv_gate.run_shadow_reactivation` | `away_win` y AH con local favorito |
 | `shade_scales` | `shade_learner.run_shade_learning` | **escala de los ajustes manuales** (FLB, tabla, empates) |
 | `rule_evidence` | `rule_evidence.run_rule_evidence` | solo reporte: veredicto de cada regla contra resultados |
+| `sharp_reference` | `sharp_reference.run_sharp_reference` | solo reporte: apuestas y modelo contra Pinnacle |
 
 **Cierres válidos:** todo lo que aprende del CLV (gate, caché de Kelly, reactivación,
 peso del modelo) usa solo cierres descargados cerca del kickoff (§5). Los cierres
@@ -401,6 +408,32 @@ la escala se movió. Push y medias (AH de cuarto, DNB con empate) cuentan en el 
 no en Brier ni calibración. Las candidatas sin datos del partido a los 10 días quedan
 `result = 'stale'`.
 
+### Referencia Pinnacle (¿hay ventaja real?)
+
+Desde el 24-sep-2026 el sistema se mide también contra **Pinnacle**, la casa de
+referencia de los profesionales. Su precio sin margen es el mejor estimador público de
+la probabilidad real, y su cierre es el patrón estándar para saber si alguien tiene
+ventaja. Viene en la misma descarga (región `eu`), sin créditos extra. **Solo mide:**
+no entra en las probabilidades, los filtros ni los stakes.
+
+- **Precios** (`src/features/pinnacle.py`): cada fetch guarda en `upcoming_matches`
+  las cuotas de Pinnacle de 1X2 y más/menos 2.5 (`pin_*`). No usa COALESCE: un fetch
+  con hora escribe el precio tal cual (NULL si ya no cotiza), para que un precio viejo
+  nunca quede con hora nueva. De ahí se derivan exactamente empate anulado
+  (P(local | no empate), la misma definición del modelo) y hándicap ±0.5. Esos
+  mercados son más del 80% de las candidatas; el resto queda sin referencia.
+- **Captura**: cada candidata shadow guarda `pin_prob` al registrarse, y cada apuesta
+  lo guarda en `decision_log.market_ctx`. El closing guarda `pin_close_prob` y
+  `pin_close_at` en ambas tablas (`save_bets.closing_updates`), con **su propia**
+  frescura: el cierre del mercado puede venir de otro fetch (btts, DNB de la API).
+- **Reporte** (`src/models/sharp_reference.py`, weekly, clave `sharp_reference`):
+  valor esperado por unidad contra el cierre sin margen de Pinnacle (apuestas y
+  candidatas; no espera el resultado), cuánto se mueve Pinnacle hacia el modelo entre
+  apertura y cierre, y modelo vs cierre de Pinnacle en Brier. Usa solo cierres válidos
+  (§5), IC 95% robusto por partido y nada con n < 100 o < 30 partidos. Llega a Telegram
+  cada semana en cuanto hay cierres válidos. Las apuestas se miden a la mejor cuota
+  europea; en PlayDoit suele ser menor.
+
 ### Calibración por mercado
 
 `apply_calibration(prob, market, league)` de `src/models/calibration_monitor.py` es el
@@ -445,7 +478,7 @@ python scripts/resolve_pending_bets.py --hours-lag 6 --limit 15
 # Salud y auditoría (sin gasto)
 python scripts/watchdog.py
 python scripts/audit_analyst_calibration.py --days 60
-python scripts/db_smoke_test.py                  # 29 checks contra la base real, solo lectura
+python scripts/db_smoke_test.py                  # 30 checks contra la base real, solo lectura
 python scripts/fix_stat_settlements.py           # en seco; --apply corrige liquidaciones
 
 # Tests
