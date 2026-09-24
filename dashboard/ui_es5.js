@@ -63,7 +63,13 @@ function loadKpis(){
       ['Resueltas', d.resolved, ''],
       ['Pendientes', d.pending, ''],
       ['Brier', d.brier === null ? '—' : d.brier.toFixed(3), ''],
-      ['CLV medio (n=' + d.clv_n + ')', d.clv_avg === null ? '—' : (d.clv_avg >= 0 ? '+' : '') + (d.clv_avg * 100).toFixed(2) + '%', d.clv_avg >= 0 ? 'pos' : 'neg']
+      ['CLV medio (n=' + d.clv_n + ')', d.clv_avg === null ? '—' : (d.clv_avg >= 0 ? '+' : '') + (d.clv_avg * 100).toFixed(2) + '%', d.clv_avg >= 0 ? 'pos' : 'neg'],
+      // Tus apuestas reales: las que registraste con su cuota de PlayDoit
+      ['Apostadas en PlayDoit', d.placed_n ? d.placed_n + ' (' + d.placed_resolved + ' resueltas)' : '— (registra tu cuota)', ''],
+      ['ROI real (tu cuota)', d.real_roi === null || d.real_roi === undefined ? '—' : pct(d.real_roi),
+        d.real_roi === null || d.real_roi === undefined ? '' : (d.real_roi >= 0 ? 'pos' : 'neg')],
+      ['PlayDoit vs mejor cuota', d.slippage_avg === null || d.slippage_avg === undefined ? '—' : pct(d.slippage_avg),
+        d.slippage_avg === null || d.slippage_avg === undefined ? '' : (d.slippage_avg >= 0 ? 'pos' : 'neg')]
     ];
     var html = '';
     for (var i = 0; i < cards.length; i++) {
@@ -102,13 +108,11 @@ function loadBy(){
           options: { indexAxis: 'y', plugins: { legend: { display: false },
             tooltip: { callbacks: { afterLabel: function(c){ return 'n=' + d.n[c.dataIndex] + ' · wr ' + d.wr[c.dataIndex] + '%'; } } } },
             scales: { xAxes: [{ ticks: { callback: function(v){ return v + '%'; } } }] } } });
-        if (dim === 'market') {
-          var sel = document.getElementById('fmarket');
-          for (var j = 0; j < d.labels.length; j++) sel.add(new Option(d.labels[j], d.labels[j]));
-        } else {
-          var sel2 = document.getElementById('fleague');
-          for (var j2 = 0; j2 < d.labels.length; j2++) sel2.add(new Option(d.labels[j2], d.labels[j2]));
-        }
+        // valor = clave cruda ("under_3.5"), texto = nombre visible: la API
+        // filtra por la clave (con el nombre, la tabla quedaba vacía)
+        var keys = d.keys || d.labels;
+        var sel = document.getElementById(dim === 'market' ? 'fmarket' : 'fleague');
+        for (var j = 0; j < d.labels.length; j++) sel.add(new Option(d.labels[j], keys[j]));
       }, function(m){ err(dim + ': ' + m); });
     })(dims[k][0], dims[k][1]);
   }
@@ -154,14 +158,42 @@ function loadBets(){
       var prof = rk === 'pending' ? '' : money(b.profit || 0);
       var cls = rk === 'win' ? 'win' : rk === 'loss' ? 'loss' : rk === 'pending' ? 'pending' : 'push';
       var clv = b.clv === '' ? '—' : (Number(b.clv) * 100).toFixed(1) + '%';
+      var minOdds = b.min_odds === '' || b.min_odds === null ? '—' : Number(b.min_odds).toFixed(2);
       html += '<tr><td>' + mxdate(b.match_date) + '</td><td>' + b.match + '</td><td>' +
               (b.league || '') + '</td><td>' + b.market + '</td><td>' +
-              (b.probability * 100).toFixed(0) + '%</td><td>' + b.odds + '</td><td>' +
+              (b.probability * 100).toFixed(0) + '%</td><td>' + b.odds + '</td><td>≥ ' +
+              minOdds + '</td><td>' + placedCell(b) + '</td><td>' +
               b.stake + 'u</td><td><span class="pill ' + cls + '">' + b.result + '</span></td><td>' +
               prof + '</td><td>' + clv + '</td></tr>';
     }
-    body.innerHTML = html || '<tr><td colspan="10" style="color:var(--muted)">Sin apuestas</td></tr>';
-  }, function(m){ body.innerHTML = '<tr><td colspan="10" style="color:var(--muted)">' + m + '</td></tr>'; });
+    body.innerHTML = html || '<tr><td colspan="12" style="color:var(--muted)">Sin apuestas</td></tr>';
+  }, function(m){ body.innerHTML = '<tr><td colspan="12" style="color:var(--muted)">' + m + '</td></tr>'; });
+}
+
+// ── Tu cuota en PlayDoit (la API no ve ese precio: lo registras tú) ──
+function placedCell(b){
+  var v = (b.odds_placed === '' || b.odds_placed === null || b.odds_placed === undefined) ? '' : b.odds_placed;
+  return '<input id="op' + b.id + '" value="' + v + '" placeholder="—" ' +
+         'style="width:58px;background:var(--card);color:var(--text);border:1px solid #2a3550;border-radius:6px;padding:2px 4px"> ' +
+         '<button onclick="savePlaced(' + b.id + ')" title="Guardar tu cuota (vacío = no la tomaste)" ' +
+         'style="padding:2px 8px;font-size:.75rem">✓</button>';
+}
+
+function savePlaced(id){
+  var el = document.getElementById('op' + id);
+  try {
+    var x = new XMLHttpRequest();
+    x.open('POST', '/api/bets/' + id + '/placed', true);
+    x.setRequestHeader('Content-Type', 'application/json');
+    x.onreadystatechange = function(){
+      if (x.readyState !== 4) return;
+      var d = null;
+      try { d = JSON.parse(x.responseText); } catch(e2) {}
+      if (x.status === 200 && d && d.ok) { el.style.borderColor = '#22c55e'; loadKpis(); }
+      else { el.style.borderColor = '#ef4444'; err('Tu cuota: ' + ((d && d.msg) || ('HTTP ' + x.status))); }
+    };
+    x.send(JSON.stringify({ odds: el.value }));
+  } catch(e) { err('Tu cuota: ' + e.message); }
 }
 
 // ── Goleadores ──
@@ -341,6 +373,23 @@ if (window.Chart && Chart.defaults && Chart.defaults.global) {
   document.head.appendChild(st);
 })();
 
+// Filtros: hasta el 24-sep-26 no tenían evento de cambio — elegir un estado,
+// mercado o liga no hacía nada hasta el siguiente auto-refresco.
+function _onChange(id, fn){ var el = document.getElementById(id); if (el) el.onchange = fn; }
+_onChange('fstatus', loadBets);
+_onChange('fmarket', loadBets);
+_onChange('fleague', loadBets);
+_onChange('frefresh', function(){
+  var mins = parseInt(document.getElementById('frefresh').value, 10) || 0;
+  _storeSet('refreshMins', String(mins));
+  setRefresh(mins);
+});
+(function(){
+  var saved = _storeGet('refreshMins', '5');
+  var sel = document.getElementById('frefresh');
+  if (sel) sel.value = saved;
+})();
+
 loadVersion();
 loadKpis();
 loadEquity();
@@ -351,4 +400,4 @@ loadBets();
 loadScorers();
 loadGh();
 loadNarrativeSec();
-setRefresh(5);   // auto-refresco de KPIs/tablas cada 5 min
+setRefresh(parseInt(_storeGet('refreshMins', '5'), 10) || 0);   // auto-refresco (5 min por defecto)

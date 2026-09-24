@@ -40,11 +40,13 @@ sys.path.append(str(Path(__file__).parent.parent))
 from config.database import engine
 from src.utils.team_normalizer import normalize_team
 from src.utils.log import get_logger
+from src.utils.min_odds import MIN_EDGE_TO_PLACE, min_odds
 
 log = get_logger(__name__)
 
-# Edge mínimo para MANTENER una bet cuya odd se movió en contra
-KEEP_EDGE = 0.02
+# Edge mínimo para MANTENER una bet cuya odd se movió en contra — el mismo
+# umbral de la "cuota mínima" que se muestra para apostar en PlayDoit
+KEEP_EDGE = MIN_EDGE_TO_PLACE
 
 
 def _fresh_odds_for(result, market: str):
@@ -349,8 +351,13 @@ def _format_confirmations(rows: list[dict]) -> str:
         lines.append(f"✅ {match_name(r['match'])}  ({hora})")
         lines.append(f"   {market_name(r['market'])} @ {r['odds']} · "
                      f"{r['stake']}u · edge {edge:+.0%}")
+        floor = min_odds(r.get("probability"))
+        if floor:
+            lines.append(f"   🟢 PlayDoit: apuesta solo si paga ≥ {floor:.2f}")
     lines.append("")
-    lines.append("<i>Valor final — ya no cambia antes del kickoff</i>")
+    lines.append("<i>Valor final — ya no cambia antes del kickoff. La cuota de "
+                 "arriba es la mejor entre casas europeas: en PlayDoit, si paga "
+                 "menos que la mínima, ya no hay valor.</i>")
     return "\n".join(lines)
 
 

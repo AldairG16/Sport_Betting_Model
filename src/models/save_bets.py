@@ -272,6 +272,10 @@ def record_placed_odds(match: str, market: str, match_date, odds_placed: float) 
     en la ejecución.
 
     Returns: número de rows actualizadas (0 si la bet no existe).
+
+    Compara por DÍA: match_date es un TIMESTAMP con hora de kickoff y se
+    comparaba contra 'YYYY-MM-DD' (medianoche) — nunca coincidía (24-sep-26).
+    El dashboard registra por id (POST /api/bets/<id>/placed).
     """
     with engine.begin() as conn:
         result = conn.execute(text("""
@@ -279,7 +283,7 @@ def record_placed_odds(match: str, market: str, match_date, odds_placed: float) 
             SET odds_placed = :odds_placed
             WHERE match = :match
               AND market = :market
-              AND match_date = :match_date
+              AND CAST(match_date AS date) = CAST(:match_date AS date)
         """), {
             "match": match, "market": market,
             "match_date": str(match_date)[:10], "odds_placed": odds_placed,
