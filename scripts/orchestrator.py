@@ -984,6 +984,8 @@ def main():
         logger.log(f"\nFIN: {end.strftime('%Y-%m-%d %H:%M:%S')}  ({elapsed:.1f}s)")
         logger.log(f"Log guardado: {logger.log_file}")
 
+        _record_run(args.mode, len(logger.failed_steps), elapsed)
+
         # ── Health check: resumen de salud del ciclo ──────────────────────
         # Solo para modos que generan apuestas (morning, evening, full).
         # IMPORTANTE: el mensaje muestra DOS números:
@@ -1062,6 +1064,18 @@ def main():
         print(f"::error::{len(logger.failed_steps)} de {logger.steps_total} pasos "
               f"fallaron en modo {args.mode}: {', '.join(logger.failed_steps)}")
         sys.exit(1)
+
+
+def _record_run(mode: str, failed: int, seconds: float) -> None:
+    """Registro de la corrida (24-sep-26): el watchdog avisa si el closing o
+    el weekly dejan de correr (src/utils/pipeline_runs.py). Warning y no
+    error: que falle el registro no es un fallo del pipeline."""
+    try:
+        from config.database import engine as _engine
+        from src.utils.pipeline_runs import record_run
+        record_run(_engine, mode, failed, seconds)
+    except Exception as e:
+        log.warning(f"⚠️  No se pudo registrar la corrida: {type(e).__name__}: {e}")
 
 
 def _report_tolerated_errors(mode: str) -> None:

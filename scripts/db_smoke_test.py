@@ -417,6 +417,18 @@ def _sharp_reference_dry():
             f"{cov['shadow_valid_close']} shadow, {cov['bets_valid_close']} bets")
 
 
+@check("Watchdog: registro de corridas y ritmo del closing/weekly (en seco)")
+def _scheduled_runs_dry():
+    from src.utils.pipeline_runs import check_scheduled_runs
+    issues = check_scheduled_runs(engine)              # crea pipeline_runs si falta
+    df = pd.read_sql(text("""
+        SELECT mode, COUNT(*) AS n, MAX(ran_at) AS ultima
+        FROM pipeline_runs GROUP BY mode ORDER BY mode
+    """), engine)
+    runs = ", ".join(f"{r['mode']}={int(r['n'])}" for _, r in df.iterrows()) or "sin corridas aún"
+    return f"{runs} | alertas: {len(issues)}" + (f" ({issues[0].splitlines()[0]})" if issues else "")
+
+
 @check("Liquidación: córners/tarjetas/tiros liquidados SIN datos (solo lectura)")
 def _stat_settlements():
     from src.models.save_bets import audit_stat_settlements
