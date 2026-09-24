@@ -8,6 +8,8 @@ Detecta silenciosamente y alerta SOLO si algo está mal:
   2. upcoming_matches sin actualizar en >26h (morning/evening no corrió)
   3. Muchas bets bloqueadas en 'pending' viejo sin resolver (resolución rota)
   4. Analyst heartbeat con gap largo durante ventana activa
+  5-6. Sin partidos cargados / sin apuestas nuevas en una semana
+  7-8. Closing parado o irregular, weekly parado (src/utils/pipeline_runs.py)
 
 Si todo está bien → no envía nada. Silencio = salud.
 """
@@ -239,6 +241,22 @@ def run_watchdog():
             print("  ✅ Se siguen registrando apuestas")
     except Exception as e:
         issues.append(f"⚠️ No se pudo verificar apuestas recientes: {e}")
+
+    # ── CHECK 7-8: closing y weekly, que dispara un servicio externo ─────────
+    # CHECK 2 solo ve morning/evening. Si cron-job.org deja de disparar el
+    # closing (cada 30 min) o el weekly (lunes), nada falla: simplemente no
+    # corren, y se pierden las confirmaciones antes de cada partido y el
+    # aprendizaje. Cada corrida deja una fila en pipeline_runs (24-sep-26).
+    try:
+        from src.utils.pipeline_runs import check_scheduled_runs
+        run_issues = check_scheduled_runs(engine, now_utc)
+        issues.extend(run_issues)
+        if not run_issues:
+            print("  ✅ Closing y weekly corren a su ritmo")
+    except Exception as e:
+        import html
+        issues.append(f"⚠️ No se pudo verificar el closing ni el weekly: "
+                      f"{html.escape(str(e)[:200])}")
 
     # ── Resultado ─────────────────────────────────────────────────────────────
     if not issues:

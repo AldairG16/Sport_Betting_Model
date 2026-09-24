@@ -170,8 +170,9 @@ resolución; si está resuelta, ya está. Para «¿por qué no habló el analist
 
 ## 4. Watchdog
 
-`scripts/watchdog.py`, cron `17 0,6,12,18 * * *`. Solo lee, no escribe, no gasta
-créditos ni tokens. **Silencio = salud**: solo manda Telegram si algo va mal.
+`scripts/watchdog.py`, cron `17 0,6,12,18 * * *`. Solo lee (y crea `pipeline_runs` si
+falta), no gasta créditos ni tokens. **Silencio = salud**: solo manda Telegram si algo
+va mal.
 
 | Check | Qué mira |
 |---|---|
@@ -181,10 +182,23 @@ créditos ni tokens. **Silencio = salud**: solo manda Telegram si algo va mal.
 | 4 | Gap del `analyst_heartbeat` — **se omite** si `PRE_KICKOFF_ANALYST_ENABLED=false`. |
 | 5 | Hay partidos futuros cargados. |
 | 6 | Antigüedad de la apuesta más reciente (umbral `DIAS_SIN_BETS_ALERTA`, 7 días). |
+| 7 | El **closing** corre: alerta si la última corrida tiene más de 2 h, o si hubo menos de 6 en las últimas 6 h (se esperan ~12). |
+| 8 | El **weekly** corre: alerta si la última corrida tiene más de 8 días. |
 
 El 2 mide **actividad** y se deja engañar: el cleanup de `update_all()` toca la tabla
 al borrar filas viejas aunque no entre ninguna nueva. El 5 y el 6 miden **producto**,
 y son los que detectan un apagón de datos.
+
+El 7 y el 8 existen desde el 24-sep-2026 porque closing y weekly los dispara
+cron-job.org: si ese servicio deja de disparar, nada falla, simplemente no corren. Sin
+closing no llegan las confirmaciones antes de cada partido y el aprendizaje no recibe
+cierres; sin weekly el sistema no aprende. Cada corrida del orquestador deja una fila en
+`pipeline_runs` (modo, hora, pasos fallidos, duración; se conservan 60 días), escrita por
+`src/utils/pipeline_runs.py`. El conteo de 6 h importa porque el cron propio de GitHub
+sigue disparando el closing a ratos: una corrida reciente no prueba que el disparo cada
+30 min siga vivo. Con menos de 6 h de historial (recién instalado) el conteo no opina.
+Mientras el weekly no tenga su primera fila, sirve de respaldo la hora de
+`model_state.anchor_weights`.
 
 ---
 
@@ -478,7 +492,7 @@ python scripts/resolve_pending_bets.py --hours-lag 6 --limit 15
 # Salud y auditoría (sin gasto)
 python scripts/watchdog.py
 python scripts/audit_analyst_calibration.py --days 60
-python scripts/db_smoke_test.py                  # 30 checks contra la base real, solo lectura
+python scripts/db_smoke_test.py                  # 31 checks contra la base real, solo lectura
 python scripts/fix_stat_settlements.py           # en seco; --apply corrige liquidaciones
 
 # Tests
