@@ -10,8 +10,9 @@ Uso:
 
  Seguridad:
     - Solo escucha en 127.0.0.1 (nadie fuera de esta PC puede verlo).
-    - Solo lectura, con UNA excepción: registrar la cuota a la que tomaste
-      una apuesta (bets_history.odds_placed), y solo con cuerpo JSON.
+    - Solo lectura: no escribe en la base. (v1.4.0 pedía teclear la cuota
+      tomada en PlayDoit; se quitó en v1.5.0 — el dueño no quiere pasos
+      manuales.)
     - DB_URL se lee de .env / entorno — nunca va en el código.
 """
 
@@ -36,7 +37,8 @@ from config.database import DATABASE_URL  # noqa: E402
 # pool_recycle la renueva antes de que el servidor la corte.
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=240)  # noqa: E402
 from dashboard.display import league_name, market_name, match_name, result_label  # noqa: E402
-from src.utils.min_odds import min_odds  # noqa: E402
+from src.utils.min_odds import (HOW_TO_READ, fmt_american, min_american,  # noqa: E402
+                                rule_examples, to_american)
 
 app = Flask(__name__)
 
@@ -164,35 +166,24 @@ def _profit(df: pd.DataFrame) -> pd.Series:
     return pd.to_numeric(df["profit"], errors="coerce").fillna(0.0)
 
 
-def _real_profit(df: pd.DataFrame) -> pd.Series:
-    """Ganancia a TU cuota (odds_placed, la que tomaste en PlayDoit), no a
-    la mejor cuota europea que registra el sistema."""
-    op = pd.to_numeric(df["odds_placed"], errors="coerce")
-    st = pd.to_numeric(df["stake"], errors="coerce").fillna(0.0)
-    r = df["result"]
-    win = st * (op - 1)
-    return (win.where(r == "win", 0.0) + (win / 2).where(r == "half_win", 0.0)
-            - st.where(r == "loss", 0.0) - (st / 2).where(r == "half_loss", 0.0))
+def _odds_us(odds) -> str:
+    """Cuota decimal guardada → americana (+128 / -140), como la ve PlayDoit."""
+    return fmt_american(to_american(odds))
 
 
-def _placed_stats(df: pd.DataFrame) -> dict:
-    """Tus apuestas reales (las que registraste con su cuota de PlayDoit)."""
-    if "odds_placed" not in df.columns:
-        df = df.assign(odds_placed=None)
-    op = pd.to_numeric(df["odds_placed"], errors="coerce")
-    placed = df[op.notna()]
-    res = placed[placed["result"].isin(RESOLVED)]
-    staked = float(pd.to_numeric(res["stake"], errors="coerce").sum())
-    real = float(_real_profit(res).sum()) if len(res) else 0.0
-    slip = (op[op.notna()] / pd.to_numeric(placed["odds"], errors="coerce") - 1)
-    return {
-        "placed_n": int(len(placed)),
-        "placed_resolved": int(len(res)),
-        "real_profit": round(real, 2) if len(res) else None,
-        "real_roi": round(real / staked, 3) if staked > 0 else None,
-        # cuánto paga PlayDoit frente a la mejor cuota europea (negativo = menos)
-        "slippage_avg": round(float(slip.mean()), 4) if len(slip) else None,
-    }
+def _playdoit_min(prob) -> str:
+    """Peor cuota americana que todavía vale la pena en PlayDoit; "" si no hay."""
+    a = min_american(prob)
+    return "" if a is None else fmt_american(a)
+
+
+def _playdoit_hint(prob) -> str:
+    """Ejemplo para el tooltip: un precio que sirve y uno que ya no."""
+    a = min_american(prob)
+    if a is None:
+        return ""
+    better, worse = rule_examples(a)
+    return f"Sirve {fmt_american(better)}" + (f"; {fmt_american(worse)} ya no" if worse is not None else "")
 
 
 @app.route("/api/kpis")
@@ -201,7 +192,7 @@ def kpis():
     # recién reactivado, bets nuevas aún pendientes), caer al histórico
     # completo para no mostrar un dashboard vacío.
     df = _q("""
-        SELECT result, stake, odds, probability, clv, match_date, profit, odds_placed
+        SELECT result, stake, odds, probability, clv, match_date, profit
         FROM bets_history
         WHERE match_date >= NOW() - INTERVAL '90 days'
     """)
@@ -209,7 +200,7 @@ def kpis():
     has_resolved = (not df.empty) and df["result"].isin(RESOLVED).any()
     if not has_resolved:
         df = _q("""
-            SELECT result, stake, odds, probability, clv, match_date, profit, odds_placed
+            SELECT result, stake, odds, probability, clv, match_date, profit
             FROM bets_history
         """)
         window = "histórico"
@@ -245,7 +236,6 @@ def kpis():
         "brier": round(brier, 4) if brier else None,
         "clv_avg": round(float(clv.mean()), 4) if len(clv) else None,
         "clv_n": int(len(clv)),
-        **_placed_stats(df),
     })
 
 
@@ -295,7 +285,7 @@ def bets():
 
     df = _q(f"""
         SELECT id, match_date, match, league, market, probability, odds,
-               stake, result, profit, closing_odds, clv, odds_placed
+               stake, result, profit, closing_odds, clv
         FROM bets_history
         WHERE {' AND '.join(where)}
         ORDER BY match_date DESC
@@ -304,8 +294,11 @@ def bets():
     if df.empty:
         return _no_data()
 
-    # cuota mínima para que en PlayDoit todavía valga la pena (src/utils/min_odds)
-    df["min_odds"] = df["probability"].map(min_odds)
+    # En formato americano, como los muestra PlayDoit (src/utils/min_odds):
+    # la mejor cuota europea (referencia) y la peor que todavía vale la pena.
+    df["odds_us"] = df["odds"].map(_odds_us)
+    df["min_us"] = df["probability"].map(_playdoit_min)
+    df["min_hint"] = df["probability"].map(_playdoit_hint)
     for col, fn in (("match", match_name), ("league", league_name), ("market", market_name)):
         if col in df.columns:
             df[col] = df[col].apply(lambda v: fn(v) if v else v)
@@ -317,37 +310,6 @@ def bets():
         "ok": True,
         "bets": df.fillna("").to_dict(orient="records"),
     })
-
-
-@app.route("/api/bets/<int:bet_id>/placed", methods=["POST"])
-def bet_placed(bet_id):
-    """
-    Registra la cuota a la que TOMASTE la apuesta (PlayDoit no está en The
-    Odds API: el sistema no ve su precio). Vacío = no la tomaste. Única
-    escritura del dashboard: solo odds_placed de esa bet. Exige cuerpo JSON:
-    un formulario de otro sitio no puede disparar la escritura.
-    """
-    if not request.is_json:
-        return jsonify({"ok": False, "msg": "se espera JSON"}), 415
-    raw = (request.get_json(silent=True) or {}).get("odds")
-    odds = None
-    if raw not in (None, ""):
-        try:
-            odds = round(float(str(raw).strip().replace(",", ".")), 3)
-        except ValueError:
-            return jsonify({"ok": False, "msg": "cuota inválida"}), 400
-        if not 1.01 <= odds <= 100:
-            return jsonify({"ok": False, "msg": "cuota fuera de rango (1.01–100)"}), 400
-    try:
-        with engine.begin() as conn:
-            r = conn.execute(text("UPDATE bets_history SET odds_placed = :o WHERE id = :id"),
-                             {"o": odds, "id": bet_id})
-    except Exception as e:
-        app.logger.warning(f"odds_placed falló: {e}")
-        return jsonify({"ok": False, "msg": DB_DOWN}), 503
-    if r.rowcount != 1:
-        return jsonify({"ok": False, "msg": "apuesta no encontrada"}), 404
-    return jsonify({"ok": True, "odds_placed": odds})
 
 
 @app.route("/api/by/<dim>")
@@ -408,7 +370,7 @@ def clv_scatter():
 def scorers():
     df = _q("""
         SELECT match_date, match, league, player, team,
-               probability, fair_odds, odds_placed, result
+               probability, fair_odds, result
         FROM goalscorer_picks
         WHERE match_date >= NOW() - INTERVAL '7 days'
         ORDER BY match_date DESC
@@ -416,6 +378,7 @@ def scorers():
     """)
     if df.empty:
         return _no_data()
+    df["fair_us"] = df["fair_odds"].map(_odds_us)
     if "league" in df.columns:
         df["league"] = df["league"].apply(lambda v: league_name(v) if v else v)
     if "match" in df.columns:
@@ -599,15 +562,15 @@ PAGE = """<!DOCTYPE html>
     <select id="frefresh" title="Auto-refresco de datos"><option value="0">Auto-refresco: off</option><option value="5" selected>Auto-refresco: 5 min</option><option value="15">15 min</option><option value="30">30 min</option></select>
     <button onclick="exportCSV()" style="font-size:.75rem;padding:6px 10px">⬇️ CSV</button>
   </div>
-  <div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Partido</th><th>Liga</th><th>Mercado</th><th>Prob</th><th>Odd</th><th title="En PlayDoit, apuesta solo si paga al menos esto">Mín. PlayDoit</th><th title="La cuota a la que la tomaste. Vacío = no la tomaste">Tu cuota</th><th>Stake</th><th>Resultado</th><th>Profit</th><th>CLV</th></tr></thead>
-  <tbody id="betsbody"><tr><td colspan="12" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
-  <div style="color:var(--muted);font-size:.75rem;margin-top:6px">Odd = mejor cuota entre casas europeas. En PlayDoit apuesta solo si paga al menos la <b>Mín.</b>; al apostar, escribe tu cuota y pulsa ✓ para medir tu ROI real.</div>
+  <div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Partido</th><th>Liga</th><th>Mercado</th><th>Prob</th><th title="La más alta entre casas europeas: solo referencia">Mejor cuota</th><th title="En PlayDoit apuesta solo si paga esto o mejor">PlayDoit</th><th>Stake</th><th>Resultado</th><th>Profit</th><th>CLV</th></tr></thead>
+  <tbody id="betsbody"><tr><td colspan="11" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
+  <div style="color:var(--muted);font-size:.75rem;margin-top:6px">Cuotas en formato americano, como las muestra PlayDoit. En PlayDoit apuesta solo si paga el mínimo de la columna <b>PlayDoit</b> o mejor. __HOW_TO_READ__</div>
   <button onclick="exportCSV()" style="margin-top:8px;font-size:.75rem">⬇️ Exportar CSV</button>
 </div>
 <div class="section"><h2>⚽ Goleadores (anytime scorer · papel)</h2>
-  <div class="tablewrap" style="max-height:300px"><table><thead><tr><th>Fecha</th><th>Partido</th><th>Jugador</th><th>Equipo</th><th>P(anota)</th><th>Fair odd</th><th>Odd real</th><th>Resultado</th></tr></thead>
-  <tbody id="scorersbody"><tr><td colspan="8" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
-  <div style="color:var(--muted);font-size:.75rem;margin-top:6px">Fair odd = 1/P(modelo). Si encuentras cuota real MEJOR que la fair, hay valor — regístrala en la DB (odds_placed).</div>
+  <div class="tablewrap" style="max-height:300px"><table><thead><tr><th>Fecha</th><th>Partido</th><th>Jugador</th><th>Equipo</th><th>P(anota)</th><th>Cuota justa</th><th>Resultado</th></tr></thead>
+  <tbody id="scorersbody"><tr><td colspan="7" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
+  <div style="color:var(--muted);font-size:.75rem;margin-top:6px">Cuota justa = la que corresponde a la probabilidad del modelo. Si PlayDoit paga más que la justa, hay valor.</div>
 </div>
 <div class="section"><h2>🎮 Panel de control (GitHub Actions)</h2>
   <div class="controls">
@@ -626,7 +589,7 @@ button { background:#14351f; color:var(--green); border:1px solid #22c55e44; bor
          padding:8px 14px; cursor:pointer; font-size:.85rem; }
 button:hover { background:#1a4527; }
 </style>
-<script src="/ui_es5.js"></script></body></html>"""
+<script src="/ui_es5.js"></script></body></html>""".replace("__HOW_TO_READ__", HOW_TO_READ)
 
 
 @app.route("/")

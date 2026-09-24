@@ -36,7 +36,7 @@ from config.settings import (
     TELEGRAM_CHAT_ID_PREKICKOFF,
     USER_TIMEZONE,
 )
-from src.utils.min_odds import min_odds
+from src.utils.min_odds import HOW_TO_READ, fmt_american, min_american, playdoit_line, to_american
 
 
 # ── Helpers de fecha en hora local del usuario ────────────────────────────────
@@ -283,44 +283,6 @@ def _is_suspicious(bet) -> bool:
     return False
 
 
-def _format_bet_line(i: int, bet, suspicious: bool) -> str:
-    market_label = _get_market_label(bet.get("market", ""), bet.get("match", ""))
-    league_label = LEAGUE_LABELS.get(bet.get("league", ""), bet.get("league", ""))
-    edge_pct     = round(float(bet.get("edge", 0)) * 100, 1)
-    prob_pct     = round(float(bet.get("probability", 0)) * 100, 1)
-    odds         = round(float(bet.get("odds", 0)), 2)
-    stake        = round(float(bet.get("stake", 0)), 2)
-
-    date_match = ""
-    if "match_date" in bet and bet["match_date"]:
-        try:
-            from datetime import timezone as _tz
-            dt = pd.to_datetime(bet["match_date"])
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=_tz.utc)
-            dt_local = dt.astimezone(ZoneInfo(USER_TIMEZONE))
-            date_match = dt_local.strftime("%d/%m %H:%M")
-        except Exception:
-            pass
-
-    icon = "⚠️" if suspicious else "✅"
-
-    # La cuota de arriba es la MEJOR entre ~20 casas europeas; PlayDoit (donde
-    # apuesta el dueño) no está en la API y casi nunca la iguala. La mínima
-    # dice hasta dónde puede bajar y todavía valer la pena (src/utils/min_odds).
-    floor = min_odds(bet.get("probability"))
-    floor_line = f"\n   🟢 PlayDoit: apuesta solo si paga ≥ {floor:.2f}" if floor else ""
-
-    return (
-        f"{icon} <b>{i}. {bet.get('match', '')}</b>\n"
-        f"   {league_label}\n"
-        f"   🎯 {market_label}  @{odds}\n"
-        f"   📈 Edge: +{edge_pct}%  |  Prob: {prob_pct}%\n"
-        f"   💰 Stake: {stake}u  |  📅 {date_match}"
-        f"{floor_line}"
-    )
-
-
 # ── Mercados que expresan la misma opinion por lado ──────────────────────────
 _RESULT_GROUPS = [
     ("away_win", "dnb_away"),   # visitante gana  vs  visitante no pierde
@@ -455,7 +417,6 @@ def _build_bets_by_league(bets: pd.DataFrame, header: str) -> tuple:
             market_label = _get_market_label(bet.get("market", ""), bet.get("match", ""))
             edge_pct     = round(float(bet.get("edge", 0)) * 100, 1)
             prob_pct     = round(float(bet.get("probability", 0)) * 100, 1)
-            odds_val     = round(float(bet.get("odds", 0)), 2)
             stake_val    = round(float(bet.get("stake", 0)), 2)
 
             date_match = ""
@@ -469,9 +430,16 @@ def _build_bets_by_league(bets: pd.DataFrame, header: str) -> tuple:
                 except Exception:
                     pass
 
+            # La cuota guardada es la MEJOR entre casas europeas; el dueño
+            # apuesta en PlayDoit, que ninguna API ve. Lo que le sirve es
+            # hasta dónde puede bajar PlayDoit y todavía valer la pena, en el
+            # formato americano en que PlayDoit la muestra (24-sep-26).
+            rule = playdoit_line(bet.get("probability"))
+            price = rule or f"Mejor cuota: {fmt_american(to_american(bet.get('odds')))}"
             lines.append(
                 f"✅ {bet_num}. <b>{bet.get('match', '')}</b>  {date_match}\n"
-                f"   🎯 {market_label}  @{odds_val}\n"
+                f"   🎯 {market_label}\n"
+                f"   {price}\n"
                 f"   📈 Edge: +{edge_pct}%  |  Prob: {prob_pct}%  |  💰 {stake_val}u"
             )
             bet_num += 1
@@ -481,6 +449,7 @@ def _build_bets_by_league(bets: pd.DataFrame, header: str) -> tuple:
     total = bet_num - 1
     lines += [
         f"<i>Total: {total} apuesta{'s' if total != 1 else ''} confiable{'s' if total != 1 else ''}</i>",
+        f"<i>{HOW_TO_READ}</i>",
         "⚠️ <i>Modelo estadistico — apuesta con responsabilidad.</i>",
     ]
 
@@ -613,10 +582,7 @@ def _format_paper_bets_section(target_date, days_ahead: int = 0) -> str:
                 prob_pct = round(float(r.get("probability", 0)) * 100, 1)
             except Exception:
                 prob_pct = 0.0
-            try:
-                odds_val = round(float(r.get("odds", 0)), 2)
-            except Exception:
-                odds_val = 0.0
+            odds_us = fmt_american(to_american(r.get("odds")))
             try:
                 stake_val = round(float(r.get("stake", 0)), 2)
             except Exception:
@@ -636,7 +602,7 @@ def _format_paper_bets_section(target_date, days_ahead: int = 0) -> str:
 
             lines.append(
                 f"📝 {bet_num}. <b>{r.get('match', '')}</b>  {date_match}\n"
-                f"   🎯 {market_label}  @{odds_val}\n"
+                f"   🎯 {market_label}  @{odds_us}\n"
                 f"   📈 Edge: +{edge_pct}%  |  Prob: {prob_pct}%  |  💰 {stake_val}u <i>(simulada)</i>"
             )
             bet_num += 1
@@ -937,7 +903,7 @@ def _format_single_match_message(match: str, verdicts_for_match: list) -> str:
         # Si es el best y hay >1 mercado, marcar con estrella
         header_prefix = "⭐ " if (v.get("is_best") and n_markets > 1) else ""
         lines.append(f"{header_prefix}{icon} <b>{verdict}</b>  {stars}")
-        lines.append(f"🎯 {market_label} @{odds_val:.2f}  (modelo +{edge_pct:.1f}%)")
+        lines.append(f"🎯 {market_label} @{fmt_american(to_american(odds_val))}  (modelo +{edge_pct:.1f}%)")
         if prob_pct > 0:
             lines.append(f"📊 Probabilidad estimada: <b>{prob_pct}%</b>  "
                          f"(cuota implica {implied_pct:.0f}%)")
@@ -1228,6 +1194,16 @@ def send_weekly_report():
 # ============================================================
 # RESUMEN NOCTURNO
 # ============================================================
+def _tomorrow_line(b) -> str:
+    """Línea del avance de mañana: el mínimo para PlayDoit en formato
+    americano, no la cuota decimal europea ni la clave cruda del mercado."""
+    label = _get_market_label(str(b.get("market") or ""), str(b.get("match") or ""))
+    a = min_american(b.get("probability"))
+    price = (f"PlayDoit {fmt_american(a)} o mejor" if a is not None
+             else f"mejor cuota {fmt_american(to_american(b.get('odds')))}")
+    return f"  • {b.get('match', '')} — {label} ({price})"
+
+
 def send_evening_summary(target_date=None):
     """
     Envia resumen de resultados del día a Telegram (ciclo 21:00 MX).
@@ -1393,7 +1369,7 @@ def send_evening_summary(target_date=None):
     try:
         tomorrow = today + timedelta(days=1)
         bets_tom = pd.read_sql(f"""
-            SELECT match, market, odds, stake, edge
+            SELECT match, market, odds, probability, stake, edge
             FROM bets_history
             WHERE {_tz_date_filter('match_date', tomorrow)}
               AND result = 'pending'
@@ -1403,7 +1379,7 @@ def send_evening_summary(target_date=None):
         lines.append(f"🌙 <b>MAÑANA ({tomorrow.strftime('%d/%m')})</b>: "
                      f"{len(bets_tom)} apuestas pendientes")
         for _, b in bets_tom.head(3).iterrows():
-            lines.append(f"  • {b['match']} — {b['market']} @{b['odds']}")
+            lines.append(_tomorrow_line(b))
         if len(bets_tom) > 3:
             lines.append(f"  … y {len(bets_tom) - 3} más (detalles en el morning)")
     except Exception as e:

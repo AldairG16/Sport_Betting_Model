@@ -37,7 +37,7 @@ class TestFormatConfirmations:
         msg = _format_confirmations(ROWS)
         assert "APUESTAS CONFIRMADAS" in msg
         assert "Tottenham vs Everton" in msg  # match_name capitaliza
-        assert "2.06" in msg
+        assert "+106" in msg and "2.06" not in msg   # americano, como PlayDoit
         assert "0.16u" in msg
         assert "Valor final" in msg
 
@@ -51,6 +51,12 @@ class TestFormatConfirmations:
         # 19:30 UTC = 13:30 America/Mexico_City
         assert "13:30" in msg
         assert "15:00" in msg                  # 21:00 UTC → 15:00 MX
+
+    def test_naive_utc_from_the_database(self):
+        """La base guarda UTC sin zona: 19:30 → 13:30 en México, sin
+        depender de la zona horaria del servidor que corre el closing."""
+        msg = _format_confirmations([dict(ROWS[0], match_date="2026-09-15 19:30:00")])
+        assert "(13:30)" in msg
 
     def test_empty_rows_returns_header_only(self):
         msg = _format_confirmations([])

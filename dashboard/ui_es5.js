@@ -63,13 +63,7 @@ function loadKpis(){
       ['Resueltas', d.resolved, ''],
       ['Pendientes', d.pending, ''],
       ['Brier', d.brier === null ? '—' : d.brier.toFixed(3), ''],
-      ['CLV medio (n=' + d.clv_n + ')', d.clv_avg === null ? '—' : (d.clv_avg >= 0 ? '+' : '') + (d.clv_avg * 100).toFixed(2) + '%', d.clv_avg >= 0 ? 'pos' : 'neg'],
-      // Tus apuestas reales: las que registraste con su cuota de PlayDoit
-      ['Apostadas en PlayDoit', d.placed_n ? d.placed_n + ' (' + d.placed_resolved + ' resueltas)' : '— (registra tu cuota)', ''],
-      ['ROI real (tu cuota)', d.real_roi === null || d.real_roi === undefined ? '—' : pct(d.real_roi),
-        d.real_roi === null || d.real_roi === undefined ? '' : (d.real_roi >= 0 ? 'pos' : 'neg')],
-      ['PlayDoit vs mejor cuota', d.slippage_avg === null || d.slippage_avg === undefined ? '—' : pct(d.slippage_avg),
-        d.slippage_avg === null || d.slippage_avg === undefined ? '' : (d.slippage_avg >= 0 ? 'pos' : 'neg')]
+      ['CLV medio (n=' + d.clv_n + ')', d.clv_avg === null ? '—' : (d.clv_avg >= 0 ? '+' : '') + (d.clv_avg * 100).toFixed(2) + '%', d.clv_avg >= 0 ? 'pos' : 'neg']
     ];
     var html = '';
     for (var i = 0; i < cards.length; i++) {
@@ -158,42 +152,18 @@ function loadBets(){
       var prof = rk === 'pending' ? '' : money(b.profit || 0);
       var cls = rk === 'win' ? 'win' : rk === 'loss' ? 'loss' : rk === 'pending' ? 'pending' : 'push';
       var clv = b.clv === '' ? '—' : (Number(b.clv) * 100).toFixed(1) + '%';
-      var minOdds = b.min_odds === '' || b.min_odds === null ? '—' : Number(b.min_odds).toFixed(2);
+      // Formato americano, como PlayDoit (+128 / -140). La mejor cuota
+      // europea es solo referencia; lo que decide es el mínimo de PlayDoit.
+      var minUs = b.min_us ? '<span title="' + (b.min_hint || '') + '">' + b.min_us + ' o mejor</span>' : '—';
       html += '<tr><td>' + mxdate(b.match_date) + '</td><td>' + b.match + '</td><td>' +
               (b.league || '') + '</td><td>' + b.market + '</td><td>' +
-              (b.probability * 100).toFixed(0) + '%</td><td>' + b.odds + '</td><td>≥ ' +
-              minOdds + '</td><td>' + placedCell(b) + '</td><td>' +
+              (b.probability * 100).toFixed(0) + '%</td><td title="decimal ' + b.odds + '">' +
+              (b.odds_us || '—') + '</td><td>' + minUs + '</td><td>' +
               b.stake + 'u</td><td><span class="pill ' + cls + '">' + b.result + '</span></td><td>' +
               prof + '</td><td>' + clv + '</td></tr>';
     }
-    body.innerHTML = html || '<tr><td colspan="12" style="color:var(--muted)">Sin apuestas</td></tr>';
-  }, function(m){ body.innerHTML = '<tr><td colspan="12" style="color:var(--muted)">' + m + '</td></tr>'; });
-}
-
-// ── Tu cuota en PlayDoit (la API no ve ese precio: lo registras tú) ──
-function placedCell(b){
-  var v = (b.odds_placed === '' || b.odds_placed === null || b.odds_placed === undefined) ? '' : b.odds_placed;
-  return '<input id="op' + b.id + '" value="' + v + '" placeholder="—" ' +
-         'style="width:58px;background:var(--card);color:var(--text);border:1px solid #2a3550;border-radius:6px;padding:2px 4px"> ' +
-         '<button onclick="savePlaced(' + b.id + ')" title="Guardar tu cuota (vacío = no la tomaste)" ' +
-         'style="padding:2px 8px;font-size:.75rem">✓</button>';
-}
-
-function savePlaced(id){
-  var el = document.getElementById('op' + id);
-  try {
-    var x = new XMLHttpRequest();
-    x.open('POST', '/api/bets/' + id + '/placed', true);
-    x.setRequestHeader('Content-Type', 'application/json');
-    x.onreadystatechange = function(){
-      if (x.readyState !== 4) return;
-      var d = null;
-      try { d = JSON.parse(x.responseText); } catch(e2) {}
-      if (x.status === 200 && d && d.ok) { el.style.borderColor = '#22c55e'; loadKpis(); }
-      else { el.style.borderColor = '#ef4444'; err('Tu cuota: ' + ((d && d.msg) || ('HTTP ' + x.status))); }
-    };
-    x.send(JSON.stringify({ odds: el.value }));
-  } catch(e) { err('Tu cuota: ' + e.message); }
+    body.innerHTML = html || '<tr><td colspan="11" style="color:var(--muted)">Sin apuestas</td></tr>';
+  }, function(m){ body.innerHTML = '<tr><td colspan="11" style="color:var(--muted)">' + m + '</td></tr>'; });
 }
 
 // ── Goleadores ──
@@ -205,14 +175,13 @@ function loadScorers(){
       var p = d.picks[i];
       var rk = String(p.result_key || p.result || 'pending').toLowerCase();
       var cls = rk === 'win' ? 'win' : rk === 'loss' ? 'loss' : 'pending';
-      var real = p.odds_placed === '' ? '—' : p.odds_placed;
       html += '<tr><td>' + mxdate(p.match_date) + '</td><td>' + p.match + '</td><td>' + p.player +
-              '</td><td>' + p.team + '</td><td>' + (p.probability * 100).toFixed(0) + '%</td><td>@' +
-              p.fair_odds + '</td><td>' + real + '</td><td><span class="pill ' + cls + '">' +
+              '</td><td>' + p.team + '</td><td>' + (p.probability * 100).toFixed(0) + '%</td><td>' +
+              (p.fair_us || '—') + '</td><td><span class="pill ' + cls + '">' +
               p.result + '</span></td></tr>';
     }
-    body.innerHTML = html || '<tr><td colspan="8" style="color:var(--muted)">Sin goleadores aún</td></tr>';
-  }, function(){ body.innerHTML = '<tr><td colspan="8" style="color:var(--muted)">Sin goleadores aún</td></tr>'; });
+    body.innerHTML = html || '<tr><td colspan="7" style="color:var(--muted)">Sin goleadores aún</td></tr>';
+  }, function(){ body.innerHTML = '<tr><td colspan="7" style="color:var(--muted)">Sin goleadores aún</td></tr>'; });
 }
 
 // ── Panel de control GitHub ──
