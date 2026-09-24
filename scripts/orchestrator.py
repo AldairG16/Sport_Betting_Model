@@ -774,6 +774,18 @@ def step_rule_evidence():
                      + scale_report(scales, html=True))
 
 
+def step_sharp_reference():
+    """¿Hay ventaja real? Apuestas y candidatas contra el cierre sin margen
+    de Pinnacle, si su precio se mueve hacia el modelo y modelo vs Pinnacle
+    en resultados (src/models/sharp_reference.py). Solo mide. Telegram cada
+    semana en cuanto haya cierres válidos: es el termómetro del dueño."""
+    from src.models.sharp_reference import format_report, has_data, run_sharp_reference
+    report = run_sharp_reference(verbose=True)
+    if has_data(report):
+        from scripts.notify_telegram import send_message
+        send_message(format_report(report, html=True))
+
+
 def step_shadow_reactivation():
     """Mercados de bloqueo fijo (away_win, AH con el local favorito) que
     vuelven solo con evidencia shadow contra el cierre."""
@@ -929,6 +941,7 @@ def main():
             run_step(logger, "Reactivación por shadow",  step_shadow_reactivation)
             run_step(logger, "Peso del modelo (ancla)",  step_anchor_learning)
             run_step(logger, "Evidencia de reglas",      step_rule_evidence)
+            run_step(logger, "Referencia Pinnacle",      step_sharp_reference)
             run_step(logger, "Refresh CLV cache",        step_refresh_clv_cache)   # Mejora #14
             run_step(logger, "Holdout evaluation",       step_evaluate_holdout)
             # 2) Cargas de datos (lentas) y el ajuste que depende de ellas

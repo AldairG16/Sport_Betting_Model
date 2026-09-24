@@ -34,6 +34,8 @@ from config.settings import (
 )
 from src.utils.team_normalizer import normalize_team
 from src.utils.log import get_logger
+from src.utils.closing_quality import CLOSING_MAX_LEAD_MIN
+from src.features.pinnacle import PIN_COLS, extract_pinnacle
 
 log = get_logger(__name__)
 
@@ -66,6 +68,14 @@ CLOSING_MIN_CREDITS         = env_int("CLOSING_MIN_CREDITS", 1500)
 # No recargar una liga/evento descargado hace menos de esto (dos corridas
 # seguidas del closing no pagan dos veces por la misma cuota).
 CLOSING_MIN_REFRESH_MIN     = env_int("CLOSING_MIN_REFRESH_MIN", 20)
+# Eventos con candidatas SHADOW en mercados por evento (24-sep-26): sin
+# recarga su cierre nunca era válido y el aprendizaje no recibía ambos
+# anotan ni empate anulado. Son datos para aprender, no apuestas: UNA recarga
+# por evento (basta una cuota dentro de la ventana de cierre), tope propio
+# por corrida y solo con créditos de sobra. Medido: 8-12 eventos por día
+# de fin de semana × ~5-7 créditos.
+CLOSING_MAX_SHADOW_EVENTS_PER_RUN = env_int("CLOSING_MAX_SHADOW_EVENTS_PER_RUN", 6)
+CLOSING_SHADOW_MIN_CREDITS        = env_int("CLOSING_SHADOW_MIN_CREDITS", 3000)
 
 # Columnas que llegan por evento (/events/{id}/odds). Su frescura es
 # specialty_fetched_at; la del resto (h2h, totals, spreads), odds_fetched_at.
@@ -808,6 +818,9 @@ def parse_match(m: dict, sport: str) -> dict | None:
             "cards_over_odds":      cards_over_odds,
             "cards_under_odds":     cards_under_odds,
             "cards_line":           cards_line,
+            # Referencia sharp (24-sep-26): las cuotas de Pinnacle, que ya
+            # vienen en esta descarga. Solo miden (src/features/pinnacle.py).
+            **extract_pinnacle(m.get("bookmakers", []), home, away),
         }
 
     except Exception as e:
@@ -910,6 +923,9 @@ def ensure_schema():
         # ── Frescura de las cuotas (22-sep-26, ver annotate_fetch_times) ────
         conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS odds_fetched_at TIMESTAMPTZ"))
         conn.execute(text("ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS specialty_fetched_at TIMESTAMPTZ"))
+        # ── Referencia Pinnacle (24-sep-26, src/features/pinnacle.py) ───────
+        for col in PIN_COLS:
+            conn.execute(text(f"ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS {col} FLOAT"))
 
 
 # ============================================================
@@ -920,8 +936,10 @@ def upsert_matches(rows: list[dict]):
         return
     with engine.begin() as conn:
         for r in rows:
-            # filas no anotadas (otros callers): frescura desconocida
-            r = {"odds_fetched_at": None, "specialty_fetched_at": None, **r}
+            # filas no anotadas (otros callers): frescura desconocida y sin
+            # precio de Pinnacle
+            r = {"odds_fetched_at": None, "specialty_fetched_at": None,
+                 **dict.fromkeys(PIN_COLS), **r}
             conn.execute(text("""
                 INSERT INTO upcoming_matches (
                     match_key, match_date, league, sport_key,
@@ -939,7 +957,9 @@ def upsert_matches(rows: list[dict]):
                     h2_home_odds, h2_draw_odds, h2_away_odds,
                     corners_over_odds, corners_under_odds, corners_line,
                     cards_over_odds, cards_under_odds, cards_line,
-                    odds_fetched_at, specialty_fetched_at
+                    odds_fetched_at, specialty_fetched_at,
+                    pin_home_odds, pin_draw_odds, pin_away_odds,
+                    pin_over25_odds, pin_under25_odds
                 )
                 VALUES (
                     :match_key, :match_date, :league, :sport_key,
@@ -957,7 +977,9 @@ def upsert_matches(rows: list[dict]):
                     :h2_home_odds, :h2_draw_odds, :h2_away_odds,
                     :corners_over_odds, :corners_under_odds, :corners_line,
                     :cards_over_odds, :cards_under_odds, :cards_line,
-                    CAST(:odds_fetched_at AS timestamptz), CAST(:specialty_fetched_at AS timestamptz)
+                    CAST(:odds_fetched_at AS timestamptz), CAST(:specialty_fetched_at AS timestamptz),
+                    :pin_home_odds, :pin_draw_odds, :pin_away_odds,
+                    :pin_over25_odds, :pin_under25_odds
                 )
                 ON CONFLICT (match_key)
                 DO UPDATE SET
@@ -1009,7 +1031,16 @@ def upsert_matches(rows: list[dict]):
                     -- esta fila no trae mercados por evento, se conservan los
                     -- anteriores (COALESCE arriba) y con ellos su hora.
                     odds_fetched_at      = COALESCE(EXCLUDED.odds_fetched_at,      upcoming_matches.odds_fetched_at),
-                    specialty_fetched_at = COALESCE(EXCLUDED.specialty_fetched_at, upcoming_matches.specialty_fetched_at)
+                    specialty_fetched_at = COALESCE(EXCLUDED.specialty_fetched_at, upcoming_matches.specialty_fetched_at),
+                    -- Pinnacle: SIN COALESCE. Cada fetch con hora escribe su
+                    -- precio tal cual (NULL si Pinnacle ya no cotiza): un precio
+                    -- viejo no puede quedar con la hora del fetch nuevo y
+                    -- pasar por cierre. Filas sin hora conservan el anterior.
+                    pin_home_odds   = CASE WHEN EXCLUDED.odds_fetched_at IS NOT NULL THEN EXCLUDED.pin_home_odds   ELSE upcoming_matches.pin_home_odds   END,
+                    pin_draw_odds   = CASE WHEN EXCLUDED.odds_fetched_at IS NOT NULL THEN EXCLUDED.pin_draw_odds   ELSE upcoming_matches.pin_draw_odds   END,
+                    pin_away_odds   = CASE WHEN EXCLUDED.odds_fetched_at IS NOT NULL THEN EXCLUDED.pin_away_odds   ELSE upcoming_matches.pin_away_odds   END,
+                    pin_over25_odds = CASE WHEN EXCLUDED.odds_fetched_at IS NOT NULL THEN EXCLUDED.pin_over25_odds ELSE upcoming_matches.pin_over25_odds END,
+                    pin_under25_odds = CASE WHEN EXCLUDED.odds_fetched_at IS NOT NULL THEN EXCLUDED.pin_under25_odds ELSE upcoming_matches.pin_under25_odds END
             """), r)
 
 
@@ -1120,17 +1151,40 @@ def _age_minutes(iso_ts) -> float | None:
         return None
 
 
+def _enriched_in_closing_window(fetched_iso, kickoff) -> bool:
+    """¿El último enrichment del evento ya sirve de cierre? (descargado
+    dentro de la ventana válida antes del kickoff, ver closing_quality)."""
+    f = pd.to_datetime(fetched_iso, utc=True, errors="coerce")
+    k = pd.to_datetime(kickoff, utc=True, errors="coerce")
+    if pd.isna(f) or pd.isna(k):
+        return False
+    return bool(f >= k - pd.Timedelta(minutes=CLOSING_MAX_LEAD_MIN))
+
+
+def _credits_left(preflight: int | None) -> int:
+    """Último saldo conocido (se actualiza con cada llamada); 0 si no se sabe."""
+    if _last_known_remaining is not None:
+        return _last_known_remaining
+    return preflight if preflight is not None else 0
+
+
 def refresh_for_closing(targets: list[dict]) -> dict:
     """
     Recarga DIRIGIDA para capturar el cierre (22-sep-26).
 
     `targets`: partidos con kickoff inminente que tienen bets pendientes o
     candidatas shadow — ver scripts/update_closing_odds.select_closing_targets
-    — como dicts {sport_key, home_norm, away_norm, match_date, specialty}.
+    — como dicts {sport_key, home_norm, away_norm, match_date, specialty,
+    shadow_specialty}.
 
     - Recarga la cuota featured (h2h/totals/spreads) de SOLO esas ligas.
-    - Re-enriquece (mercados por evento) SOLO los eventos con specialty=True
-      (bets en btts/DNB/DC/1T/córners/tarjetas).
+    - Re-enriquece (mercados por evento) los eventos con specialty=True
+      (bets en btts/DNB/DC/1T/córners/tarjetas) en cada corrida.
+    - Y, desde el 24-sep-26, los eventos con shadow_specialty=True (solo
+      candidatas shadow en esos mercados): UNA vez por evento — si su último
+      enrichment ya cae en la ventana de cierre, no paga otra vez —, con
+      tope propio por corrida y solo con créditos de sobra
+      (CLOSING_SHADOW_MIN_CREDITS). Sin esto su cierre nunca era válido.
     - Anota la hora de descarga en cada fila (annotate_fetch_times).
 
     Antes el closing hacía update_all(force=True) sobre las 19 ligas cuando
@@ -1138,7 +1192,8 @@ def refresh_for_closing(targets: list[dict]) -> dict:
     bet (casi todo el shadow) nunca tenían una cuota posterior a la de
     apertura, y su "cierre" era esa misma cuota.
     """
-    stats = {"leagues": 0, "events": 0, "skipped_fresh": 0, "targets": len(targets)}
+    stats = {"leagues": 0, "events": 0, "shadow_events": 0, "skipped_fresh": 0,
+             "targets": len(targets)}
     if not targets:
         print("   🎯 Recarga de cierre: ningún partido con bets/shadow en la ventana — sin gasto")
         return stats
@@ -1173,6 +1228,8 @@ def refresh_for_closing(targets: list[dict]) -> dict:
             stats["leagues"] += 1
 
         want_specialty = {(t["home_norm"], t["away_norm"]) for t in league_targets if t.get("specialty")}
+        want_shadow = {(t["home_norm"], t["away_norm"]): t["match_date"] for t in league_targets
+                       if t.get("shadow_specialty") and not t.get("specialty")}
         for m in data:
             if not sport.startswith("soccer_"):
                 break
@@ -1180,19 +1237,28 @@ def refresh_for_closing(targets: list[dict]) -> dict:
                    normalize_team(m.get("away_team", "")).lower().strip())
             ek = _enrich_cache_key(str(m.get("id")))
             cached_ev = cache.get(ek) or {}
+            refresh = False
             if key in want_specialty and stats["events"] < CLOSING_MAX_EVENTS_PER_RUN:
                 ev_age = _age_minutes(cached_ev.get("fetched_at"))
                 if ev_age is None or ev_age >= CLOSING_MIN_REFRESH_MIN:
-                    cache.pop(ek, None)            # fuerza la llamada por evento
+                    refresh = True
                     stats["events"] += 1
-                    extra = fetch_event_specialty_markets(sport, m["id"], cache)
-                    # REEMPLAZAR, no mezclar: si el evento ya traía mercados
-                    # viejos (liga en caché reciente), quedarían junto a los
-                    # nuevos con la hora nueva — cuota vieja marcada fresca.
-                    strip_specialty(m)
-                    if extra:
-                        merge_specialty(m, extra)
-                    continue
+            elif (key in want_shadow
+                  and stats["shadow_events"] < CLOSING_MAX_SHADOW_EVENTS_PER_RUN
+                  and _credits_left(remaining) >= CLOSING_SHADOW_MIN_CREDITS
+                  and not _enriched_in_closing_window(cached_ev.get("fetched_at"), want_shadow[key])):
+                refresh = True
+                stats["shadow_events"] += 1
+            if refresh:
+                cache.pop(ek, None)            # fuerza la llamada por evento
+                extra = fetch_event_specialty_markets(sport, m["id"], cache)
+                # REEMPLAZAR, no mezclar: si el evento ya traía mercados
+                # viejos (liga en caché reciente), quedarían junto a los
+                # nuevos con la hora nueva — cuota vieja marcada fresca.
+                strip_specialty(m)
+                if extra:
+                    merge_specialty(m, extra)
+                continue
             # sin refresco: re-adjuntar lo que ya había (sin gastar); la hora
             # que anote annotate_fetch_times será la de ese enrichment viejo
             extra = cached_ev.get("bookmakers", [])
@@ -1205,7 +1271,8 @@ def refresh_for_closing(targets: list[dict]) -> dict:
 
     save_cache(cache)
     print(f"   🎯 Recarga de cierre: {stats['leagues']} ligas, {stats['events']} eventos "
-          f"(ya frescas: {stats['skipped_fresh']}) para {len(targets)} partidos")
+          f"con bets + {stats['shadow_events']} shadow (ya frescas: {stats['skipped_fresh']}) "
+          f"para {len(targets)} partidos")
     return stats
 
 

@@ -130,6 +130,18 @@ def test_targets_are_matches_with_bets_or_shadow_and_flag_per_event_markets():
     assert targets[(_norm("everton"), "soccer_epl")]["specialty"] is False
 
 
+def test_shadow_in_per_event_markets_is_flagged_apart_from_bets():
+    """Ambos anotan / empate anulado solo en shadow: marca propia (una sola
+    recarga por evento), no la de las bets (recarga en cada corrida)."""
+    from scripts.update_closing_odds import plan_closing_targets
+    upcoming = pd.DataFrame([{"sport_key": "soccer_epl", "home_team_norm": _norm("everton"),
+                              "away_team_norm": _norm("fulham"), "match_date": KICKOFF}])
+    shadow = pd.DataFrame([{"match": f"{_norm('everton')} vs {_norm('fulham')}", "market": "home_win"},
+                           {"match": f"{_norm('everton')} vs {_norm('fulham')}", "market": "dnb_away"}])
+    (t,) = plan_closing_targets(upcoming, pd.DataFrame(columns=["match", "market"]), shadow)
+    assert (t["specialty"], t["shadow_specialty"]) == (False, True)
+
+
 # ============================================================
 # Recarga dirigida
 # ============================================================
@@ -174,9 +186,9 @@ class _FakeApi:
         self.uum = uum
 
 
-def _target(sport, home, away, specialty=False):
+def _target(sport, home, away, specialty=False, shadow_specialty=False):
     return {"sport_key": sport, "home_norm": _norm(home), "away_norm": _norm(away),
-            "match_date": KICKOFF, "specialty": specialty}
+            "match_date": KICKOFF, "specialty": specialty, "shadow_specialty": shadow_specialty}
 
 
 def test_only_target_leagues_are_refetched_and_fresh_ones_skipped(monkeypatch):
@@ -201,6 +213,41 @@ def test_per_event_refresh_only_for_flagged_events_and_marked_fresh(monkeypatch)
     assert rows["soccer_epl-1"]["specialty_fetched_at"] is not None
     assert rows["soccer_epl-1"]["odds_fetched_at"] is not None
     assert rows["soccer_epl-2"]["specialty_fetched_at"] is None     # sin mercados por evento
+
+
+def test_shadow_only_events_are_refreshed_once_inside_the_closing_window(monkeypatch):
+    """Sin enrichment dentro de la ventana de cierre → una recarga; con uno
+    ya dentro (60 min antes del kickoff) no se paga otra vez."""
+    import scripts.update_upcoming_matches as uum
+    monkeypatch.setattr(uum, "_last_known_remaining", None)
+    api = _FakeApi(monkeypatch, cache={})
+    stats = api.uum.refresh_for_closing([_target("soccer_epl", "everton", "fulham",
+                                                 shadow_specialty=True)])
+    assert api.event_calls == ["soccer_epl-2"] and stats["shadow_events"] == 1
+
+    valid = {uum._enrich_cache_key("soccer_epl-2"): {
+        "fetched_at": (KICKOFF - timedelta(minutes=60)).isoformat(), "bookmakers": []}}
+    api = _FakeApi(monkeypatch, cache=valid)
+    stats = api.uum.refresh_for_closing([_target("soccer_epl", "everton", "fulham",
+                                                 shadow_specialty=True)])
+    assert api.event_calls == [] and stats["shadow_events"] == 0
+
+
+def test_shadow_refresh_needs_spare_credits_and_has_its_own_cap(monkeypatch):
+    import scripts.update_upcoming_matches as uum
+    monkeypatch.setattr(uum, "_last_known_remaining", None)
+    both = [_target("soccer_epl", "arsenal", "chelsea", specialty=True),
+            _target("soccer_epl", "everton", "fulham", shadow_specialty=True)]
+
+    api = _FakeApi(monkeypatch, cache={}, remaining=2_500)     # > mínimo del closing, < el de shadow
+    stats = api.uum.refresh_for_closing(both)
+    assert api.event_calls == ["soccer_epl-1"]                 # la bet sí; el shadow no
+    assert (stats["events"], stats["shadow_events"]) == (1, 0)
+
+    api = _FakeApi(monkeypatch, cache={})
+    monkeypatch.setattr(uum, "CLOSING_MAX_SHADOW_EVENTS_PER_RUN", 0)
+    api.uum.refresh_for_closing(both)
+    assert api.event_calls == ["soccer_epl-1"]
 
 
 def test_league_cap_per_run(monkeypatch):

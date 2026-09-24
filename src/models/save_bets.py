@@ -93,6 +93,9 @@ SHADOW_TABLE_SQL = """
         result       TEXT,
         profit       NUMERIC,
         resolved_at  TIMESTAMPTZ,
+        pin_prob       NUMERIC,
+        pin_close_prob NUMERIC,
+        pin_close_at   TIMESTAMPTZ,
         created_at   TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE (match, market, match_date)
     )
@@ -106,6 +109,11 @@ SHADOW_TABLE_SQL = """
 #                       miente", empates; ya acotado por D12, sin escalar)
 #   result / profit     liquidación real con stake 1 (resolve_shadow_outcomes)
 # Con resultado real se mide si cada regla acierta (src/models/rule_evidence.py).
+# Y el 24-sep-26, la referencia Pinnacle (src/features/pinnacle.py, solo mide):
+#   pin_prob            probabilidad sin margen de Pinnacle al registrar
+#   pin_close_prob      la misma, en el cierre (el último fetch antes del kickoff)
+#   pin_close_at        cuándo se descargó ese cierre (su propia frescura: el
+#                       cierre del mercado puede venir de otro fetch)
 SHADOW_ALTER_SQL = """
     ALTER TABLE shadow_bets
         ADD COLUMN IF NOT EXISTS closing_fetched_at TIMESTAMPTZ,
@@ -113,9 +121,17 @@ SHADOW_ALTER_SQL = """
         ADD COLUMN IF NOT EXISTS shade_delta NUMERIC,
         ADD COLUMN IF NOT EXISTS result TEXT,
         ADD COLUMN IF NOT EXISTS profit NUMERIC,
-        ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ
+        ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS pin_prob NUMERIC,
+        ADD COLUMN IF NOT EXISTS pin_close_prob NUMERIC,
+        ADD COLUMN IF NOT EXISTS pin_close_at TIMESTAMPTZ
 """
-BETS_CLOSING_ALTER_SQL = "ALTER TABLE bets_history ADD COLUMN IF NOT EXISTS closing_fetched_at TIMESTAMPTZ"
+BETS_CLOSING_ALTER_SQL = """
+    ALTER TABLE bets_history
+        ADD COLUMN IF NOT EXISTS closing_fetched_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS pin_close_prob NUMERIC,
+        ADD COLUMN IF NOT EXISTS pin_close_at TIMESTAMPTZ
+"""
 
 
 def persist_shadow_bets(records: list):
@@ -150,9 +166,11 @@ def persist_shadow_bets(records: list):
                         if hasattr(v, "item") and not isinstance(v, (str, bytes)):
                             v = v.item()
                         clean[k] = v
-                # mercados sin ancla no traen los campos de los shades
+                # mercados sin ancla no traen los campos de los shades; sin
+                # precio de Pinnacle no hay referencia
                 clean.setdefault("p_pre_shade", None)
                 clean.setdefault("shade_delta", None)
+                clean.setdefault("pin_prob", None)
                 try:
                     # savepoint por fila: un fallo no aborta el lote
                     with conn.begin_nested():
@@ -160,11 +178,11 @@ def persist_shadow_bets(records: list):
                             INSERT INTO shadow_bets
                                 (match, match_date, league, market, p_final,
                                  p_ref, deviation, odds, edge_market, reason,
-                                 p_pre_shade, shade_delta)
+                                 p_pre_shade, shade_delta, pin_prob)
                             VALUES
                                 (:match, :match_date, :league, :market, :p_final,
                                  :p_ref, :deviation, :odds, :edge_market, :reason,
-                                 :p_pre_shade, :shade_delta)
+                                 :p_pre_shade, :shade_delta, :pin_prob)
                             ON CONFLICT (match, market, match_date) DO NOTHING
                         """), clean)
                     inserted += 1
@@ -275,7 +293,8 @@ def record_placed_odds(match: str, market: str, match_date, odds_placed: float) 
 
     Compara por DÍA: match_date es un TIMESTAMP con hora de kickoff y se
     comparaba contra 'YYYY-MM-DD' (medianoche) — nunca coincidía (24-sep-26).
-    El dashboard registra por id (POST /api/bets/<id>/placed).
+    Nada lo llama en producción desde v1.5.0: el dueño no registra cuotas a
+    mano (el dashboard ya no tiene esa casilla).
     """
     with engine.begin() as conn:
         result = conn.execute(text("""
@@ -1086,6 +1105,46 @@ def closing_quote_for(market, odds_row):
     return v, fetched
 
 
+def closing_updates(current, market, odds_row, match_date) -> dict:
+    """
+    Qué cierres escribir en una fila de bets_history o shadow_bets
+    (`current`: su fila actual, con closing_odds, closing_fetched_at y
+    pin_close_at). Dos cierres independientes, cada uno con su frescura:
+
+      - el del mercado (closing_quote_for): reemplaza al guardado solo si
+        llega uno descargado más cerca del kickoff; sin hora conocida solo
+        rellena un hueco;
+      - el de Pinnacle (src/features/pinnacle.py): mismo criterio, con la
+        hora del fetch que lo trajo. Solo mide, nada lo usa para apostar.
+
+    Devuelve {columna: valor}; vacío si nada mejora.
+    """
+    from src.features.pinnacle import pinnacle_quote_for
+    from src.utils.closing_quality import should_update_closing
+    sets = {}
+    closing_odds, fetched_at = closing_quote_for(market, odds_row)
+    if closing_odds is not None:
+        if fetched_at is None:
+            if pd.isna(current.get("closing_odds")):
+                sets.update(closing_odds=float(closing_odds), closing_fetched_at=None)
+        elif should_update_closing(current.get("closing_fetched_at"), fetched_at, match_date):
+            sets.update(closing_odds=float(closing_odds),
+                        closing_fetched_at=pd.to_datetime(fetched_at, utc=True).to_pydatetime())
+    pin_prob, pin_at = pinnacle_quote_for(market, odds_row)
+    if pin_prob is not None and should_update_closing(current.get("pin_close_at"), pin_at, match_date):
+        sets.update(pin_close_prob=pin_prob,
+                    pin_close_at=pd.to_datetime(pin_at, utc=True).to_pydatetime())
+    return sets
+
+
+def apply_closing_updates(conn, table: str, row_id: int, sets: dict) -> None:
+    """UPDATE de las columnas de `closing_updates` (nombres fijos, no de entrada)."""
+    assert table in ("bets_history", "shadow_bets") and set(sets) <= {
+        "closing_odds", "closing_fetched_at", "pin_close_prob", "pin_close_at"}
+    cols = ", ".join(f"{c} = :{c}" for c in sets)
+    conn.execute(text(f"UPDATE {table} SET {cols} WHERE id = :id"), {**sets, "id": int(row_id)})
+
+
 
 def _update_shadow_closing():
     """Rellena closing_odds de shadow_bets con el MISMO lookup y mapeo que
@@ -1096,12 +1155,13 @@ def _update_shadow_closing():
     kickoff: cada corrida del closing acerca el cierre al precio final en
     vez de quedarse con la primera cuota vista (que solía ser la misma de
     apertura → movimiento 0 falso). Solo el aprendizaje usa los cierres que
-    pasan closing_quality.is_valid_closing."""
-    from src.utils.closing_quality import should_update_closing
+    pasan closing_quality.is_valid_closing. Desde el 24-sep-26 guarda también
+    el cierre de Pinnacle (closing_updates)."""
     with engine.begin() as conn:
         conn.execute(text(SHADOW_ALTER_SQL))
     sdf = pd.read_sql(text("""
-        SELECT id, match, market, match_date, closing_odds, closing_fetched_at
+        SELECT id, match, market, match_date, closing_odds, closing_fetched_at,
+               pin_close_at
         FROM shadow_bets
         WHERE match_date BETWEEN NOW() - INTERVAL '10 days'
                              AND NOW() + INTERVAL '90 minutes'
@@ -1131,26 +1191,10 @@ def _update_shadow_closing():
             if odds_df.empty:
                 continue
 
-            closing_odds, fetched_at = closing_quote_for(market, odds_df.iloc[0])
-            if closing_odds is None:
+            sets = closing_updates(row, market, odds_df.iloc[0], bet_match_date)
+            if not sets:
                 continue
-            current = row["closing_fetched_at"]
-            if fetched_at is None:
-                # frescura desconocida (fila previa al 22-sep): solo si no
-                # había cierre, y sin hora — el aprendizaje no la usará
-                if not pd.isna(row["closing_odds"]):
-                    continue
-            elif not should_update_closing(current, fetched_at, bet_match_date):
-                continue
-
-            conn.execute(text("""
-                UPDATE shadow_bets
-                SET closing_odds = :closing_odds, closing_fetched_at = :fetched_at
-                WHERE id = :id
-            """), {"closing_odds": float(closing_odds),
-                   "fetched_at": pd.to_datetime(fetched_at, utc=True).to_pydatetime()
-                   if fetched_at is not None else None,
-                   "id": int(row["id"])})
+            apply_closing_updates(conn, "shadow_bets", row["id"], sets)
             s_updated += 1
 
     print(f"🌑 Shadow closing: {s_updated}/{len(sdf)}")

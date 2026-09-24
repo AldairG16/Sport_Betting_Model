@@ -133,7 +133,7 @@ def test_bets_and_shadow_closing_share_lookup_and_mapping(monkeypatch):
     (_, sh_upd), = eng.statements("UPDATE shadow_bets SET closing_odds")
     for upd in (bet_upd, sh_upd):
         assert upd["closing_odds"] == 1.85
-        assert upd["fetched_at"] == fetched.to_pydatetime()
+        assert upd["closing_fetched_at"] == fetched.to_pydatetime()
 
 
 def test_shadow_closing_runs_even_without_bets_to_close(monkeypatch):
