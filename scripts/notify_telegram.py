@@ -36,6 +36,7 @@ from config.settings import (
     TELEGRAM_CHAT_ID_PREKICKOFF,
     USER_TIMEZONE,
 )
+from src.utils.min_odds import min_odds
 
 
 # ── Helpers de fecha en hora local del usuario ────────────────────────────────
@@ -304,12 +305,19 @@ def _format_bet_line(i: int, bet, suspicious: bool) -> str:
 
     icon = "⚠️" if suspicious else "✅"
 
+    # La cuota de arriba es la MEJOR entre ~20 casas europeas; PlayDoit (donde
+    # apuesta el dueño) no está en la API y casi nunca la iguala. La mínima
+    # dice hasta dónde puede bajar y todavía valer la pena (src/utils/min_odds).
+    floor = min_odds(bet.get("probability"))
+    floor_line = f"\n   🟢 PlayDoit: apuesta solo si paga ≥ {floor:.2f}" if floor else ""
+
     return (
         f"{icon} <b>{i}. {bet.get('match', '')}</b>\n"
         f"   {league_label}\n"
         f"   🎯 {market_label}  @{odds}\n"
         f"   📈 Edge: +{edge_pct}%  |  Prob: {prob_pct}%\n"
         f"   💰 Stake: {stake}u  |  📅 {date_match}"
+        f"{floor_line}"
     )
 
 
