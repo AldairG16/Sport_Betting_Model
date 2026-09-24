@@ -471,15 +471,19 @@ lo compila `release.yml`:
 El `.exe` lleva dentro el JS, Chart.js y `VERSION`. Una copia de `ui_es5.js` junto al
 `.exe` tiene prioridad, para arreglos en vivo sin recompilar.
 
-**PlayDoit (la casa del dueño) no está en The Odds API.** La cuota que muestra el sistema
-es la mejor entre ~20 casas europeas. Por eso cada pick y cada confirmación
-pre-kickoff dicen "PlayDoit: apuesta solo si paga ≥ X" (`src/utils/min_odds.py`: edge ≥
-2%, el mismo umbral de la revalidación). En el dashboard, la columna **Tu cuota**
-registra la cuota a la que se tomó cada apuesta (`bets_history.odds_placed`, única
-escritura del dashboard). Con eso salen el ROI real y cuánto paga PlayDoit frente a la
-mejor cuota. Hasta el 22-sep-2026 el
-`.exe` en uso no se podía reconstruir desde el repo: `app.py` era una reescritura a
-medias, sin rutas.
+**PlayDoit (la casa del dueño) no está en ninguna API de cuotas** (ni The Odds API, ni
+Odds-API.io, ni OddsPapi; revisado el 24-sep-2026). La cuota que guarda el sistema es la
+mejor entre ~20 casas europeas. Por eso cada pick, cada confirmación pre-kickoff y el
+avance de mañana dicen "PlayDoit: apuesta si paga -138 o mejor (-125 ✅ · -150 ❌)":
+**formato americano**, como lo muestra PlayDoit, porque el dueño no lee cuotas
+decimales (`src/utils/min_odds.py`: edge ≥ 2%, el mismo umbral de la revalidación,
+redondeado del lado seguro). En americano un número más alto siempre paga más. El
+dashboard muestra lo mismo (columnas **Mejor cuota** y **PlayDoit**) y no pide nada a
+mano: el registro de la cuota tomada (v1.4.0) se quitó en v1.5.0 por pedido del dueño.
+La columna `bets_history.odds_placed` sigue en la base, sin uso.
+
+Hasta el 22-sep-2026 el `.exe` en uso no se podía reconstruir desde el repo: `app.py`
+era una reescritura a medias, sin rutas.
 
 ---
 

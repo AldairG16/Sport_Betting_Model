@@ -40,7 +40,8 @@ sys.path.append(str(Path(__file__).parent.parent))
 from config.database import engine
 from src.utils.team_normalizer import normalize_team
 from src.utils.log import get_logger
-from src.utils.min_odds import MIN_EDGE_TO_PLACE, min_odds
+from src.utils.min_odds import (HOW_TO_READ, MIN_EDGE_TO_PLACE, fmt_american,
+                                playdoit_line, to_american)
 
 log = get_logger(__name__)
 
@@ -343,21 +344,26 @@ def _format_confirmations(rows: list[dict]) -> str:
              "<i>Cuota final revalidada · alineaciones verificadas</i>", ""]
     for r in rows:
         try:
-            ko = datetime.fromisoformat(str(r["match_date"])).astimezone(tz)
-            hora = ko.strftime("%H:%M")
+            ko = datetime.fromisoformat(str(r["match_date"]))
+            # La base guarda UTC sin zona. Sin esto, astimezone() tomaba la
+            # hora del servidor: bien en GitHub (UTC), 6 h mal en una PC de México.
+            if ko.tzinfo is None:
+                ko = ko.replace(tzinfo=timezone.utc)
+            hora = ko.astimezone(tz).strftime("%H:%M")
         except (ValueError, TypeError):
             hora = "?"
         edge = float(r.get("edge") or 0)
         lines.append(f"✅ {match_name(r['match'])}  ({hora})")
-        lines.append(f"   {market_name(r['market'])} @ {r['odds']} · "
-                     f"{r['stake']}u · edge {edge:+.0%}")
-        floor = min_odds(r.get("probability"))
-        if floor:
-            lines.append(f"   🟢 PlayDoit: apuesta solo si paga ≥ {floor:.2f}")
+        lines.append(f"   {market_name(r['market'])} · {r['stake']}u · edge {edge:+.0%}")
+        # En formato americano, como lo muestra PlayDoit (24-sep-26): la cuota
+        # decimal europea no le servía al dueño para decidir.
+        rule = playdoit_line(r.get("probability"))
+        lines.append(f"   {rule}" if rule else
+                     f"   Mejor cuota: {fmt_american(to_american(r.get('odds')))}")
     lines.append("")
-    lines.append("<i>Valor final — ya no cambia antes del kickoff. La cuota de "
-                 "arriba es la mejor entre casas europeas: en PlayDoit, si paga "
-                 "menos que la mínima, ya no hay valor.</i>")
+    lines.append("<i>Valor final — ya no cambia antes del kickoff. Si PlayDoit "
+                 "paga menos que el mínimo, ya no hay valor: no la apuestes.</i>")
+    lines.append(f"<i>{HOW_TO_READ}</i>")
     return "\n".join(lines)
 
 
