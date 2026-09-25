@@ -62,14 +62,14 @@ def test_weekly_without_data_has_no_opinion():
     assert weekly_issue(None, NOW) is None and weekly_issue(pd.NaT, NOW) is None
 
 
-def test_each_run_is_recorded_and_old_rows_pruned():
+def test_each_run_is_recorded_and_nothing_is_deleted():
     from src.utils.pipeline_runs import record_run
     from tests.fake_db import FakeEngine
     eng = FakeEngine()
     record_run(eng, "closing", 0, 63.04)
     (_, params), = eng.statements("INSERT INTO pipeline_runs")
     assert params == {"mode": "closing", "failed": 0, "seconds": 63.0}
-    assert eng.statements("DELETE FROM pipeline_runs WHERE ran_at < NOW() - INTERVAL '60 days'")
+    assert not eng.statements("DELETE")
 
 
 def test_orchestrator_records_runs_without_ever_breaking_them(monkeypatch):

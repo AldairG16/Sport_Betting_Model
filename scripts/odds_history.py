@@ -1,17 +1,24 @@
 """
 scripts/odds_history.py
 =======================
-ACUMULADOR DE HISTORIAL DE CUOTAS (fotografías horarias).
+ACUMULADOR DE HISTORIAL DE CUOTAS (movimientos de línea).
 
 El proceso profesional con más infraestructura: predecir hacia dónde se
 moverá la LÍNEA, no el partido. Si sabemos que el cierre tenderá a X,
 apostamos antes del movimiento. Para eso hace falta el dataset de
-movimientos — esta tabla lo construye desde hoy (casi costo cero: lee
+movimientos — esta tabla lo construye (casi costo cero: lee
 upcoming_matches tras cada fetch, sin llamadas extra a la API).
 
-Implementación: un solo INSERT...SELECT del lado del servidor (sin viaje
-Python↔DB por fila — evita problemas de NaN/None/tipos y es ~50x más
-rápido). Retención: filas >90 días se borran automáticamente.
+Solo guarda una foto cuando la cuota de ese partido CAMBIÓ desde la
+anterior (25-sep-26). Con el closing cada 30 min, la mayoría de las
+corridas reutilizan el caché y la cuota es la misma: el 97% de las filas
+de un día eran copias idénticas (24,067 de 24,798) y la tabla crecía
+~8 MB/día. Una foto repetida no aporta nada — la anterior ya dice la misma
+cuota —, así que no se guarda. Tampoco se borra nada: sin copias la tabla
+crece unas 30 veces menos y cabe por años (antes se borraba a los 90 días).
+
+Un solo INSERT...SELECT del lado del servidor (sin viaje Python↔DB por
+fila — evita problemas de NaN/None/tipos y es ~50x más rápido).
 """
 
 import sys
@@ -23,7 +30,14 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from config.database import engine
 
-RETENTION_DAYS = 90
+# Lo que define "la misma foto": si ninguna de estas cambió, no se guarda.
+SNAPSHOT_COLS = (
+    "home_odds", "draw_odds", "away_odds",
+    "over25_odds", "under25_odds",
+    "btts_yes_odds", "btts_no_odds",
+    "ah_line", "ah_home_odds", "ah_away_odds",
+    "corners_line", "cards_line", "bookmaker_count",
+)
 
 
 def _ensure_table(conn):
@@ -49,50 +63,40 @@ def _ensure_table(conn):
     """))
 
 
+def snapshot_sql() -> str:
+    """INSERT...SELECT de las filas cuya cuota cambió respecto de la última
+    foto del mismo partido (o que aún no tienen foto). Las columnas de
+    upcoming_matches son FLOAT y las de aquí NUMERIC: se comparan en NUMERIC,
+    el mismo tipo en que quedaron guardadas."""
+    cols = ", ".join(SNAPSHOT_COLS)
+    new = ", ".join(f"u.{c}::numeric" if c != "bookmaker_count" else f"u.{c}" for c in SNAPSHOT_COLS)
+    old = ", ".join(f"prev.{c}" for c in SNAPSHOT_COLS)
+    return f"""
+        INSERT INTO odds_history (captured_at, match_key, match, league, kickoff, {cols})
+        SELECT NOW(), u.match_key, u.home_team || ' vs ' || u.away_team, u.sport_key,
+               u.match_date, {", ".join("u." + c for c in SNAPSHOT_COLS)}
+        FROM upcoming_matches u
+        LEFT JOIN LATERAL (
+            SELECT {cols} FROM odds_history h
+            WHERE h.match_key = u.match_key
+            ORDER BY h.captured_at DESC
+            LIMIT 1
+        ) prev ON TRUE
+        WHERE u.home_odds IS NOT NULL AND u.home_odds > 1
+          AND u.away_odds IS NOT NULL AND u.away_odds > 1
+          AND (prev.home_odds IS NULL OR ({new}) IS DISTINCT FROM ({old}))
+    """
+
+
 def capture_snapshot(verbose: bool = True) -> int:
-    """
-    Fotografía las cuotas actuales de todos los partidos con odds.
-    Se llama tras cada fetch de cuotas (morning y closing horario).
-    Un solo INSERT...SELECT del lado del servidor.
-    """
-    inserted = 0
+    """Fotografía las cuotas que cambiaron. Se llama tras cada fetch
+    (morning y cada closing)."""
     with engine.begin() as conn:
         _ensure_table(conn)
-        r = conn.execute(text("""
-            INSERT INTO odds_history (
-                captured_at, match_key, match, league, kickoff,
-                home_odds, draw_odds, away_odds,
-                over25_odds, under25_odds,
-                btts_yes_odds, btts_no_odds,
-                ah_line, ah_home_odds, ah_away_odds,
-                corners_line, cards_line, bookmaker_count
-            )
-            SELECT
-                NOW(),
-                match_key,
-                home_team || ' vs ' || away_team,
-                sport_key,
-                match_date,
-                home_odds, draw_odds, away_odds,
-                over25_odds, under25_odds,
-                btts_yes_odds, btts_no_odds,
-                ah_line, ah_home_odds, ah_away_odds,
-                corners_line, cards_line, bookmaker_count
-            FROM upcoming_matches
-            WHERE home_odds IS NOT NULL AND home_odds > 1
-              AND away_odds IS NOT NULL AND away_odds > 1
-        """)
-        )
+        r = conn.execute(text(snapshot_sql()))
         inserted = r.rowcount or 0
-
-        # Retención: el dataset de movimiento no necesita más de 90 días
-        conn.execute(text("""
-            DELETE FROM odds_history
-            WHERE captured_at < NOW() - INTERVAL '90 days'
-        """))
-
     if verbose:
-        print(f"📸 odds_history: {inserted} fotografías de cuotas capturadas")
+        print(f"📸 odds_history: {inserted} fotos nuevas (solo cuotas que cambiaron)")
     return inserted
 
 

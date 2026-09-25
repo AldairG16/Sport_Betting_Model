@@ -1297,6 +1297,9 @@ def send_evening_summary(target_date=None):
     losses   = df[df["result"] == "loss"]
     pending  = df[df["result"] == "pending"]
     resolved = df[df["result"].isin(["win", "loss", "half_win", "half_loss"])]
+    # 'stale' del mismo día = cancelada antes del kickoff (la revalidación o
+    # el lineup guard): no se apostó. Salía como "❓ revisar (sin resolver)".
+    cancelled = df[df["result"] == "stale"]
 
     profit_day  = float(resolved["profit"].sum()) if not resolved.empty else 0
     staked_day  = float(resolved["stake"].sum())  if not resolved.empty else 0
@@ -1304,7 +1307,9 @@ def send_evening_summary(target_date=None):
     roi_emoji   = "📈" if profit_day >= 0 else "📉"
 
     lines += [
-        f"Bets hoy:   {len(df)}  ({len(wins)}✅  {len(losses)}❌  {len(pending)}⏳)",
+        f"Bets hoy:   {len(df) - len(cancelled)}  ({len(wins)}✅  {len(losses)}❌  {len(pending)}⏳)"
+        + (f"  ·  {len(cancelled)} cancelada{'s' if len(cancelled) != 1 else ''} 🚫"
+           if len(cancelled) else ""),
     ]
 
     if not resolved.empty:
@@ -1332,6 +1337,9 @@ def send_evening_summary(target_date=None):
             elif result == "loss":
                 icon = "❌"
                 pnl  = f"{float(bet['profit']):.2f}u"
+            elif result == "stale":
+                icon = "🚫"
+                pnl  = "cancelada antes del partido (no se apostó)"
             else:
                 # Distinguir POR QUÉ sigue pending. Antes todo era "pendiente"
                 # y el usuario no podía saber si era un bug o estaba esperando.

@@ -959,7 +959,8 @@ def upsert_matches(rows: list[dict]):
                     cards_over_odds, cards_under_odds, cards_line,
                     odds_fetched_at, specialty_fetched_at,
                     pin_home_odds, pin_draw_odds, pin_away_odds,
-                    pin_over25_odds, pin_under25_odds
+                    pin_over25_odds, pin_under25_odds,
+                    pin_total_line, pin_total_over_odds, pin_total_under_odds
                 )
                 VALUES (
                     :match_key, :match_date, :league, :sport_key,
@@ -979,7 +980,8 @@ def upsert_matches(rows: list[dict]):
                     :cards_over_odds, :cards_under_odds, :cards_line,
                     CAST(:odds_fetched_at AS timestamptz), CAST(:specialty_fetched_at AS timestamptz),
                     :pin_home_odds, :pin_draw_odds, :pin_away_odds,
-                    :pin_over25_odds, :pin_under25_odds
+                    :pin_over25_odds, :pin_under25_odds,
+                    :pin_total_line, :pin_total_over_odds, :pin_total_under_odds
                 )
                 ON CONFLICT (match_key)
                 DO UPDATE SET
@@ -1040,7 +1042,10 @@ def upsert_matches(rows: list[dict]):
                     pin_draw_odds   = CASE WHEN EXCLUDED.odds_fetched_at IS NOT NULL THEN EXCLUDED.pin_draw_odds   ELSE upcoming_matches.pin_draw_odds   END,
                     pin_away_odds   = CASE WHEN EXCLUDED.odds_fetched_at IS NOT NULL THEN EXCLUDED.pin_away_odds   ELSE upcoming_matches.pin_away_odds   END,
                     pin_over25_odds = CASE WHEN EXCLUDED.odds_fetched_at IS NOT NULL THEN EXCLUDED.pin_over25_odds ELSE upcoming_matches.pin_over25_odds END,
-                    pin_under25_odds = CASE WHEN EXCLUDED.odds_fetched_at IS NOT NULL THEN EXCLUDED.pin_under25_odds ELSE upcoming_matches.pin_under25_odds END
+                    pin_under25_odds = CASE WHEN EXCLUDED.odds_fetched_at IS NOT NULL THEN EXCLUDED.pin_under25_odds ELSE upcoming_matches.pin_under25_odds END,
+                    pin_total_line = CASE WHEN EXCLUDED.odds_fetched_at IS NOT NULL THEN EXCLUDED.pin_total_line ELSE upcoming_matches.pin_total_line END,
+                    pin_total_over_odds = CASE WHEN EXCLUDED.odds_fetched_at IS NOT NULL THEN EXCLUDED.pin_total_over_odds ELSE upcoming_matches.pin_total_over_odds END,
+                    pin_total_under_odds = CASE WHEN EXCLUDED.odds_fetched_at IS NOT NULL THEN EXCLUDED.pin_total_under_odds ELSE upcoming_matches.pin_total_under_odds END
             """), r)
 
 
