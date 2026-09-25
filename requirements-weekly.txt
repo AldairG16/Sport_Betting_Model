@@ -1,6 +1,10 @@
 # ============================================================
 # requirements-weekly.txt — stack de scraping (solo weekly)
 # ============================================================
+# SIN USO desde el 25-sep-26: el xG de Understat se descarga directo
+# (src/features/soccerdata_feed.py) y Club Elo se retiró; el weekly instala
+# solo requirements.txt. Se conserva como referencia histórica.
+#
 # soccerdata trae seleniumbase (para WhoScored/Sofascore/FBref) que arrastra
 # pins incompatibles con el core e hypothesis. Nosotros solo usamos
 # Understat (wrapper-tls-requests) y ClubElo (requests) → instalamos soccerdata con

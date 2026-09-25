@@ -193,7 +193,7 @@ El 7 y el 8 existen desde el 24-sep-2026 porque closing y weekly los dispara
 cron-job.org: si ese servicio deja de disparar, nada falla, simplemente no corren. Sin
 closing no llegan las confirmaciones antes de cada partido y el aprendizaje no recibe
 cierres; sin weekly el sistema no aprende. Cada corrida del orquestador deja una fila en
-`pipeline_runs` (modo, hora, pasos fallidos, duración; se conservan 60 días), escrita por
+`pipeline_runs` (modo, hora, pasos fallidos, duración; no se borra nada), escrita por
 `src/utils/pipeline_runs.py`. El conteo de 6 h importa porque el cron propio de GitHub
 sigue disparando el closing a ratos: una corrida reciente no prueba que el disparo cada
 30 min siga vivo. Con menos de 6 h de historial (recién instalado) el conteo no opina.
@@ -231,6 +231,13 @@ y nada se borra.
 
 **No edites archivos con `Get-Content`/`Set-Content` de Windows PowerShell 5.1.** Lee
 UTF-8 sin BOM como ANSI y escribe con BOM: rompe todos los acentos del archivo.
+
+**Runner fijo: `ubuntu-24.04`.** GitHub anunció que `ubuntu-latest` pasa a Ubuntu 26.04
+desde el 19-oct-2026. Un cambio de imagen puede romper la instalación de dependencias o
+el Python de **todas** las corridas a la vez sin tocar el código, así que los workflows
+fijan `ubuntu-24.04` (25-sep-2026). Subirlo es una decisión: en una rama, con `tests` y
+el smoke test en verde. `release.yml` compila en `windows-latest`: si falla, solo se ve
+al publicar una versión del dashboard.
 
 **Secrets vacíos en GH Actions.** `int(os.environ.get("X", "default"))` devuelve
 `int("")` y lanza `ValueError`, matando el pipeline antes de escribir nada. Usa

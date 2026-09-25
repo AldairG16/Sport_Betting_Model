@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   weekly:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 120 (antes 60): las cargas de datos solas tardan ~50 min y el 22-sep,
     # con Load historical data ya funcionando, el job rozaba/pasaba el límite.
     timeout-minutes: 120
@@ -35,11 +35,10 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
+      # soccerdata ya no se usa: el xG real de Understat se descarga directo
+      # (src/features/soccerdata_feed.py, 25-sep-26)
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install soccerdata==1.9.1 --no-deps
-          pip install wrapper-tls-requests tqdm Unidecode
+        run: pip install -r requirements.txt
 
       - name: Run weekly pipeline
         env:
