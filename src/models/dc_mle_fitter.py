@@ -142,6 +142,78 @@ def _x_from_rho(rho):
 # AJUSTE MLE
 # ─────────────────────────────────────────────────────────────
 
+def dc_objective(params, h_idx, a_idx, hg, ag, weights, h_adv_mult, n_teams, log_fact):
+    """
+    −log-verosimilitud penalizada de Dixon-Coles y su gradiente EXACTO.
+
+    Por qué el gradiente (25-sep-26): con ~2,500 parámetros (ataque y
+    defensa de ~1,250 equipos), L-BFGS-B aproximaba cada gradiente por
+    diferencias finitas — miles de evaluaciones por paso — y agotaba
+    MAX_FUN tras unos pocos pasos ("TOTAL NO. OF F,G EVALUATIONS EXCEEDS
+    LIMIT", converged=False en TODOS los fits). El "ajuste" semanal solo
+    arrastraba el warm-start. Con el gradiente analítico cada paso cuesta
+    una evaluación y el óptimo se alcanza de verdad.
+
+    log λ_h = a[h] + d[a] + home_adv·(1 − neutral),  log λ_a = a[a] + d[h]
+    ρ = −RHO_BOUND·σ(x)   (misma transformación que _rho_from_x)
+    """
+    attacks = params[:n_teams]
+    defenses = params[n_teams:2 * n_teams]
+    home_adv = params[-2]
+    sig = 1.0 / (1.0 + np.exp(-params[-1]))
+    rho = -RHO_BOUND * sig
+    drho_dx = -RHO_BOUND * sig * (1.0 - sig)
+
+    log_lh = attacks[h_idx] + defenses[a_idx] + home_adv * h_adv_mult
+    log_la = attacks[a_idx] + defenses[h_idx]
+    lam_h = np.exp(log_lh)
+    lam_a = np.exp(log_la)
+
+    m00 = (hg == 0) & (ag == 0)
+    m10 = (hg == 1) & (ag == 0)
+    m01 = (hg == 0) & (ag == 1)
+    m11 = (hg == 1) & (ag == 1)
+    lam_ha = lam_h * lam_a
+    tau = np.ones(len(hg))
+    tau[m00] = 1.0 - lam_ha[m00] * rho
+    tau[m10] = 1.0 + lam_a[m10] * rho
+    tau[m01] = 1.0 + lam_h[m01] * rho
+    tau[m11] = 1.0 - rho
+    ok = tau > 1e-10                       # donde se recorta, la derivada es 0
+    inv_tau = np.where(ok, 1.0 / np.where(ok, tau, 1.0), 0.0)
+    log_tau = np.log(np.maximum(tau, 1e-10))
+
+    ll = weights * (hg * log_lh - lam_h + ag * log_la - lam_a - log_fact + log_tau)
+    reg_teams = REG_TEAMS * (np.sum(attacks ** 2) + np.sum(defenses ** 2))
+    obj = -(np.sum(ll) - reg_teams - REG_RHO * (rho - PRIOR_RHO) ** 2)
+    if REG_HA > 0:
+        obj += REG_HA * (home_adv - HA_PRIOR) ** 2
+
+    # ∂ log τ / ∂ log λ_h, ∂ log λ_a, ∂ ρ
+    dt_h = np.zeros(len(hg))
+    dt_a = np.zeros(len(hg))
+    dt_r = np.zeros(len(hg))
+    dt_h[m00] = -lam_ha[m00] * rho * inv_tau[m00]
+    dt_a[m00] = dt_h[m00]
+    dt_r[m00] = -lam_ha[m00] * inv_tau[m00]
+    dt_a[m10] = lam_a[m10] * rho * inv_tau[m10]
+    dt_r[m10] = lam_a[m10] * inv_tau[m10]
+    dt_h[m01] = lam_h[m01] * rho * inv_tau[m01]
+    dt_r[m01] = lam_h[m01] * inv_tau[m01]
+    dt_r[m11] = -inv_tau[m11]
+
+    g_h = weights * (hg - lam_h + dt_h)     # ∂ ll / ∂ log λ_h
+    g_a = weights * (ag - lam_a + dt_a)     # ∂ ll / ∂ log λ_a
+    grad = np.empty_like(params, dtype=float)
+    grad[:n_teams] = -(np.bincount(h_idx, g_h, n_teams) + np.bincount(a_idx, g_a, n_teams)) \
+        + 2 * REG_TEAMS * attacks
+    grad[n_teams:2 * n_teams] = -(np.bincount(a_idx, g_h, n_teams) + np.bincount(h_idx, g_a, n_teams)) \
+        + 2 * REG_TEAMS * defenses
+    grad[-2] = -np.sum(g_h * h_adv_mult) + (2 * REG_HA * (home_adv - HA_PRIOR) if REG_HA > 0 else 0.0)
+    grad[-1] = (-np.sum(weights * dt_r) + 2 * REG_RHO * (rho - PRIOR_RHO)) * drho_dx
+    return float(obj), grad
+
+
 def _np_max_abs(arr):
     """Norma inf del gradiente final (None si scipy no lo trae)."""
     try:
@@ -173,10 +245,11 @@ def _previous_fit(verbose: bool = False) -> dict:
     return prev
 
 
-def fit_dc_parameters(verbose: bool = True) -> dict:
+def fit_dc_parameters(verbose: bool = True, save: bool = True) -> dict:
     """
     Ajusta los parámetros Dixon-Coles MLE sobre datos históricos.
-    Guarda el resultado en data/dc_params.json.
+    Guarda el resultado en data/dc_params.json y en Neon (save=False: solo
+    lo devuelve, para ensayos).
 
     Returns:
         dict con parámetros ajustados o {} si falla
@@ -239,41 +312,8 @@ def fit_dc_parameters(verbose: bool = True) -> dict:
     # fitter aprende un home_adv inflado que sobreestima al "local" en los
     # partidos del Mundial.
     h_adv_mult = (~df["neutral"].astype(bool).values).astype(float)
-
-    # ── Función de log-verosimilitud (vectorizada) ────────────────────────
-    def neg_log_likelihood(params):
-        attacks  = params[:n_teams]
-        defenses = params[n_teams : 2 * n_teams]
-        home_adv = params[-2]
-        # rho via sigmoide → siempre en (-RHO_BOUND, 0), gradiente fluye
-        rho      = _rho_from_x(params[-1])
-
-        # Lambdas en log-espacio (garantiza λ > 0)
-        # h_adv_mult = 0 en partidos neutrales → home_adv no contribuye
-        lam_h = np.exp(attacks[h_idx] + defenses[a_idx] + home_adv * h_adv_mult)
-        lam_a = np.exp(attacks[a_idx] + defenses[h_idx])
-
-        # Log-probabilidades de Poisson
-        log_p_h = hg * np.log(np.maximum(lam_h, 1e-10)) - lam_h - _log_factorial(hg)
-        log_p_a = ag * np.log(np.maximum(lam_a, 1e-10)) - lam_a - _log_factorial(ag)
-
-        # Tau (Dixon-Coles correction) — vectorizado
-        tau = _tau_vec(hg, ag, lam_h, lam_a, rho)
-        log_tau = np.log(np.maximum(tau, 1e-10))
-
-        # Log-likelihood total con pesos
-        ll = weights * (log_p_h + log_p_a + log_tau)
-
-        # L2 regularization sobre teams (evita extremos con pocos datos)
-        reg_teams = REG_TEAMS * (np.sum(attacks**2) + np.sum(defenses**2))
-        # Prior bayesiano sobre rho hacia el valor empírico DC97 = -0.10
-        # Sin esto el optimizer derivaba a rho=0 por ruido en data internacional.
-        reg_rho   = REG_RHO * (rho - PRIOR_RHO) ** 2
-
-        obj = -(np.sum(ll) - reg_teams - reg_rho)
-        if REG_HA > 0:
-            obj += REG_HA * (params[-2] - HA_PRIOR) ** 2
-        return obj
+    # log-factoriales de los marcadores: constantes del ajuste, una sola vez
+    log_fact = _log_factorial(hg) + _log_factorial(ag)
 
     # ── Parámetros iniciales ──────────────────────────────────────────────
     # Warm start desde el fit anterior si existe, así el optimizador no
@@ -316,16 +356,20 @@ def fit_dc_parameters(verbose: bool = True) -> dict:
     # restamos mean(α) de los attacks y se lo sumamos a los defenses.
     # L-BFGS-B con limited-memory Hessian escala O(n), no O(n²) → ~30s.
     if verbose:
-        print("   Optimizando con L-BFGS-B... (~20-40 segundos)")
+        print("   Optimizando con L-BFGS-B y gradiente exacto...")
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         result = minimize(
-            neg_log_likelihood,
+            dc_objective,
             x0,
+            args=(h_idx, a_idx, hg, ag, weights, h_adv_mult, n_teams, log_fact),
+            jac=True,
             method="L-BFGS-B",
-            options={"maxiter": MAX_ITER, "maxfun": MAX_FUN, "ftol": 1e-7, "gtol": 1e-5, "disp": False},
+            options={"maxiter": MAX_ITER, "maxfun": MAX_FUN, "ftol": 1e-9, "gtol": 1e-4, "disp": False},
         )
+    if verbose:
+        print(f"   {result.nit} iteraciones · convergió: {bool(result.success)} ({result.message})")
 
     if not result.success and verbose:
         log.warning(f"   ⚠️  Optimizador no convergió perfectamente: {result.message}")
@@ -390,6 +434,9 @@ def fit_dc_parameters(verbose: bool = True) -> dict:
                 float(_np.sort(_g)[::-1][:_top1pct].sum() / _g.sum()), 4)
     except Exception as _ge:
         output["grad_hist_error"] = str(_ge)[:100]
+
+    if not save:
+        return output
 
     with open(DC_PARAMS_FILE, "w") as f:
         json.dump(output, f, indent=2)

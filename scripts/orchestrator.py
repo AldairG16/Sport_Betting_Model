@@ -675,15 +675,16 @@ def step_collect_events():
 
 
 def step_soccerdata_refresh():
-    """xG real + goleadores de clubes + Club Elo vía soccerdata (scraping
-    semanal, corre en CI con Python 3.11). Guarda en Neon; el pipeline
-    solo lee."""
-    try:
-        from src.features.soccerdata_feed import refresh_understat, refresh_club_elo
-        refresh_understat(verbose=True)
-        refresh_club_elo(verbose=True)
-    except Exception as e:
-        log.error(f"⚠️  Soccerdata refresh falló: {e}")
+    """xG real + goleadores de clubes (Understat, directo). Guarda en Neon;
+    el pipeline solo lee. Si no llega nada, es un ERROR visible: hasta el
+    25-sep-26 este paso decía OK sin haber cargado nunca un dato."""
+    from src.features.soccerdata_feed import refresh_understat
+    res = refresh_understat(verbose=True)
+    if res.get("status") == "failed":
+        log.error(f"xG real NO disponible (Understat): el modelo usa el xG sustituto "
+                  f"esta semana — {'; '.join(res.get('errors') or [])}")
+    elif res.get("status") == "partial":
+        log.warning(f"xG real incompleto (Understat): {'; '.join(res.get('errors') or [])}")
 
 
 def step_fit_dc_mle():

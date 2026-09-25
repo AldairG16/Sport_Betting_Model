@@ -1,5 +1,7 @@
 """
-Tests del puente soccerdata (partes puras, sin scraping ni DB).
+Tests del xG real de Understat (partes puras y la descarga con fakes, sin
+red ni DB). Hasta el 25-sep-26 la carga dependía de `soccerdata`, cuyo
+import fallaba en CI: el paso decía OK y nunca hubo xG real.
 """
 
 import sys
@@ -7,25 +9,77 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.features.soccerdata_feed import _pick_col, current_season
+from src.features.soccerdata_feed import current_season, parse_understat
 
 import pandas as pd
 import pytest
 
+LEAGUE_DATA = {
+    "teams": {
+        "1": {"id": "1", "title": "Arsenal", "history": [
+            {"h_a": "h", "xG": "2.1", "xGA": "0.7"}, {"h_a": "a", "xG": "1.4", "xGA": "1.1"}]},
+        "2": {"id": "2", "title": "Chelsea", "history": [{"h_a": "a", "xG": "0.9", "xGA": "1.8"}]},
+        "3": {"id": "3", "title": "Sin partidos", "history": []},
+    },
+    "players": [
+        {"player_name": "Bukayo Saka", "team_title": "Arsenal", "goals": "2", "games": "2", "xG": "1.3"},
+        {"player_name": "Sin Goles", "team_title": "Chelsea", "goals": "0", "games": "1", "xG": "0.1"},
+    ],
+}
 
-class TestPickCol:
 
-    def test_finds_first_candidate(self):
-        df = pd.DataFrame(columns=["team", "xG", "matches"])
-        assert _pick_col(df, "xg_for", "xG", "xg") == "xG"
+class TestUnderstat:
 
-    def test_case_insensitive(self):
-        df = pd.DataFrame(columns=["Xg_For"])
-        assert _pick_col(df, "xg_for") == "Xg_For"
+    def test_parse_teams_and_scorers(self):
+        teams, players = parse_understat(LEAGUE_DATA)
+        assert teams == [
+            {"team": "Arsenal", "xg_for": 3.5, "xg_against": 1.8, "matches": 2},
+            {"team": "Chelsea", "xg_for": 0.9, "xg_against": 1.8, "matches": 1},
+        ]
+        assert players == [{"player": "Bukayo Saka", "team": "Arsenal", "goals": 2,
+                            "matches": 2, "xg": 1.3}]
 
-    def test_returns_none_when_missing(self):
-        df = pd.DataFrame(columns=["team"])
-        assert _pick_col(df, "xg_for", "xG") is None
+    def _refresh(self, monkeypatch, fetch):
+        import src.features.soccerdata_feed as sf
+        from tests.fake_db import FakeEngine
+        eng = FakeEngine()
+        monkeypatch.setattr(sf, "engine", eng)
+        monkeypatch.setattr(sf, "fetch_understat", fetch)
+        return sf.refresh_understat(verbose=False), eng
+
+    def test_all_leagues_load(self, monkeypatch):
+        res, eng = self._refresh(monkeypatch, lambda league, season: LEAGUE_DATA)
+        assert res["status"] == "ok" and res["team_rows"] == 10     # 2 equipos × 5 ligas
+        assert len(eng.statements("INSERT INTO player_club_goals")) == 5
+
+    def test_total_failure_is_reported_not_hidden(self, monkeypatch):
+        def down(league, season):
+            raise ConnectionError("403")
+        res, eng = self._refresh(monkeypatch, down)
+        assert res["status"] == "failed" and not eng.executed
+
+    def test_partial(self, monkeypatch):
+        res, _ = self._refresh(monkeypatch, lambda league, season:
+                               LEAGUE_DATA if league == "EPL" else {"teams": {}})
+        assert res["status"] == "partial" and res["team_rows"] == 2
+
+    def test_weekly_step_raises_an_error_when_nothing_loads(self, monkeypatch):
+        import scripts.orchestrator as orch
+        import src.features.soccerdata_feed as sf
+        calls = []
+
+        class FakeLog:
+            def error(self, msg):
+                calls.append(("error", msg))
+
+            def warning(self, msg):
+                calls.append(("warning", msg))
+
+        monkeypatch.setattr(orch, "log", FakeLog())
+        monkeypatch.setattr(sf, "refresh_understat",
+                            lambda verbose=True: {"status": "failed", "errors": ["EPL/2026: 403"]})
+        orch.step_soccerdata_refresh()
+        assert calls and calls[0][0] == "error" and "xG real NO disponible" in calls[0][1]
 
 
 class TestSeason:

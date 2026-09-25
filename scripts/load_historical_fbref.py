@@ -63,7 +63,10 @@ def load_extra():
             "AC":"away_corners"
         })
 
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        # football-data escribe DD/MM/YYYY. Sin dayfirst, "03/11/2026" se leía
+        # como 11-mar → 3-nov: 15 partidos argentinos quedaron con fecha futura
+        # (encontrados el 25-sep-26; ver scripts/fix_swapped_dates.py).
+        df["date"] = pd.to_datetime(df["date"], dayfirst=True, errors="coerce")
         df = df.dropna(subset=["date"])
 
         df["league"] = data["league"]

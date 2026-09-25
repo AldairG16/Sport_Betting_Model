@@ -33,7 +33,8 @@ def _book(key, home, draw, away, over, under, point=2.5):
 BOOKS = [_book("williamhill", 2.20, 3.50, 3.30, 2.00, 1.85),
          _book("pinnacle", 2.10, 3.40, 3.60, 1.95, 1.93)]
 PIN = {"pin_home_odds": 2.10, "pin_draw_odds": 3.40, "pin_away_odds": 3.60,
-       "pin_over25_odds": 1.95, "pin_under25_odds": 1.93}
+       "pin_over25_odds": 1.95, "pin_under25_odds": 1.93,
+       "pin_total_line": 2.5, "pin_total_over_odds": 1.95, "pin_total_under_odds": 1.93}
 
 
 # ============================================================
@@ -49,6 +50,7 @@ def test_without_pinnacle_or_at_another_total_line_there_is_no_price():
     other_line = extract_pinnacle([_book("pinnacle", 2.1, 3.4, 3.6, 1.9, 1.9, point=2.75)],
                                   "Alpha", "Beta")
     assert other_line["pin_home_odds"] == 2.1 and other_line["pin_over25_odds"] is None
+    assert (other_line["pin_total_line"], other_line["pin_total_over_odds"]) == (2.75, 1.9)
 
 
 def test_parse_match_keeps_the_best_price_and_adds_pinnacle():
@@ -81,10 +83,13 @@ def test_derived_markets_are_exact_equivalences():
     assert pinnacle_prob("ah_away_-0.50", ROW) == pytest.approx(px + pa)      # visita o empate
     assert pinnacle_prob("ah_home_+0.50", ROW) == pytest.approx(ph + px)      # local o empate
     assert pinnacle_prob("ah_away_+0.50", ROW) == pytest.approx(pa)
+    assert pinnacle_prob("dc_1x", ROW) == pytest.approx(ph + px)
+    assert pinnacle_prob("dc_x2", ROW) == pytest.approx(px + pa)
+    assert pinnacle_prob("dc_12", ROW) == pytest.approx(ph + pa)
 
 
 @pytest.mark.parametrize("market", ["ah_home_-0.75", "ah_away_-1.50", "ah_home_+0.00", "btts",
-                                    "corners_over_9.5", "dc_1x", "", None])
+                                    "corners_over_9.5", "h1_home", "", None])
 def test_markets_without_an_exact_reference(market):
     assert pinnacle_prob(market, ROW) is None
 

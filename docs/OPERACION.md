@@ -204,6 +204,34 @@ Mientras el weekly no tenga su primera fila, sirve de respaldo la hora de
 
 ## 5. Gotchas que ya rompieron producción
 
+**Un paso "OK" no prueba que hizo algo.** El paso del xG real imprimió ✅ OK desde el
+17 hasta el 25-sep-2026 sin cargar nunca un dato: `soccerdata` se instalaba sin sus
+dependencias y el `import` fallaba, el código lo trataba como "no instalado — omitido"
+y seguía. Hoy lee Understat directo (`/getLeagueData/<liga>/<temporada>`) y, si no llega
+ninguna liga, registra un **error** que llega a Telegram. Ante un "OK" sospechoso, busca
+en el log qué cargó.
+
+**El ajuste Dixon-Coles nunca convergía.** Con ~2,500 parámetros y gradiente por
+diferencias finitas, L-BFGS-B agotaba `MAX_FUN` tras pocos pasos (`converged=False` en
+todos los fits; el "ajuste" solo arrastraba el warm-start de la semana anterior). Desde
+el 25-sep-2026 `dc_objective` da el gradiente **exacto**: converge en segundos (medido:
+489 iteraciones, 4 s, gradiente máx. 0.02 frente a 65.8). Si vuelve a salir
+`converged=False`, algo cambió en los datos o en el objetivo: no es "normal".
+
+**Fechas DD/MM de football-data.** Sin `dayfirst=True`, "03/11/2026" se lee como
+11-mar → 3-nov. `scripts/load_historical_fbref.py` (cargador viejo, fuera del pipeline)
+metió así 15 partidos argentinos con fecha futura; `scripts/fix_swapped_dates.py` los
+detecta y corrige (ensayo por defecto, `--apply`). Un partido con resultado y fecha
+futura es siempre un error de fecha.
+
+**`odds_history` guarda cambios, no fotos.** Con el closing cada 30 min, el 97% de las
+fotos eran copias idénticas (~8 MB/día; en el plan gratuito de Neon, la base se llenaba
+en ~2 meses). Desde el 25-sep-2026 solo entra una foto si la cuota de ese partido cambió
+y nada se borra.
+
+**No edites archivos con `Get-Content`/`Set-Content` de Windows PowerShell 5.1.** Lee
+UTF-8 sin BOM como ANSI y escribe con BOM: rompe todos los acentos del archivo.
+
 **Secrets vacíos en GH Actions.** `int(os.environ.get("X", "default"))` devuelve
 `int("")` y lanza `ValueError`, matando el pipeline antes de escribir nada. Usa
 `env_int` / `env_float` / `env_str` de `config/settings.py`. El último módulo que lo
@@ -431,11 +459,14 @@ ventaja. Viene en la misma descarga (región `eu`), sin créditos extra. **Solo 
 no entra en las probabilidades, los filtros ni los stakes.
 
 - **Precios** (`src/features/pinnacle.py`): cada fetch guarda en `upcoming_matches`
-  las cuotas de Pinnacle de 1X2 y más/menos 2.5 (`pin_*`). No usa COALESCE: un fetch
-  con hora escribe el precio tal cual (NULL si ya no cotiza), para que un precio viejo
-  nunca quede con hora nueva. De ahí se derivan exactamente empate anulado
-  (P(local | no empate), la misma definición del modelo) y hándicap ±0.5. Esos
-  mercados son más del 80% de las candidatas; el resto queda sin referencia.
+  las cuotas de Pinnacle de 1X2 y de su línea principal de goles (`pin_*`). No usa
+  COALESCE: un fetch con hora escribe el precio tal cual (NULL si ya no cotiza), para que
+  un precio viejo nunca quede con hora nueva. Se derivan exactamente del 1X2: empate
+  anulado (P(local | no empate), la misma definición del modelo), hándicap ±0.5 y doble
+  oportunidad. Más/menos 2.5: directo si Pinnacle cotiza 2.5 (solo ~14% de los partidos);
+  si no, derivado de su línea principal (2.25, 2.75, 3…) despejando el λ de Poisson que
+  hace justa su cuota, con devolución en líneas enteras y mitad y mitad en las de cuarto
+  (`over25_from_line`). El resto de mercados queda sin referencia.
 - **Captura**: cada candidata shadow guarda `pin_prob` al registrarse, y cada apuesta
   lo guarda en `decision_log.market_ctx`. El closing guarda `pin_close_prob` y
   `pin_close_at` en ambas tablas (`save_bets.closing_updates`), con **su propia**
@@ -492,7 +523,7 @@ python scripts/resolve_pending_bets.py --hours-lag 6 --limit 15
 # Salud y auditoría (sin gasto)
 python scripts/watchdog.py
 python scripts/audit_analyst_calibration.py --days 60
-python scripts/db_smoke_test.py                  # 31 checks contra la base real, solo lectura
+python scripts/db_smoke_test.py                  # 32 checks contra la base real, solo lectura
 python scripts/fix_stat_settlements.py           # en seco; --apply corrige liquidaciones
 
 # Tests

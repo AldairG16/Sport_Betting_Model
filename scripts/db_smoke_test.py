@@ -417,6 +417,17 @@ def _sharp_reference_dry():
             f"{cov['shadow_valid_close']} shadow, {cov['bets_valid_close']} bets")
 
 
+@check("odds_history: la foto solo guarda cuotas que cambiaron (en seco)")
+def _odds_history_dedupe():
+    from scripts.odds_history import snapshot_sql
+    sql = snapshot_sql()
+    with engine.connect() as c:
+        would = c.execute(text(f"SELECT COUNT(*) FROM ({sql[sql.index('SELECT NOW()'):]}) t")).scalar()
+        total = c.execute(text("""SELECT COUNT(*) FROM upcoming_matches
+                                  WHERE home_odds > 1 AND away_odds > 1""")).scalar()
+    return f"guardaría {would} de {total} partidos (antes: los {total} en cada corrida)"
+
+
 @check("Watchdog: registro de corridas y ritmo del closing/weekly (en seco)")
 def _scheduled_runs_dry():
     from src.utils.pipeline_runs import check_scheduled_runs

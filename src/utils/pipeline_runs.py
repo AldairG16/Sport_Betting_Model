@@ -33,7 +33,7 @@ RUNS_DDL = (
     """,
     "CREATE INDEX IF NOT EXISTS idx_pipeline_runs_mode_ran ON pipeline_runs (mode, ran_at DESC)",
 )
-KEEP_DAYS = 60
+# Sin poda: ~50 filas/día (casi todas del closing) son ~1 MB al año.
 
 # El closing corre cada 30 min (≈12 por ventana de 6 h).
 CLOSING_MAX_GAP_H = 2.0
@@ -44,7 +44,7 @@ WEEKLY_MAX_GAP_D = 8.0
 
 
 def record_run(engine, mode: str, failed: int, seconds: float | None) -> None:
-    """Una fila por corrida (y poda de lo que pasa de KEEP_DAYS)."""
+    """Una fila por corrida."""
     with engine.begin() as conn:
         for stmt in RUNS_DDL:
             conn.execute(text(stmt))
@@ -53,7 +53,6 @@ def record_run(engine, mode: str, failed: int, seconds: float | None) -> None:
             VALUES (:mode, :failed, :seconds)
         """), {"mode": mode, "failed": int(failed),
                "seconds": None if seconds is None else round(float(seconds), 1)})
-        conn.execute(text(f"DELETE FROM pipeline_runs WHERE ran_at < NOW() - INTERVAL '{KEEP_DAYS} days'"))
 
 
 def _hours(now, t) -> float:
