@@ -21,6 +21,11 @@ Solución (corre en el modo closing, justo antes de los kickoffs):
      - edge nuevo < KEEP_EDGE → CANCELAR: marcar result='stale' con
        profit 0 (excluida de métricas, igual que cleanup_stale_bets).
        El mercado absorbió el edge — no apostar.
+  3. Filtro Pinnacle (25-sep-26), el mismo del pipeline: la bet que sigue
+     viva se cancela si a la cuota de ahora no tiene valor frente a Pinnacle
+     (p_pinnacle − 1/cuota < KEEP_EDGE), o si no hay precio de Pinnacle y su
+     grupo "sinref:" todavía no se reactivó con evidencia. Así las pendientes
+     de antes del filtro tampoco llegan como confirmadas sin valor real.
 
 Todo cambia queda anotado en decision_log.revalidation para autopsia.
 
@@ -38,6 +43,7 @@ from sqlalchemy import text
 sys.path.append(str(Path(__file__).parent.parent))
 
 from config.database import engine
+from src.features.pinnacle import PIN_COLS, no_reference_group, pinnacle_prob
 from src.utils.team_normalizer import normalize_team
 from src.utils.log import get_logger
 from src.utils.min_odds import (HOW_TO_READ, MIN_EDGE_TO_PLACE, fmt_american,
@@ -48,6 +54,33 @@ log = get_logger(__name__)
 # Edge mínimo para MANTENER una bet cuya odd se movió en contra — el mismo
 # umbral de la "cuota mínima" que se muestra para apostar en PlayDoit
 KEEP_EDGE = MIN_EDGE_TO_PLACE
+
+
+def sharp_decision(market: str, row, price, reactivated, recorded_pin=None):
+    """
+    Filtro Pinnacle del pipeline aplicado a una bet pendiente. Función pura:
+    devuelve (motivo para cancelarla o None, probabilidad de Pinnacle usada).
+    El precio de Pinnacle sale de la fila fresca; si esta no lo trae, del que
+    se guardó con la bet (pin_close_prob o el del momento del pick).
+    """
+    p_pin = pinnacle_prob(market, row)
+    if p_pin is None:
+        try:
+            p = float(recorded_pin)
+            p_pin = p if 0 < p < 1 else None
+        except (TypeError, ValueError):
+            p_pin = None
+    if p_pin is None:
+        return (None if no_reference_group(market) in reactivated else "cancelled_no_reference"), None
+    if not price or p_pin - 1.0 / float(price) < KEEP_EDGE:
+        return "cancelled_no_value_pinnacle", p_pin
+    return None, p_pin
+
+
+def _reactivated_groups() -> set:
+    """Grupos que el shadow ya reactivó (incluye los "sinref:")."""
+    from scripts.clv_gate import load_shadow_reactivated
+    return set(load_shadow_reactivated())
 
 
 def _fresh_odds_for(result, market: str):
@@ -202,9 +235,40 @@ def lineup_guard(verbose: bool = True) -> int:
     return cancelled
 
 
-def revalidate_pending_bets(verbose: bool = True) -> dict:
+def _cancel(conn, bet_id: int, note: dict, dry_run: bool = False):
+    if dry_run:
+        return
+    conn.execute(text("""
+        UPDATE bets_history
+        SET result = 'stale',
+            profit = 0.0,
+            decision_log = COALESCE(decision_log, '{}'::jsonb)
+                          || jsonb_build_object('revalidation',
+                               to_jsonb(CAST(:note AS jsonb)))
+        WHERE id = :id
+    """), {"note": str(_json_dumps(note)), "id": int(bet_id)})
+
+
+def _set_odds(conn, bet_id: int, odds: float, note: dict, dry_run: bool = False):
+    if dry_run:
+        return
+    conn.execute(text("""
+        UPDATE bets_history
+        SET odds = :odds,
+            decision_log = COALESCE(decision_log, '{}'::jsonb)
+                          || jsonb_build_object('revalidation',
+                               to_jsonb(CAST(:note AS jsonb)))
+        WHERE id = :id
+    """), {"odds": odds, "note": str(_json_dumps(note)), "id": int(bet_id)})
+
+
+def revalidate_pending_bets(verbose: bool = True, dry_run: bool = False) -> dict:
+    """dry_run: decide igual pero no escribe nada ni corre el lineup guard
+    (lo usa el smoke test para ver qué cancelaría ahora)."""
     bets = pd.read_sql(text("""
-        SELECT id, match, market, probability, odds
+        SELECT id, match, market, probability, odds,
+               COALESCE(pin_close_prob,
+                        CAST(decision_log->'market_ctx'->>'pin_prob' AS float)) AS pin_prob
         FROM bets_history
         WHERE result = 'pending'
           AND match_date > NOW()
@@ -216,7 +280,15 @@ def revalidate_pending_bets(verbose: bool = True) -> dict:
         return {"status": "no_bets"}
 
     kept_better, kept_edge, cancelled, no_odds, not_found = 0, 0, 0, 0, 0
+    cancelled_sharp = 0
     now_iso = datetime.now(timezone.utc).isoformat()
+    # Sin el estado de reactivación no se sabe qué grupos "sinref:" ya tienen
+    # evidencia: se asume ninguno (lo conservador es no apostar sin referencia)
+    try:
+        reactivated = _reactivated_groups()
+    except Exception as e:
+        log.warning(f"   ⚠️  Reactivaciones no disponibles, se asume ninguna: {e}")
+        reactivated = set()
 
     with engine.begin() as conn:
         for _, bet in bets.iterrows():
@@ -229,7 +301,7 @@ def revalidate_pending_bets(verbose: bool = True) -> dict:
             home_n = normalize_team(home_raw).lower().strip()
             away_n = normalize_team(away_raw).lower().strip()
 
-            row = conn.execute(text("""
+            row = conn.execute(text(f"""
                 SELECT home_odds, draw_odds, away_odds,
                        over25_odds, under25_odds,
                        btts_yes_odds, btts_no_odds,
@@ -239,7 +311,8 @@ def revalidate_pending_bets(verbose: bool = True) -> dict:
                        h1_home_odds, h1_draw_odds, h1_away_odds,
                        h2_home_odds, h2_draw_odds, h2_away_odds,
                        corners_over_odds, corners_under_odds, corners_line,
-                       cards_over_odds, cards_under_odds, cards_line
+                       cards_over_odds, cards_under_odds, cards_line,
+                       {", ".join(PIN_COLS)}
                 FROM upcoming_matches
                 WHERE home_team_norm = :home
                   AND away_team_norm = :away
@@ -252,72 +325,71 @@ def revalidate_pending_bets(verbose: bool = True) -> dict:
                 continue
 
             fresh = _fresh_odds_for(row, market)
-            if fresh is None:
-                no_odds += 1
-                continue
-
             old = float(bet["odds"])
             prob = float(bet["probability"]) if bet["probability"] else None
             note = {"revalidated_at": now_iso, "odds_before": old, "odds_after": fresh}
 
+            # 1. Odd peor y el edge del modelo no sobrevive → cancelar
+            if (fresh is not None and fresh < old
+                    and not (prob is not None and (prob - 1.0 / fresh) >= KEEP_EDGE)):
+                note["decision"] = "cancelled_line_moved"
+                note["new_edge"] = round(prob - 1.0 / fresh, 4) if prob else None
+                _cancel(conn, bet["id"], note, dry_run)
+                cancelled += 1
+                continue
+
+            # 2. Filtro Pinnacle a la cuota de ahora (la fresca, o la guardada)
+            reason, p_pin = sharp_decision(market, row, fresh or old, reactivated,
+                                           bet.get("pin_prob"))
+            if reason:
+                note["decision"] = reason
+                note["pin_prob"] = None if p_pin is None else round(p_pin, 4)
+                _cancel(conn, bet["id"], note, dry_run)
+                cancelled_sharp += 1
+                if verbose:
+                    print(f"   🔒 Cancelada [{market}] {bet['match']}: "
+                          + ("sin valor frente a Pinnacle" if p_pin is not None
+                             else "sin referencia de Pinnacle"))
+                continue
+
+            if fresh is None:
+                no_odds += 1
+                continue
+
             if fresh >= old:
                 # Odd igual o mejor → tomar el número fresco
-                conn.execute(text("""
-                    UPDATE bets_history
-                    SET odds = :odds,
-                        decision_log = COALESCE(decision_log, '{}'::jsonb)
-                                      || jsonb_build_object('revalidation',
-                                           to_jsonb(CAST(:note AS jsonb)))
-                    WHERE id = :id
-                """), {"odds": fresh, "note": str(_json_dumps(note)), "id": int(bet["id"])})
+                _set_odds(conn, bet["id"], fresh, note, dry_run)
                 kept_better += 1
             else:
-                # Odd peor → ¿el edge sobrevive?
-                if prob is not None and (prob - 1.0 / fresh) >= KEEP_EDGE:
-                    note["decision"] = "kept_edge_survives"
-                    conn.execute(text("""
-                        UPDATE bets_history
-                        SET odds = :odds,
-                            decision_log = COALESCE(decision_log, '{}'::jsonb)
-                                          || jsonb_build_object('revalidation',
-                                               to_jsonb(CAST(:note AS jsonb)))
-                        WHERE id = :id
-                    """), {"odds": fresh, "note": str(_json_dumps(note)), "id": int(bet["id"])})
-                    kept_edge += 1
-                else:
-                    note["decision"] = "cancelled_line_moved"
-                    note["new_edge"] = round(prob - 1.0 / fresh, 4) if prob else None
-                    conn.execute(text("""
-                        UPDATE bets_history
-                        SET result = 'stale',
-                            profit = 0.0,
-                            decision_log = COALESCE(decision_log, '{}'::jsonb)
-                                          || jsonb_build_object('revalidation',
-                                               to_jsonb(CAST(:note AS jsonb)))
-                        WHERE id = :id
-                    """), {"note": str(_json_dumps(note)), "id": int(bet["id"])})
-                    cancelled += 1
+                # Odd peor pero el edge sobrevive (el caso contrario ya se canceló)
+                note["decision"] = "kept_edge_survives"
+                _set_odds(conn, bet["id"], fresh, note, dry_run)
+                kept_edge += 1
 
     cancelled_ln = 0
     # ── GUARDIA DE ALINEACIONES (después de la revalidación de odds) ──
     try:
-        cancelled_ln = lineup_guard(verbose=verbose)
+        if not dry_run:
+            cancelled_ln = lineup_guard(verbose=verbose)
     except Exception as e:
         log.error(f"   ⚠️  Lineup guard falló: {e}")
 
     summary = {
         "status": "ok",
+        "dry_run": dry_run,
         "total": len(bets),
         "lineup_cancelled": cancelled_ln,
         "kept_better_odds": kept_better,
         "kept_edge_survives": kept_edge,
         "cancelled": cancelled,
+        "cancelled_sharp": cancelled_sharp,
         "no_fresh_odds": no_odds,
         "match_not_found": not_found,
     }
 
     if verbose:
-        print(f"\n🔁 REVALIDACIÓN PRE-KICKOFF (umbral edge {KEEP_EDGE:.0%})")
+        print(f"\n🔁 REVALIDACIÓN PRE-KICKOFF (umbral edge {KEEP_EDGE:.0%})"
+              + (" — ENSAYO: no se escribió nada" if dry_run else ""))
         print(f"   Bets evaluadas:        {len(bets)}")
         print(f"   Odd mejor/igual:       {kept_better} (actualizadas al número fresco)")
         print(f"   Odd peor, edge vive:   {kept_edge} (mantenidas a la odd nueva)")
@@ -325,6 +397,7 @@ def revalidate_pending_bets(verbose: bool = True) -> dict:
         # ERROR entraba en los "errores tolerados" y mandaba un Telegram de
         # alarma en CADA closing, aun con 0 canceladas (23-sep-26).
         print(f"   ❌ Canceladas:          {cancelled} (línea absorbió el edge)")
+        print(f"   🔒 Filtro Pinnacle:     {cancelled_sharp} canceladas (sin valor real o sin referencia)")
         print(f"   Sin odd fresca:        {no_odds}  |  Partido no encontrado: {not_found}")
 
     return summary
@@ -357,7 +430,7 @@ def _format_confirmations(rows: list[dict]) -> str:
         lines.append(f"   {market_name(r['market'])} · {r['stake']}u · edge {edge:+.0%}")
         # En formato americano, como lo muestra PlayDoit (24-sep-26): la cuota
         # decimal europea no le servía al dueño para decidir.
-        rule = playdoit_line(r.get("probability"))
+        rule = playdoit_line(r.get("probability"), pin_prob=r.get("pin_prob"))
         lines.append(f"   {rule}" if rule else
                      f"   Mejor cuota: {fmt_american(to_american(r.get('odds')))}")
     lines.append("")
@@ -376,7 +449,9 @@ def send_kickoff_confirmations(verbose: bool = True) -> int:
     como notificadas si el envío a Telegram tuvo éxito.
     """
     rows = pd.read_sql(text("""
-        SELECT id, match, market, probability, odds, stake, edge, match_date
+        SELECT id, match, market, probability, odds, stake, edge, match_date,
+               COALESCE(pin_close_prob,
+                        CAST(decision_log->'market_ctx'->>'pin_prob' AS float)) AS pin_prob
         FROM bets_history
         WHERE result = 'pending'
           AND match_date BETWEEN NOW() AND NOW() + INTERVAL '90 minutes'

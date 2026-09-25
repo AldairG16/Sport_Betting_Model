@@ -955,7 +955,12 @@
      "corners_cards": 1.0,
      "ah_dnb": 1.0
     },
-    "xg_source": "proxy"
+    "xg_source": "proxy",
+    "side_bias": {
+     "home": 0.0,
+     "draw": 0.0,
+     "away": 0.0
+    }
    },
    "signals": {
     "h2h_used": false,
@@ -1034,7 +1039,12 @@
      "btts": 1.0,
      "ah_dnb": 1.0
     },
-    "xg_source": "proxy"
+    "xg_source": "proxy",
+    "side_bias": {
+     "home": 0.0,
+     "draw": 0.0,
+     "away": 0.0
+    }
    },
    "signals": {
     "h2h_used": false,
@@ -1113,7 +1123,12 @@
      "btts": 1.0,
      "ah_dnb": 1.0
     },
-    "xg_source": "proxy"
+    "xg_source": "proxy",
+    "side_bias": {
+     "home": 0.0,
+     "draw": 0.0,
+     "away": 0.0
+    }
    },
    "signals": {
     "h2h_used": false,
@@ -1192,7 +1207,12 @@
      "btts": 1.0,
      "ah_dnb": 1.0
     },
-    "xg_source": "proxy"
+    "xg_source": "proxy",
+    "side_bias": {
+     "home": 0.0,
+     "draw": 0.0,
+     "away": 0.0
+    }
    },
    "signals": {
     "h2h_used": false,
@@ -1271,7 +1291,12 @@
      "btts": 1.0,
      "ah_dnb": 1.0
     },
-    "xg_source": "proxy"
+    "xg_source": "proxy",
+    "side_bias": {
+     "home": 0.0,
+     "draw": 0.0,
+     "away": 0.0
+    }
    },
    "signals": {
     "h2h_used": true,
@@ -1350,7 +1375,12 @@
      "btts": 1.0,
      "ah_dnb": 1.0
     },
-    "xg_source": "proxy"
+    "xg_source": "proxy",
+    "side_bias": {
+     "home": 0.0,
+     "draw": 0.0,
+     "away": 0.0
+    }
    },
    "signals": {
     "h2h_used": false,
@@ -1430,7 +1460,12 @@
      "btts": 1.0,
      "ah_dnb": 1.0
     },
-    "xg_source": "proxy"
+    "xg_source": "proxy",
+    "side_bias": {
+     "home": 0.0,
+     "draw": 0.0,
+     "away": 0.0
+    }
    },
    "signals": {
     "h2h_used": false,

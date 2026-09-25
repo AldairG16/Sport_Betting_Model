@@ -105,7 +105,8 @@ from src.models.ensemble_model import ensemble_predict
 from src.models.betting_engine import find_value_bets, kelly_stake, calculate_edges
 
 from src.features.market_odds import market_probabilities
-from src.features.pinnacle import pinnacle_prob
+from src.features.pinnacle import no_reference_group, pinnacle_prob, pinnacle_probs
+from src.utils.min_odds import MIN_EDGE_TO_PLACE
 from src.models.bet_ranker import rank_bets
 from src.models.save_bets import save_bets, persist_shadow_bets
 from src.models.bet_filters import bet_quality_filter
@@ -193,6 +194,9 @@ MAX_MODEL_DEVIATION     = 0.30
 # aquí. Banda [0-2pt) fuera por diseño (ruido de cuota); declarado en
 # docs/AUDITORIA_RONDA8.md §2.3.
 SHADOW_MIN_DEV          = 0.02
+# Filtro Pinnacle (25-sep-26): una bet real exige p_pinnacle − 1/cuota ≥ esto
+# (el mismo umbral de la cuota mínima para PlayDoit, src/utils/min_odds.py).
+SHARP_MIN_EDGE          = MIN_EDGE_TO_PLACE
 MAX_ODDS                = 3.80     # elimina longshots
 MAX_BETS_PER_MATCH      = 2
 MAX_RELIABLE_EDGE       = 0.499
@@ -366,18 +370,21 @@ _BLOCKED_MARKETS = {
 #   reactivated: grupos de bloqueo fijo que el shadow ya reactivó
 #   anchor: peso del modelo vs mercado por familia (anchor_learner)
 #   shades: escala de los ajustes manuales por familia (shade_learner)
+#   side_bias: sesgo del modelo por lado contra Pinnacle (side_bias)
 def load_learned_state() -> dict:
     from scripts.clv_gate import (load_clv_blocked_markets, load_clv_blocked_leagues,
                                   load_shadow_reactivated)
     from src.models.anchor_learner import load_anchor_weights
     from src.models.shade_learner import load_shade_scales
+    from src.models.side_bias import load_side_bias
     state = {"blocked_markets": set(), "blocked_leagues": set(),
-             "reactivated": set(), "anchor": {}, "shades": {}}
+             "reactivated": set(), "anchor": {}, "shades": {}, "side_bias": {}}
     loaders = (("blocked_markets", load_clv_blocked_markets),
                ("blocked_leagues", load_clv_blocked_leagues),
                ("reactivated", load_shadow_reactivated),
                ("anchor", load_anchor_weights),
-               ("shades", load_shade_scales))
+               ("shades", load_shade_scales),
+               ("side_bias", load_side_bias))
     for key, fn in loaders:
         try:
             state[key] = fn()
@@ -1256,6 +1263,21 @@ def _stage_model_probabilities(row, T, L, ctx, stats):
     return M, Q
 
 
+def _stage_side_bias(row, T, M, ctx, records):
+    """Etapa 3b — registra el 1X2 CRUDO del modelo contra Pinnacle (de ahí
+    aprende side_bias) y descuenta el sesgo por lado ya aprendido del 1X2 y
+    de sus derivados, antes del ancla (src/models/side_bias.py)."""
+    from src.models.side_bias import debias, record
+    rec = record(f"{T.home} vs {T.away}", T.date, _row_league_of(row),
+                 M.model_probs, pinnacle_probs(row))
+    if rec:
+        records.append(rec)
+    M.model_probs, M.side_bias_shift = debias(M.model_probs, getattr(ctx, "side_bias", None))
+    M.home_win = M.model_probs.get("home_win", M.home_win)
+    M.draw = M.model_probs.get("draw", M.draw)
+    M.away_win = M.model_probs.get("away_win", M.away_win)
+
+
 def _stage_market_probabilities(row, Q, p_ah_home):
     """Etapa 4 — probabilidad del mercado sin margen: market_probs (devig confiable, ancla) y market_probs_raw (patas sueltas)."""
     _ah_line = Q._ah_line
@@ -1979,8 +2001,9 @@ def _stage_candidates(clean_probabilities, odds, line, confidence, home, away, s
     return bets
 
 
-def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation):
-    """Etapa 11 — selección final por partido: bloqueos, umbrales de edge, techo de desvío, grupos excluyentes, stake Kelly y decision_log."""
+def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=None):
+    """Etapa 11 — selección final por partido: bloqueos, filtro Pinnacle, umbrales de edge, techo de desvío, grupos excluyentes, stake Kelly y decision_log."""
+    stats = stats if stats is not None else Counter()
     selected: list = []
     home = T.home
     away = T.away
@@ -2121,6 +2144,25 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation):
                 and _grp not in reactivated):
             continue
 
+        # ── Filtro Pinnacle: modo recolección (25-sep-26) ─────────
+        # Dinero real SOLO si la cuota supera por ≥ 2 pt la probabilidad
+        # sin margen de Pinnacle, el mercado más preciso. Medido el 25-sep:
+        # 7 de 11 pendientes tenían valor NEGATIVO frente a Pinnacle aun a
+        # la mejor cuota europea, y en PlayDoit (que paga menos) peor. Si la
+        # mejor cuota europea no pasa, PlayDoit tampoco. Mercados sin
+        # referencia de Pinnacle: solo en sombra hasta que su evidencia
+        # contra el cierre los reactive (clv_gate: grupos "sinref:*").
+        # Las candidatas siguen midiéndose igual (shadow, arriba).
+        if not _is_paper:
+            _pin = pinnacle_prob(mkt, row)
+            if _pin is None:
+                if no_reference_group(mkt) not in reactivated:
+                    stats['sharp_no_ref'] += 1
+                    continue
+            elif _pin - 1.0 / bet["odds"] < SHARP_MIN_EDGE:
+                stats['sharp_no_value'] += 1
+                continue
+
         # ── Mejora 4: Sweet spots de odds por mercado ────────────
         # Rangos donde el modelo ha demostrado edge real:
         #   home_win @1.5-2.0 → 81% WR, +42% ROI
@@ -2242,6 +2284,9 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation):
                     "anchor_model_weight": _anchor_w_by_family,
                     "shade_scale": _shade_scale_by_family,
                     "xg_source": _xg_source,
+                    # sesgo por lado descontado (side_bias), cambio en el 1X2
+                    "side_bias": {k: round(float(v), 4) for k, v in
+                                  (getattr(M, "side_bias_shift", None) or {}).items()},
                 },
                 "signals": {
                     "h2h_used": bool(h2h),
@@ -2611,6 +2656,10 @@ def run_prediction_pipeline(dry_run: bool = False):
     reactivated     = set(learned["reactivated"])
     anchor_state    = learned["anchor"] or {}
     shade_state     = learned.get("shades") or {}
+    side_bias_state = learned.get("side_bias") or {}
+    if any(side_bias_state.get(s) for s in ("home", "draw", "away")):
+        print("⚖️ Sesgo por lado descontado (vs Pinnacle): " + ", ".join(
+            f"{s}={side_bias_state.get(s, 0) * 100:+.1f}pt" for s in ("home", "draw", "away")))
     if learned["blocked_markets"]:
         print(f"🚦 Mercados bloqueados por CLV gate: {sorted(learned['blocked_markets'])}")
     if learned["blocked_leagues"]:
@@ -2664,6 +2713,9 @@ def run_prediction_pipeline(dry_run: bool = False):
     # si la ventana apostable [MIN_EDGE→desvío, MAX_MODEL_DEVIATION] está en
     # el lado correcto (ver docs/AUDITORIA_RONDA7.md §3).
     shadow_records: list = []
+    # 1X2 crudo del modelo vs Pinnacle en CADA partido con precio de Pinnacle
+    # (no solo candidatas): de aquí aprende src/models/side_bias.py.
+    model_sharp_records: list = []
     # Contadores del resumen (antes 14 variables nonlocal).
     stats = Counter()
 
@@ -2676,6 +2728,7 @@ def run_prediction_pipeline(dry_run: bool = False):
         cal_factors=cal_factors,
         anchor_state=anchor_state,
         shade_state=shade_state,
+        side_bias=side_bias_state,
         DC_RHO_SCORE=DC_RHO_SCORE,
         DC_RHO_GLOBAL=DC_RHO_GLOBAL,
         DC_CONVERGED=DC_CONVERGED,
@@ -2701,6 +2754,7 @@ def run_prediction_pipeline(dry_run: bool = False):
             return
         L = _stage_lambdas(row, T, ctx, stats)
         M, Q = _stage_model_probabilities(row, T, L, ctx, stats)
+        _stage_side_bias(row, T, M, ctx, model_sharp_records)
         market_probs, market_probs_raw = _stage_market_probabilities(row, Q, M.p_ah_home)
         probabilities, model_deviation, signed_deviation = _stage_blend(
             M.model_probs, market_probs, market_probs_raw)
@@ -2715,7 +2769,7 @@ def run_prediction_pipeline(dry_run: bool = False):
                                  T.home, T.away, stats)
         if not bets:
             return
-        all_bets.extend(_stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation))
+        all_bets.extend(_stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats))
 
 
     failed_matches: list = []
@@ -2824,6 +2878,17 @@ def run_prediction_pipeline(dry_run: bool = False):
           f"({stats['sweep_ref']}/{stats['sweep_total']}) · sobre piso 2pt: {stats['shadow_swept']}")
     if not dry_run:
         persist_shadow_bets(shadow_records)
+        try:
+            from src.models.side_bias import persist as persist_model_sharp
+            n_ms = persist_model_sharp(model_sharp_records)
+            print(f"⚖️ Modelo vs Pinnacle: {n_ms} partidos registrados para medir el sesgo por lado")
+        except Exception as e:
+            # ERROR, no WARNING: sin estas filas el sesgo por lado no aprende
+            # nunca, y un fallo silencioso ya costó semanas (§5, "OK silencioso")
+            log.error(f"❌ model_vs_sharp no registrado: {type(e).__name__}: {e}")
+    if stats['sharp_no_value'] or stats['sharp_no_ref']:
+        print(f"🔒 Filtro Pinnacle: {stats['sharp_no_value']} sin valor frente a Pinnacle · "
+              f"{stats['sharp_no_ref']} sin referencia (solo en sombra hasta tener evidencia)")
 
     LAST_RUN_SUMMARY.clear()
     LAST_RUN_SUMMARY.update({

@@ -265,11 +265,16 @@ def run_pipeline(monkeypatch, matches: pd.DataFrame | None = None,
                  calibration: dict | None = None,
                  mle_lambdas=None,
                  dc_params: dict | None = None,
-                 overrides: dict | None = None) -> dict:
+                 overrides: dict | None = None,
+                 sharp_gate: bool = False) -> dict:
     """
     Corre el pipeline con dependencias sustituidas y devuelve lo capturado.
     `learned` sustituye el estado aprendido por el weekly (DB): claves
-    blocked_markets, blocked_leagues, reactivated, anchor, shades.
+    blocked_markets, blocked_leagues, reactivated, anchor, shades, side_bias.
+    `sharp_gate`: con False (default) los grupos "sinref:*" están reactivados,
+    así que los partidos SIN precio de Pinnacle (los del arnés) apuestan como
+    antes; con precio de Pinnacle el filtro de valor corre siempre. Las pruebas
+    del modo recolección lo encienden con True.
     `pending`: {fecha 'YYYY-MM-DD': stake ya comprometido} (tope por slate).
     `calibration`: factores de calibración activos (por defecto, ninguno).
     `mle_lambdas`: fn(home, away, is_neutral) → (λh, λa) y activa DC-MLE.
@@ -283,9 +288,12 @@ def run_pipeline(monkeypatch, matches: pd.DataFrame | None = None,
     import src.models.dc_mle_fitter as dcf
     import src.models.monte_carlo_simulator as mcs
 
+    import src.models.side_bias as sbm
+    from src.models.anchor_learner import FAMILIES
+
     df = default_matches() if matches is None else matches
     moves = LINE_MOVES if line_moves is None else line_moves
-    captured = {"bets": [], "shadow": [], "paper": [], "sql": []}
+    captured = {"bets": [], "shadow": [], "paper": [], "sql": [], "model_sharp": []}
 
     pend = pending or {}
 
@@ -314,9 +322,13 @@ def run_pipeline(monkeypatch, matches: pd.DataFrame | None = None,
     monkeypatch.setattr(pp, "_has_coverage", lambda league, kind: True)
     monkeypatch.setattr(be, "_load_clv_cache", lambda: {})
     state = {"blocked_markets": set(), "blocked_leagues": set(),
-             "reactivated": set(), "anchor": {}, "shades": {}}
+             "reactivated": set(), "anchor": {}, "shades": {}, "side_bias": {}}
     state.update(learned or {})
+    if not sharp_gate:
+        state["reactivated"] = set(state["reactivated"]) | {
+            f"sinref:{f}" for f in (*FAMILIES, "otros")}
     monkeypatch.setattr(pp, "load_learned_state", lambda: dict(state))
+    monkeypatch.setattr(sbm, "persist", lambda recs: captured["model_sharp"].extend(recs) or len(recs))
 
     # Features (leen la DB en producción)
     monkeypatch.setattr(pp, "compute_elo", lambda: dict(ELO))

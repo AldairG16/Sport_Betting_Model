@@ -22,6 +22,8 @@ septiembre-2026 funcionan contra el esquema real de producción:
   13. Reglas contra resultados reales: columnas de resultado del shadow,
       candidatas liquidables, evidencia por regla y escala de los ajustes
       manuales, todo EN SECO (no liquida ni guarda estado)
+  14. Modo recolección (25-sep-26): revalidación con filtro Pinnacle en
+      ENSAYO, tabla model_vs_sharp y sesgo por lado en seco, canceladas
 
 READ-ONLY sobre datos: no inserta, no actualiza ni borra bets. Los DDL
 guards son idempotentes (IF NOT EXISTS) y son los mismos que correría el
@@ -415,6 +417,38 @@ def _sharp_reference_dry():
     return (f"partidos próximos con precio Pinnacle: {int(pin['con_pinnacle'])}/{int(pin['total'])} | "
             f"shadow con Pinnacle: {cov['shadow_with_pin']}/{cov['shadow']} | cierres válidos: "
             f"{cov['shadow_valid_close']} shadow, {cov['bets_valid_close']} bets")
+
+
+@check("Modo recolección: revalidación con filtro Pinnacle (ENSAYO, no escribe)")
+def _revalidation_sharp_dry():
+    from scripts.revalidate_pending_bets import revalidate_pending_bets
+    s = revalidate_pending_bets(verbose=False, dry_run=True)
+    if s.get("status") == "no_bets":
+        return "sin pendientes futuras"
+    return (f"{s['total']} pendientes → canceladas: {s['cancelled_sharp']} por Pinnacle, "
+            f"{s['cancelled']} por línea | mantenidas: "
+            f"{s['kept_better_odds'] + s['kept_edge_survives']} | sin cuota: {s['no_fresh_odds']}")
+
+
+@check("Sesgo por lado: tabla model_vs_sharp (DDL idempotente) y aprendizaje (en seco)")
+def _side_bias_dry():
+    from src.models.side_bias import WINDOW_DAYS, learn, load_side_bias, read_pairs
+    df = read_pairs()
+    st = learn(df, load_side_bias())                   # sin save_state
+    return (f"{len(df)} partidos en {WINDOW_DAYS} días | corrección local "
+            f"{st['home'] * 100:+.1f}pt, empate {st['draw'] * 100:+.1f}pt, "
+            f"visitante {st['away'] * 100:+.1f}pt ({st['source']})")
+
+
+@check("Canceladas antes del kickoff: fuera del ROI y de la recuperación de stale")
+def _cancelled_bets():
+    from src.utils.bet_status import CANCELLED_SQL
+    r = pd.read_sql(text(f"""
+        SELECT COUNT(*) FILTER (WHERE {CANCELLED_SQL}) AS canceladas,
+               COUNT(*) FILTER (WHERE NOT {CANCELLED_SQL}) AS sin_fuente
+        FROM bets_history WHERE result = 'stale'
+    """), engine).iloc[0]
+    return f"stale: {int(r['canceladas'])} canceladas · {int(r['sin_fuente'])} sin fuente de resultado"
 
 
 @check("odds_history: la foto solo guarda cuotas que cambiaron (en seco)")

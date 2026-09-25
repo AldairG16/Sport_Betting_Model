@@ -32,29 +32,42 @@ MIN_EDGE_TO_PLACE = 0.02
 HOW_TO_READ = "Número más alto = paga más: -120 es mejor que -140 y +150 mejor que +130."
 
 
-def _floor_decimal(prob, min_edge: float) -> float | None:
-    """Cuota decimal EXACTA (sin redondear) que deja justo min_edge."""
+def _floor_decimal(prob, min_edge: float, pin_prob=None) -> float | None:
+    """
+    Cuota decimal EXACTA (sin redondear) que deja justo min_edge. Con precio
+    de Pinnacle (25-sep-26) se usa la probabilidad MÁS CONSERVADORA entre el
+    modelo y Pinnacle: el modelo daba ~5 pt de más al local, y apostar por
+    debajo de lo que Pinnacle considera justo no tiene valor real.
+    """
     try:
         p = float(prob)
     except (TypeError, ValueError):
         return None
-    if not (0 < p < 1) or p - min_edge <= 0:
+    if not (0 < p < 1):
+        return None
+    try:
+        pin = float(pin_prob)
+        if 0 < pin < 1:
+            p = min(p, pin)
+    except (TypeError, ValueError):
+        pass
+    if p - min_edge <= 0:
         return None
     return 1.0 / (p - min_edge)
 
 
-def min_odds(prob, min_edge: float = MIN_EDGE_TO_PLACE) -> float | None:
+def min_odds(prob, min_edge: float = MIN_EDGE_TO_PLACE, pin_prob=None) -> float | None:
     """Cuota mínima decimal, redondeada HACIA ARRIBA a 2 decimales (apostar
     justo en el número mostrado nunca deja menos edge que el umbral). None
     si la probabilidad no alcanza para ningún precio."""
-    d = _floor_decimal(prob, min_edge)
+    d = _floor_decimal(prob, min_edge, pin_prob)
     return None if d is None else math.ceil(100.0 * d - 1e-9) / 100.0
 
 
-def min_american(prob, min_edge: float = MIN_EDGE_TO_PLACE) -> int | None:
+def min_american(prob, min_edge: float = MIN_EDGE_TO_PLACE, pin_prob=None) -> int | None:
     """La PEOR cuota americana que todavía deja edge ≥ min_edge, redondeada
     del lado seguro: a ese número el edge alcanza; un punto peor, ya no."""
-    d = _floor_decimal(prob, min_edge)
+    d = _floor_decimal(prob, min_edge, pin_prob)
     if d is None:
         return None
     if d >= 2.0:
@@ -106,9 +119,9 @@ def rule_examples(american: int) -> tuple[int, int | None]:
     return (100 if better == -100 else better), worse
 
 
-def playdoit_line(prob, min_edge: float = MIN_EDGE_TO_PLACE) -> str:
+def playdoit_line(prob, min_edge: float = MIN_EDGE_TO_PLACE, pin_prob=None) -> str:
     """Línea de Telegram con la regla para PlayDoit; "" si no hay precio."""
-    a = min_american(prob, min_edge)
+    a = min_american(prob, min_edge, pin_prob)
     if a is None:
         return ""
     better, worse = rule_examples(a)

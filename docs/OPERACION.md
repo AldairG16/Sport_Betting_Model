@@ -116,8 +116,10 @@ Cada uno es su propio workflow.
 explícitas (`_stage_*` en `src/pipeline/prediction_pipeline.py`): fuerzas → λ →
 probabilidades del modelo → mercado sin margen → combinación → cuotas → probabilidad
 final (ancla, calibración, sesgos) → shadow → contexto de mercado → candidatas →
-selección y stake. Después, `_apply_portfolio_limits` (correlación, sospechosas,
-exposición y tope por slate). Cada etapa es la misma lógica de antes del 22-sep-2026
+selección y stake. Entre las probabilidades del modelo y el mercado, la etapa 3b
+descuenta el sesgo por lado aprendido contra Pinnacle (§7); la selección aplica el
+**filtro Pinnacle** del modo recolección (§7). Después, `_apply_portfolio_limits`
+(correlación, sospechosas, exposición y tope por slate). Cada etapa es la misma lógica de antes del 22-sep-2026
 (verificado con dos goldens); cambiarla exige regenerar el golden con el diff a la vista.
 Trae cuotas de The Odds API, `src/pipeline/prediction_pipeline.py` puntúa cada par
 (partido, mercado), aplica calibración, filtros de edge y Kelly, e inserta en
@@ -151,8 +153,9 @@ del evening, sin llamar a la LLM.
 **4 · Aprendizaje semanal** — el modo `weekly` recalcula todo lo que el sistema
 aprende de los datos que recolecta solo, y lo guarda en `model_state` (§7):
 calibración, CLV gate, caché de CLV para Kelly, **peso del modelo frente al
-mercado**, **reactivaciones por shadow**, **evidencia de las reglas contra resultados
-reales** y **escala de los ajustes manuales**. Las corridas diarias lo leen de la DB
+mercado**, **sesgo por lado contra Pinnacle**, **reactivaciones por shadow**,
+**evidencia de las reglas contra resultados reales** y **escala de los ajustes
+manuales**. Las corridas diarias lo leen de la DB
 al arrancar (`load_learned_state()` en el pipeline). Solo aprende de datos de la
 cohorte actual (`LEARNING_SINCE`, §7). Estos pasos corren **al inicio** del weekly,
 antes de las cargas de datos: las cargas tardan ~62 min (histórico 11', eventos 21',
@@ -162,8 +165,12 @@ llegar a aprender. Límite actual del job: 120 min.
 ### Cómo auditar
 
 El pipeline **nunca borra** de `bets_history`. Para «¿por qué no apostó esto?»: si no
-existe la fila, el modelo no lo puntuó; si existe en `pending`, apostó y espera
-resolución; si está resuelta, ya está. Para «¿por qué no habló el analista?»: mira
+existe la fila, el modelo no lo puntuó o el filtro Pinnacle lo dejó solo en sombra
+(`shadow_bets`, con su `pin_prob`); si existe en `pending`, apostó y espera
+resolución; si está resuelta, ya está. Una fila `stale` con la razón en
+`decision_log` (`revalidation.decision` = `cancelled_*`, o `lineup_guard`) es una
+bet **cancelada** antes del kickoff: no se apostó, no cuenta en el ROI y los scripts
+que recuperan stale no la tocan (`src/utils/bet_status.py`). Para «¿por qué no habló el analista?»: mira
 `analyst_heartbeat` (que el cron disparó) y su `error_msg` (fallos por bet).
 
 ---
@@ -386,7 +393,8 @@ fuente de verdad; los archivos de `config/` y `data/` son espejo local.
 | `clv_gate_markets` / `clv_gate_leagues` | `clv_gate.run_clv_gate` | kill-switch por mercado / liga |
 | `clv_cache` | `betting_engine.refresh_clv_cache` | fracción de Kelly por CLV |
 | `anchor_weights` | `anchor_learner.run_anchor_learning` | **peso del modelo** frente al mercado |
-| `shadow_reactivation` | `clv_gate.run_shadow_reactivation` | `away_win` y AH con local favorito |
+| `side_bias` | `side_bias.run_side_bias` | **sesgo por lado** que se descuenta del 1X2 del modelo |
+| `shadow_reactivation` | `clv_gate.run_shadow_reactivation` | `away_win`, AH con local favorito y grupos `sinref:*` |
 | `shade_scales` | `shade_learner.run_shade_learning` | **escala de los ajustes manuales** (FLB, tabla, empates) |
 | `rule_evidence` | `rule_evidence.run_rule_evidence` | solo reporte: veredicto de cada regla contra resultados |
 | `sharp_reference` | `sharp_reference.run_sharp_reference` | solo reporte: apuestas y modelo contra Pinnacle |
@@ -417,7 +425,11 @@ es el comportamiento correcto, y el shadow sigue midiendo.
 
 `away_win` y los AH con el local favorito están bloqueados de forma fija. Vuelven solos
 si sus candidatas shadow que se habrían apostado (desvío > 0, edge ≥ 5 pt) muestran
-CLV ≥ 0 con n ≥ 30; se re-bloquean con CLV significativamente negativo.
+CLV ≥ 0 con n ≥ 30; se re-bloquean con CLV significativamente negativo. Con el mismo
+criterio vuelven los mercados **sin referencia de Pinnacle** (grupos `sinref:<familia>`:
+btts, córners/tarjetas, medio tiempo, goles sin línea...): cuentan sus candidatas que
+no tenían `pin_prob`, solo desde el 25-sep-2026 03:00 UTC (`PIN_RECORDING_SINCE`:
+antes el vacío significaba "no se guardaba", no "Pinnacle no cotiza").
 
 ### Reglas manuales contra resultados reales
 
@@ -455,8 +467,9 @@ no en Brier ni calibración. Las candidatas sin datos del partido a los 10 días
 Desde el 24-sep-2026 el sistema se mide también contra **Pinnacle**, la casa de
 referencia de los profesionales. Su precio sin margen es el mejor estimador público de
 la probabilidad real, y su cierre es el patrón estándar para saber si alguien tiene
-ventaja. Viene en la misma descarga (región `eu`), sin créditos extra. **Solo mide:**
-no entra en las probabilidades, los filtros ni los stakes.
+ventaja. Viene en la misma descarga (región `eu`), sin créditos extra. Desde el
+25-sep-2026 además **decide qué lleva dinero real** (modo recolección, abajo) y corrige
+el sesgo por lado del modelo; en las probabilidades del ancla y en los stakes no entra.
 
 - **Precios** (`src/features/pinnacle.py`): cada fetch guarda en `upcoming_matches`
   las cuotas de Pinnacle de 1X2 y de su línea principal de goles (`pin_*`). No usa
@@ -478,6 +491,44 @@ no entra en las probabilidades, los filtros ni los stakes.
   (§5), IC 95% robusto por partido y nada con n < 100 o < 30 partidos. Llega a Telegram
   cada semana en cuanto hay cierres válidos. Las apuestas se miden a la mejor cuota
   europea; en PlayDoit suele ser menor.
+
+### Modo recolección: el filtro Pinnacle (25-sep-2026)
+
+La auditoría del 25-sep midió que 7 de 11 apuestas pendientes tenían valor **negativo**
+contra Pinnacle aun a la mejor cuota europea, y el simulacro de revalidación de ese día
+no dejó en pie ninguna de las 14 pendientes. El modelo todavía no demuestra ventaja
+sobre Pinnacle, así que el dinero real solo va donde Pinnacle confirma el valor, y todo
+lo demás se sigue midiendo en sombra:
+
+- **Pipeline** (`_stage_select_bets`): una apuesta real exige
+  `p_pinnacle − 1/cuota ≥ 2 pt` (`SHARP_MIN_EDGE` = `MIN_EDGE_TO_PLACE`). Sin precio de
+  Pinnacle solo pasa si su grupo `sinref:<familia>` ya fue reactivado con evidencia
+  (§7, reactivación). Las candidatas shadow no cambian: se registran igual, con su
+  `pin_prob`. El resumen de la corrida imprime `🔒 Filtro Pinnacle: N sin valor · M sin
+  referencia`.
+- **Revalidación pre-kickoff** (`scripts/revalidate_pending_bets.py`, cada closing):
+  la misma regla a la cuota fresca, con el precio fresco de Pinnacle (o, si la fila ya
+  no lo trae, el guardado con la bet). Cancela con `cancelled_no_value_pinnacle` o
+  `cancelled_no_reference`; Telegram dice "canceladas: sin valor real frente a
+  Pinnacle (no las apuestes)" y la confirmación pre-kickoff ya no sale.
+- **Días sin picks son lo esperado.** Los mensajes lo dicen: "Sin apuestas con valor
+  real frente a Pinnacle. No apuestes nada: el sistema sigue recolectando datos en
+  sombra." Si el modelo demuestra ventaja (referencia Pinnacle con veredicto, peso del
+  modelo al alza), el filtro se puede relajar; es una decisión del dueño.
+
+### Sesgo por lado (`src/models/side_bias.py`)
+
+Medido el 25-sep: el modelo daba en promedio +5.1 pt al local, −2.2 al empate y −3.3 al
+visitante frente a Pinnacle. Pinnacle no tiene sesgo por lado, así que es un error
+sistemático del modelo. Cada corrida guarda, en **cada** partido con precio de Pinnacle
+(no solo en las candidatas, que sesgarían la muestra), el 1X2 **crudo** del modelo y el
+de Pinnacle (tabla `model_vs_sharp`, una fila por partido). El weekly estima el sesgo
+medio por lado en los últimos 21 días (`WINDOW_DAYS`), lo encoge hacia 0
+(`n/(n+60)`), limita el cambio a ±3 pt por semana y el total a ±8 pt, y con < 30
+partidos conserva el anterior (arranca en 0). El pipeline lo descuenta del 1X2 del
+modelo y de lo que se deriva de él (doble oportunidad, empate anulado, hándicap) antes
+del ancla; el `decision_log.model.side_bias` guarda el cambio aplicado. Telegram solo
+cuando la corrección se mueve.
 
 ### Calibración por mercado
 
@@ -523,7 +574,8 @@ python scripts/resolve_pending_bets.py --hours-lag 6 --limit 15
 # Salud y auditoría (sin gasto)
 python scripts/watchdog.py
 python scripts/audit_analyst_calibration.py --days 60
-python scripts/db_smoke_test.py                  # 32 checks contra la base real, solo lectura
+python scripts/db_smoke_test.py                  # 35 checks contra la base real, solo lectura
+python -c "from scripts.revalidate_pending_bets import revalidate_pending_bets as r; r(dry_run=True)"  # qué cancelaría ahora
 python scripts/fix_stat_settlements.py           # en seco; --apply corrige liquidaciones
 
 # Tests
@@ -555,10 +607,14 @@ mejor entre ~20 casas europeas. Por eso cada pick, cada confirmación pre-kickof
 avance de mañana dicen "PlayDoit: apuesta si paga -138 o mejor (-125 ✅ · -150 ❌)":
 **formato americano**, como lo muestra PlayDoit, porque el dueño no lee cuotas
 decimales (`src/utils/min_odds.py`: edge ≥ 2%, el mismo umbral de la revalidación,
-redondeado del lado seguro). En americano un número más alto siempre paga más. El
-dashboard muestra lo mismo (columnas **Mejor cuota** y **PlayDoit**) y no pide nada a
-mano: el registro de la cuota tomada (v1.4.0) se quitó en v1.5.0 por pedido del dueño.
-La columna `bets_history.odds_placed` sigue en la base, sin uso.
+redondeado del lado seguro). Desde el 25-sep-2026 el mínimo usa la probabilidad **más
+conservadora** entre el modelo y Pinnacle (`pin_close_prob` si el closing ya la
+capturó; si no, la del pick): apostar por debajo de lo que Pinnacle considera justo no
+tiene valor real. En americano un número más alto siempre paga más. El dashboard
+muestra lo mismo (columnas **Mejor cuota** y **PlayDoit**), marca las canceladas
+("Cancelada", "no apostar") y no pide nada a mano: el registro de la cuota tomada
+(v1.4.0) se quitó en v1.5.0 por pedido del dueño. La columna `bets_history.odds_placed`
+sigue en la base, sin uso.
 
 Hasta el 22-sep-2026 el `.exe` en uso no se podía reconstruir desde el repo: `app.py`
 era una reescritura a medias, sin rutas.

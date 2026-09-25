@@ -412,6 +412,16 @@ def load_clv_blocked_markets() -> set:
 #   - AH con el local favorito: grupos ah_home_fav y ah_away_dog (ver
 #     _ah_group — son las dos patas de la misma línea)
 SHADOW_REACTIVABLE = ("away_win", "ah_home_fav", "ah_away_dog")
+# Filtro Pinnacle (25-sep-26): los mercados SIN referencia de Pinnacle
+# (btts, córners/tarjetas, medio tiempo, goles cuando no hay línea...) no
+# llevan dinero real hasta que sus candidatas sin referencia muestren CLV
+# ≥ 0 con n ≥ 30 contra el cierre — mismo criterio y misma histéresis.
+NO_REF_REACTIVABLE = tuple(f"sinref:{f}" for f in
+                           ("1x2", "totals", "btts", "ah_dnb", "halftime", "corners_cards", "otros"))
+REACTIVABLE_GROUPS = SHADOW_REACTIVABLE + NO_REF_REACTIVABLE
+# Desde cuándo cada candidata guarda pin_prob (primera corrida con el PR #15):
+# antes el vacío no significa "Pinnacle no cotiza", sino "no se guardaba".
+PIN_RECORDING_SINCE = "2026-09-25T03:00:00+00:00"
 REACTIVATION_MIN_N = MIN_BETS_STAT      # 30, como el gate
 REACTIVATION_MIN_EDGE = 0.05            # piso operativo del pipeline (MIN_EDGE)
 
@@ -428,7 +438,7 @@ def merge_reactivation_state(prev: dict, stats: dict) -> dict:
     bloquear solo con CLV significativamente negativo; entre ambos manda el
     estado anterior (histéresis, igual que merge_gate_state).
     """
-    out = {g: bool(prev.get(g, False)) for g in SHADOW_REACTIVABLE}
+    out = {g: bool(prev.get(g, False)) for g in REACTIVABLE_GROUPS}
     for g, (n, mean, sd) in stats.items():
         if g not in out:
             continue
@@ -446,9 +456,12 @@ def shadow_reactivation_stats() -> dict:
     la DB falla.
     """
     from src.utils.closing_quality import valid_closing_sql, ensure_closing_columns
+    from src.models.save_bets import SHADOW_ALTER_SQL
     ensure_closing_columns(engine)
+    with engine.begin() as conn:
+        conn.execute(text(SHADOW_ALTER_SQL))          # pin_prob (filtro Pinnacle)
     df = pd.read_sql(text(f"""
-        SELECT market, odds, closing_odds, deviation, edge_market
+        SELECT market, odds, closing_odds, deviation, edge_market, pin_prob, created_at
         FROM shadow_bets
         WHERE closing_odds > 1 AND odds > 1
           AND deviation > 0
@@ -457,12 +470,32 @@ def shadow_reactivation_stats() -> dict:
           AND {valid_closing_sql()}
           AND closing_fetched_at > created_at
     """), engine, params={"min_edge": REACTIVATION_MIN_EDGE, "since": LEARNING_SINCE})
+    return aggregate_reactivation_stats(df)
+
+
+def aggregate_reactivation_stats(df: pd.DataFrame) -> dict:
+    """
+    Función pura: {grupo: (n, CLV medio, sd)}. Cada candidata cuenta en su
+    grupo de bloqueo fijo (away_win, AH con local favorito) y, si no tenía
+    precio de Pinnacle (pin_prob vacío, registrada desde PIN_RECORDING_SINCE),
+    en su grupo "sinref:<familia>".
+    """
+    from src.features.pinnacle import no_reference_group
     stats = {}
-    if not df.empty:
-        df["grp"] = df["market"].map(_reactivation_group)
-        df = df[df["grp"].isin(SHADOW_REACTIVABLE)].copy()
-        df["clv"] = 1.0 / df["closing_odds"].astype(float) - 1.0 / df["odds"].astype(float)
-        for g, sub in df.groupby("grp"):
+    if df.empty:
+        return stats
+    df = df.copy()
+    df["clv"] = 1.0 / df["closing_odds"].astype(float) - 1.0 / df["odds"].astype(float)
+    pin = (pd.to_numeric(df["pin_prob"], errors="coerce") if "pin_prob" in df.columns
+           else pd.Series(float("nan"), index=df.index))
+    no_pin = pin.isna()
+    if "created_at" in df.columns:
+        no_pin &= pd.to_datetime(df["created_at"], utc=True) >= pd.Timestamp(PIN_RECORDING_SINCE)
+    fixed = df["market"].map(_reactivation_group)
+    no_ref = df["market"].map(no_reference_group).where(no_pin)
+    for groups in (fixed, no_ref):
+        mask = groups.isin(REACTIVABLE_GROUPS)
+        for g, sub in df[mask].groupby(groups[mask]):
             n = len(sub)
             sd = float(sub["clv"].std(ddof=1)) if n > 1 else None
             stats[str(g)] = (n, float(sub["clv"].mean()), sd)
@@ -490,7 +523,7 @@ def run_shadow_reactivation(verbose: bool = True) -> dict:
     })
     if verbose:
         print("\n🔁 REACTIVACIÓN POR SHADOW (candidatas que se habrían apostado vs cierre)")
-        for g in SHADOW_REACTIVABLE:
+        for g in REACTIVABLE_GROUPS:
             n, mean, _ = stats.get(g, (0, None, None))
             clv_s = f"{mean:+.4f}" if mean is not None else "  -  "
             estado = "REACTIVADO" if new[g] else "bloqueado"

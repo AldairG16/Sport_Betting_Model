@@ -380,14 +380,17 @@ def step_pre_kickoff_closing():
     try:
         from scripts.revalidate_pending_bets import revalidate_pending_bets
         result = revalidate_pending_bets(verbose=True)
-        if result.get("cancelled"):
+        if result.get("cancelled") or result.get("cancelled_sharp"):
             from scripts.notify_telegram import send_message
-            send_message(
-                f"🔁 <b>REVALIDACIÓN PRE-KICKOFF</b>\n\n"
-                f"• {result['cancelled']} bets canceladas (la línea absorbió el edge)\n"
-                f"• {result.get('kept_better_odds', 0)} actualizadas a odd mejor\n"
-                f"• {result.get('kept_edge_survives', 0)} mantenidas (el edge sobrevive)"
-            )
+            lines = ["🔁 <b>REVALIDACIÓN PRE-KICKOFF</b>", ""]
+            if result.get("cancelled"):
+                lines.append(f"• {result['cancelled']} bets canceladas (la línea absorbió el edge)")
+            if result.get("cancelled_sharp"):
+                lines.append(f"• {result['cancelled_sharp']} bets canceladas: sin valor real "
+                             f"frente a Pinnacle (no las apuestes)")
+            lines += [f"• {result.get('kept_better_odds', 0)} actualizadas a odd mejor",
+                      f"• {result.get('kept_edge_survives', 0)} mantenidas (el edge sobrevive)"]
+            send_message("\n".join(lines))
     except Exception as e:
         # La revalidación es un filtro de protección — un fallo no debe
         # romper el closing, pero sí debe verse en el log.
@@ -752,6 +755,18 @@ def step_anchor_learning():
         send_message(format_report(state, html=True))
 
 
+def step_side_bias():
+    """Sesgo del modelo por lado (local/empate/visitante) contra Pinnacle,
+    que el pipeline descuenta del 1X2 y sus derivados (src/models/side_bias.py).
+    Telegram cuando la corrección cambia: silencio = sin novedad."""
+    from src.models.side_bias import SIDES, format_report, load_side_bias, run_side_bias
+    previous = load_side_bias()
+    state = run_side_bias(verbose=True)
+    if any(abs((state.get(s) or 0) - (previous.get(s) or 0)) > 1e-9 for s in SIDES):
+        from scripts.notify_telegram import send_message
+        send_message(format_report(state, previous, html=True))
+
+
 def step_rule_evidence():
     """Reglas manuales contra RESULTADOS reales: liquida las shadow
     pendientes, arma la evidencia por regla (rule_evidence) y aprende la
@@ -941,6 +956,7 @@ def main():
             run_step(logger, "CLV gate (kill-switch)",   step_clv_gate)
             run_step(logger, "Reactivación por shadow",  step_shadow_reactivation)
             run_step(logger, "Peso del modelo (ancla)",  step_anchor_learning)
+            run_step(logger, "Sesgo por lado (Pinnacle)", step_side_bias)
             run_step(logger, "Evidencia de reglas",      step_rule_evidence)
             run_step(logger, "Referencia Pinnacle",      step_sharp_reference)
             run_step(logger, "Refresh CLV cache",        step_refresh_clv_cache)   # Mejora #14

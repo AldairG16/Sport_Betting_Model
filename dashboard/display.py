@@ -168,4 +168,5 @@ def result_label(r: str) -> str:
         "pending": "Pendiente",
         "unresolved": "Esperando datos",
         "stale": "Sin fuente",
+        "cancelled": "Cancelada",
     }.get(r or "", r or "")

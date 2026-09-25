@@ -189,6 +189,15 @@ def pinnacle_prob(market, row) -> float | None:
     return None
 
 
+def no_reference_group(market) -> str:
+    """Grupo de reactivación de un mercado sin referencia de Pinnacle:
+    'sinref:<familia>' (btts, corners_cards, halftime...). Sin precio sharp,
+    su dinero real espera a la evidencia de sus candidatas contra el cierre
+    (scripts/clv_gate.run_shadow_reactivation)."""
+    from src.models.anchor_learner import market_family
+    return "sinref:" + (market_family(str(market or "")) or "otros")
+
+
 def pinnacle_quote_for(market, row) -> tuple[float | None, object]:
     """(probabilidad de Pinnacle, cuándo se descargó) desde una fila de
     upcoming_matches. Sin hora conocida no sirve de cierre: (None, None)."""
