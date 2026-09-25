@@ -4,11 +4,21 @@ Entrypoint para el ejecutable (PyInstaller).
 Cuando el programa se congela a .exe, config/settings.py ya no puede
 encontrar el .env por rutas del repo. Este entrypoint carga el .env que
 vive JUNTO AL EXE antes de importar nada de config.
+
+Desde v1.6.0 (25-sep-26) el .exe tiene dos modos (dashboard/supervisor.py):
+  BettingDashboard.exe          supervisor: abre el navegador y mantiene vivo
+                                el servidor (lo vuelve a abrir si se cae o se
+                                cuelga). Es lo que lanza el acceso directo.
+  BettingDashboard.exe --serve  el servidor web (lo lanza el supervisor).
 """
 
 import os
 import sys
+import time
 from pathlib import Path
+
+if not getattr(sys, "frozen", False):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def _load_env_beside_exe():
@@ -32,35 +42,42 @@ def _load_env_beside_exe():
         os.environ.setdefault(key.strip(), val.strip())
 
 
+def _serve():
+    import logging
+    # Sin una línea por petición en la consola: si la consola se pausa, cada
+    # escritura bloquea la respuesta y la página se queda esperando.
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
+    from dashboard.app import app
+    from dashboard.supervisor import PORT
+    app.run(host="127.0.0.1", port=PORT, debug=False, threaded=True)
+
+
+def _supervise():
+    from dashboard import supervisor as sv
+    lock = sv.single_instance()          # vive mientras viva este proceso
+    if lock is None:
+        # Instancia única (fix 17-sep-26): cada doble clic acumulaba una
+        # instancia zombi peleándose por el puerto. Ahora abre el navegador
+        # hacia el que ya corre y esta ventana se cierra sola.
+        print("  Ya hay un dashboard corriendo — abriendo el navegador...")
+        sv.open_browser()
+        time.sleep(5)
+        return
+    print(f"  Dashboard: {sv.URL}")
+    print("  Se mantiene abierto solo: si el servidor se cae o se cuelga, se vuelve a abrir.")
+    print("  Cierra esta ventana para apagar el dashboard.")
+    sv.log_event("Supervisor iniciado")
+    sv.Supervisor().run()
+
+
 if __name__ == "__main__":
     # Consola Windows usa cp1252 y no soporta acentos/emojis del output
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     _load_env_beside_exe()
-
-    # ── Instancia única (fix 17-sep-26) ──────────────────────────────────
-    # Si el puerto ya está atendido, otro dashboard vive: abrir el navegador
-    # hacia él y salir limpio. Antes, cada doble clic acumulaba una instancia
-    # zombi peleándose por el puerto 5050 y el programa "no abría".
-    import socket
-    _port_busy = False
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as _s:
-        _s.settimeout(1.0)
-        _port_busy = _s.connect_ex(("127.0.0.1", 5050)) == 0
-
-    if _port_busy:
-        print("  Ya hay un dashboard corriendo — abriendo navegador...")
-        import webbrowser
-        webbrowser.open("http://127.0.0.1:5050")
-        print("  (Esa otra ventana de consola es la que puedes cerrar)")
-        try:
-            input("  Presiona Enter para cerrar esta ventana...")
-        except EOFError:
-            pass
-        sys.exit(0)
-
-    import webbrowser
-    webbrowser.open("http://127.0.0.1:5050")
-    from dashboard.app import app
-    print("  Dashboard: http://127.0.0.1:5050  (Ctrl+C para salir)")
-    app.run(host="127.0.0.1", port=5050, debug=False)
+    from dashboard.supervisor import quiet_console
+    quiet_console()
+    if "--serve" in sys.argv[1:]:
+        _serve()
+    else:
+        _supervise()
