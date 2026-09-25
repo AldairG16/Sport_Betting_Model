@@ -34,6 +34,45 @@ function err(msg){
   e.textContent = '⚠️ ' + msg;
 }
 
+// ── Sin conexión con el programa (v1.6.0) ──
+// status 0 = el navegador no llegó al programa: cerrado o reiniciándose.
+// Antes cada sección mostraba "HTTP 0". El supervisor lo vuelve a abrir
+// solo; la página conserva lo último que mostró, avisa arriba y se recarga
+// sola en cuanto el programa responde.
+var OFFLINE_MSG = 'El programa del dashboard no responde';
+var _offlineSince = null, _offlineTimer = null;
+function _offlineBanner(){
+  var el = document.getElementById('offline');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'offline';
+    el.style.cssText = 'position:sticky;top:0;z-index:10;background:#3a2a14;color:#fbbf24;' +
+                       'padding:10px 14px;border-radius:8px;margin:10px 0;font-size:.9rem';
+    document.body.insertBefore(el, document.body.firstChild);
+  }
+  return el;
+}
+function serverDown(){
+  var now = new Date().getTime();
+  if (_offlineSince === null) _offlineSince = now;
+  var mins = Math.floor((now - _offlineSince) / 60000);
+  _offlineBanner().textContent = mins < 2
+    ? '⏳ ' + OFFLINE_MSG + ': se está reiniciando solo. Esta página se actualiza sola cuando vuelva.'
+    : '⚠️ ' + OFFLINE_MSG + ' desde hace ' + mins + ' min. Ábrelo de nuevo (BettingDashboard.exe) ' +
+      'o reinicia la PC: arranca solo con Windows. Esta página se actualiza sola cuando vuelva.';
+  if (!_offlineTimer) _offlineTimer = setInterval(_probeServer, 5000);
+}
+function _probeServer(){
+  var x = new XMLHttpRequest();
+  x.open('GET', '/api/health?t=' + new Date().getTime(), true);
+  x.onreadystatechange = function(){
+    if (x.readyState !== 4) return;
+    if (x.status === 200) { clearInterval(_offlineTimer); location.reload(); }
+    else serverDown();
+  };
+  x.send();
+}
+
 // XHR GET + JSON (compatibilidad universal; fetch no existe en navegadores viejos)
 function getJSON(url, ok, fail){
   try {
@@ -41,6 +80,7 @@ function getJSON(url, ok, fail){
     x.open('GET', url, true);
     x.onreadystatechange = function(){
       if (x.readyState !== 4) return;
+      if (x.status === 0) { serverDown(); return; }       // programa caído: aviso arriba
       if (x.status !== 200) { if (fail) fail('HTTP ' + x.status); return; }
       var d;
       try { d = JSON.parse(x.responseText); } catch(e2) { if (fail) fail('JSON inválido'); return; }
@@ -222,6 +262,7 @@ function dispatch(wf){
       var d = null;
       try { d = JSON.parse(x.responseText); } catch(e2) {}
       if (d && d.ok) { msg.textContent = '✅ ' + d.msg + ' — aparece abajo en segundos'; loadGh(); }
+      else if (x.status === 0) { msg.textContent = '⚠️ ' + OFFLINE_MSG; serverDown(); }
       else { msg.textContent = '⚠️ ' + ((d && d.msg) || ('HTTP ' + x.status)); }
     };
     x.send();

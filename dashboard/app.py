@@ -106,6 +106,13 @@ def chartjs_local():
 
 
 
+@app.route("/api/health")
+def api_health():
+    """Latido del proceso (sin base de datos): lo consultan el supervisor
+    (dashboard/supervisor.py) y la página cuando pierde la conexión."""
+    return jsonify({"ok": True, "version": _app_version()})
+
+
 @app.route("/api/version")
 def api_version():
     import urllib.request

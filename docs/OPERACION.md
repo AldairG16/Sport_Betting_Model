@@ -601,6 +601,27 @@ lo compila `release.yml`:
 El `.exe` lleva dentro el JS, Chart.js y `VERSION`. Una copia de `ui_es5.js` junto al
 `.exe` tiene prioridad, para arreglos en vivo sin recompilar.
 
+**Se mantiene abierto solo (v1.6.0).** El `.exe` es un supervisor
+(`dashboard/supervisor.py`): lanza el servidor (el mismo `.exe` con `--serve`), le
+pregunta cada 15 s a `/api/health` y lo vuelve a abrir si se cierra (esperas de 5, 15,
+30 y 60 s si se cae seguido) o si pasa ~45 s sin responder (lo cierra con todo su
+árbol: el `.exe` de un solo archivo son dos procesos). Si el puerto lo ocupa un
+dashboard anterior colgado, lo cierra solo si es `BettingDashboard.exe`; otro programa
+no se toca. Cada evento queda en `dashboard_supervisor.log` junto al `.exe`. Un segundo
+doble clic solo abre el navegador. La consola desactiva la "edición rápida" (un clic en
+la ventana congelaba el servidor) y ya no escribe una línea por petición. La página,
+si pierde la conexión, conserva lo último que mostró, avisa arriba y se recarga sola
+cuando el programa vuelve (antes: "HTTP 0" en cada sección). Si el 5050 lo usa otro
+programa: `DASHBOARD_PORT=` en el `.env` junto al `.exe`. `release.yml` prueba el
+relanzamiento: cierra el servidor a la fuerza y exige que vuelva.
+
+**Arranque y reinicio en la PC del dueño:** `installer\dist\BettingDashboard.exe`,
+lanzado por el acceso directo de la carpeta Inicio de Windows (`Betting Dashboard.lnk`,
+carpeta de trabajo `installer\dist`, donde vive el `.env`). Desde una sesión de agente
+se lanza con `Start-Process explorer.exe -ArgumentList "<Inicio>\Betting Dashboard.lnk"`,
+nunca con `Start-Process` directo sobre el `.exe`: el 24-sep-2026 Windows lo cerró junto
+con la sesión que lo había lanzado.
+
 **PlayDoit (la casa del dueño) no está en ninguna API de cuotas** (ni The Odds API, ni
 Odds-API.io, ni OddsPapi; revisado el 24-sep-2026). La cuota que guarda el sistema es la
 mejor entre ~20 casas europeas. Por eso cada pick, cada confirmación pre-kickoff y el

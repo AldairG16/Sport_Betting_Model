@@ -64,20 +64,26 @@ jobs:
 
       # Arranca el .exe con una DB ficticia (la página y los archivos
       # estáticos no la tocan) y comprueba que sirve lo que lleva dentro.
+      # Desde v1.6.0 el .exe es un supervisor (dashboard/supervisor.py): se
+      # cierra el servidor a la fuerza y tiene que volver solo.
       - name: Smoke test of the executable
         run: |
           Set-Content -Path installer/dist/.env -Value "DB_URL=postgresql://dummy:dummy@localhost/dummy" -Encoding ascii
           $proc = Start-Process -FilePath "installer/dist/BettingDashboard.exe" -WorkingDirectory "installer/dist" -PassThru
-          try {
-            $ready = $false
-            for ($i = 0; $i -lt 45 -and -not $ready; $i++) {
+          function Wait-Health([int]$secs) {
+            for ($i = 0; $i -lt ($secs / 2); $i++) {
               Start-Sleep -Seconds 2
               try {
-                $r = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:5050/" -TimeoutSec 5
-                $ready = ($r.StatusCode -eq 200)
+                $h = Invoke-RestMethod -Uri "http://127.0.0.1:5050/api/health" -TimeoutSec 5
+                if ($h.ok) { return $true }
               } catch { }
             }
-            if (-not $ready) { throw "El .exe no respondió en http://127.0.0.1:5050/" }
+            return $false
+          }
+          try {
+            if (-not (Wait-Health 90)) { throw "El .exe no respondió en http://127.0.0.1:5050/api/health" }
+            $r = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:5050/" -TimeoutSec 10
+            if ($r.StatusCode -ne 200) { throw "La página principal no respondió" }
             foreach ($path in @("/ui_es5.js", "/chartjs.js")) {
               # sin redirecciones: /chartjs.js manda al CDN si Chart.js no viene dentro
               $r = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:5050$path" -MaximumRedirection 0 -TimeoutSec 10
@@ -87,8 +93,18 @@ jobs:
             $v = Invoke-RestMethod -Uri "http://127.0.0.1:5050/api/version" -TimeoutSec 15
             if ($v.current -eq "dev") { throw "VERSION no viene empaquetado (el .exe reporta 'dev')" }
             Write-Host "Versión empaquetada: $($v.current)"
+
+            # El supervisor vuelve a abrir el servidor si este se cae
+            $line = netstat -ano -p TCP | Select-String ':5050\s+(0\.0\.0\.0:0|\[::\]:0)\s' | Select-Object -First 1
+            if (-not $line) { throw "No se encontró el proceso que escucha en 5050" }
+            $serverPid = ($line.Line.Trim() -split '\s+')[-1]
+            taskkill /PID $serverPid /T /F | Out-Null
+            Start-Sleep -Seconds 3
+            if (-not (Wait-Health 150)) { throw "El supervisor no volvió a abrir el servidor" }
+            Write-Host "Supervisor OK: servidor cerrado a la fuerza (PID $serverPid) y vuelto a abrir"
           } finally {
-            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            # todo el árbol: supervisor + servidor (cada uno son 2 procesos)
+            taskkill /PID $proc.Id /T /F | Out-Null
             Remove-Item installer/dist/.env -ErrorAction SilentlyContinue
           }
 
