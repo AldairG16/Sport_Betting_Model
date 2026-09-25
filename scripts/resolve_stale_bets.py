@@ -13,6 +13,9 @@ Flujo:
   4. Las que siguen sin datos fuente quedan en 'stale' (honesto: sin datos
      no se inventa resultado)
 
+Las CANCELADAS antes del kickoff también son 'stale' y no se tocan: no se
+apostaron (src/utils/bet_status.py).
+
 Costo: 0 créditos de API — todo es lectura local de la DB.
 """
 
@@ -26,14 +29,16 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from config.database import engine
 from src.models.save_bets import _market_required_match_fields
+from src.utils.bet_status import CANCELLED_SQL
 from src.utils.team_normalizer import normalize_team
 
 
 def resolve_stale_bets(apply: bool = True, verbose: bool = True) -> dict:
-    bets = pd.read_sql(text("""
+    bets = pd.read_sql(text(f"""
         SELECT id, match, market, match_date, league
         FROM bets_history
         WHERE result = 'stale'
+          AND NOT {CANCELLED_SQL}
         ORDER BY match_date
     """), engine)
 

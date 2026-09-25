@@ -38,6 +38,17 @@ from config.settings import (
 )
 from src.utils.min_odds import HOW_TO_READ, fmt_american, min_american, playdoit_line, to_american
 
+# Probabilidad sin margen de Pinnacle de una bet (25-sep-26): su cierre si el
+# closing ya lo capturó; si no, la del momento del pick (decision_log). Con
+# ella la cuota mínima para PlayDoit nunca queda por debajo de lo justo.
+PIN_PROB_SQL = "COALESCE(pin_close_prob, CAST(decision_log->'market_ctx'->>'pin_prob' AS float))"
+
+# Días sin picks (frecuentes desde el filtro Pinnacle): es lo esperado, no una falla.
+NO_PICKS_TEXT = ("Sin apuestas con valor real frente a Pinnacle. No apuestes nada: "
+                 "el sistema sigue recolectando datos en sombra.")
+PIN_PROB_SQL_B = ("COALESCE(b.pin_close_prob, "
+                  "CAST(b.decision_log->'market_ctx'->>'pin_prob' AS float))")
+
 
 # ── Helpers de fecha en hora local del usuario ────────────────────────────────
 def _local_today():
@@ -434,7 +445,7 @@ def _build_bets_by_league(bets: pd.DataFrame, header: str) -> tuple:
             # apuesta en PlayDoit, que ninguna API ve. Lo que le sirve es
             # hasta dónde puede bajar PlayDoit y todavía valer la pena, en el
             # formato americano en que PlayDoit la muestra (24-sep-26).
-            rule = playdoit_line(bet.get("probability"))
+            rule = playdoit_line(bet.get("probability"), pin_prob=bet.get("pin_prob"))
             price = rule or f"Mejor cuota: {fmt_american(to_american(bet.get('odds')))}"
             lines.append(
                 f"✅ {bet_num}. <b>{bet.get('match', '')}</b>  {date_match}\n"
@@ -641,6 +652,7 @@ def notify_best_bets():
             SELECT DISTINCT ON (match, market)
                    b.match, b.match_date, b.market,
                    b.probability, b.odds, b.edge, b.stake,
+                   {PIN_PROB_SQL_B} AS pin_prob,
                    COALESCE(u.sport_key, b.league, '') as league
             FROM bets_history b
             LEFT JOIN u_dedup u
@@ -672,7 +684,7 @@ def notify_best_bets():
         else:
             msg = (
                 f"⚽ <b>BETTING MODEL — {today.strftime('%d/%m/%Y')}</b>\n\n"
-                "Sin value bets detectadas para hoy."
+                f"{NO_PICKS_TEXT}"
             )
         send_message(msg)
         _set_last_picks_shown(0)
@@ -717,6 +729,7 @@ def send_tomorrow_preview():
             SELECT DISTINCT ON (match, market)
                    b.match, b.match_date, b.market,
                    b.probability, b.odds, b.edge, b.stake,
+                   {PIN_PROB_SQL_B} AS pin_prob,
                    COALESCE(u.sport_key, b.league, '') as league
             FROM bets_history b
             LEFT JOIN u_dedup u
@@ -743,7 +756,7 @@ def send_tomorrow_preview():
         else:
             msg = (
                 f"🌙 <b>PICKS DE MAÑANA — {tomorrow.strftime('%d/%m/%Y')}</b>\n\n"
-                "Sin value bets detectadas para mañana."
+                f"{NO_PICKS_TEXT}"
             )
         send_message(msg)
         _set_last_picks_shown(0)
@@ -1198,7 +1211,7 @@ def _tomorrow_line(b) -> str:
     """Línea del avance de mañana: el mínimo para PlayDoit en formato
     americano, no la cuota decimal europea ni la clave cruda del mercado."""
     label = _get_market_label(str(b.get("market") or ""), str(b.get("match") or ""))
-    a = min_american(b.get("probability"))
+    a = min_american(b.get("probability"), pin_prob=b.get("pin_prob"))
     price = (f"PlayDoit {fmt_american(a)} o mejor" if a is not None
              else f"mejor cuota {fmt_american(to_american(b.get('odds')))}")
     return f"  • {b.get('match', '')} — {label} ({price})"
@@ -1377,7 +1390,7 @@ def send_evening_summary(target_date=None):
     try:
         tomorrow = today + timedelta(days=1)
         bets_tom = pd.read_sql(f"""
-            SELECT match, market, odds, probability, stake, edge
+            SELECT match, market, odds, probability, stake, edge, {PIN_PROB_SQL} AS pin_prob
             FROM bets_history
             WHERE {_tz_date_filter('match_date', tomorrow)}
               AND result = 'pending'

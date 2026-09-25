@@ -113,11 +113,14 @@ def fetch_espn_scoreboard(slug: str, date: pd.Timestamp) -> list[dict]:
 
 
 def backfill_espn_results(verbose: bool = True) -> dict:
-    # Stale bets cuyos mercados se pueden resolver con goles (+HT)
-    bets = pd.read_sql(text("""
+    # Stale bets cuyos mercados se pueden resolver con goles (+HT); las
+    # canceladas antes del kickoff no se apostaron: no se resuelven
+    from src.utils.bet_status import CANCELLED_SQL
+    bets = pd.read_sql(text(f"""
         SELECT id, match, market, match_date, league
         FROM bets_history
         WHERE result = 'stale'
+          AND NOT {CANCELLED_SQL}
         ORDER BY league, match_date
     """), engine)
     if bets.empty:

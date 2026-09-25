@@ -149,12 +149,15 @@ function loadBets(){
     for (var i = 0; i < d.bets.length; i++) {
       var b = d.bets[i];
       var rk = String(b.result_key || b.result || 'pending').toLowerCase();
-      var prof = rk === 'pending' ? '' : money(b.profit || 0);
-      var cls = rk === 'win' ? 'win' : rk === 'loss' ? 'loss' : rk === 'pending' ? 'pending' : 'push';
+      var off = rk === 'cancelled';   // cancelada antes del partido: no se apuesta
+      var prof = (rk === 'pending' || off) ? '' : money(b.profit || 0);
+      var cls = rk === 'win' ? 'win' : rk === 'loss' ? 'loss' : rk === 'pending' ? 'pending' :
+                off ? 'cancelled' : 'push';
       var clv = b.clv === '' ? '—' : (Number(b.clv) * 100).toFixed(1) + '%';
       // Formato americano, como PlayDoit (+128 / -140). La mejor cuota
       // europea es solo referencia; lo que decide es el mínimo de PlayDoit.
-      var minUs = b.min_us ? '<span title="' + (b.min_hint || '') + '">' + b.min_us + ' o mejor</span>' : '—';
+      var minUs = off ? '<span title="Cancelada antes del partido: ya no tiene valor">no apostar</span>' :
+                  b.min_us ? '<span title="' + (b.min_hint || '') + '">' + b.min_us + ' o mejor</span>' : '—';
       html += '<tr><td>' + mxdate(b.match_date) + '</td><td>' + b.match + '</td><td>' +
               (b.league || '') + '</td><td>' + b.market + '</td><td>' +
               (b.probability * 100).toFixed(0) + '%</td><td title="decimal ' + b.odds + '">' +

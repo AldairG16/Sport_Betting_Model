@@ -37,6 +37,7 @@ from config.database import DATABASE_URL  # noqa: E402
 # pool_recycle la renueva antes de que el servidor la corte.
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=240)  # noqa: E402
 from dashboard.display import league_name, market_name, match_name, result_label  # noqa: E402
+from src.utils.bet_status import CANCELLED_SQL  # noqa: E402
 from src.utils.min_odds import (HOW_TO_READ, fmt_american, min_american,  # noqa: E402
                                 rule_examples, to_american)
 
@@ -171,15 +172,16 @@ def _odds_us(odds) -> str:
     return fmt_american(to_american(odds))
 
 
-def _playdoit_min(prob) -> str:
-    """Peor cuota americana que todavía vale la pena en PlayDoit; "" si no hay."""
-    a = min_american(prob)
+def _playdoit_min(prob, pin_prob=None) -> str:
+    """Peor cuota americana que todavía vale la pena en PlayDoit (con la
+    probabilidad más conservadora entre el modelo y Pinnacle); "" si no hay."""
+    a = min_american(prob, pin_prob=pin_prob)
     return "" if a is None else fmt_american(a)
 
 
-def _playdoit_hint(prob) -> str:
+def _playdoit_hint(prob, pin_prob=None) -> str:
     """Ejemplo para el tooltip: un precio que sirve y uno que ya no."""
-    a = min_american(prob)
+    a = min_american(prob, pin_prob=pin_prob)
     if a is None:
         return ""
     better, worse = rule_examples(a)
@@ -273,11 +275,13 @@ def bets():
     elif status == "resolved":
         where.append("result IN ('win','loss','push','half_win','half_loss')")
     elif status == "stale":
-        where.append("result = 'stale'")
+        where.append(f"result = 'stale' AND NOT {CANCELLED_SQL}")
     else:
         # Vista default: TODO excepto stale (bets antiguas sin fuente de
-        # resultado — historial muerto que no debe estorbar el día a día)
-        where.append("result IS DISTINCT FROM 'stale'")
+        # resultado — historial muerto que no debe estorbar el día a día).
+        # Las canceladas antes del kickoff también se guardan 'stale', pero
+        # sí se muestran: el dueño las vio en Telegram y debe saber que ya no van.
+        where.append(f"(result IS DISTINCT FROM 'stale' OR {CANCELLED_SQL})")
     if market:
         where.append("market = :market"); params["market"] = market
     if league:
@@ -285,7 +289,10 @@ def bets():
 
     df = _q(f"""
         SELECT id, match_date, match, league, market, probability, odds,
-               stake, result, profit, closing_odds, clv
+               stake, result, profit, closing_odds, clv,
+               COALESCE(pin_close_prob,
+                        CAST(decision_log->'market_ctx'->>'pin_prob' AS float)) AS pin_prob,
+               {CANCELLED_SQL} AS cancelled
         FROM bets_history
         WHERE {' AND '.join(where)}
         ORDER BY match_date DESC
@@ -297,8 +304,14 @@ def bets():
     # En formato americano, como los muestra PlayDoit (src/utils/min_odds):
     # la mejor cuota europea (referencia) y la peor que todavía vale la pena.
     df["odds_us"] = df["odds"].map(_odds_us)
-    df["min_us"] = df["probability"].map(_playdoit_min)
-    df["min_hint"] = df["probability"].map(_playdoit_hint)
+    pin = df["pin_prob"] if "pin_prob" in df.columns else [None] * len(df)
+    df["min_us"] = [_playdoit_min(p, q) for p, q in zip(df["probability"], pin)]
+    df["min_hint"] = [_playdoit_hint(p, q) for p, q in zip(df["probability"], pin)]
+    # canceladas antes del kickoff (revalidación o lineup guard): 'stale'
+    # también las marcaba, y el dashboard las mostraba como "Sin fuente"
+    if "cancelled" in df.columns:
+        df.loc[df["cancelled"].fillna(False).astype(bool) & (df["result"] == "stale"),
+               "result"] = "cancelled"
     for col, fn in (("match", match_name), ("league", league_name), ("market", market_name)):
         if col in df.columns:
             df[col] = df[col].apply(lambda v: fn(v) if v else v)
@@ -522,6 +535,7 @@ PAGE = """<!DOCTYPE html>
   .pill { padding:2px 8px; border-radius:99px; font-size:.72rem; font-weight:600; }
   .pill.win{background:#14351f;color:var(--green)} .pill.loss{background:#3a1a1a;color:var(--red)}
   .pill.pending{background:#2a2a14;color:#eab308} .pill.push,.pill.half_win,.pill.half_loss{background:#1e2a3a;color:#93c5fd}
+  .pill.cancelled{background:#2a2f3a;color:#9aa4b8;text-decoration:line-through}
   .controls { display:flex; gap:10px; margin:14px 0; flex-wrap:wrap; }
   .tablewrap { max-height:480px; overflow-y:auto; border-radius:10px; }
   .tablewrap thead th { position:sticky; top:0; background:#1a2233; z-index:1; }
