@@ -194,12 +194,14 @@ def optimize_thresholds(min_sample: int = 200, verbose: bool = True) -> dict:
     # --------------------------------
     # 1. Intentar usar bets_history reales
     # --------------------------------
+    # Solo apuestas jugadas y liquidadas: una 'stale' (cancelada o sin fuente
+    # de resultado) sumaba su stake con profit 0 y bajaba el ROI de su celda.
+    from src.utils.bet_status import RESOLVED_SQL
     try:
-        df_real = pd.read_sql("""
+        df_real = pd.read_sql(f"""
             SELECT edge, odds, probability, result, profit, stake
             FROM bets_history
-            WHERE result IS NOT NULL
-              AND result::text NOT IN ('pending', 'null', '')
+            WHERE {RESOLVED_SQL}
             ORDER BY match_date
         """, engine)
     except Exception:

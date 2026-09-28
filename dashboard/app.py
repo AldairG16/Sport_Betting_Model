@@ -219,9 +219,13 @@ def kpis():
     resolved = df[df["result"].isin(RESOLVED)]
     pending = df[df["result"] == "pending"]
     wins = resolved[resolved["result"].isin(WIN_LIKE)]
+    losses = resolved[resolved["result"].isin(("loss", "half_loss"))]
     profit = _profit(resolved).sum()
     staked = float(resolved["stake"].sum())
-    clv = df["clv"].dropna()
+    # Solo apuestas jugadas (y las pendientes en el conteo): las 'stale'
+    # (canceladas o sin fuente de resultado) no se apostaron o no tienen
+    # resultado. Hasta v1.6.0 "Bets 90d" y el CLV medio las incluían.
+    clv = resolved["clv"].dropna()
 
     # Misma lectura que bankroll_manager.get_current_bankroll. Antes pedía
     # columnas que la tabla no tiene (bankroll, updated_at): el KPI salía "—".
@@ -236,10 +240,12 @@ def kpis():
         "ok": True,
         "window": window,
         "bankroll": bankroll,
-        "bets_90d": int(len(df)),
+        "bets_90d": int(len(resolved) + len(pending)),
         "resolved": int(len(resolved)),
         "pending": int(len(pending)),
-        "win_rate": round(len(wins) / len(resolved), 3) if len(resolved) else None,
+        # ganadas / (ganadas + perdidas), igual que el reporte semanal
+        "win_rate": (round(len(wins) / (len(wins) + len(losses)), 3)
+                     if len(wins) + len(losses) else None),
         "profit": round(float(profit), 2),
         "roi": round(float(profit / staked), 3) if staked > 0 else None,
         "brier": round(brier, 4) if brier else None,
@@ -283,12 +289,15 @@ def bets():
         where.append("result IN ('win','loss','push','half_win','half_loss')")
     elif status == "stale":
         where.append(f"result = 'stale' AND NOT {CANCELLED_SQL}")
+    elif status == "cancelled":
+        where.append(CANCELLED_SQL)
     else:
         # Vista default: TODO excepto stale (bets antiguas sin fuente de
         # resultado — historial muerto que no debe estorbar el día a día).
-        # Las canceladas antes del kickoff también se guardan 'stale', pero
-        # sí se muestran: el dueño las vio en Telegram y debe saber que ya no van.
-        where.append(f"(result IS DISTINCT FROM 'stale' OR {CANCELLED_SQL})")
+        # Las canceladas antes del kickoff también se guardan 'stale': se ven
+        # hasta que empieza el partido (el dueño las vio en Telegram y debe
+        # saber que ya no van); después quedan en el filtro "Canceladas".
+        where.append(f"(result IS DISTINCT FROM 'stale' OR ({CANCELLED_SQL} AND match_date > NOW()))")
     if market:
         where.append("market = :market"); params["market"] = market
     if league:
@@ -577,7 +586,7 @@ PAGE = """<!DOCTYPE html>
 </div>
 <div class="section"><h2>📋 Apuestas</h2>
   <div class="controls">
-    <select id="fstatus"><option value="all">Activas (pendientes + resueltas)</option><option value="pending">Solo pendientes</option><option value="resolved">Solo resueltas</option><option value="stale">Histórico muerto (stale)</option></select>
+    <select id="fstatus"><option value="all">Activas (pendientes + resueltas)</option><option value="pending">Solo pendientes</option><option value="resolved">Solo resueltas</option><option value="cancelled">Canceladas (no apostadas)</option><option value="stale">Histórico muerto (stale)</option></select>
     <select id="fmarket"><option value="">Todos los mercados</option></select>
     <select id="fleague"><option value="">Todas las ligas</option></select>
     <select id="frefresh" title="Auto-refresco de datos"><option value="0">Auto-refresco: off</option><option value="5" selected>Auto-refresco: 5 min</option><option value="15">15 min</option><option value="30">30 min</option></select>

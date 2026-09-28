@@ -48,10 +48,19 @@ leagues = {
     "G1":  "soccer_greece_super_league",      # Greek Super League
 }
 
-seasons = [
-    "1516","1617","1718","1819","1920",
-    "2021","2122","2223","2324","2425","2526"
-]
+def season_codes(today=None, first_start: int = 2015) -> list[str]:
+    """Códigos de football-data ('1516' … temporada en curso). La temporada
+    europea arranca en julio/agosto; si el CSV nuevo todavía no existe, la
+    descarga da 404 y se salta. Hasta el 28-sep-26 la lista era fija y
+    terminaba en '2526': desde agosto el weekly ya no cargaba la temporada
+    2026/27 y solo la cubría el respaldo diario de los últimos 10 días."""
+    from datetime import date
+    today = today or date.today()
+    last_start = today.year if today.month >= 7 else today.year - 1
+    return [f"{y % 100:02d}{(y + 1) % 100:02d}" for y in range(first_start, last_start + 1)]
+
+
+seasons = season_codes()
 
 
 # =========================

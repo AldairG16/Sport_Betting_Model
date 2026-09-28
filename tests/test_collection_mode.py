@@ -272,7 +272,7 @@ def test_dashboard_shows_cancelled_bets_and_the_pinnacle_floor(monkeypatch):
     assert (got[0]["result"], got[0]["result_key"]) == ("Cancelada", "cancelled")
     assert got[0]["min_us"] == "-112"                                     # piso de Pinnacle
     assert got[1]["min_us"] == "-138"                                     # sin Pinnacle: el modelo
-    # la vista por defecto incluye las canceladas; la de histórico muerto, no
-    assert "OR " + dash.CANCELLED_SQL in seen[0]
+    # la vista por defecto incluye las canceladas hasta el kickoff; la de histórico muerto, no
+    assert f"OR ({dash.CANCELLED_SQL} AND match_date > NOW())" in seen[0]
     dash.app.test_client().get("/api/bets?status=stale")
     assert "AND NOT " + dash.CANCELLED_SQL in seen[1]

@@ -170,7 +170,12 @@ existe la fila, el modelo no lo puntuó o el filtro Pinnacle lo dejó solo en so
 resolución; si está resuelta, ya está. Una fila `stale` con la razón en
 `decision_log` (`revalidation.decision` = `cancelled_*`, o `lineup_guard`) es una
 bet **cancelada** antes del kickoff: no se apostó, no cuenta en el ROI y los scripts
-que recuperan stale no la tocan (`src/utils/bet_status.py`). Para «¿por qué no habló el analista?»: mira
+que recuperan stale no la tocan (`src/utils/bet_status.py`). Antes del 25-sep-2026 sí
+la tocaban: `scripts/fix_resurrected_cancelled.py` (ensayo por defecto, `--apply`)
+devuelve a cancelada la que se liquidó así y le regresa su profit al bankroll (el
+28-sep: real betis vs getafe | over25, +0.99u). Todo lo que mide rendimiento (ROI,
+acierto, conteo de bets) filtra con `RESOLVED_SQL`: una `stale` tiene stake y profit 0
+y, contada, diluye el ROI. Para «¿por qué no habló el analista?»: mira
 `analyst_heartbeat` (que el cron disparó) y su `error_msg` (fallos por bet).
 
 ---
@@ -230,6 +235,15 @@ el 25-sep-2026 `dc_objective` da el gradiente **exacto**: converge en segundos (
 metió así 15 partidos argentinos con fecha futura; `scripts/fix_swapped_dates.py` los
 detecta y corrige (ensayo por defecto, `--apply`). Un partido con resultado y fecha
 futura es siempre un error de fecha.
+
+**Temporadas de football-data.** La lista de temporadas del weekly era fija y terminaba
+en `2526`: desde agosto-2026 el weekly no cargaba la 2026/27 y solo la cubría el
+respaldo diario de los últimos 10 días. Hoy se calcula hasta la temporada en curso
+(`season_codes()` en `scripts/load_historical_data.py`). En las ligas "extra" (un CSV
+por liga) la columna `Season` puede venir como `2026/2027` (la J-League juega de
+agosto a mayo desde 2026-27): se guarda el año de inicio (`season_start()` en
+`scripts/load_extra_leagues.py`); el texto rompía la columna entera y el weekly del
+28-sep perdió 80 partidos.
 
 **`odds_history` guarda cambios, no fotos.** Con el closing cada 30 min, el 97% de las
 fotos eran copias idénticas (~8 MB/día; en el plan gratuito de Neon, la base se llenaba
@@ -640,7 +654,10 @@ conservadora** entre el modelo y Pinnacle (`pin_close_prob` si el closing ya la
 capturó; si no, la del pick): apostar por debajo de lo que Pinnacle considera justo no
 tiene valor real. En americano un número más alto siempre paga más. El dashboard
 muestra lo mismo (columnas **Mejor cuota** y **PlayDoit**), marca las canceladas
-("Cancelada", "no apostar") y no pide nada a mano: el registro de la cuota tomada
+("Cancelada", "no apostar"; en la lista hasta el kickoff, después en el filtro
+**Canceladas**) y no pide nada a mano. "Bets 90d", el CLV medio y el % de acierto
+cuentan solo apuestas jugadas (acierto = ganadas / (ganadas + perdidas), igual que el
+reporte semanal, que pone las canceladas en una línea aparte). El registro de la cuota tomada
 (v1.4.0) se quitó en v1.5.0 por pedido del dueño. La columna `bets_history.odds_placed`
 sigue en la base, sin uso.
 
