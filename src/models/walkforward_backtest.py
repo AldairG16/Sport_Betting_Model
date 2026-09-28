@@ -182,11 +182,14 @@ def run_walkforward(verbose: bool = True) -> dict:
     print("=" * 60)
 
     # ── Cargar datos ──────────────────────────────────────────
-    df = pd.read_sql("""
+    # Solo apuestas jugadas y liquidadas: 'stale' (canceladas o sin fuente de
+    # resultado) contaba como una bet de profit 0 y diluía el P&L y el WR.
+    from src.utils.bet_status import RESOLVED_SQL
+    df = pd.read_sql(f"""
         SELECT id, match, market, odds, closing_odds, clv, result,
                profit, edge, probability, stake, league, match_date
         FROM bets_history
-        WHERE result NOT IN ('pending', 'unresolved')
+        WHERE {RESOLVED_SQL}
         ORDER BY match_date ASC
     """, engine)
 

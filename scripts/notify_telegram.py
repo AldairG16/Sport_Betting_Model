@@ -1054,48 +1054,56 @@ def send_health_check(
 # ============================================================
 # REPORTE SEMANAL
 # ============================================================
+def _wlp(df: pd.DataFrame) -> tuple[int, int, int]:
+    """(ganadas, perdidas, nulas) de apuestas liquidadas; las medias cuentan
+    de su lado. El % de acierto es ganadas / (ganadas + perdidas)."""
+    r = df["result"]
+    return (int(r.isin(["win", "half_win"]).sum()),
+            int(r.isin(["loss", "half_loss"]).sum()),
+            int((r == "push").sum()))
+
+
 def send_weekly_report():
     """
     Genera y envía por Telegram un reporte de rendimiento de los últimos 7 días.
 
     Incluye:
-      - Total bets / wins / losses / pendientes
-      - ROI semanal y ROI total acumulado
-      - Profit en unidades
+      - Bets jugadas en la semana: ganadas / perdidas / nulas, profit y ROI
+      - Canceladas antes del partido (aparte: no se apostaron)
+      - ROI total acumulado
       - Bankroll actual vs inicial
-      - Top 3 ligas por ROI
-      - Peor liga (si hay pérdida)
-      - Mejor mercado (home_win / over25 / etc.)
+      - Top 3 ligas por ROI y peor liga
+      - ROI por mercado
+
+    Solo cuentan las apuestas jugadas y liquidadas (RESOLVED_SQL): hasta el
+    28-sep-26 contaba también las 'stale' (canceladas y sin fuente de
+    resultado) como apuestas con profit 0.
     """
+    from sqlalchemy import text
+    from src.utils.bet_status import CANCELLED_SQL, RESOLVED_SQL
+
     print("\n📊 GENERANDO REPORTE SEMANAL...\n")
 
-    # ── Stats de la última semana ──────────────────────────────────────────
-    try:
-        week_df = pd.read_sql("""
-            SELECT market, odds, stake, result, profit, league
-            FROM bets_history
-            WHERE result NOT IN ('pending')
-              AND result IS NOT NULL
-              AND created_at >= NOW() - INTERVAL '7 days'
-        """, engine)
-    except Exception:
-        # Fallback sin created_at (columna puede no existir)
-        week_df = pd.read_sql("""
-            SELECT market, odds, stake, result, profit, league
-            FROM bets_history
-            WHERE result NOT IN ('pending')
-              AND result IS NOT NULL
-              AND match_date >= NOW() - INTERVAL '7 days'
-        """, engine)
+    # ── La semana: partidos jugados en los últimos 7 días ─────────────────
+    week_df = pd.read_sql(text(f"""
+        SELECT market, odds, stake, result, profit, league
+        FROM bets_history
+        WHERE {RESOLVED_SQL}
+          AND match_date >= NOW() - INTERVAL '7 days'
+    """), engine)
+    cancelled_week = int(pd.read_sql(text(f"""
+        SELECT COUNT(*) AS n FROM bets_history
+        WHERE result = 'stale' AND {CANCELLED_SQL}
+          AND match_date >= NOW() - INTERVAL '7 days'
+    """), engine).iloc[0]["n"])
 
     # ── Stats totales (todo el historial) ─────────────────────────────────
     try:
-        all_df = pd.read_sql("""
+        all_df = pd.read_sql(text(f"""
             SELECT stake, profit, result, league, market
             FROM bets_history
-            WHERE result NOT IN ('pending')
-              AND result IS NOT NULL
-        """, engine)
+            WHERE {RESOLVED_SQL}
+        """), engine)
     except Exception:
         all_df = pd.DataFrame()
 
@@ -1110,13 +1118,17 @@ def send_weekly_report():
     lines    = [f"📊 <b>REPORTE SEMANAL — {now_str}</b>", ""]
 
     # ── Sección: esta semana ───────────────────────────────────────────────
+    cancelled_line = (f"🚫 Canceladas antes del partido (no se apostaron): {cancelled_week}"
+                      if cancelled_week else None)
     if week_df.empty:
-        lines.append("Sin apuestas resueltas esta semana.")
+        lines.append("Sin apuestas jugadas esta semana.")
+        if cancelled_line:
+            lines.append(cancelled_line)
+        lines.append("")
     else:
-        wins      = int((week_df["result"] == "win").sum())
-        losses    = int((week_df["result"] == "loss").sum())
-        total_w   = wins + losses
-        win_rate  = wins / total_w * 100 if total_w > 0 else 0
+        wins, losses, pushes = _wlp(week_df)
+        decided   = wins + losses
+        win_rate  = wins / decided * 100 if decided > 0 else 0
         profit_w  = float(week_df["profit"].sum())
         staked_w  = float(week_df["stake"].sum())
         roi_w     = profit_w / staked_w * 100 if staked_w > 0 else 0
@@ -1124,11 +1136,14 @@ def send_weekly_report():
 
         lines += [
             "— <b>ESTA SEMANA</b> —",
-            f"Bets:     {total_w}  ({wins}W / {losses}L  {win_rate:.0f}%)",
+            f"Bets:     {len(week_df)}  ({wins}W / {losses}L"
+            f"{f' / {pushes} nulas' if pushes else ''}  {win_rate:.0f}%)",
             f"Profit:   {'+' if profit_w >= 0 else ''}{profit_w:.2f}u",
             f"ROI:      {roi_emoji} {'+' if roi_w >= 0 else ''}{roi_w:.1f}%",
-            "",
         ]
+        if cancelled_line:
+            lines.append(cancelled_line)
+        lines.append("")
 
         # ── Top ligas esta semana ────────────────────────────────────────
         if "league" in week_df.columns:
@@ -1174,11 +1189,12 @@ def send_weekly_report():
         total_profit = float(all_df["profit"].sum())
         total_staked = float(all_df["stake"].sum())
         total_roi    = total_profit / total_staked * 100 if total_staked > 0 else 0
-        total_wins   = int((all_df["result"] == "win").sum())
+        total_wins, total_losses, _ = _wlp(all_df)
+        total_wr     = total_wins / (total_wins + total_losses) * 100 if total_wins + total_losses else 0
 
         lines += [
             "— <b>ACUMULADO TOTAL</b> —",
-            f"Bets totales: {total_bets}  (WR: {total_wins/total_bets*100:.0f}%)",
+            f"Bets totales: {total_bets}  (WR: {total_wr:.0f}%)",
             f"Profit total: {'+' if total_profit >= 0 else ''}{total_profit:.2f}u",
             f"ROI total:    {'+' if total_roi >= 0 else ''}{total_roi:.1f}%",
             "",

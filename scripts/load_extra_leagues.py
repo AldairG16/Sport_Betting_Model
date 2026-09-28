@@ -85,6 +85,16 @@ def _normalize_date(date_str: str) -> str | None:
         return None
 
 
+def season_start(value) -> int | None:
+    """Año de inicio de la temporada, como lo guarda `matches.season` (entero).
+    football-data escribe "2025" en las ligas de año calendario y, desde que la
+    J-League pasó a jugar de agosto a mayo, "2026/2027": ese texto no entraba
+    en la columna entera y el weekly del 28-sep-26 perdió 80 partidos."""
+    import re
+    m = re.search(r"\d{4}", str(value if value is not None else ""))
+    return int(m.group(0)) if m else None
+
+
 def load_extra_leagues(leagues: dict = None):
     """
     Descarga y carga datos historicos de extra leagues.
@@ -134,8 +144,10 @@ def load_extra_leagues(leagues: dict = None):
         df["home_goals"] = df["home_goals"].astype(int)
         df["away_goals"] = df["away_goals"].astype(int)
 
-        # Season
-        df["season"] = df["Season"].astype(str) if "Season" in df.columns else "unknown"
+        # Season: año de inicio (entero); None si no viene. dtype object para
+        # que un faltante quede None (NULL) y no NaN, que la columna entera rechaza
+        df["season"] = (pd.Series([season_start(v) for v in df["Season"]], index=df.index, dtype=object)
+                        if "Season" in df.columns else None)
         df["league"] = sport_key
 
         # Por lotes con ON CONFLICT DO NOTHING (src/utils/db_batch). Antes:
