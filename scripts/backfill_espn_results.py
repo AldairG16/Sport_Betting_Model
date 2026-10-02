@@ -128,7 +128,8 @@ def backfill_espn_results(verbose: bool = True) -> dict:
         print("Sin stale.")
         return {}
 
-    stats = {"backfilled": 0, "matched": 0, "no_espn_league": 0, "not_found": 0, "errors": 0}
+    stats = {"backfilled": 0, "matched": 0, "no_espn_league": 0, "not_found": 0, "errors": 0,
+             "score_mismatch": 0}
     # Cache: (liga, fecha) → partidos ESPN (evita repetir requests)
     board_cache: dict = {}
 
@@ -167,28 +168,47 @@ def backfill_espn_results(verbose: bool = True) -> dict:
                 continue
             m, d = found
             stats["matched"] += 1
-
-            # Upsert en matches (misma política que el resto del sistema), con
-            # el nombre canónico: una bet vieja puede traer un nombre anterior
-            # y la fila quedaría repetida con otro nombre.
-            league_col = league if league else None
-            conn.execute(text("""
-                INSERT INTO matches (date, league, season, home_team, away_team,
-                                     home_goals, away_goals,
-                                     home_goals_ht, away_goals_ht)
-                VALUES (:d, :lg, :season, :h, :a, :hg, :ag, :hht, :aht)
-                ON CONFLICT (date, home_team, away_team) DO UPDATE SET
-                    home_goals    = COALESCE(matches.home_goals,    EXCLUDED.home_goals),
-                    away_goals    = COALESCE(matches.away_goals,    EXCLUDED.away_goals),
-                    home_goals_ht = COALESCE(matches.home_goals_ht, EXCLUDED.home_goals_ht),
-                    away_goals_ht = COALESCE(matches.away_goals_ht, EXCLUDED.away_goals_ht)
-            """), {
-                "d": d.strftime("%Y-%m-%d"), "lg": league_col,
+            params = {
+                "d": d.strftime("%Y-%m-%d"), "lg": league if league else None,
                 "season": d.year if d.month >= 8 else d.year - 1,
+                # nombre canónico: una bet vieja puede traer un nombre anterior
                 "h": normalize_team(home_raw), "a": normalize_team(away_raw),
                 "hg": m["home_goals"], "ag": m["away_goals"],
                 "hht": m["home_goals_ht"], "aht": m["away_goals_ht"],
-            })
+            }
+            # Si el partido ya tiene fila (±1 día), se COMPLETA esa (2-oct-26):
+            # insertar con la fecha de ESPN creaba un partido repetido cuando
+            # la fila estaba un día antes o después. Y solo si el marcador
+            # final coincide: un nombre parecido puede ser otro partido.
+            row = conn.execute(text("""
+                SELECT id, home_goals, away_goals FROM matches
+                WHERE LOWER(home_team) = :h AND LOWER(away_team) = :a
+                  AND date BETWEEN CAST(:d AS date) - 1 AND CAST(:d AS date) + 1
+                ORDER BY ABS(date - CAST(:d AS date)) LIMIT 1
+            """), params).first()
+            if row is not None and row.home_goals is not None and \
+                    (int(row.home_goals), int(row.away_goals)) != (params["hg"], params["ag"]):
+                stats["score_mismatch"] += 1
+                print(f"   ✗ {home_raw} vs {away_raw}: ESPN {params['hg']}-{params['ag']} y la base "
+                      f"{row.home_goals}-{row.away_goals} — no se toca")
+                continue
+            if row is not None:
+                conn.execute(text("""
+                    UPDATE matches SET
+                        home_goals    = COALESCE(home_goals,    :hg),
+                        away_goals    = COALESCE(away_goals,    :ag),
+                        home_goals_ht = COALESCE(home_goals_ht, :hht),
+                        away_goals_ht = COALESCE(away_goals_ht, :aht)
+                    WHERE id = :id
+                """), {**params, "id": row.id})
+            else:
+                conn.execute(text("""
+                    INSERT INTO matches (date, league, season, home_team, away_team,
+                                         home_goals, away_goals,
+                                         home_goals_ht, away_goals_ht)
+                    VALUES (:d, :lg, :season, :h, :a, :hg, :ag, :hht, :aht)
+                    ON CONFLICT (date, home_team, away_team) DO NOTHING
+                """), params)
             stats["backfilled"] += 1
             if verbose:
                 ht = f" (HT {m['home_goals_ht']}-{m['away_goals_ht']})" if m["home_goals_ht"] is not None else ""
@@ -196,9 +216,10 @@ def backfill_espn_results(verbose: bool = True) -> dict:
                       f"{m['home_goals']}-{m['away_goals']}{ht}")
 
     if verbose:
-        print(f"\nESPN backfill: {stats['backfilled']} partidos insertados "
+        print(f"\nESPN backfill: {stats['backfilled']} partidos completados o insertados "
               f"({stats['matched']} matcheados, {stats['not_found']} no encontrados, "
-              f"{stats['no_espn_league']} sin liga ESPN)")
+              f"{stats['no_espn_league']} sin liga ESPN, "
+              f"{stats['score_mismatch']} con otro marcador en la base)")
 
     if stats["backfilled"]:
         from scripts.resolve_stale_bets import resolve_stale_bets

@@ -65,16 +65,21 @@ con la fecha exacta y suele aparecer la página con FT + corners + cards.
 VERIFICACIÓN OBLIGATORIA:
   • Fecha del partido debe coincidir con la del usuario (±1 día por
     timezone). Si no coincide → devolvé null en todos los campos.
+  • Los equipos deben ser EXACTAMENTE los pedidos. Si el partido de esa
+    fecha es de otro club con nombre parecido (Paris FC no es Paris
+    Saint-Germain), "completed" debe ser false y todos los datos null:
+    el resultado se guarda con los nombres pedidos.
   • Si el partido fue ABANDONADO, POSTPONED o aún jugándose, "completed"
     debe ser false y todos los datos null.
   • Para AET (alargue/penales): devolvé el resultado al MINUTO 90,
     no el de extra time o penales. Aclaralo en source.
 
-Salida JSON ESTRICTA — solo el JSON, sin markdown, sin prosa:
+Salida JSON ESTRICTA — solo el JSON, sin markdown, sin prosa, sin comentarios
+(home_goals_ht / away_goals_ht = goles al medio tiempo, minuto 45):
 {
   "home_goals": int | null,
   "away_goals": int | null,
-  "home_goals_ht": int | null,        // goles al medio tiempo (min 45)
+  "home_goals_ht": int | null,
   "away_goals_ht": int | null,
   "home_corners": int | null,
   "away_corners": int | null,
@@ -211,14 +216,17 @@ def _ask_claude_for_result(client, home: str, away: str, date_str: str,
     )
     MODEL = "claude-haiku-4-5"
     est_cost = estimate_call_cost(MODEL, est_input_tokens=2500,
-                                  est_output_tokens=350, web_searches=1)
+                                  est_output_tokens=800, web_searches=1)
     ok, reason = can_call(engine, est_cost)
     if not ok:
         raise RuntimeError(f"Budget guard: {reason}")
 
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=350,           # antes 600 — JSON schema cabe en <300
+        # 800 y no 350: con la búsqueda el modelo suele escribir una frase
+        # antes del JSON, y con 350 el JSON quedaba cortado (2-oct-26).
+        # La salida de Haiku cuesta poco; lo caro es la búsqueda.
+        max_tokens=800,
         system=[{
             "type": "text",
             "text": SYSTEM_PROMPT,
@@ -240,19 +248,58 @@ def _ask_claude_for_result(client, home: str, away: str, date_str: str,
                 web_searches=u["web_searches"],
                 cache_read_tokens=u["cache_read_tokens"])
 
-    text_blocks = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
-    raw = text_blocks[-1].strip() if text_blocks else "{}"
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.lower().startswith("json"):
-            raw = raw[4:]
-        raw = raw.strip()
-
+    # Con búsqueda web la respuesta llega en VARIOS bloques de texto (uno por
+    # cita) y a veces con una frase antes del JSON. Hasta el 2-oct-26 se leía
+    # solo el último bloque: 9 de 10 respuestas pagadas se perdían como
+    # "Parse error" (un print). Ahora se lee todo el texto y, si no hay JSON,
+    # es un error que cuenta.
+    raw = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        print(f"   ⚠️  Parse error: {e}  raw[:120]={raw[:120]}")
-        return None
+        return parse_result_json(raw)
+    except ValueError as e:
+        raise ValueError(f"{e} (stop_reason={getattr(resp, 'stop_reason', '?')})") from None
+
+
+def _json_objects(s: str) -> list[str]:
+    """Objetos {...} balanceados del texto, en orden (las comillas solo
+    cuentan dentro de un objeto: la prosa puede traer comillas sueltas)."""
+    out, depth, start, in_str, esc = [], 0, 0, False, False
+    for i, ch in enumerate(s):
+        if depth and in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"' and depth:
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                out.append(s[start:i + 1])
+    return out
+
+
+def parse_result_json(text_: str) -> dict:
+    """El objeto JSON de la respuesta aunque venga con prosa, en un bloque
+    ```json o con comentarios //. ValueError si no hay ninguno válido."""
+    import re
+    candidates = _json_objects(text_ or "")[::-1]          # el último primero
+    for c in candidates:
+        for variant in (c, re.sub(r"(?m)(?<=[,\s])//[^\n]*$", "", c)):
+            try:
+                obj = json.loads(variant)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and ("completed" in obj or "home_goals" in obj):
+                return obj
+    raise ValueError(f"respuesta sin JSON válido: {(text_ or '').strip()[:120]!r}")
 
 
 # ============================================================
