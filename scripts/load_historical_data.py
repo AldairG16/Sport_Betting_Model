@@ -8,7 +8,6 @@ if hasattr(sys.stdout, "reconfigure"):
 import json
 
 import pandas as pd
-import numpy as np
 from sqlalchemy import text
 from config.database import engine
 from src.utils.team_normalizer import normalize_team
@@ -48,81 +47,16 @@ def season_codes(today=None, first_start: int = 2015) -> list[str]:
 seasons = season_codes()
 
 
-# =========================
-# HEDGE FUND IMPUTATION
-# =========================
-
-def advanced_impute(df):
-
-    stats_cols = [
-        "home_shots","away_shots",
-        "home_shots_target","away_shots_target",
-        "home_corners","away_corners"
-    ]
-
-    # crear columnas si no existen
-    for col in stats_cols:
-        if col not in df.columns:
-            df[col] = np.nan
-
-    # =========================
-    # RECENCY WEIGHT
-    # =========================
-
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.sort_values("date", ascending=False)
-
-    df["recency_weight"] = np.exp(-np.arange(len(df)) / 50)
-
-    # =========================
-    # BASELINE POR LIGA
-    # =========================
-
-    league_avg = {}
-
-    for col in stats_cols:
-        valid = df[col].dropna()
-        if len(valid) > 0:
-            league_avg[col] = np.average(valid, weights=df.loc[valid.index, "recency_weight"])
-        else:
-            league_avg[col] = None
-
-    # =========================
-    # GLOBAL FALLBACK
-    # =========================
-
-    global_defaults = {
-        "home_shots": 12,
-        "away_shots": 10,
-        "home_shots_target": 4,
-        "away_shots_target": 3,
-        "home_corners": 5,
-        "away_corners": 4
-    }
-
-    # =========================
-    # IMPUTACIÓN
-    # =========================
-
-    for col in stats_cols:
-
-        if league_avg[col] is not None:
-            df[col] = df[col].fillna(league_avg[col])
-        else:
-            df[col] = df[col].fillna(global_defaults[col])
-
-    # =========================
-    # GOAL TEMPO ADJUSTMENT
-    # =========================
-
-    df["tempo"] = (df["home_goals"] + df["away_goals"]) / 2.5
-
-    for col in stats_cols:
-        df[col] = df[col] * (0.8 + 0.4 * df["tempo"])
-
-    df.drop(columns=["tempo", "recency_weight"], inplace=True)
-
-    return df
+# Estadísticas tal cual las publica football-data; sin dato → NULL.
+# Hasta el 2-oct-26 pasaban por advanced_impute(): rellenaba los huecos con
+# promedios de liga y MULTIPLICABA córners y tiros (también los reales) por
+# 0.8 + 0.4·goles/2.5. En la base, solo 13% de los córners de la Premier
+# 2023-24 eran los reales (Burnley 0-3 City: 6-5 → 8-6) y una apuesta de
+# córners se liquidó con un dato alterado. Un modelo que quiera imputar lo
+# hace al calcular sus features, nunca al guardar.
+STAT_COLS = ["home_shots", "away_shots", "home_shots_target", "away_shots_target",
+             "home_corners", "away_corners", "home_yellow", "away_yellow",
+             "home_red", "away_red"]
 
 
 # =========================
@@ -192,10 +126,7 @@ def load_historical_data():
             df = df.dropna(subset=["date"])
             df["home_team"] = df["home_team"].apply(normalize_team)
             df["away_team"] = df["away_team"].apply(normalize_team)
-            df = advanced_impute(df)
-
-            # Agregar columnas de tarjetas si existen en el CSV (opcional)
-            for col in ["home_yellow", "away_yellow", "home_red", "away_red"]:
+            for col in STAT_COLS:          # columna que el CSV no trae → NULL
                 if col not in df.columns:
                     df[col] = None
 
@@ -214,11 +145,15 @@ def load_historical_data():
             # multi-VALUES por lote. El executemany de antes hacía un viaje a
             # Neon por fila. to_json convierte numpy → nativos y NaN → null
             # (ronda 15).
+            # fill_null: si el partido ya existe (lo insertó antes The Odds API,
+            # sin estadísticas) se completan las que falten; nunca se pisa un
+            # dato. Antes se ignoraba y esos partidos no tenían córners nunca.
             cols = list(df.columns)
             rows = json.loads(df.to_json(orient="records", date_format="iso"))
             with engine.begin() as conn:
                 res = insert_ignore_conflicts(conn, "matches", cols, rows,
-                                              ["date", "home_team", "away_team"])
+                                              ["date", "home_team", "away_team"],
+                                              fill_null=STAT_COLS + ["season"])
             print(f"✅ {league} {s}: {describe(res)}")
             if res["errors"]:
                 log.error(f"❌ Histórico {league} {s}: {res['errors']} filas no se "

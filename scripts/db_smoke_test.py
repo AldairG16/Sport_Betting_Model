@@ -512,6 +512,24 @@ def _batch_insert_real():
             f"el resto ({bad['first_error'][:50]}…)")
 
 
+@check("Inserción que completa NULL sin pisar datos (tabla TEMPORAL)")
+def _batch_fill_null_real():
+    """fill_null (2-oct-26): la fila que ya existe recibe solo lo que tenía en
+    NULL; un dato existente nunca se pisa. RETURNING (xmax = 0) separa las
+    insertadas de las completadas: solo Postgres real lo puede validar."""
+    from src.utils.db_batch import insert_ignore_conflicts
+    with engine.begin() as c:
+        c.execute(text("CREATE TEMP TABLE smoke_fill (k INT, x INT, y INT, UNIQUE (k)) ON COMMIT DROP"))
+        c.execute(text("INSERT INTO smoke_fill VALUES (1, NULL, 7), (2, 5, 5)"))
+        res = insert_ignore_conflicts(c, "smoke_fill", ["k", "x", "y"],
+                                      [{"k": 1, "x": 3, "y": 9}, {"k": 2, "x": 1, "y": 1},
+                                       {"k": 3, "x": 4, "y": None}], ["k"], fill_null=["x", "y"])
+        rows = {k: (x, y) for k, x, y in c.execute(text("SELECT k, x, y FROM smoke_fill")).fetchall()}
+    assert (res["inserted"], res["filled"], res["existing"]) == (1, 1, 1), res
+    assert rows == {1: (3, 7), 2: (5, 5), 3: (4, None)}, rows
+    return "1 insertada, 1 completada (solo su NULL), 1 sin cambios"
+
+
 @check("Closing: bets BTTS con cierre (antes 0 por clave 'btts_yes')")
 def _btts_closing():
     df = pd.read_sql(text("""

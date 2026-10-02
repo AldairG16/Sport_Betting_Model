@@ -48,21 +48,35 @@ def _native(v):
     return v
 
 
+def _tail(table: str, conflict_cols: list[str], fill_null) -> str:
+    conflict = ", ".join(conflict_cols)
+    if not fill_null:
+        return f"ON CONFLICT ({conflict}) DO NOTHING RETURNING 1"
+    sets = ", ".join(f"{c} = COALESCE({table}.{c}, EXCLUDED.{c})" for c in fill_null)
+    need = " OR ".join(f"({table}.{c} IS NULL AND EXCLUDED.{c} IS NOT NULL)" for c in fill_null)
+    # xmax = 0 solo en las filas recién insertadas: separa insertadas de completadas
+    return f"ON CONFLICT ({conflict}) DO UPDATE SET {sets} WHERE {need} RETURNING (xmax = 0)"
+
+
 def insert_ignore_conflicts(conn, table: str, columns: list[str], rows: list[dict],
-                            conflict_cols: list[str], chunk: int = 500) -> dict:
+                            conflict_cols: list[str], chunk: int = 500,
+                            fill_null=()) -> dict:
     """
     Inserta `rows` (dicts con al menos `columns`) en `table`, ignorando las
     que chocan con `conflict_cols`. Debe llamarse dentro de una transacción
     (`with engine.begin() as conn`). `table`, `columns` y `conflict_cols`
     son identificadores del código, nunca datos de usuario.
 
-    Devuelve {"inserted", "existing", "errors", "first_error"}.
+    `fill_null` (2-oct-26): columnas que, si la fila ya existe y las tiene en
+    NULL, se completan con el valor nuevo. Nunca se pisa un dato existente.
+
+    Devuelve {"inserted", "filled", "existing", "errors", "first_error"}.
     """
-    out = {"inserted": 0, "existing": 0, "errors": 0, "first_error": None}
+    out = {"inserted": 0, "filled": 0, "existing": 0, "errors": 0, "first_error": None}
     if not rows:
         return out
     cols_sql = ", ".join(columns)
-    tail = f"ON CONFLICT ({', '.join(conflict_cols)}) DO NOTHING RETURNING 1"
+    tail = _tail(table, conflict_cols, fill_null)
     single = text(f"INSERT INTO {table} ({cols_sql}) VALUES "
                   f"({', '.join(':' + c for c in columns)}) {tail}")
     chunk = max(1, min(chunk, MAX_BIND_PARAMS // max(1, len(columns))))
@@ -75,20 +89,18 @@ def insert_ignore_conflicts(conn, table: str, columns: list[str], rows: list[dic
         params = {f"{c}_{i}": r[c] for i, r in enumerate(part) for c in columns}
         try:
             with conn.begin_nested():
-                n = len(conn.execute(
+                got = conn.execute(
                     text(f"INSERT INTO {table} ({cols_sql}) VALUES {values} {tail}"),
-                    params).fetchall())
-            out["inserted"] += n
-            out["existing"] += len(part) - n
+                    params).fetchall()
+            _count(out, got, len(part), fill_null)
             continue
         except Exception:
             pass   # el lote falló entero (savepoint revertido): aislar fila a fila
         for r in part:
             try:
                 with conn.begin_nested():
-                    n = len(conn.execute(single, r).fetchall())
-                out["inserted"] += n
-                out["existing"] += 1 - n
+                    got = conn.execute(single, r).fetchall()
+                _count(out, got, 1, fill_null)
             except Exception as e:
                 out["errors"] += 1
                 if out["first_error"] is None:
@@ -96,9 +108,20 @@ def insert_ignore_conflicts(conn, table: str, columns: list[str], rows: list[dic
     return out
 
 
+def _count(out: dict, returned: list, sent: int, fill_null) -> None:
+    """RETURNING devuelve una fila por insertada (y por completada si hay
+    fill_null, con True solo en las insertadas)."""
+    inserted = sum(1 for r in returned if r[0]) if fill_null else len(returned)
+    out["inserted"] += inserted
+    out["filled"] += len(returned) - inserted
+    out["existing"] += sent - len(returned)
+
+
 def describe(result: dict) -> str:
     """Resumen de una línea para el log."""
     s = f"{result['inserted']:,} nuevas, {result['existing']:,} ya existían"
+    if result.get("filled"):
+        s += f", {result['filled']:,} completadas"
     if result["errors"]:
         s += f", {result['errors']:,} con error (primera: {result['first_error']})"
     return s

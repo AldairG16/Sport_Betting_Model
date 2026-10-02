@@ -460,6 +460,14 @@ def step_load_extra_leagues():
     load_extra_leagues()
 
 
+def step_resolve_stale():
+    """Las apuestas reales que quedaron sin resultado ('stale') se liquidan
+    solas cuando llega su dato con las cargas del weekly (2-oct-26). Gratis:
+    solo lee la base. Antes no lo corría nadie: 34 quedaron así desde mayo."""
+    from scripts.resolve_stale_bets import resolve_stale_bets
+    resolve_stale_bets(apply=True, verbose=True)
+
+
 def step_team_names_check():
     """Un ascendido o una fuente nueva puede traer otro nombre del mismo club
     (el mismo partido guardado dos veces). Avisa como ERROR los pares nuevos
@@ -975,6 +983,7 @@ def main():
             run_step(logger, "Collect match events",     step_collect_events)
             run_step(logger, "Load extra leagues",       step_load_extra_leagues)
             run_step(logger, "Nombres de equipo nuevos", step_team_names_check)
+            run_step(logger, "Apuestas sin fuente con dato nuevo", step_resolve_stale)
             # run_step(logger, "Load MLB data",            step_load_mlb)  # desactivado — sin creditos MLB
             run_step(logger, "Soccerdata refresh (xG real)", step_soccerdata_refresh)
             run_step(logger, "Fit DC-MLE parameters",    step_fit_dc_mle)
