@@ -233,6 +233,49 @@ def test_espn_with_another_score_does_not_touch_the_row(monkeypatch):
     assert not eng.statements("UPDATE matches") and not eng.statements("INSERT INTO matches")
 
 
+def test_espn_halftime_comes_from_the_match_detail(monkeypatch):
+    """El marcador del día no trae los tiempos de partidos viejos; el detalle
+    del partido sí (Flamengo 2-2 Vasco, 1-0 al descanso)."""
+    import json
+    import scripts.backfill_espn_results as be
+
+    class Resp:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+    detail = {"header": {"competitions": [{"competitors": [
+        {"homeAway": "home", "linescores": [{"displayValue": "1"}, {"displayValue": "1"}]},
+        {"homeAway": "away", "linescores": [{"displayValue": "0"}, {"displayValue": "2"}]}]}]}}
+    seen = []
+    monkeypatch.setattr(be.urllib.request, "urlopen", lambda req, timeout=None: seen.append(req.full_url)
+                        or Resp(detail))
+    assert be.fetch_espn_halftime("bra.1", "401") == (1, 0)
+    assert seen[0].endswith("/soccer/bra.1/summary?event=401")
+    assert be.fetch_espn_halftime("bra.1", None) is None
+    monkeypatch.setattr(be.urllib.request, "urlopen", lambda req, timeout=None: Resp({"header": {}}))
+    assert be.fetch_espn_halftime("bra.1", "401") is None
+
+
+def test_espn_backfill_asks_the_detail_when_the_day_has_no_halftime(monkeypatch):
+    from types import SimpleNamespace
+    be, eng = _espn_world(monkeypatch, SimpleNamespace(id=55, home_goals=3, away_goals=0))
+    no_ht = [{"id": "77", "home": "GAIS", "away": "Kalmar FF", "home_goals": 3, "away_goals": 0,
+              "home_goals_ht": None, "away_goals_ht": None, "date": "2026-05-31"}]
+    monkeypatch.setattr(be, "fetch_espn_scoreboard", lambda slug, d: no_ht if d.day == 31 else [])
+    monkeypatch.setattr(be, "fetch_espn_halftime", lambda slug, event_id: (2, 0) if event_id == "77" else None)
+    be.backfill_espn_results(verbose=False)
+    (sql, params), = eng.statements("UPDATE matches SET")
+    assert (params["hht"], params["aht"]) == (2, 0)
+
+
 def test_espn_inserts_only_when_there_is_no_row(monkeypatch):
     be, eng = _espn_world(monkeypatch, None)
     be.backfill_espn_results(verbose=False)

@@ -103,6 +103,7 @@ def fetch_espn_scoreboard(slug: str, date: pd.Timestamp) -> list[dict]:
             }
         if "home" in teams and "away" in teams:
             out.append({
+                "id": ev.get("id"),
                 "home": teams["home"]["name"], "away": teams["away"]["name"],
                 "home_goals": int(teams["home"]["score"]),
                 "away_goals": int(teams["away"]["score"]),
@@ -111,6 +112,33 @@ def fetch_espn_scoreboard(slug: str, date: pd.Timestamp) -> list[dict]:
                 "date": str(ev.get("date", ""))[:10],
             })
     return out
+
+
+def fetch_espn_halftime(slug: str, event_id) -> tuple | None:
+    """(local, visitante) al medio tiempo desde el detalle del partido. El
+    marcador del día no trae los tiempos de los partidos viejos (2-oct-26):
+    las apuestas de primer tiempo quedaban sin resultado aunque ESPN lo tenga."""
+    if not event_id:
+        return None
+    url = ESPN_BASE.format(slug=slug).rsplit("/", 1)[0] + f"/summary?event={event_id}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = __import__("json").loads(r.read())
+    except Exception:
+        return None
+    comps = ((data.get("header") or {}).get("competitions") or [{}])[0].get("competitors", [])
+    ht = {}
+    for c in comps:
+        ls = c.get("linescores") or []
+        if not ls or c.get("homeAway") not in ("home", "away"):
+            continue
+        v = ls[0].get("displayValue", ls[0].get("value"))
+        try:
+            ht[c["homeAway"]] = int(float(v))
+        except (TypeError, ValueError):
+            pass
+    return (ht["home"], ht["away"]) if len(ht) == 2 else None
 
 
 def backfill_espn_results(verbose: bool = True) -> dict:
@@ -168,6 +196,10 @@ def backfill_espn_results(verbose: bool = True) -> dict:
                 continue
             m, d = found
             stats["matched"] += 1
+            if m.get("home_goals_ht") is None:
+                ht = fetch_espn_halftime(slug, m.get("id"))
+                if ht:
+                    m["home_goals_ht"], m["away_goals_ht"] = ht
             params = {
                 "d": d.strftime("%Y-%m-%d"), "lg": league if league else None,
                 "season": d.year if d.month >= 8 else d.year - 1,

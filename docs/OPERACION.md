@@ -185,7 +185,9 @@ club se guardaría con el nombre de la apuesta.
 
 `scripts/backfill_espn_results.py` (gratis, API pública de ESPN) completa goles y medio
 tiempo de las apuestas sin fuente: llena la fila que ya existe (±1 día) y solo si el
-marcador final coincide; inserta solo si el partido no tiene fila.
+marcador final coincide; inserta solo si el partido no tiene fila. El marcador del día no
+trae los tiempos de los partidos viejos: el medio tiempo sale del detalle del partido
+(`/summary?event=`).
 
 > **No corrió nunca hasta el 1-oct-2026.** `resolve_pending.yml` no tenía disparador
 > desde el 11-may y el paso del evening no recibía `ANTHROPIC_API_KEY` (`evening.yml`
