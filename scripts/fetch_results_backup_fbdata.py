@@ -33,28 +33,16 @@ if hasattr(sys.stdout, "reconfigure"):
 import pandas as pd
 from sqlalchemy import text
 from config.database import engine
+from src.utils.football_data import SEASON_LEAGUES, SEASON_URL, check_division, fetch_csv
 from src.utils.team_normalizer import normalize_team
 from src.utils.log import get_logger
 
 log = get_logger(__name__)
 
 
-# Mapeo code football-data.co.uk → sport_key de The Odds API.
-# Debe coincidir con `scripts/load_historical_data.py` (misma forma de nombrar).
-LEAGUES = {
-    "E0":  "soccer_epl",
-    "E1":  "soccer_efl_champ",
-    "D1":  "soccer_germany_bundesliga",
-    "I1":  "soccer_italy_serie_a",
-    "SP1": "soccer_spain_la_liga",
-    "F1":  "soccer_france_ligue_one",
-    "N1":  "soccer_netherlands_eredivisie",
-    "P1":  "soccer_portugal_primeira_liga",
-    "SC0": "soccer_spl",
-    "T1":  "soccer_turkey_super_league",
-    "B1":  "soccer_belgium_first_div",
-    "G1":  "soccer_greece_super_league",
-}
+# Mapeo code football-data.co.uk → sport_key de The Odds API (el mismo que
+# usa scripts/load_historical_data.py).
+LEAGUES = SEASON_LEAGUES
 
 
 def _current_season_code() -> str:
@@ -73,12 +61,17 @@ def _current_season_code() -> str:
 
 
 def _download_csv(season: str, code: str) -> pd.DataFrame | None:
-    """Descarga el CSV de football-data. Retorna None si falla."""
-    url = f"https://www.football-data.co.uk/mmz4281/{season}/{code}.csv"
-    try:
-        df = pd.read_csv(url)
-    except Exception as e:
-        print(f"   ⚠️  {code} ({season}): descarga falló — {e}")
+    """Descarga el CSV de football-data. Retorna None si falla o si todavía
+    no existe. En agosto-26 la temporada nueva no estaba publicada y el
+    servidor mandaba otro archivo (E0 → National League, SP1 → Escocia y
+    Portugal): se guardaron como Premier y La Liga (src/utils/football_data.py)."""
+    df, why = fetch_csv(SEASON_URL.format(season=season, code=code))
+    if df is None:
+        print(f"   ⚠️  {code} ({season}): {why}")
+        return None
+    problem = check_division(df, code)
+    if problem:
+        log.error(f"❌ fbdata {code} ({season}): {problem} — no se carga")
         return None
     if df.empty:
         return None
@@ -106,6 +99,14 @@ def _normalize_and_clean(df: pd.DataFrame, league: str, season_start: int) -> pd
         "HTHG":"home_goals_ht",
         "HTAG":"away_goals_ht",
     })
+    # Solo las columnas que se usan (el CSV trae ~100 de cuotas): agregar
+    # columnas a un frame tan ancho dejaba 72 PerformanceWarning por corrida
+    # en el log, que tapaban lo importante.
+    keep = ["date", "home_team", "away_team", "home_goals", "away_goals",
+            "home_shots", "away_shots", "home_shots_target", "away_shots_target",
+            "home_corners", "away_corners", "home_yellow", "away_yellow",
+            "home_red", "away_red", "home_goals_ht", "away_goals_ht"]
+    df = df[[c for c in keep if c in df.columns]].copy()
 
     # Parse date (football-data usa DD/MM/YYYY o DD/MM/YY)
     df["date"] = pd.to_datetime(df["date"], dayfirst=True, errors="coerce")

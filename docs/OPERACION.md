@@ -17,7 +17,7 @@ ver §2.
 | **PostgreSQL** | Todo el estado: `matches`, `upcoming_matches`, `bets_history`, `shadow_bets`, `bankroll`, `pre_kickoff_analyses`, `analyst_heartbeat`, `anthropic_usage`, y lo aprendido en `model_state` (§7). | `DB_URL` | Alojada fuera del repo. Ver §7. |
 | **Anthropic** | Los dos agentes LLM: analista pre-kickoff y resolver de pendientes. | `ANTHROPIC_API_KEY` | ~$0.014-0.020 por llamada. Ver §6. |
 | **Telegram** | Único canal de salida: picks, resumen diario, alertas del watchdog. | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`; el analista usa `*_PREKICKOFF` y cae al bot principal si no están. | Gratis. |
-| **football-data.co.uk** | Respaldo de resultados y **única** fuente de córners y tarjetas. Publica con 24-36 h de retraso. | Ninguna, son CSV públicos. | Gratis. |
+| **football-data.co.uk** | Respaldo de resultados y **única** fuente de córners y tarjetas. Publica con 24-36 h de retraso. Si un archivo no existe, **manda otro parecido** sin avisar (§5). | Ninguna, son CSV públicos. | Gratis. |
 | **OpenWeatherMap** | Clima del partido (`src/features/weather_impact.py`). | `WEATHER_API_KEY` | Gratis, 1000 llamadas/día. |
 
 `RAPIDAPI_KEY` solo la usa `test_api.py`, que no forma parte del pipeline.
@@ -35,7 +35,7 @@ son *repository secrets*; en local, un `.env` (que está en `.gitignore`).
 
 Esto **no** es lo que uno esperaría, y confundirlo cuesta caro:
 
-- **El cron de GitHub casi no se usa.** Solo `watchdog.yml`, `late_results.yml` y
+- **El cron de GitHub casi no se usa.** Solo `watchdog.yml` (como respaldo) y
   `closing.yml` (`7,37 * * * *`) llevan `schedule:`. Los demás lo perdieron a
   propósito.
 - **GitHub descarta muchos crons programados.** Medido el 20-22 sep: el closing
@@ -56,8 +56,16 @@ Esto **no** es lo que uno esperaría, y confundirlo cuesta caro:
   así que un cron ahí dispararía *además* del agente externo — doble corrida, doble
   gasto de API y dos pasadas escribiendo apuestas. Los crons originales están anotados
   en el commit que los retiró, por si algún día se apaga ese agente.
-- `watchdog.yml` y `late_results.yml` son la excepción porque el agente externo **no**
-  los dispara: ahí un cron no duplica nada, enciende lo que faltaba.
+- **El latido del closing dispara los trabajos de horario fijo** (1-oct-2026). El
+  closing es la corrida más puntual (336 seguidas sin un hueco de más de 45 min del 25-sep
+  al 1-oct); el cron de GitHub corría el reintento de resultados y el watchdog con 4-6 h
+  de atraso y se saltaba algunos, y el resolvedor no tenía quién lo disparara. Al final
+  de cada closing, `scripts/heartbeat_dispatch.py` hace `gh workflow run` (token del
+  workflow, permiso `actions: write`) de: `late_results.yml` a las 00:00 y 06:30,
+  `resolve_pending.yml` a las 07:00 y 19:00, y `watchdog.yml` a las 03:00, 09:00, 15:00 y
+  21:00 (hora de México). Cada horario tiene 30 min de ventana; no dispara si el trabajo
+  arrancó hace menos de 25 min. Un disparo fallido deja el closing en rojo. El watchdog
+  conserva además su cron: si el closing muere, el watchdog lo detecta igual.
 
 Para lanzar uno a mano: Actions → el workflow → «Run workflow», o
 `scripts/_trigger_workflow.ps1`, que hace el `workflow_dispatch` por API.
@@ -88,6 +96,25 @@ el orchestrator lo reporta como `::warning::` en Actions y por Telegram
 ("N errores tolerados"). Así se habría visto el primer día el apagón de 82 días
 (`❌ API error 401` en cada liga dentro de un paso "OK"). Un `except` que atrapa un
 fallo real debe usar `log.error`, no `print`.
+
+**Un WARNING no le llega a nadie.** Solo los `log.error` van a Telegram. La auditoría
+del 1-oct-2026 encontró fallas reales registradas como WARNING o `print`, y las pasó a
+ERROR: el estado aprendido que no se pudo guardar o leer (`model_state`), las candidatas
+en sombra rechazadas, el cierre de las sombras, las apuestas sin cierre por error de
+búsqueda, el gate de CLV por liga y una apuesta real que termina `stale` (sin resultado,
+fuera del bankroll: así pasaron 34 en abril-mayo sin un aviso). Regla: WARNING es solo
+para lo que no cambia ni dinero ni aprendizaje.
+
+**Fallar cerrado, no abierto.** Si falta una parte del estado aprendido (bloqueos, peso
+del modelo, sesgos), la corrida sigue midiendo en sombra pero **no registra apuestas
+reales** (`real_bets_with_state`). Si no se puede leer el bankroll, la corrida falla
+(antes devolvía 100u y Kelly inflaba los stakes un 68%). Si el gate de CLV no tiene
+datos, conserva los bloqueos anteriores (antes escribía la lista vacía).
+
+**Telegram que no entrega = corrida en rojo.** Telegram es el único canal: si un
+mensaje no se entrega (token vencido, bot bloqueado, 3 intentos fallidos), se anota en
+`SEND_FAILURES` y el orquestador, el resolvedor y el watchdog terminan con código 1.
+Así el aviso llega por el otro canal que queda: el correo de GitHub por la corrida roja.
 
 **Los scripts se lanzan como `python scripts/X.py`.** En ese modo la raíz del repo no
 está en `sys.path` hasta que el script la agrega: todo `from src...`/`from config...`
@@ -143,12 +170,23 @@ por su canal de Telegram. **Nunca toca `bets_history`.**
 > habilitar el workflow y poner la variable en `true`.
 
 **3 · Resolver de pendientes** — `scripts/resolve_pending_bets.py`, `resolve_pending.yml`.
-Dos veces al día toma bets atascadas en `pending` >6 h tras el kickoff (típicamente
-córners y tarjetas esperando el CSV de football-data, o ligas que The Odds API no
-puntúa). Pide a Claude el resultado FT vía `web_search`, completa `matches` y llama a
-`update_bet_results()`. **Gasta tokens.** `late_results.yml` cubre el caso barato:
-re-corre `--mode results` a las 00:00 y 06:30 MX para partidos que acaban después
-del evening, sin llamar a la LLM.
+Toma bets atascadas en `pending` >6 h tras el kickoff (típicamente córners y tarjetas
+esperando el CSV de football-data, o ligas que The Odds API no puntúa). Pide a Claude el
+resultado FT vía `web_search`, completa `matches` y llama a `update_bet_results()`.
+**Gasta tokens.** Corre a las 07:00 y 19:00 MX (lo dispara el latido del closing, §2) y
+como paso del evening antes del resumen. Una respuesta con `confidence: low` no se usa:
+con ella se liquidaría dinero.
+
+> **No corrió nunca hasta el 1-oct-2026.** `resolve_pending.yml` no tenía disparador
+> desde el 11-may y el paso del evening no recibía `ANTHROPIC_API_KEY` (`evening.yml`
+> no la pasaba): imprimía "abortando" y salía verde. 34 apuestas reales de abril-mayo
+> (19.54u apostadas) quedaron `stale`. Hoy, sin key la corrida es un error; cada corrida
+> deja su fila en `pipeline_runs` (modo `resolve_pending`) y el watchdog avisa si pasan
+> 30 h sin una. `--include-stale` (casilla `include_stale` del workflow) suma, una vez,
+> las apuestas reales que quedaron sin fuente; nunca las canceladas antes del kickoff.
+
+`late_results.yml` cubre el caso barato: re-corre `--mode results` a las 00:00 y 06:30
+MX para partidos que acaban después del evening, sin llamar a la LLM.
 
 **4 · Aprendizaje semanal** — el modo `weekly` recalcula todo lo que el sistema
 aprende de los datos que recolecta solo, y lo guarda en `model_state` (§7):
@@ -182,20 +220,27 @@ y, contada, diluye el ROI. Para «¿por qué no habló el analista?»: mira
 
 ## 4. Watchdog
 
-`scripts/watchdog.py`, cron `17 0,6,12,18 * * *`. Solo lee (y crea `pipeline_runs` si
-falta), no gasta créditos ni tokens. **Silencio = salud**: solo manda Telegram si algo
-va mal.
+`scripts/watchdog.py`: lo dispara el latido del closing (03:00, 09:00, 15:00 y 21:00
+MX) y conserva su cron `17 0,6,12,18 * * *` como respaldo independiente. Solo lee (y
+crea `pipeline_runs` si falta), no gasta créditos ni tokens. **Silencio = salud**: solo
+manda Telegram si algo va mal. Termina en **rojo** si la DB no responde o si su alerta
+no se pudo entregar (revisa la respuesta de Telegram; un 400 por HTML se reintenta en
+texto plano): el correo de GitHub es el segundo canal.
 
 | Check | Qué mira |
 |---|---|
 | 1 | La DB responde. |
 | 2 | `MAX(updated_at)` de `upcoming_matches` es reciente. |
-| 3 | Bets en `pending` de más de 5 días. |
+| 3 | Alguna apuesta real sigue `pending` 4+ días después del partido: la liquidación no corre (su timeout la pasa a `unresolved` a los 3). |
 | 4 | Gap del `analyst_heartbeat` — **se omite** si `PRE_KICKOFF_ANALYST_ENABLED=false`. |
 | 5 | Hay partidos futuros cargados. |
-| 6 | Antigüedad de la apuesta más reciente (umbral `DIAS_SIN_BETS_ALERTA`, 7 días). |
+| 6 | Antigüedad de la última **candidata** en `shadow_bets` (umbral `DIAS_SIN_CANDIDATAS_ALERTA`, 4 días). En modo recolección pueden pasar semanas sin una apuesta real. |
 | 7 | El **closing** corre: alerta si la última corrida tiene más de 2 h, o si hubo menos de 6 en las últimas 6 h (se esperan ~12). |
 | 8 | El **weekly** corre: alerta si la última corrida tiene más de 8 días. |
+| 9-10 | El **reintento de resultados** y el **resolvedor** corren: alerta si pasan 30 h sin una corrida, o si no hay ninguna registrada. |
+
+Una apuesta que termina sin resultado (`stale`) no se repite aquí cada 6 horas: avisa
+**una vez**, como ERROR, en la corrida que la marca.
 
 El 2 mide **actividad** y se deja engañar: el cleanup de `update_all()` toca la tabla
 al borrar filas viejas aunque no entre ninguna nueva. El 5 y el 6 miden **producto**,
@@ -244,6 +289,45 @@ por liga) la columna `Season` puede venir como `2026/2027` (la J-League juega de
 agosto a mayo desde 2026-27): se guarda el año de inicio (`season_start()` en
 `scripts/load_extra_leagues.py`); el texto rompía la columna entera y el weekly del
 28-sep perdió 80 partidos.
+
+**football-data manda OTRO archivo cuando el pedido no existe.** El servidor corrige el
+nombre y redirige a uno que difiere en una letra, con HTTP 200. Así entraron, sin un solo
+error, partidos con la etiqueta de otra liga (medido el 1-oct-2026):
+
+- `KOR.csv` → `NOR.csv`: 3,541 partidos **noruegos** guardados como K-League desde 2012.
+  La calibración de la K-League (r16) era noruega, y Noruega quedó bloqueada por "solo
+  32 partidos".
+- `ECL.csv` → `EC.csv`: 5,850 partidos de la **National League inglesa** (5ª división)
+  como Champions League desde 2015. Salían de ahí la tasa BTTS de la Champions y su
+  "cobertura" de córners y tarjetas.
+- Temporada nueva sin publicar (agosto-2026): `E0` → `EC` (12 partidos de la National
+  League como Premier) y `SP1` → `SC1` / `P1` (Escocia y Portugal como La Liga).
+
+Regla (`src/utils/football_data.py`): el archivo final tiene que ser el pedido (si no,
+"no existe", igual que un 404), y su columna `Div` (temporada) o `Country` (`/new/`) la
+esperada (si no, ERROR y no se carga). Los tres cargadores la usan. Lo ya guardado lo
+reetiquetó `scripts/fix_league_labels.py`. Desde r17 la K-League usa factores neutros
+(~60 partidos coreanos reales), Noruega los que r16 midió y la BTTS de la Champions el
+default.
+
+**El mismo club con dos nombres.** football-data escribe "Man United", "Leeds", "Paris
+SG"; The Odds API, "Manchester United", "Leeds United", "Paris Saint Germain". El mismo
+partido quedaba dos veces y la historia del club repartida en dos nombres (Dixon-Coles
+veía dos equipos; las búsquedas de historia, con el nombre de la API, no encontraban la
+otra mitad). Medido el 1-oct-2026: 5,936 partidos repetidos (la Premier tenía 456 por
+temporada en vez de 380). La capa aprendida de `normalize_team` lo une: un equipo no
+juega dos partidos el mismo día, así que dos filas con la misma fecha (±1 día), el mismo
+marcador y el mismo equipo del mismo lado son el mismo partido y el rival tiene dos
+nombres (`src/utils/team_identity.py`). Se aceptan solos los nombres compatibles (uno
+contiene al otro o casi iguales); los demás, solo verificados a mano (`ALLOW`);
+`DENY` guarda los clubes distintos que los datos mezclaban (PSG y Paris FC). Si los dos
+equipos estaban escritos distinto, el par sale en una segunda ronda. El mapa vive en
+`config/team_aliases.json` (canónico = el nombre de la API); `scripts/learn_team_aliases.py
+--write` lo regenera y el weekly avisa como ERROR si aparece un par nuevo sin unir (un
+ascendido, una fuente nueva). `scripts/fix_team_identities.py` pasó lo guardado al
+canónico y unió los repetidos, con respaldo en `matches_identity_backup`. Efecto
+colateral que dejó de pasar: el "temporada ya cargada" del weekly contaba los repetidos,
+así que dejó de cargar la 2025/26 antes de terminar.
 
 **`odds_history` guarda cambios, no fotos.** Con el closing cada 30 min, el 97% de las
 fotos eran copias idénticas (~8 MB/día; en el plan gratuito de Neon, la base se llenaba
@@ -366,9 +450,11 @@ pasada (`plan_bet_settlements`). Hasta el 22-sep-2026 las `unresolved` se re-mar
 `pending` y el timeout de 3 días las devolvía a `unresolved` en la misma corrida: nunca
 se liquidaban y terminaban `stale`, fuera del bankroll.
 
-**Los nombres de equipo pasan por `normalize_team()` antes de consultar.** `matches` y
-`upcoming_matches` guardan minúsculas normalizadas. Un desajuste deja bets en `pending`
-para siempre aunque `fetch_results` haya corrido.
+**Los nombres de equipo pasan por `normalize_team()` antes de consultar y de guardar.**
+`matches` y `upcoming_matches` guardan el nombre canónico en minúsculas (las selecciones
+del cargador internacional conservan sus mayúsculas: "China PR"). Un desajuste deja bets
+en `pending` para siempre aunque `fetch_results` haya corrido, o duplica el partido con
+otro nombre. Todo `INSERT` en `matches` usa `normalize_team`.
 
 **`fetch_results.py` no tiene guarda de créditos.** Los cuenta pero no se detiene por
 umbral, a diferencia de `update_upcoming_matches`. Con 15 ligas son hasta 15 créditos
@@ -591,9 +677,15 @@ python scripts/orchestrator.py --mode weekly    # recarga histórica + calibraci
 python scripts/pre_kickoff_analyst.py
 python scripts/pre_kickoff_analyst.py --debug   # 1 sola bet, verifica la integración
 python scripts/resolve_pending_bets.py --hours-lag 6 --limit 15
+python scripts/resolve_pending_bets.py --include-stale   # una vez: suma las reales sin fuente
 
 # Salud y auditoría (sin gasto)
 python scripts/watchdog.py
+python scripts/heartbeat_dispatch.py             # lo corre el closing; necesita gh y GH_TOKEN
+python scripts/learn_team_aliases.py             # en seco: nombres del mismo club; --write reescribe el mapa
+python scripts/learn_team_aliases.py --check     # solo avisa pares nuevos sin unir (lo hace el weekly)
+python scripts/fix_league_labels.py              # en seco; --apply reetiqueta ligas (respaldo antes)
+python scripts/fix_team_identities.py            # en seco; --apply une nombres y repetidos (después del anterior)
 python scripts/audit_analyst_calibration.py --days 60
 python scripts/db_smoke_test.py                  # 35 checks contra la base real, solo lectura
 python -c "from scripts.revalidate_pending_bets import revalidate_pending_bets as r; r(dry_run=True)"  # qué cancelaría ahora

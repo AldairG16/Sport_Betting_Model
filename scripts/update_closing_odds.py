@@ -178,6 +178,7 @@ def update_closing_odds(only_near_kickoff: bool = True):
 
     updates = 0
     not_found = 0
+    lookup_errors = []
 
     # Un solo mapeo mercado → cuota de cierre para apuestas Y shadow
     # (save_bets.closing_updates). Antes este script tenía su propia
@@ -202,7 +203,7 @@ def update_closing_odds(only_near_kickoff: bool = True):
             try:
                 odds_df = _nearest_market_row(home_raw, away_raw, match_date)
             except Exception as e:
-                log.warning(f"⚠️  closing: no se pudo buscar {match}: {type(e).__name__}")
+                lookup_errors.append(f"{match}: {type(e).__name__}")
                 continue
 
             if odds_df.empty:
@@ -219,6 +220,10 @@ def update_closing_odds(only_near_kickoff: bool = True):
             updates += 1
 
     print(f"✅ Closing odds actualizadas: {updates}")
+    if lookup_errors:
+        # ERROR (1-oct-26): cada una es una apuesta sin cierre ni CLV
+        log.error(f"❌ closing: {len(lookup_errors)} apuestas sin cierre por error de búsqueda "
+                  f"(ej. {lookup_errors[0]})")
 
     _close_shadow()
     if not_found > 0:
@@ -232,12 +237,15 @@ def _close_shadow():
     corre en producción; el shadow se rellena AQUÍ, donde corre el closing.
     Corre SIEMPRE: hasta el 23-sep-26 quedaba después del `return` de "no
     hay bets pendientes" y un slate sin apuestas no cerraba su shadow.
+    Un fallo es ERROR (1-oct-26): sin estos cierres el modo recolección no mide
+    nada, y como WARNING no llegaba a Telegram.
     """
     try:
         from src.models.save_bets import _update_shadow_closing
         _update_shadow_closing()
     except Exception as e:
-        log.warning(f"⚠️  shadow closing omitido: {type(e).__name__}")
+        log.error(f"❌ shadow closing falló — las candidatas no reciben cierre: "
+                  f"{type(e).__name__}: {str(e)[:160]}")
 
 
 if __name__ == "__main__":

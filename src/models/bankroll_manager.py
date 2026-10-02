@@ -28,6 +28,9 @@ from sqlalchemy import text
 
 from config.database import engine
 from config.settings import INITIAL_BANKROLL
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -95,7 +98,11 @@ def _initialize_bankroll(amount: float):
 def get_current_bankroll() -> float:
     """
     Retorna el bankroll actual desde la DB.
-    Fallback: INITIAL_BANKROLL si la tabla aún no existe o está vacía.
+    Fallback: INITIAL_BANKROLL solo si la tabla aún está vacía.
+
+    Si la lectura FALLA, propaga el error (1-oct-26): antes devolvía 100u en
+    silencio y Kelly calculaba los stakes como si el bankroll fuera 100 en vez
+    de ~59 (68% más grandes). Mejor una corrida en rojo que stakes inflados.
     """
     try:
         ensure_bankroll_schema()
@@ -103,11 +110,12 @@ def get_current_bankroll() -> float:
             "SELECT current_bankroll FROM bankroll ORDER BY id LIMIT 1",
             engine
         )
-        if df.empty:
-            return float(INITIAL_BANKROLL)
-        return float(df.iloc[0]["current_bankroll"])
-    except Exception:
+    except Exception as e:
+        log.error(f"❌ No se pudo leer el bankroll: {type(e).__name__}: {e}")
+        raise
+    if df.empty:
         return float(INITIAL_BANKROLL)
+    return float(df.iloc[0]["current_bankroll"])
 
 
 def update_bankroll(profit: float, notes: str = "", conn=None) -> float:

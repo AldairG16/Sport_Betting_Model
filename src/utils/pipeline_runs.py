@@ -41,6 +41,16 @@ CLOSING_WINDOW_H = 6.0
 CLOSING_MIN_RUNS = 6
 # El weekly corre los lunes; un día de holgura.
 WEEKLY_MAX_GAP_D = 8.0
+# Corren dos veces al día, disparados desde el latido del closing
+# (scripts/heartbeat_dispatch.py). El resolvedor pasó del 11-may al 1-oct-26
+# sin correr una sola vez y nada lo detectó.
+DAILY_MAX_GAP_H = {"results": 30.0, "resolve_pending": 30.0}
+DAILY_LABELS = {
+    "results": ("REINTENTO DE RESULTADOS", "late_results.yml",
+                "los partidos que terminan tarde no se liquidan hasta el día siguiente"),
+    "resolve_pending": ("RESOLVEDOR DE PENDIENTES", "resolve_pending.yml",
+                        "las apuestas sin marcador en la API quedan sin resultado"),
+}
 
 
 def record_run(engine, mode: str, failed: int, seconds: float | None) -> None:
@@ -100,6 +110,24 @@ def weekly_issue(last_weekly, now) -> str | None:
             "aprende ni recalibra.")
 
 
+def daily_issue(mode: str, last_run, now) -> str | None:
+    """Corridas de dos veces al día: None = sano. Sin ninguna corrida
+    registrada también es problema: así se escondió el resolvedor."""
+    title, workflow, consequence = DAILY_LABELS[mode]
+    max_h = DAILY_MAX_GAP_H[mode]
+    if last_run is not None and not pd.isna(last_run):
+        age = _hours(now, pd.Timestamp(last_run))
+        if age <= max_h:
+            return None
+        when = f"Última corrida hace {age:.0f} h"
+    else:
+        when = "No hay ninguna corrida registrada"
+    return (f"🟡 <b>{title} SIN CORRER</b>\n"
+            f"{when} (debe correr 2 veces al día).\n"
+            f"→ Lo dispara el closing cada 30 min (heartbeat_dispatch.py): revisa "
+            f"{workflow} y el paso del closing que lo dispara. Sin él {consequence}.")
+
+
 def _ts(v):
     t = pd.to_datetime(v, utc=True, errors="coerce")
     return None if pd.isna(t) else t
@@ -129,12 +157,18 @@ def check_scheduled_runs(engine, now: datetime | None = None) -> list[str]:
             (SELECT MAX(updated_at) FROM model_state WHERE key = 'anchor_weights')
         ) AS last_weekly
     """), engine)
+    daily = pd.read_sql(text("""
+        SELECT mode, MAX(ran_at) AS last_run FROM pipeline_runs
+        WHERE mode IN ('results', 'resolve_pending') GROUP BY mode
+    """), engine)
+    last_daily = {r["mode"]: _ts(r["last_run"]) for _, r in daily.iterrows()}
     first_ever = _ts(span.iloc[0]["first_ever"]) if not span.empty else None
     last_run = _ts(span.iloc[0]["last_run"]) if not span.empty else None
     issues = []
     for issue in (
         closing_issue(closing["ran_at"] if not closing.empty else [], first_ever, last_run, now),
         weekly_issue(_ts(weekly.iloc[0]["last_weekly"]) if not weekly.empty else None, now),
+        *(daily_issue(m, last_daily.get(m), now) for m in DAILY_MAX_GAP_H),
     ):
         if issue:
             issues.append(issue)

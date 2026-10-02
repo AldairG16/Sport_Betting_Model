@@ -145,6 +145,7 @@ def persist_shadow_bets(records: list):
             conn.execute(text(SHADOW_TABLE_SQL))
             conn.execute(text(SHADOW_ALTER_SQL))
             inserted = 0
+            rejected, first_error = 0, ""
             for r in records:
                 if not r.get("odds") or r["odds"] <= 1.01:
                     continue   # sin precio real no hay nada que medir
@@ -187,12 +188,15 @@ def persist_shadow_bets(records: list):
                         """), clean)
                     inserted += 1
                 except Exception as row_err:
-                    if inserted == 0 and not hasattr(persist_shadow_bets, "_dbg"):
-                        persist_shadow_bets._dbg = True
-                        log.warning(f"⚠️  shadow primera fila rechazada: {str(row_err)[:200]}")
-                    log.warning(f"⚠️  shadow fila rechazada ({r.get('market')}): "
-                          f"{type(row_err).__name__}")
+                    if not rejected:
+                        first_error = f"{type(row_err).__name__}: {str(row_err)[:200]}"
+                    rejected += 1
         print(f"🌑 Shadow: {inserted}/{len(records)} candidatas registradas")
+        if rejected:
+            # ERROR (1-oct-26): las candidatas son lo que mide el modo
+            # recolección; como WARNING por fila, un rechazo total no llegaba
+            # a Telegram y la medición se paraba en silencio.
+            log.error(f"❌ shadow: {rejected} de {len(records)} candidatas rechazadas — {first_error}")
     except Exception as e:
         log.error(f"⚠️  persist_shadow_bets error: {e}")
 
@@ -775,9 +779,14 @@ def update_bet_results():
             SET result = 'stale'
             WHERE result = 'unresolved'
               AND match_date < NOW() - INTERVAL '7 days'
-        """))
-        if r2.rowcount > 0:
-            print(f"🗑️  {r2.rowcount} bets 'unresolved' → 'stale' (tras 7 días sin datos fuente)")
+            RETURNING match, market
+        """)).fetchall()
+        if r2:
+            # ERROR, una sola vez por apuesta (1-oct-26): son apuestas REALES
+            # que salen del bankroll sin resultado. Con un print así pasaron
+            # 34 en abril-mayo sin que nadie se enterara.
+            log.error(f"❌ {len(r2)} apuestas reales quedaron SIN RESULTADO ('stale') tras 7 días "
+                      f"sin datos de fuente — no cuentan en el bankroll (ej. {r2[0][0]} | {r2[0][1]})")
 
 
 def audit_stat_settlements() -> dict:

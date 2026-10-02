@@ -86,6 +86,22 @@ def test_keep_prefers_row_with_more_stats_when_both_names_are_clean():
     assert keep["id"] == 2
 
 
+def test_merged_duplicates_are_backed_up_before_the_delete(monkeypatch):
+    """En matches no se borra nada sin copia (1-oct-26)."""
+    from tests.fake_db import FakeEngine
+    eng = FakeEngine()
+    monkeypatch.setattr(sa, "engine", eng)
+    monkeypatch.setattr(sa.pd, "read_sql", lambda *a, **k: pd.DataFrame(
+        [_match(1, "nott'm forest", "arsenal"), _match(2, "nottm forest", "arsenal", home_corners=6)]))
+    status, msg = sa.audit_duplicate_matches()
+    assert status == "ok" and msg.startswith("1 duplicados")
+    sqls = [s for s, _ in eng.executed]
+    i_backup = next(i for i, s in enumerate(sqls) if s.startswith("INSERT INTO matches_identity_backup"))
+    i_delete = next(i for i, s in enumerate(sqls) if s.startswith("DELETE FROM matches"))
+    assert i_backup < i_delete
+    assert eng.executed[i_backup][1]["ids"] == [1] == eng.executed[i_delete][1]["ids"]
+
+
 # ============================================================
 # Sanidad del xG proxy
 # ============================================================

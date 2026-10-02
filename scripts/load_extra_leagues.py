@@ -12,7 +12,6 @@ URL: https://www.football-data.co.uk/new/{CODE}.csv
 
 Ligas disponibles:
   JPN = Japan J-League
-  KOR = South Korea K-League
   NOR = Norway Eliteserien
   SWE = Sweden Allsvenskan
   CHN = China Super League
@@ -22,15 +21,18 @@ Ligas disponibles:
   AUT = Austria Bundesliga
   ROU = Romania Liga 1
 
+Corea del Sur NO existe en football-data: hasta el 1-oct-26 se pedía KOR.csv y
+el servidor REDIRIGE en silencio a NOR.csv. Cada weekly guardaba toda la
+historia noruega como K-League (3,541 partidos) y la de Noruega no entraba
+("ya existían"). Por eso cada liga trae su país esperado y se verifica.
+
 Uso:
   python scripts/load_extra_leagues.py
 """
 
 import sys
 import os
-import requests
 import pandas as pd
-from io import StringIO
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -40,6 +42,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from config.database import engine
 from src.utils.team_normalizer import normalize_team
 from src.utils.db_batch import insert_ignore_conflicts, describe
+from src.utils.football_data import fetch_csv
 from src.utils.log import get_logger
 
 log = get_logger(__name__)
@@ -48,7 +51,6 @@ log = get_logger(__name__)
 # ── Mapeo de ligas extra ─────────────────────────────────────────────────────
 EXTRA_LEAGUES = {
     "JPN": "soccer_japan_j_league",
-    "KOR": "soccer_korea_kleague1",
     "NOR": "soccer_norway_eliteserien",
     "SWE": "soccer_sweden_allsvenskan",
     "CHN": "soccer_china_superleague",
@@ -59,22 +61,35 @@ EXTRA_LEAGUES = {
     # "AUT": "soccer_austria_bundesliga",
 }
 
+# País que debe traer la columna Country de cada CSV
+EXPECTED_COUNTRY = {
+    "JPN": "Japan", "NOR": "Norway", "SWE": "Sweden", "CHN": "China",
+    "DNK": "Denmark", "FIN": "Finland", "POL": "Poland", "AUT": "Austria",
+}
+
 BASE_URL = "https://www.football-data.co.uk/new/{code}.csv"
 
 
+def check_country(code: str, df: pd.DataFrame) -> str | None:
+    """None si el CSV es del país de la liga pedida; si no, el motivo para no
+    cargarlo. La redirección a otro archivo ya la descarta fetch_csv."""
+    expected = EXPECTED_COUNTRY.get(code)
+    if expected and "Country" in df.columns:
+        got = {str(c).strip() for c in df["Country"].dropna().unique()}
+        if got != {expected}:
+            return f"{code}.csv trae Country={sorted(got)} (se esperaba {expected})"
+    return None
+
+
 def _download_csv(code: str) -> pd.DataFrame | None:
-    """Descarga CSV de una extra league desde football-data.co.uk."""
-    url = BASE_URL.format(code=code)
-    try:
-        r = requests.get(url, timeout=30)
-        r.raise_for_status()
-        # Handle BOM encoding
-        content = r.content.decode("utf-8-sig")
-        df = pd.read_csv(StringIO(content))
-        return df
-    except Exception as e:
-        print(f"  ERROR descargando {code}: {e}")
+    """Descarga CSV de una extra league desde football-data.co.uk. Estos
+    archivos traen todas las temporadas: que falten es un error."""
+    df, why = fetch_csv(BASE_URL.format(code=code))
+    problem = why if df is None else check_country(code, df)
+    if problem:
+        log.error(f"❌ Liga extra {code}: {problem} — no se carga")
         return None
+    return df
 
 
 def _normalize_date(date_str: str) -> str | None:

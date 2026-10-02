@@ -73,7 +73,12 @@ LEAGUE_FACTORS = {
         "tempo":          1.102,
         "draw_rate":      0.265,
         "over25_rate":    0.532,
-        "btts_rate":    0.5647,  # J1 r15: Q-BA, 3 años n>=500
+        # r17 (1-oct-26): default. El 0.5647 de r15 ("3 años n>=500") salió de
+        # la National League inglesa (5ª división) guardada como Champions:
+        # football-data no tiene Champions y redirigía ECL.csv a EC.csv
+        # (src/utils/football_data.py). Los otros cuatro son los originales
+        # de abr-26, no se midieron con esa data.
+        "btts_rate":      0.53,
     },
     "soccer_germany_bundesliga": {
         "home_advantage": 1.253,
@@ -177,7 +182,22 @@ LEAGUE_FACTORS = {
         "btts_rate":    0.53,  # J1 r15: Q-BA, 3 años n>=500   # placeholder (no se usa para MLB)
     },
     # ── K1 (ronda 16): Q-CA, 3 años, misma ventana que Q-BA ──
+    # K-League (r17, 1-oct-26): valores NEUTROS (= DEFAULT_FACTORS) a
+    # propósito. Los de r16 salieron de partidos NORUEGOS guardados como
+    # K-League (football-data no tiene Corea y redirigía KOR.csv a NOR.csv,
+    # src/utils/football_data.py); con ~60 partidos coreanos reales no hay
+    # muestra para medirla.
     "soccer_korea_kleague1": {
+        "home_advantage": 1.200,
+        "tempo":          1.050,
+        "draw_rate":      0.260,
+        "over25_rate":    0.510,
+        "btts_rate":      0.530,
+    },
+    # Noruega (r17): los valores que r16 midió como "K-League" — 3 años de
+    # partidos noruegos. Sigue en BLOCKED_LEAGUES (solo shadow): con su
+    # historia ya en su liga, reactivarla es decisión del dueño.
+    "soccer_norway_eliteserien": {
         "home_advantage": 1.223,
         "tempo":          1.212,
         "draw_rate":      0.217,
@@ -212,8 +232,6 @@ LEAGUE_FACTORS = {
         "over25_rate":    0.534,
         "btts_rate":      0.531,
     },
-    # soccer_norway_eliteserien: n=21 en 3 años — no medible → BLOQUEADA
-    # (ver BLOCKED_LEAGUES en prediction_pipeline)
 }
 
 # Valores por defecto si la liga no está en el mapa
@@ -229,7 +247,7 @@ DEFAULT_FACTORS = {
 # 0.20 = 20% liga histórica + 80% Poisson del partido
 OVER25_SHRINK = 0.20
 BTTS_SHRINK   = 0.20   # J1 r15: mismo estimador y misma data family que over25
-LEAGUE_FACTORS_VERSION = "r16"  # K1: 5 ligas calibradas (Q-CA) + noruega bloqueada
+LEAGUE_FACTORS_VERSION = "r17"  # r16: K-League neutra y su medición a Noruega (era noruega); BTTS de Champions al default (era de la 5ª inglesa)
 
 
 

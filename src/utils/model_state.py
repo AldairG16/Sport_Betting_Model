@@ -85,8 +85,10 @@ def save_state(key: str, value: dict, file_path: Path | None = None,
                 """), {"k": key, "v": payload, "t": datetime.now(timezone.utc)})
         return True
     except Exception as e:
-        log.warning(f"⚠️  model_state/{key}: no se pudo persistir en la DB — las demás "
-              f"corridas NO verán este estado. {type(e).__name__}: {str(e)[:150]}")
+        # ERROR (no WARNING): lo aprendido se perdería sin que nadie se entere —
+        # los WARNING no llegan a Telegram, los ERROR sí ("errores tolerados")
+        log.error(f"❌ model_state/{key}: no se pudo persistir en la DB — las demás "
+                  f"corridas NO verán este estado. {type(e).__name__}: {str(e)[:150]}")
         return False
 
 
@@ -104,8 +106,8 @@ def load_state(key: str, file_path: Path | None = None) -> dict | None:
             v = row[0]
             return json.loads(v) if isinstance(v, str) else dict(v)
     except Exception as e:
-        log.warning(f"⚠️  model_state/{key}: DB no disponible, uso fallback local. "
-              f"{type(e).__name__}: {str(e)[:120]}")
+        log.error(f"❌ model_state/{key}: DB no disponible, uso fallback local. "
+                  f"{type(e).__name__}: {str(e)[:120]}")
     if file_path is not None and file_path.exists():
         try:
             return json.loads(file_path.read_text(encoding="utf-8"))

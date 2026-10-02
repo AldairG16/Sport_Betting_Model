@@ -34,8 +34,9 @@ def test_unmeasurable_league_is_blocked_not_defaulted():
 
 
 def test_calibration_version_is_declared():
-    """R13: los cambios de la tabla de ligas son trazables por cohorte."""
-    assert LEAGUE_FACTORS_VERSION == "r16"
+    """R13: los cambios de la tabla de ligas son trazables por cohorte
+    (r17: K-League neutra, su medición a Noruega, BTTS de Champions)."""
+    assert LEAGUE_FACTORS_VERSION == "r17"
 
 
 def test_new_leagues_have_all_five_parameters():

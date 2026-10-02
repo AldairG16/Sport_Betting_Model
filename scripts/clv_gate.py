@@ -257,14 +257,15 @@ def run_clv_gate(verbose: bool = True) -> dict:
             log.error(f"❌ clv_gate: no se pudo leer bets_history: {e}")
         return {"status": "error", "error": str(e)}
 
-    if df.empty:
-        if verbose:
-            print("clv_gate: sin datos de CLV — no se bloquea nada.")
-        _write_blocked([], verbose=False)
-        return {"status": "no_data", "blocked": []}
-
-    # CLV en escala de probabilidad (misma definición que clv_tracker)
-    df["clv"] = 1.0 / df["closing_odds"] - 1.0 / df["odds"]
+    # Sin datos NO se desbloquea nada ni se salta el gate por liga (1-oct-26):
+    # antes un slate sin cierres válidos escribía la lista vacía (fallaba
+    # ABIERTO) y retornaba antes del gate por liga, que quedó congelado desde
+    # el 22-sep. Sin datos manda el estado anterior, igual que la histéresis.
+    if df.empty and verbose:
+        print("clv_gate: sin datos de CLV esta semana — se conserva el estado anterior.")
+    if not df.empty:
+        # CLV en escala de probabilidad (misma definición que clv_tracker)
+        df["clv"] = 1.0 / df["closing_odds"] - 1.0 / df["odds"]
 
     # Estado previo (C2): blocked + streaks viven en el payload del JSON
     prev_state = _read_blocked_state()
@@ -273,7 +274,7 @@ def run_clv_gate(verbose: bool = True) -> dict:
 
     stats = {}
     report = []
-    for mkt, sub in df.groupby("market"):
+    for mkt, sub in (df.groupby("market") if not df.empty else []):
         n = len(sub)
         avg = float(sub["clv"].mean())
         sd = float(sub["clv"].std(ddof=1)) if n > 1 else None
@@ -296,6 +297,7 @@ def run_clv_gate(verbose: bool = True) -> dict:
     # Protege las ligas re-habilitadas: si vuelven a fallar con muestra,
     # vuelven a bloquearse solas. Mismo criterio que los mercados.
     blocked_leagues = []
+    prev_leagues = sorted(load_clv_blocked_leagues())
     try:
         lg = pd.read_sql(text(f"""
             SELECT league, odds, closing_odds
@@ -307,17 +309,23 @@ def run_clv_gate(verbose: bool = True) -> dict:
               AND match_date >= CAST(:since AS timestamptz)
               AND {valid_closing_sql()}
         """), engine, params={"since": LEARNING_SINCE})
-        if not lg.empty:
+        if lg.empty:
+            # sin datos: se conservan los bloqueos (no se desbloquea a ciegas)
+            blocked_leagues = prev_leagues
+        else:
             lg["clv"] = 1.0 / lg["closing_odds"] - 1.0 / lg["odds"]
             for l, sub in lg.groupby("league"):
                 if len(sub) < _LEAGUE_MIN_BETS:
+                    if str(l) in prev_leagues:
+                        blocked_leagues.append(str(l))   # muestra corta: sigue como estaba
                     continue
                 avg = float(sub["clv"].mean())
                 if avg <= _LEAGUE_CLV_FLOOR:
                     blocked_leagues.append(str(l))
     except Exception as e:
-        log.warning(f"   ⚠️  League gate omitido: {e}")
-    _write_league_blocked(blocked_leagues, verbose=verbose)
+        log.error(f"❌ League gate falló, se conservan los bloqueos anteriores: {e}")
+        blocked_leagues = prev_leagues
+    _write_league_blocked(sorted(set(blocked_leagues)), verbose=verbose)
 
     # blocked_since: conservar el existente; fecha nueva para los recién bloqueados
     prev_since = prev_state.get("blocked_since", {})
@@ -340,7 +348,7 @@ def run_clv_gate(verbose: bool = True) -> dict:
             print("   ✅ Ninguna liga cumple criterio de bloqueo")
 
     return {
-        "status": "ok",
+        "status": "no_data" if df.empty else "ok",
         "blocked": blocked,
         "blocked_leagues": blocked_leagues,
         "by_market": report,

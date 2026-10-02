@@ -31,8 +31,9 @@ from sqlalchemy import text
 sys.path.append(str(Path(__file__).parent.parent))
 
 from config.database import engine
+from src.utils.team_normalizer import normalize_team
 
-ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/scoreboard"
+ESPN_BASE ="https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/scoreboard"
 
 # sport_key (The Odds API) → slug ESPN
 ESPN_LEAGUES = {
@@ -167,7 +168,9 @@ def backfill_espn_results(verbose: bool = True) -> dict:
             m, d = found
             stats["matched"] += 1
 
-            # Upsert en matches (misma política que el resto del sistema)
+            # Upsert en matches (misma política que el resto del sistema), con
+            # el nombre canónico: una bet vieja puede traer un nombre anterior
+            # y la fila quedaría repetida con otro nombre.
             league_col = league if league else None
             conn.execute(text("""
                 INSERT INTO matches (date, league, season, home_team, away_team,
@@ -182,7 +185,7 @@ def backfill_espn_results(verbose: bool = True) -> dict:
             """), {
                 "d": d.strftime("%Y-%m-%d"), "lg": league_col,
                 "season": d.year if d.month >= 8 else d.year - 1,
-                "h": home_raw, "a": away_raw,
+                "h": normalize_team(home_raw), "a": normalize_team(away_raw),
                 "hg": m["home_goals"], "ag": m["away_goals"],
                 "hht": m["home_goals_ht"], "aht": m["away_goals_ht"],
             })

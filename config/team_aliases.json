@@ -1,0 +1,940 @@
+{
+  "generated_at": "2026-10-01T21:15:55+00:00",
+  "policy": {
+    "min_support": 1,
+    "rule": "misma fecha (±1 día), mismo marcador y mismo equipo del mismo lado",
+    "canonical": "el nombre de la API de cuotas (upcoming_matches)"
+  },
+  "aliases": {
+    "academico viseu": "academico de viseu",
+    "aek": "aek athens",
+    "ael": "larisa",
+    "antwerp": "royal antwerp",
+    "aris": "aris thessaloniki",
+    "athletic club": "ath bilbao",
+    "atromitos": "atromitos athens",
+    "avs futebol sad": "avs",
+    "beijing fc": "beijing guoan",
+    "besiktas": "besiktas jk",
+    "betis": "real betis",
+    "birmingham": "birmingham city",
+    "blackburn": "blackburn rovers",
+    "bodo/glimt": "bod/glimt",
+    "bolton": "bolton wanderers",
+    "brann": "sk brann",
+    "brommapojkarna": "if brommapojkarna",
+    "buyuksehyr": "basaksehir",
+    "cardiff": "cardiff city",
+    "cercle brugge": "cercle brugge ksv",
+    "charlton": "charlton athletic",
+    "chengdu rongcheng fc": "chengdu rongcheng",
+    "china": "china pr",
+    "chongqing tonglianglong fc": "chongqing tonglianglong",
+    "coventry": "coventry city",
+    "degerfors": "degerfors if",
+    "derby": "derby county",
+    "djurgarden": "djurgardens if",
+    "dortmund": "borussia dortmund",
+    "dundee fc": "dundee",
+    "elfsborg": "if elfsborg",
+    "estrela": "cf estrela",
+    "falkirk fc": "falkirk",
+    "fatih karagumruk": "karagumruk",
+    "fc cologne": "fc koln",
+    "fc porto": "porto",
+    "fc volendam": "volendam",
+    "for sittard": "fortuna sittard",
+    "fredrikstad": "fredrikstad fk",
+    "gaziantep": "gazisehir gaziantep",
+    "genclerbirligi": "genclerbirligi sk",
+    "goteborg": "ifk goteborg",
+    "goztep": "goztepe",
+    "guimaraes": "vitoria sc",
+    "hacken": "bk hacken",
+    "halmstad": "halmstads bk",
+    "hammarby": "hammarby if",
+    "henan fc": "henan songshan longmen",
+    "heracles almelo": "heracles",
+    "hull": "hull city",
+    "inter": "inter milan",
+    "ipswich": "ipswich town",
+    "iraklis": "iraklis fc",
+    "kalmar": "kalmar ff",
+    "kasimpasa": "kasimpasa sk",
+    "kfum oslo": "kfum",
+    "kifisia": "ae kifisia fc",
+    "konyaspor": "torku konyaspor",
+    "kristiansund": "kristiansund bk",
+    "leicester city": "leicester",
+    "levadeiakos": "levadiakos",
+    "leverkusen": "bayer leverkusen",
+    "liaoning tieren fc": "liaoning tieren",
+    "lincoln": "lincoln city",
+    "man united": "manchester united",
+    "mechelen": "kv mechelen",
+    "mgladbach": "gladbach",
+    "milan": "ac milan",
+    "mjallby": "mjallby aif",
+    "moreirense": "moreirense fc",
+    "nijmegen": "nec nijmegen",
+    "norwich": "norwich city",
+    "olympiakos": "olympiakos piraeus",
+    "orgryte": "orgryte is",
+    "oud heverlee leuven": "leuven",
+    "oxford united": "oxford",
+    "panetolikos": "panetolikos agrinio",
+    "panserraikos fc": "panserraikos",
+    "paok": "paok thessaloniki",
+    "paris sg": "paris saint germain",
+    "preston": "preston north end",
+    "qingdao hainiu fc": "qingdao hainiu",
+    "qingdao west coast fc": "qingdao west coast",
+    "qpr": "queens park rangers",
+    "rio ave": "rio ave fc",
+    "rizespor": "caykur rizespor",
+    "saint etienne": "st etienne",
+    "santander": "real racing club de santander",
+    "sarpsborg 08": "sarpsborg fk",
+    "schalke": "schalke 04",
+    "shandong luneng taishan fc": "shandong taishan",
+    "shanghai shenhua fc": "shanghai shenhua",
+    "shanghai sipg fc": "shanghai port",
+    "sheffield wednesday": "sheffield weds",
+    "shenzhen peng city fc": "shenzhen xinpengcheng",
+    "sirius": "ik sirius",
+    "sp braga": "braga",
+    "sp lisbon": "sporting lisbon",
+    "st gilloise": "union saint gilloise",
+    "st truiden": "sint truiden",
+    "standard": "standard liege",
+    "start": "ik start",
+    "stoke": "stoke city",
+    "swansea": "swansea city",
+    "telstar": "sc telstar",
+    "tianjin jinmen tiger fc": "tianjin jinmen tiger",
+    "twente": "fc twente enschede",
+    "utrecht": "fc utrecht",
+    "viking": "viking fk",
+    "volos nfc": "volos fc",
+    "waregem": "sv zulte waregem",
+    "west brom": "west bromwich albion",
+    "wolverhampton": "wolves",
+    "wrexham": "wrexham afc",
+    "zhejiang": "zhejiang professional",
+    "zwolle": "fc zwolle"
+  },
+  "groups": [
+    {
+      "canonical": "ac milan",
+      "names": [
+        "ac milan",
+        "milan"
+      ]
+    },
+    {
+      "canonical": "academico de viseu",
+      "names": [
+        "academico de viseu",
+        "academico viseu"
+      ]
+    },
+    {
+      "canonical": "ae kifisia fc",
+      "names": [
+        "ae kifisia fc",
+        "kifisia"
+      ]
+    },
+    {
+      "canonical": "aek athens",
+      "names": [
+        "aek",
+        "aek athens"
+      ]
+    },
+    {
+      "canonical": "aris thessaloniki",
+      "names": [
+        "aris",
+        "aris thessaloniki"
+      ]
+    },
+    {
+      "canonical": "ath bilbao",
+      "names": [
+        "ath bilbao",
+        "athletic club"
+      ]
+    },
+    {
+      "canonical": "atromitos athens",
+      "names": [
+        "atromitos",
+        "atromitos athens"
+      ]
+    },
+    {
+      "canonical": "avs",
+      "names": [
+        "avs",
+        "avs futebol sad"
+      ]
+    },
+    {
+      "canonical": "basaksehir",
+      "names": [
+        "basaksehir",
+        "buyuksehyr"
+      ]
+    },
+    {
+      "canonical": "bayer leverkusen",
+      "names": [
+        "bayer leverkusen",
+        "leverkusen"
+      ]
+    },
+    {
+      "canonical": "beijing guoan",
+      "names": [
+        "beijing fc",
+        "beijing guoan"
+      ]
+    },
+    {
+      "canonical": "besiktas jk",
+      "names": [
+        "besiktas",
+        "besiktas jk"
+      ]
+    },
+    {
+      "canonical": "birmingham city",
+      "names": [
+        "birmingham",
+        "birmingham city"
+      ]
+    },
+    {
+      "canonical": "bk hacken",
+      "names": [
+        "bk hacken",
+        "hacken"
+      ]
+    },
+    {
+      "canonical": "blackburn rovers",
+      "names": [
+        "blackburn",
+        "blackburn rovers"
+      ]
+    },
+    {
+      "canonical": "bod/glimt",
+      "names": [
+        "bod/glimt",
+        "bodo/glimt"
+      ]
+    },
+    {
+      "canonical": "bolton wanderers",
+      "names": [
+        "bolton",
+        "bolton wanderers"
+      ]
+    },
+    {
+      "canonical": "borussia dortmund",
+      "names": [
+        "borussia dortmund",
+        "dortmund"
+      ]
+    },
+    {
+      "canonical": "braga",
+      "names": [
+        "braga",
+        "sp braga"
+      ]
+    },
+    {
+      "canonical": "cardiff city",
+      "names": [
+        "cardiff",
+        "cardiff city"
+      ]
+    },
+    {
+      "canonical": "caykur rizespor",
+      "names": [
+        "caykur rizespor",
+        "rizespor"
+      ]
+    },
+    {
+      "canonical": "cercle brugge ksv",
+      "names": [
+        "cercle brugge",
+        "cercle brugge ksv"
+      ]
+    },
+    {
+      "canonical": "cf estrela",
+      "names": [
+        "cf estrela",
+        "estrela"
+      ]
+    },
+    {
+      "canonical": "charlton athletic",
+      "names": [
+        "charlton",
+        "charlton athletic"
+      ]
+    },
+    {
+      "canonical": "chengdu rongcheng",
+      "names": [
+        "chengdu rongcheng",
+        "chengdu rongcheng fc"
+      ]
+    },
+    {
+      "canonical": "china pr",
+      "names": [
+        "china",
+        "china pr"
+      ]
+    },
+    {
+      "canonical": "chongqing tonglianglong",
+      "names": [
+        "chongqing tonglianglong",
+        "chongqing tonglianglong fc"
+      ]
+    },
+    {
+      "canonical": "coventry city",
+      "names": [
+        "coventry",
+        "coventry city"
+      ]
+    },
+    {
+      "canonical": "degerfors if",
+      "names": [
+        "degerfors",
+        "degerfors if"
+      ]
+    },
+    {
+      "canonical": "derby county",
+      "names": [
+        "derby",
+        "derby county"
+      ]
+    },
+    {
+      "canonical": "djurgardens if",
+      "names": [
+        "djurgarden",
+        "djurgardens if"
+      ]
+    },
+    {
+      "canonical": "dundee",
+      "names": [
+        "dundee",
+        "dundee fc"
+      ]
+    },
+    {
+      "canonical": "falkirk",
+      "names": [
+        "falkirk",
+        "falkirk fc"
+      ]
+    },
+    {
+      "canonical": "fc koln",
+      "names": [
+        "fc cologne",
+        "fc koln"
+      ]
+    },
+    {
+      "canonical": "fc twente enschede",
+      "names": [
+        "fc twente enschede",
+        "twente"
+      ]
+    },
+    {
+      "canonical": "fc utrecht",
+      "names": [
+        "fc utrecht",
+        "utrecht"
+      ]
+    },
+    {
+      "canonical": "fc zwolle",
+      "names": [
+        "fc zwolle",
+        "zwolle"
+      ]
+    },
+    {
+      "canonical": "fortuna sittard",
+      "names": [
+        "for sittard",
+        "fortuna sittard"
+      ]
+    },
+    {
+      "canonical": "fredrikstad fk",
+      "names": [
+        "fredrikstad",
+        "fredrikstad fk"
+      ]
+    },
+    {
+      "canonical": "gazisehir gaziantep",
+      "names": [
+        "gaziantep",
+        "gazisehir gaziantep"
+      ]
+    },
+    {
+      "canonical": "genclerbirligi sk",
+      "names": [
+        "genclerbirligi",
+        "genclerbirligi sk"
+      ]
+    },
+    {
+      "canonical": "gladbach",
+      "names": [
+        "gladbach",
+        "mgladbach"
+      ]
+    },
+    {
+      "canonical": "goztepe",
+      "names": [
+        "goztep",
+        "goztepe"
+      ]
+    },
+    {
+      "canonical": "halmstads bk",
+      "names": [
+        "halmstad",
+        "halmstads bk"
+      ]
+    },
+    {
+      "canonical": "hammarby if",
+      "names": [
+        "hammarby",
+        "hammarby if"
+      ]
+    },
+    {
+      "canonical": "henan songshan longmen",
+      "names": [
+        "henan fc",
+        "henan songshan longmen"
+      ]
+    },
+    {
+      "canonical": "heracles",
+      "names": [
+        "heracles",
+        "heracles almelo"
+      ]
+    },
+    {
+      "canonical": "hull city",
+      "names": [
+        "hull",
+        "hull city"
+      ]
+    },
+    {
+      "canonical": "if brommapojkarna",
+      "names": [
+        "brommapojkarna",
+        "if brommapojkarna"
+      ]
+    },
+    {
+      "canonical": "if elfsborg",
+      "names": [
+        "elfsborg",
+        "if elfsborg"
+      ]
+    },
+    {
+      "canonical": "ifk goteborg",
+      "names": [
+        "goteborg",
+        "ifk goteborg"
+      ]
+    },
+    {
+      "canonical": "ik sirius",
+      "names": [
+        "ik sirius",
+        "sirius"
+      ]
+    },
+    {
+      "canonical": "ik start",
+      "names": [
+        "ik start",
+        "start"
+      ]
+    },
+    {
+      "canonical": "inter milan",
+      "names": [
+        "inter",
+        "inter milan"
+      ]
+    },
+    {
+      "canonical": "ipswich town",
+      "names": [
+        "ipswich",
+        "ipswich town"
+      ]
+    },
+    {
+      "canonical": "iraklis fc",
+      "names": [
+        "iraklis",
+        "iraklis fc"
+      ]
+    },
+    {
+      "canonical": "kalmar ff",
+      "names": [
+        "kalmar",
+        "kalmar ff"
+      ]
+    },
+    {
+      "canonical": "karagumruk",
+      "names": [
+        "fatih karagumruk",
+        "karagumruk"
+      ]
+    },
+    {
+      "canonical": "kasimpasa sk",
+      "names": [
+        "kasimpasa",
+        "kasimpasa sk"
+      ]
+    },
+    {
+      "canonical": "kfum",
+      "names": [
+        "kfum",
+        "kfum oslo"
+      ]
+    },
+    {
+      "canonical": "kristiansund bk",
+      "names": [
+        "kristiansund",
+        "kristiansund bk"
+      ]
+    },
+    {
+      "canonical": "kv mechelen",
+      "names": [
+        "kv mechelen",
+        "mechelen"
+      ]
+    },
+    {
+      "canonical": "larisa",
+      "names": [
+        "ael",
+        "larisa"
+      ]
+    },
+    {
+      "canonical": "leicester",
+      "names": [
+        "leicester",
+        "leicester city"
+      ]
+    },
+    {
+      "canonical": "leuven",
+      "names": [
+        "leuven",
+        "oud heverlee leuven"
+      ]
+    },
+    {
+      "canonical": "levadiakos",
+      "names": [
+        "levadeiakos",
+        "levadiakos"
+      ]
+    },
+    {
+      "canonical": "liaoning tieren",
+      "names": [
+        "liaoning tieren",
+        "liaoning tieren fc"
+      ]
+    },
+    {
+      "canonical": "lincoln city",
+      "names": [
+        "lincoln",
+        "lincoln city"
+      ]
+    },
+    {
+      "canonical": "manchester united",
+      "names": [
+        "man united",
+        "manchester united"
+      ]
+    },
+    {
+      "canonical": "mjallby aif",
+      "names": [
+        "mjallby",
+        "mjallby aif"
+      ]
+    },
+    {
+      "canonical": "moreirense fc",
+      "names": [
+        "moreirense",
+        "moreirense fc"
+      ]
+    },
+    {
+      "canonical": "nec nijmegen",
+      "names": [
+        "nec nijmegen",
+        "nijmegen"
+      ]
+    },
+    {
+      "canonical": "norwich city",
+      "names": [
+        "norwich",
+        "norwich city"
+      ]
+    },
+    {
+      "canonical": "olympiakos piraeus",
+      "names": [
+        "olympiakos",
+        "olympiakos piraeus"
+      ]
+    },
+    {
+      "canonical": "orgryte is",
+      "names": [
+        "orgryte",
+        "orgryte is"
+      ]
+    },
+    {
+      "canonical": "oxford",
+      "names": [
+        "oxford",
+        "oxford united"
+      ]
+    },
+    {
+      "canonical": "panetolikos agrinio",
+      "names": [
+        "panetolikos",
+        "panetolikos agrinio"
+      ]
+    },
+    {
+      "canonical": "panserraikos",
+      "names": [
+        "panserraikos",
+        "panserraikos fc"
+      ]
+    },
+    {
+      "canonical": "paok thessaloniki",
+      "names": [
+        "paok",
+        "paok thessaloniki"
+      ]
+    },
+    {
+      "canonical": "paris saint germain",
+      "names": [
+        "paris saint germain",
+        "paris sg"
+      ]
+    },
+    {
+      "canonical": "porto",
+      "names": [
+        "fc porto",
+        "porto"
+      ]
+    },
+    {
+      "canonical": "preston north end",
+      "names": [
+        "preston",
+        "preston north end"
+      ]
+    },
+    {
+      "canonical": "qingdao hainiu",
+      "names": [
+        "qingdao hainiu",
+        "qingdao hainiu fc"
+      ]
+    },
+    {
+      "canonical": "qingdao west coast",
+      "names": [
+        "qingdao west coast",
+        "qingdao west coast fc"
+      ]
+    },
+    {
+      "canonical": "queens park rangers",
+      "names": [
+        "qpr",
+        "queens park rangers"
+      ]
+    },
+    {
+      "canonical": "real betis",
+      "names": [
+        "betis",
+        "real betis"
+      ]
+    },
+    {
+      "canonical": "real racing club de santander",
+      "names": [
+        "real racing club de santander",
+        "santander"
+      ]
+    },
+    {
+      "canonical": "rio ave fc",
+      "names": [
+        "rio ave",
+        "rio ave fc"
+      ]
+    },
+    {
+      "canonical": "royal antwerp",
+      "names": [
+        "antwerp",
+        "royal antwerp"
+      ]
+    },
+    {
+      "canonical": "sarpsborg fk",
+      "names": [
+        "sarpsborg 08",
+        "sarpsborg fk"
+      ]
+    },
+    {
+      "canonical": "sc telstar",
+      "names": [
+        "sc telstar",
+        "telstar"
+      ]
+    },
+    {
+      "canonical": "schalke 04",
+      "names": [
+        "schalke",
+        "schalke 04"
+      ]
+    },
+    {
+      "canonical": "shandong taishan",
+      "names": [
+        "shandong luneng taishan fc",
+        "shandong taishan"
+      ]
+    },
+    {
+      "canonical": "shanghai port",
+      "names": [
+        "shanghai port",
+        "shanghai sipg fc"
+      ]
+    },
+    {
+      "canonical": "shanghai shenhua",
+      "names": [
+        "shanghai shenhua",
+        "shanghai shenhua fc"
+      ]
+    },
+    {
+      "canonical": "sheffield weds",
+      "names": [
+        "sheffield wednesday",
+        "sheffield weds"
+      ]
+    },
+    {
+      "canonical": "shenzhen xinpengcheng",
+      "names": [
+        "shenzhen peng city fc",
+        "shenzhen xinpengcheng"
+      ]
+    },
+    {
+      "canonical": "sint truiden",
+      "names": [
+        "sint truiden",
+        "st truiden"
+      ]
+    },
+    {
+      "canonical": "sk brann",
+      "names": [
+        "brann",
+        "sk brann"
+      ]
+    },
+    {
+      "canonical": "sporting lisbon",
+      "names": [
+        "sp lisbon",
+        "sporting lisbon"
+      ]
+    },
+    {
+      "canonical": "st etienne",
+      "names": [
+        "saint etienne",
+        "st etienne"
+      ]
+    },
+    {
+      "canonical": "standard liege",
+      "names": [
+        "standard",
+        "standard liege"
+      ]
+    },
+    {
+      "canonical": "stoke city",
+      "names": [
+        "stoke",
+        "stoke city"
+      ]
+    },
+    {
+      "canonical": "sv zulte waregem",
+      "names": [
+        "sv zulte waregem",
+        "waregem"
+      ]
+    },
+    {
+      "canonical": "swansea city",
+      "names": [
+        "swansea",
+        "swansea city"
+      ]
+    },
+    {
+      "canonical": "tianjin jinmen tiger",
+      "names": [
+        "tianjin jinmen tiger",
+        "tianjin jinmen tiger fc"
+      ]
+    },
+    {
+      "canonical": "torku konyaspor",
+      "names": [
+        "konyaspor",
+        "torku konyaspor"
+      ]
+    },
+    {
+      "canonical": "union saint gilloise",
+      "names": [
+        "st gilloise",
+        "union saint gilloise"
+      ]
+    },
+    {
+      "canonical": "viking fk",
+      "names": [
+        "viking",
+        "viking fk"
+      ]
+    },
+    {
+      "canonical": "vitoria sc",
+      "names": [
+        "guimaraes",
+        "vitoria sc"
+      ]
+    },
+    {
+      "canonical": "volendam",
+      "names": [
+        "fc volendam",
+        "volendam"
+      ]
+    },
+    {
+      "canonical": "volos fc",
+      "names": [
+        "volos fc",
+        "volos nfc"
+      ]
+    },
+    {
+      "canonical": "west bromwich albion",
+      "names": [
+        "west brom",
+        "west bromwich albion"
+      ]
+    },
+    {
+      "canonical": "wolves",
+      "names": [
+        "wolverhampton",
+        "wolves"
+      ]
+    },
+    {
+      "canonical": "wrexham afc",
+      "names": [
+        "wrexham",
+        "wrexham afc"
+      ]
+    },
+    {
+      "canonical": "zhejiang professional",
+      "names": [
+        "zhejiang",
+        "zhejiang professional"
+      ]
+    }
+  ]
+}

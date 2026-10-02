@@ -460,6 +460,14 @@ def step_load_extra_leagues():
     load_extra_leagues()
 
 
+def step_team_names_check():
+    """Un ascendido o una fuente nueva puede traer otro nombre del mismo club
+    (el mismo partido guardado dos veces). Avisa como ERROR los pares nuevos
+    que el normalizador todavía no une (scripts/learn_team_aliases.py)."""
+    from scripts.learn_team_aliases import check_new_aliases
+    check_new_aliases()
+
+
 # ============================================================
 # MODOS
 # ============================================================
@@ -966,6 +974,7 @@ def main():
             run_step(logger, "Load international data",  step_load_international)
             run_step(logger, "Collect match events",     step_collect_events)
             run_step(logger, "Load extra leagues",       step_load_extra_leagues)
+            run_step(logger, "Nombres de equipo nuevos", step_team_names_check)
             # run_step(logger, "Load MLB data",            step_load_mlb)  # desactivado — sin creditos MLB
             run_step(logger, "Soccerdata refresh (xG real)", step_soccerdata_refresh)
             run_step(logger, "Fit DC-MLE parameters",    step_fit_dc_mle)
@@ -1081,6 +1090,20 @@ def main():
         print(f"::error::{len(logger.failed_steps)} de {logger.steps_total} pasos "
               f"fallaron en modo {args.mode}: {', '.join(logger.failed_steps)}")
         sys.exit(1)
+
+    # Telegram es el único canal de avisos: si un mensaje no se entregó, la
+    # corrida termina en ROJO para que el aviso llegue por el correo de GitHub
+    # (1-oct-26). Antes un token vencido o un bot bloqueado pasaban en verde.
+    send_failures = _telegram_send_failures()
+    if send_failures:
+        print(f"::error::{len(send_failures)} mensaje(s) de Telegram no se entregaron "
+              f"en modo {args.mode}: " + " | ".join(send_failures[:3]))
+        sys.exit(1)
+
+
+def _telegram_send_failures() -> list:
+    mod = sys.modules.get("scripts.notify_telegram")
+    return list(getattr(mod, "SEND_FAILURES", []) or [])
 
 
 def _record_run(mode: str, failed: int, seconds: float) -> None:

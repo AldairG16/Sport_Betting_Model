@@ -34,7 +34,11 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from config.database import engine
 from config.settings import ANTHROPIC_API_KEY
+from src.utils.bet_status import CANCELLED_SQL
+from src.utils.log import get_logger
 from src.utils.team_normalizer import normalize_team
+
+log = get_logger(__name__)
 
 
 # ============================================================
@@ -148,20 +152,27 @@ def _which_fields_missing(home_norm: str, away_norm: str, date,
 # ============================================================
 
 def _fetch_pending_grouped(hours_lag: int = 6,
-                            limit_matches: int = 30) -> pd.DataFrame:
+                            limit_matches: int = 30,
+                            include_stale: bool = False) -> pd.DataFrame:
     """
     Bets pending > N horas, agrupadas por partido único.
     Devuelve DataFrame con: match, match_date, markets (list).
 
     `limit_matches` controla el costo: con 30 partidos × $0.03 ≈ $0.90 por
     corrida. Si hay más pending, las extras se procesan en la siguiente.
+
+    `include_stale` suma las apuestas REALES que quedaron 'stale' por falta de
+    fuente (nunca las canceladas antes del kickoff: esas no se apostaron).
+    Es para la recuperación única del 1-oct-26: 34 apuestas de abril-mayo que
+    quedaron sin resultado mientras este resolvedor no corría.
     """
-    df = pd.read_sql(text("""
+    stale_clause = (f"OR (result = 'stale' AND NOT {CANCELLED_SQL})" if include_stale else "")
+    df = pd.read_sql(text(f"""
         SELECT match, MIN(match_date)::timestamp AS match_date,
                ARRAY_AGG(DISTINCT market ORDER BY market) AS markets,
                COUNT(*) AS n_bets
         FROM bets_history
-        WHERE result = 'pending'
+        WHERE (result = 'pending' {stale_clause})
           AND match_date < NOW() - (:hours || ' hours')::interval
           AND match LIKE '% vs %'
         GROUP BY match
@@ -330,8 +341,18 @@ def _upsert_match_row(home_raw: str, away_raw: str, date_str: str,
 # MAIN
 # ============================================================
 
+def _record(seconds: float, failed: int) -> None:
+    """Huella de la corrida en pipeline_runs: el watchdog avisa si el
+    resolvedor deja de correr (del 11-may al 1-oct-26 no corrió y nadie lo vio)."""
+    try:
+        from src.utils.pipeline_runs import record_run
+        record_run(engine, "resolve_pending", failed, seconds)
+    except Exception as e:
+        log.error(f"❌ resolve_pending: no se pudo registrar la corrida: {e}")
+
+
 def main(hours_lag: int = 6, limit_matches: int = 30,
-         silent_telegram: bool = False):
+         silent_telegram: bool = False, include_stale: bool = False):
     """
     Args:
         hours_lag: solo procesa bets con kickoff > N horas
@@ -339,19 +360,36 @@ def main(hours_lag: int = 6, limit_matches: int = 30,
         silent_telegram: si True, suprime el mensaje final de Telegram
             (usado por el evening chain — el resumen ya cubre la info,
             evita 2 notificaciones back-to-back).
+        include_stale: incluye las apuestas reales sin fuente (ver
+            _fetch_pending_grouped) y al final las recupera.
     """
+    import time
+    t0 = time.monotonic()
+    try:
+        failed = _run(hours_lag, limit_matches, silent_telegram, include_stale)
+    except Exception:
+        _record(time.monotonic() - t0, 1)
+        raise
+    _record(time.monotonic() - t0, failed)
+
+
+def _run(hours_lag: int, limit_matches: int, silent_telegram: bool,
+         include_stale: bool) -> int:
+    """Devuelve cuántas consultas fallaron."""
     print(f"\n🔎 RESOLVE PENDING BETS — lag={hours_lag}h, "
           f"max={limit_matches} partidos por corrida"
-          f"{' (silent)' if silent_telegram else ''}\n")
+          f"{' (silent)' if silent_telegram else ''}"
+          f"{' (+ sin fuente)' if include_stale else ''}\n")
 
     if not ANTHROPIC_API_KEY:
-        print("⚠️  ANTHROPIC_API_KEY no configurada — abortando.")
-        return
+        # ERROR y corrida en rojo: antes imprimía "abortando" y salía verde
+        raise RuntimeError("ANTHROPIC_API_KEY no configurada: el resolvedor no puede correr")
 
-    df = _fetch_pending_grouped(hours_lag=hours_lag, limit_matches=limit_matches)
+    df = _fetch_pending_grouped(hours_lag=hours_lag, limit_matches=limit_matches,
+                                include_stale=include_stale)
     if df.empty:
         print(f"✓ Sin bets pending > {hours_lag}h. Nada que resolver.")
-        return
+        return 0
 
     print(f"📋 {len(df)} partido(s) único(s) con bets pending\n")
 
@@ -361,6 +399,8 @@ def main(hours_lag: int = 6, limit_matches: int = 30,
     n_queried = 0
     n_upserted = 0
     n_skipped_complete = 0
+    n_low = 0
+    errors: list[str] = []
 
     for _, row in df.iterrows():
         match = row["match"]
@@ -386,6 +426,9 @@ def main(hours_lag: int = 6, limit_matches: int = 30,
                                           missing)
         except Exception as e:
             print(f"     ❌ Claude error: {e}")
+            errors.append(f"{match}: {type(e).__name__}: {str(e)[:120]}")
+            if str(e).startswith("Budget guard"):
+                break                           # tope diario: no seguir pidiendo
             continue
         n_queried += 1
 
@@ -394,6 +437,11 @@ def main(hours_lag: int = 6, limit_matches: int = 30,
         if not data.get("completed"):
             print(f"     ⚠️  Claude reporta 'not completed' "
                   f"(notes={data.get('notes')})")
+            continue
+        if str(data.get("confidence", "")).lower() == "low":
+            # Con esto se liquida dinero: una sola fuente débil no alcanza
+            n_low += 1
+            print(f"     ⚠️  confianza baja — no se usa (notes={data.get('notes')})")
             continue
 
         ok = _upsert_match_row(home_raw, away_raw, date_str, data)
@@ -404,32 +452,42 @@ def main(hours_lag: int = 6, limit_matches: int = 30,
                   f"src={(data.get('source_url') or '')[:60]})")
 
     print(f"\n📊 Resumen: consultas Claude={n_queried}, "
-          f"upserts={n_upserted}, skipped (ya completo)={n_skipped_complete}")
+          f"upserts={n_upserted}, skipped (ya completo)={n_skipped_complete}, "
+          f"confianza baja={n_low}, errores={len(errors)}")
+    if errors:
+        log.error(f"❌ resolve_pending: {len(errors)} consulta(s) a Claude fallaron — {errors[0]}")
 
-    if n_upserted == 0:
+    recovered = {}
+    if n_upserted or (include_stale and n_skipped_complete):
+        # ── Re-evaluar bets pending con los nuevos datos ─────────────
+        print("\n📡 Re-evaluando bets_history con los datos nuevos...\n")
+        from src.models.save_bets import update_bet_results
+        update_bet_results()
+        if include_stale:
+            # las 'stale' sin fuente que ya tienen datos vuelven a pending y
+            # se liquidan con la misma lógica (las canceladas no se tocan)
+            from scripts.resolve_stale_bets import resolve_stale_bets
+            recovered = resolve_stale_bets(apply=True, verbose=True)
+    else:
         print("✓ Nada se upserteo — no re-evaluamos bets.")
-        return
-
-    # ── Re-evaluar bets pending con los nuevos datos ─────────────────
-    print("\n📡 Re-evaluando bets_history con los datos nuevos...\n")
-    from src.models.save_bets import update_bet_results
-    update_bet_results()
+        return len(errors)
 
     # ── Notificar a Telegram (silencio si nada cambió o si chained) ──
     if silent_telegram:
         print("📭 silent_telegram=True — sin notificación (chained run)")
-        return
-    try:
-        from scripts.notify_telegram import send_message
-        send_message(
-            f"🔎 <b>RESOLVE PENDING</b>\n"
-            f"Consultas a Claude: {n_queried}\n"
-            f"Upserts en matches: {n_upserted}\n"
-            f"Ya estaban completas: {n_skipped_complete}\n\n"
-            f"<i>Ver bets_history para confirmar las resoluciones.</i>"
-        )
-    except Exception as e:
-        print(f"⚠️  No se pudo notificar a Telegram: {e}")
+        return len(errors)
+    from scripts.notify_telegram import send_message
+    extra = (f"Recuperadas sin fuente: {recovered.get('recovered', 0)} de {recovered.get('total', 0)}\n"
+             if include_stale else "")
+    send_message(
+        f"🔎 <b>RESOLVE PENDING</b>\n"
+        f"Consultas a Claude: {n_queried}\n"
+        f"Upserts en matches: {n_upserted}\n"
+        f"Ya estaban completas: {n_skipped_complete}\n"
+        f"{extra}\n"
+        f"<i>Ver bets_history para confirmar las resoluciones.</i>"
+    )
+    return len(errors)
 
 
 if __name__ == "__main__":
@@ -439,10 +497,17 @@ if __name__ == "__main__":
                     help="Solo bets con kickoff > N horas (default 6)")
     ap.add_argument("--limit", type=int, default=15,
                     help="Máximo partidos por corrida (default 15 — budget-friendly)")
+    ap.add_argument("--include-stale", action="store_true",
+                    help="Incluye las apuestas reales sin fuente (recuperación única)")
     args = ap.parse_args()
 
     try:
-        main(hours_lag=args.hours_lag, limit_matches=args.limit)
+        main(hours_lag=args.hours_lag, limit_matches=args.limit,
+             include_stale=args.include_stale)
+        from scripts.notify_telegram import SEND_FAILURES
+        if SEND_FAILURES:
+            print(f"::error::{len(SEND_FAILURES)} mensaje(s) de Telegram no se entregaron")
+            sys.exit(1)
     except BaseException as _exc:
         traceback.print_exc()
         try:
