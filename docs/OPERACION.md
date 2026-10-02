@@ -175,7 +175,9 @@ esperando el CSV de football-data, o ligas que The Odds API no puntúa). Pide a 
 resultado FT vía `web_search`, completa `matches` y llama a `update_bet_results()`.
 **Gasta tokens.** Corre a las 07:00 y 19:00 MX (lo dispara el latido del closing, §2) y
 como paso del evening antes del resumen. Una respuesta con `confidence: low` no se usa:
-con ella se liquidaría dinero.
+con ella se liquidaría dinero. En su corrida suelta no existe el reporte de errores
+tolerados del orquestador: si una consulta a Claude falla, avisa por Telegram y sale en
+rojo.
 
 > **No corrió nunca hasta el 1-oct-2026.** `resolve_pending.yml` no tenía disparador
 > desde el 11-may y el paso del evening no recibía `ANTHROPIC_API_KEY` (`evening.yml`

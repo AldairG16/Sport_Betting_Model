@@ -105,28 +105,18 @@ def main(apply: bool) -> int:
     failures: list = []
     plan: dict = {}          # id -> (liga guardada, liga correcta)
 
-    # 1. K-League ← Noruega
+    # Primero TODAS las descargas y después la base, seguido: con consultas
+    # intercaladas, la conexión quedaba inactiva durante las descargas y la
+    # base la cortaba ("server closed the connection unexpectedly", 2-oct-26).
     nor, why = fetch_csv(NOR_URL)
     if nor is None:
         raise RuntimeError(f"NOR.csv: {why}")
-    rows = _rows(engine, "league = :l", {"l": KOREA})
-    for i, lg in plan_relabels(rows, {NORWAY: match_keys(nor, "Home", "Away")}).items():
-        plan[i] = (KOREA, lg)
-    print(f"1. K-League: {len(rows)} filas · noruegas: {sum(1 for v in plan.values() if v[0] == KOREA)}")
-
-    # 2. Champions ← National League, todas las temporadas
+    nor_keys = match_keys(nor, "Home", "Away")
     ec = set()
     for s in season_codes():
         df = _season_csv(s, "EC", failures)
         if df is not None:
             ec |= match_keys(df)
-    rows = _rows(engine, "league = :l", {"l": CHAMPIONS})
-    p2 = plan_relabels(rows, {NATIONAL: ec})
-    plan.update({i: (CHAMPIONS, lg) for i, lg in p2.items()})
-    print(f"2. Champions: {len(rows)} filas · de la National League inglesa: {len(p2)} · "
-          f"quedan como Champions: {len(rows) - len(p2)}")
-
-    # 3. temporada en curso: filas que no están en el CSV de su liga sino en otro
     current = season_codes()[-1]
     keys = {}
     for code, league in {**SEASON_LEAGUES, **OTHER_SEASON_LEAGUES}.items():
@@ -134,6 +124,22 @@ def main(apply: bool) -> int:
         if df is not None:
             keys[league] = match_keys(df)
     own = {lg: keys[lg] for lg in SEASON_LEAGUES.values() if lg in keys}
+    engine.dispose()             # conexiones nuevas: nada quedó inactivo del pool
+
+    # 1. K-League ← Noruega
+    rows = _rows(engine, "league = :l", {"l": KOREA})
+    for i, lg in plan_relabels(rows, {NORWAY: nor_keys}).items():
+        plan[i] = (KOREA, lg)
+    print(f"1. K-League: {len(rows)} filas · noruegas: {sum(1 for v in plan.values() if v[0] == KOREA)}")
+
+    # 2. Champions ← National League, todas las temporadas
+    rows = _rows(engine, "league = :l", {"l": CHAMPIONS})
+    p2 = plan_relabels(rows, {NATIONAL: ec})
+    plan.update({i: (CHAMPIONS, lg) for i, lg in p2.items()})
+    print(f"2. Champions: {len(rows)} filas · de la National League inglesa: {len(p2)} · "
+          f"quedan como Champions: {len(rows) - len(p2)}")
+
+    # 3. temporada en curso: filas que no están en el CSV de su liga sino en otro
     rows = _rows(engine, "league = ANY(:l) AND season = :s",
                  {"l": sorted(own), "s": int(current[:2]) + 2000})
     p3 = plan_relabels(rows, keys, own=own)
@@ -153,6 +159,7 @@ def main(apply: bool) -> int:
         print("Nada que corregir.")
         return 0
 
+    engine.dispose()
     with engine.begin() as conn:
         backup_matches(conn, plan, "relabel_league")
         changed = 0

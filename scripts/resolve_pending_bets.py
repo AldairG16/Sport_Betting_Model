@@ -351,6 +351,20 @@ def _record(seconds: float, failed: int) -> None:
         log.error(f"❌ resolve_pending: no se pudo registrar la corrida: {e}")
 
 
+def report_failures(failed: int, send) -> int:
+    """Corrida suelta (resolve_pending.yml): avisa las consultas fallidas.
+    Devuelve el código de salida (1 si hubo alguna)."""
+    if not failed:
+        return 0
+    import html
+    from src.utils.log import RUN_ISSUES
+    first = next((e for e in RUN_ISSUES.errors() if "resolve_pending" in e), "")
+    send(f"⚠️ <b>RESOLVE PENDING</b>\n{failed} consulta(s) a Claude fallaron: esas apuestas "
+         f"siguen sin resultado.\n<code>{html.escape(first[:300])}</code>")
+    print(f"::error::resolve_pending: {failed} consulta(s) a Claude fallaron")
+    return 1
+
+
 def main(hours_lag: int = 6, limit_matches: int = 30,
          silent_telegram: bool = False, include_stale: bool = False):
     """
@@ -371,6 +385,7 @@ def main(hours_lag: int = 6, limit_matches: int = 30,
         _record(time.monotonic() - t0, 1)
         raise
     _record(time.monotonic() - t0, failed)
+    return failed
 
 
 def _run(hours_lag: int, limit_matches: int, silent_telegram: bool,
@@ -502,12 +517,8 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     try:
-        main(hours_lag=args.hours_lag, limit_matches=args.limit,
-             include_stale=args.include_stale)
-        from scripts.notify_telegram import SEND_FAILURES
-        if SEND_FAILURES:
-            print(f"::error::{len(SEND_FAILURES)} mensaje(s) de Telegram no se entregaron")
-            sys.exit(1)
+        failed = main(hours_lag=args.hours_lag, limit_matches=args.limit,
+                      include_stale=args.include_stale)
     except BaseException as _exc:
         traceback.print_exc()
         try:
@@ -519,3 +530,14 @@ if __name__ == "__main__":
         except Exception:
             pass
         sys.exit(1)
+
+    # Fuera del orquestador no hay reporte de "errores tolerados": aquí una
+    # consulta fallida se avisa por Telegram y deja la corrida en rojo
+    # (2-oct-26). Antes el sys.exit de abajo caía en el except de arriba y
+    # mandaba un falso "CRASH".
+    from scripts.notify_telegram import SEND_FAILURES, send_message
+    exit_code = report_failures(failed, send_message)
+    if SEND_FAILURES:
+        print(f"::error::{len(SEND_FAILURES)} mensaje(s) de Telegram no se entregaron")
+        exit_code = 1
+    sys.exit(exit_code)

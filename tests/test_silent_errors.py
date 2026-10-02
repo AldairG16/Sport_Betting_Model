@@ -328,6 +328,17 @@ def test_resolver_skips_low_confidence_and_counts_errors(monkeypatch):
     assert runs == [1] and _errors("1 consulta(s) a Claude fallaron")
 
 
+def test_standalone_resolver_reports_failed_queries():
+    """Fuera del orquestador no hay reporte de errores tolerados: el
+    resolvedor suelto avisa por Telegram y sale en rojo."""
+    import scripts.resolve_pending_bets as rp
+    sent = []
+    assert rp.report_failures(0, sent.append) == 0 and sent == []
+    rp.log.error("❌ resolve_pending: 2 consulta(s) a Claude fallaron — a vs b: Error: <overloaded>")
+    assert rp.report_failures(2, sent.append) == 1
+    assert "2 consulta(s) a Claude fallaron" in sent[0] and "&lt;overloaded&gt;" in sent[0]
+
+
 # ============================================================
 # Latido: el closing dispara los trabajos de horario fijo
 # ============================================================

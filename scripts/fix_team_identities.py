@@ -242,6 +242,9 @@ def update_names(conn, updates: list, chunk: int = 1000) -> None:
 def main(apply: bool) -> int:
     from config.database import engine
     from src.utils.match_backup import backup_matches
+    # La descarga va antes que la base: una conexión inactiva mientras tanto
+    # la corta el servidor (2-oct-26)
+    truth = paris_truth(_paris_csv())
     counts = pd.read_sql(text(f"""
         SELECT t AS name, COUNT(*) AS n FROM (
             SELECT home_team AS t FROM matches WHERE {NOT_BASEBALL}
@@ -259,7 +262,7 @@ def main(apply: bool) -> int:
     paris_rows = rows[(rows["date"] >= PARIS_SINCE) & (rows["league"] == LIGUE_1)
                       & (rows["home_team"].str.lower().isin(PARIS_LABELS)
                          | rows["away_team"].str.lower().isin(PARIS_LABELS))]
-    paris_fixes, paris_unresolved = paris_corrections(paris_rows, paris_truth(_paris_csv()))
+    paris_fixes, paris_unresolved = paris_corrections(paris_rows, truth)
     plan = plan_names(rows, renames, paris_fixes)
     keep, delete = plan_merges(plan)
     blocked = blocked_ids(plan, delete)
@@ -291,6 +294,7 @@ def main(apply: bool) -> int:
     updates = [(i, by_id.at[i, "new_home"], by_id.at[i, "new_away"],
                 normalize_team(by_id.at[i, "new_home"]), normalize_team(by_id.at[i, "new_away"]))
                for i in to_update]
+    engine.dispose()             # conexión nueva: la del plan quedó inactiva mientras se calculaba
     with engine.begin() as conn:
         backup_matches(conn, sorted(set(delete) | set(to_update)), "update_identity", delete_ids=delete)
         if delete:
