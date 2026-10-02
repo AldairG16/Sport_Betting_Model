@@ -336,6 +336,12 @@ fotos eran copias idénticas (~8 MB/día; en el plan gratuito de Neon, la base s
 en ~2 meses). Desde el 25-sep-2026 solo entra una foto si la cuota de ese partido cambió
 y nada se borra.
 
+**La base corta una conexión inactiva.** Un script que intercala consultas con
+descargas largas deja la conexión del pool quieta, y la siguiente consulta revienta con
+`server closed the connection unexpectedly` (2-oct-2026, en el primer intento de
+`fix_league_labels.py`). En scripts largos: descargar todo primero y después la parte de
+base de datos seguida, con `engine.dispose()` antes para empezar con conexiones nuevas.
+
 **No edites archivos con `Get-Content`/`Set-Content` de Windows PowerShell 5.1.** Lee
 UTF-8 sin BOM como ANSI y escribe con BOM: rompe todos los acentos del archivo.
 
