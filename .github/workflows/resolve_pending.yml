@@ -10,14 +10,16 @@ name: Resolve Pending Bets
 # Cap: 30 partidos por corrida (~$0.90 max).
 
 on:
-  # Sin `schedule:` A PROPOSITO. Las corridas de produccion las dispara un
-  # agente externo por `workflow_dispatch` contra `master` (todos los runs
-  # historicos son workflow_dispatch, ninguno schedule). Al pasar `master` a
-  # rama por defecto, un bloque `schedule:` aqui haria que GitHub disparara
-  # ADEMAS por su cuenta: dos corridas del mismo slate, el doble de creditos
-  # de API y dos pasadas escribiendo apuestas.
-  # Para volver a los crons de GitHub hay que apagar antes ese dispatcher.
+  # Sin `schedule:` a propósito: lo dispara el latido del closing a las 07:00
+  # y 19:00 MX (scripts/heartbeat_dispatch.py, 1-oct-26). Del 11-may al
+  # 1-oct-26 no lo disparó nadie y no corrió ni una vez; el watchdog avisa
+  # ahora si pasan 30 h sin una corrida.
   workflow_dispatch:
+    inputs:
+      include_stale:
+        description: 'Recuperación única: sumar las apuestas reales que quedaron sin fuente (stale)'
+        type: boolean
+        default: false
   push:
     branches: [ master ]
     paths: [ '.github/workflows/resolve_pending.yml' ]
@@ -33,10 +35,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -52,4 +54,10 @@ jobs:
           TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
           ANTHROPIC_DAILY_BUDGET_USD: ${{ secrets.ANTHROPIC_DAILY_BUDGET_USD }}
           USER_TIMEZONE:         America/Mexico_City
-        run: python scripts/resolve_pending_bets.py --hours-lag 6 --limit 15
+          INCLUDE_STALE:         ${{ inputs.include_stale && '1' || '' }}
+        run: |
+          if [ -n "$INCLUDE_STALE" ]; then
+            python scripts/resolve_pending_bets.py --hours-lag 6 --limit 40 --include-stale
+          else
+            python scripts/resolve_pending_bets.py --hours-lag 6 --limit 15
+          fi

@@ -25,6 +25,12 @@ concurrency:
   group: closing-pipeline
   cancel-in-progress: false
 
+# El último paso dispara otros workflows (gh workflow run): necesita
+# actions: write. Lo demás solo lee el repo.
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   closing:
     runs-on: ubuntu-24.04
@@ -32,10 +38,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -44,7 +50,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Restore API cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: data/api_cache.json
           key: odds-api-cache-${{ github.run_id }}
@@ -70,11 +76,21 @@ jobs:
         run: python scripts/orchestrator.py --mode closing
 
       # Guardar el cache AUNQUE el run falle: desde el 22-sep-26 un paso
-      # fallido deja el run en rojo, y actions/cache@v4 solo guarda en
+      # fallido deja el run en rojo, y actions/cache solo guarda en
       # runs exitosos — sin esto el siguiente run haría full fetch.
       - name: Save API cache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: data/api_cache.json
           key: odds-api-cache-${{ github.run_id }}
+
+      # Latido (1-oct-26): el closing es la corrida más puntual y dispara a
+      # su hora el reintento de resultados, el resolvedor de pendientes y el
+      # watchdog (scripts/heartbeat_dispatch.py, docs/OPERACION.md §2). Corre
+      # aunque el closing falle: el watchdog tiene que correr igual.
+      - name: Dispatch scheduled jobs (heartbeat)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/heartbeat_dispatch.py
