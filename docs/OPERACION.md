@@ -177,7 +177,15 @@ resultado FT vía `web_search`, completa `matches` y llama a `update_bet_results
 como paso del evening antes del resumen. Una respuesta con `confidence: low` no se usa:
 con ella se liquidaría dinero. En su corrida suelta no existe el reporte de errores
 tolerados del orquestador: si una consulta a Claude falla, avisa por Telegram y sale en
-rojo.
+rojo. Con búsqueda web la respuesta llega en varios bloques de texto y a veces con una
+frase antes del JSON: se busca el JSON en todo el texto, y una respuesta sin JSON cuenta
+como falla (hasta el 2-oct-2026 se leía solo el último bloque y 9 de cada 10 respuestas
+pagadas se perdían). Claude verifica que los equipos sean los pedidos: un partido de otro
+club se guardaría con el nombre de la apuesta.
+
+`scripts/backfill_espn_results.py` (gratis, API pública de ESPN) completa goles y medio
+tiempo de las apuestas sin fuente: llena la fila que ya existe (±1 día) y solo si el
+marcador final coincide; inserta solo si el partido no tiene fila.
 
 > **No corrió nunca hasta el 1-oct-2026.** `resolve_pending.yml` no tenía disparador
 > desde el 11-may y el paso del evening no recibía `ANTHROPIC_API_KEY` (`evening.yml`

@@ -328,6 +328,46 @@ def test_resolver_skips_low_confidence_and_counts_errors(monkeypatch):
     assert runs == [1] and _errors("1 consulta(s) a Claude fallaron")
 
 
+JSON_OK = ('{"home_goals": 4, "away_goals": 1, "home_goals_ht": 3, "away_goals_ht": 1, '
+           '"completed": true, "source_url": "https://www.sofascore.com/x", "confidence": "high", '
+           '"notes": null}')
+
+
+@pytest.mark.parametrize("text", [
+    JSON_OK,
+    "Excelente, tengo información confiable. Del análisis de las fuentes:\n\n" + JSON_OK,
+    "```json\n" + JSON_OK + "\n```",
+    JSON_OK.replace('"home_goals_ht": 3,', '"home_goals_ht": 3,   // al minuto 45\n'),
+])
+def test_resolver_reads_the_json_even_with_prose_or_comments(text):
+    """9 de 10 respuestas pagadas se perdían el 2-oct-26 como "Parse error"."""
+    from scripts.resolve_pending_bets import parse_result_json
+    d = parse_result_json(text)
+    assert (d["home_goals"], d["away_goals"], d["home_goals_ht"]) == (4, 1, 3)
+    assert d["source_url"] == "https://www.sofascore.com/x"     # el // de la URL no es comentario
+
+
+def test_resolver_without_json_is_an_error_not_a_print(monkeypatch):
+    import src.utils.anthropic_budget as ab
+    from types import SimpleNamespace
+    import scripts.resolve_pending_bets as rp
+    monkeypatch.setattr(ab, "can_call", lambda engine, cost: (True, ""))
+    monkeypatch.setattr(ab, "record_call", lambda *a, **k: None)
+    blocks = [SimpleNamespace(type="text", text="Busco el resultado. "),
+              SimpleNamespace(type="server_tool_use"),
+              SimpleNamespace(type="text", text=JSON_OK[:40]),       # la respuesta llega en
+              SimpleNamespace(type="text", text=JSON_OK[40:])]       # varios bloques (citas)
+
+    class Client:
+        def __init__(self, content, stop="end_turn"):
+            resp = SimpleNamespace(content=content, stop_reason=stop, usage=None)
+            self.messages = SimpleNamespace(create=lambda **k: resp)
+    assert rp._ask_claude_for_result(Client(blocks), "a", "b", "2026-04-10", {"home_goals"})["home_goals"] == 4
+    with pytest.raises(ValueError, match="respuesta sin JSON válido.*stop_reason=max_tokens"):
+        rp._ask_claude_for_result(Client([SimpleNamespace(type="text", text="Según FotMob, el partido")],
+                                         stop="max_tokens"), "a", "b", "2026-04-10", {"home_goals"})
+
+
 def test_standalone_resolver_reports_failed_queries():
     """Fuera del orquestador no hay reporte de errores tolerados: el
     resolvedor suelto avisa por Telegram y sale en rojo."""

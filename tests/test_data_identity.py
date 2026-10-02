@@ -190,6 +190,57 @@ def test_rows_are_backed_up_before_being_touched():
 
 
 # ============================================================
+# Respaldo ESPN: completa la fila existente, no crea repetidos
+# ============================================================
+
+def _espn_world(monkeypatch, existing):
+    import scripts.backfill_espn_results as be
+    import scripts.resolve_stale_bets as rsb
+
+    def respond(sql, params):
+        if sql.startswith("SELECT id, home_goals, away_goals FROM matches"):
+            return FakeResult(rows=[existing] if existing else [])
+        return FakeResult()
+    eng = FakeEngine(respond)
+    monkeypatch.setattr(be, "engine", eng)
+    monkeypatch.setattr(be.pd, "read_sql", lambda *a, **k: pd.DataFrame([{
+        "id": 1, "match": "gais vs kalmar ff", "market": "h1_home",
+        "match_date": pd.Timestamp("2026-05-30 15:00"), "league": "soccer_sweden_allsvenskan"}]))
+    monkeypatch.setattr(be, "fetch_espn_scoreboard", lambda slug, d: [] if d.day != 31 else [{
+        "home": "GAIS", "away": "Kalmar FF", "home_goals": 3, "away_goals": 0,
+        "home_goals_ht": 1, "away_goals_ht": 0, "date": "2026-05-31"}])
+    monkeypatch.setattr(rsb, "resolve_stale_bets", lambda **k: {})
+    return be, eng
+
+
+def test_espn_fills_the_existing_row_of_the_day_before(monkeypatch):
+    """ESPN listaba el partido el 31 y la fila está el 30: antes se insertaba
+    un repetido con fecha 31."""
+    from types import SimpleNamespace
+    be, eng = _espn_world(monkeypatch, SimpleNamespace(id=55, home_goals=3, away_goals=0))
+    stats = be.backfill_espn_results(verbose=False)
+    assert stats["backfilled"] == 1 and stats["score_mismatch"] == 0
+    (sql, params), = eng.statements("UPDATE matches SET")
+    assert params["id"] == 55 and params["hht"] == 1
+    assert not eng.statements("INSERT INTO matches")
+
+
+def test_espn_with_another_score_does_not_touch_the_row(monkeypatch):
+    from types import SimpleNamespace
+    be, eng = _espn_world(monkeypatch, SimpleNamespace(id=55, home_goals=2, away_goals=2))
+    stats = be.backfill_espn_results(verbose=False)
+    assert stats["score_mismatch"] == 1 and stats["backfilled"] == 0
+    assert not eng.statements("UPDATE matches") and not eng.statements("INSERT INTO matches")
+
+
+def test_espn_inserts_only_when_there_is_no_row(monkeypatch):
+    be, eng = _espn_world(monkeypatch, None)
+    be.backfill_espn_results(verbose=False)
+    (sql, params), = eng.statements("INSERT INTO matches")
+    assert params["h"] == "gais" and params["a"] == "kalmar ff" and params["d"] == "2026-05-31"
+
+
+# ============================================================
 # Identidad de equipos (src/utils/team_identity.py)
 # ============================================================
 
