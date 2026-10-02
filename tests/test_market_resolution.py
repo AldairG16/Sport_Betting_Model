@@ -11,7 +11,6 @@ mismas tablas de casos. Sin DB real — datos 100% sintéticos.
 """
 
 from contextlib import contextmanager
-from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -352,13 +351,14 @@ def test_update_bet_results_writes_plan_with_bankroll_guard(monkeypatch):
             return _matches_like_production(MATCHES)
         raise AssertionError(f"SQL inesperado: {s[:100]}")
 
+    from tests.fake_db import FakeResult
     executed = []
 
     class FakeConn:
         def execute(self, stmt, params=None):
             executed.append((" ".join(str(stmt).split()), params))
             # la bet 2 ya la liquidó otra corrida entre lectura y escritura
-            return SimpleNamespace(rowcount=0 if (params or {}).get("id") == 2 else 1)
+            return FakeResult(rowcount=0 if (params or {}).get("id") == 2 else 1)
 
         @contextmanager
         def begin_nested(self):

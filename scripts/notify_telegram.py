@@ -36,7 +36,15 @@ from config.settings import (
     TELEGRAM_CHAT_ID_PREKICKOFF,
     USER_TIMEZONE,
 )
+from src.utils.log import get_logger
 from src.utils.min_odds import HOW_TO_READ, fmt_american, min_american, playdoit_line, to_american
+
+log = get_logger(__name__)
+
+# Mensajes que no se pudieron entregar en esta corrida. El orquestador termina
+# en rojo si hay alguno (1-oct-26): Telegram es el único canal de alertas, y si
+# es él el que falla, el aviso solo puede llegar por el correo de GitHub.
+SEND_FAILURES: list[str] = []
 
 # Probabilidad sin margen de Pinnacle de una bet (25-sep-26): su cierre si el
 # closing ya lo capturó; si no, la del momento del pick (decision_log). Con
@@ -99,7 +107,8 @@ def _send_to_bot(text: str, bot_token: str, chat_id: str, label: str = "Telegram
     `label` se usa solo para los logs (distinguir bot principal vs prekickoff).
     """
     if not bot_token or not chat_id:
-        print(f"⚠️  {label} no configurado (token o chat_id vacíos).")
+        log.error(f"❌ {label} no configurado (token o chat_id vacíos): mensaje no enviado")
+        SEND_FAILURES.append(f"{label}: sin configurar")
         return False
 
     # Dividir en chunks si es muy largo
@@ -148,7 +157,8 @@ def _send_to_bot(text: str, bot_token: str, chat_id: str, label: str = "Telegram
                 time.sleep(wait)
 
         if not sent:
-            print(f"❌ {label}: mensaje no enviado tras 3 intentos")
+            log.error(f"❌ {label}: mensaje no enviado tras 3 intentos")
+            SEND_FAILURES.append(f"{label}: {chunk[:60]!r}")
             all_ok = False
 
     return all_ok
@@ -161,7 +171,8 @@ def send_message(text: str) -> bool:
     Retorna True si todos los fragmentos se enviaron correctamente.
     """
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("⚠️  Telegram no configurado. Agrega TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID en .env")
+        log.error("❌ Telegram no configurado (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID): mensaje no enviado")
+        SEND_FAILURES.append("Telegram: sin configurar")
         return False
     return _send_to_bot(text, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Telegram")
 
@@ -663,7 +674,7 @@ def notify_best_bets():
             ORDER BY match, market, b.edge DESC
         """, engine)
     except Exception as e:
-        print(f"❌ Error leyendo bets: {e}")
+        log.error(f"❌ Telegram: no se pudieron leer las bets de hoy — mensaje no enviado: {e}")
         return
 
     # Paper-trading section (Mundial 2026, etc.) — se agrega aunque NO haya
@@ -740,7 +751,7 @@ def send_tomorrow_preview():
             ORDER BY match, market, b.edge DESC
         """, engine)
     except Exception as e:
-        print(f"❌ Error leyendo bets de mañana: {e}")
+        log.error(f"❌ Telegram: no se pudieron leer las bets de mañana — preview no enviado: {e}")
         return
 
     paper_section = _format_paper_bets_section(tomorrow)
@@ -1277,7 +1288,7 @@ def send_evening_summary(target_date=None):
             ORDER BY match_date
         """, engine)
     except Exception as e:
-        print(f"❌ Error leyendo bets: {e}")
+        log.error(f"❌ Resumen nocturno: no se pudieron leer las bets — no enviado: {e}")
         return
 
     # ── Filtrar para alinear con la notificación matutina ────────────────
@@ -1309,7 +1320,8 @@ def send_evening_summary(target_date=None):
     print(f"🌙 Resumen del día: today={today} ({USER_TIMEZONE})")
     print(f"   Bets totales en DB: {n_total_all}  |  confiables: {n_total}  |  descartadas: {n_descartado}")
     print(f"   Confiables: resueltas={n_resolved}  pendientes={n_pending}")
-    if n_total > 0 and n_resolved == 0:
+    # n_pending, no n_total: las canceladas del día ('stale') no son pendientes
+    if n_pending > 0 and n_resolved == 0:
         print("   ⚠️  TODAS pendientes — investigar step_fetch_results / step_results")
 
     lines = [f"🌙 <b>RESUMEN DEL DÍA — {date_str}</b>", ""]
@@ -1420,7 +1432,7 @@ def send_evening_summary(target_date=None):
         if len(bets_tom) > 3:
             lines.append(f"  … y {len(bets_tom) - 3} más (detalles en el morning)")
     except Exception as e:
-        print(f"⚠️  Preview de mañana omitido: {e}")
+        log.error(f"❌ Resumen nocturno: el avance de mañana se omitió: {e}")
 
     msg = "\n".join(lines)
     ok  = send_message(msg)

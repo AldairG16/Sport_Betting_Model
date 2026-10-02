@@ -5,16 +5,16 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-import io
 import json
 
 import pandas as pd
 import numpy as np
-import requests
 from sqlalchemy import text
 from config.database import engine
 from src.utils.team_normalizer import normalize_team
 from src.utils.db_batch import insert_ignore_conflicts, describe
+from src.utils.football_data import (SEASON_LEAGUES, SEASON_URL, check_division,
+                                     fetch_csv, is_missing)
 from src.utils.log import get_logger
 
 log = get_logger(__name__)
@@ -27,26 +27,11 @@ def _ensure_cards_schema():
             conn.execute(text(f"ALTER TABLE matches ADD COLUMN IF NOT EXISTS {col} INT"))
 
 
-leagues = {
-    # Big 5 originales
-    "E0":  "soccer_epl",
-    "D1":  "soccer_germany_bundesliga",
-    "I1":  "soccer_italy_serie_a",
-    "SP1": "soccer_spain_la_liga",
-    "F1":  "soccer_france_ligue_one",
-    "ECL": "soccer_uefa_champs_league",
-
-    # Nuevas ligas europeas
-    "E1":  "soccer_efl_champ",               # Championship
-    "N1":  "soccer_netherlands_eredivisie",   # Eredivisie
-    "P1":  "soccer_portugal_primeira_liga",   # Primeira Liga
-    "SC0": "soccer_spl",                      # Scottish Premiership
-
-    # Tier 3: mercados blandos (nuevas)
-    "T1":  "soccer_turkey_super_league",      # Turkey Super Lig
-    "B1":  "soccer_belgium_first_div",        # Belgian First Division
-    "G1":  "soccer_greece_super_league",      # Greek Super League
-}
+# football-data NO tiene Champions League: hasta el 1-oct-26 aquí había
+# "ECL": "soccer_uefa_champs_league", el servidor redirigía ECL.csv a EC.csv y
+# la National League inglesa (5ª división) se guardaba como Champions desde
+# 2015 (src/utils/football_data.py).
+leagues = SEASON_LEAGUES
 
 def season_codes(today=None, first_start: int = 2015) -> list[str]:
     """Códigos de football-data ('1516' … temporada en curso). La temporada
@@ -157,6 +142,7 @@ def load_historical_data():
             "SELECT league, season, COUNT(*) FROM matches GROUP BY league, season"
         )).fetchall()
     loaded_counts = {(lg, int(sn)): int(c) for lg, sn, c in _rows if sn is not None}
+    failed = []   # descargas que fallaron (no "todavía no existe")
 
     for code, league in leagues.items():
         for s in seasons:
@@ -164,18 +150,15 @@ def load_historical_data():
             existing = loaded_counts.get((league, season_year), 0)
 
             print(f"Downloading {league} {s} (en DB: {existing})")
-            url = f"https://www.football-data.co.uk/mmz4281/{s}/{code}.csv"
-            try:
-                resp = requests.get(url, timeout=30)
-                if resp.status_code != 200 or len(resp.text) < 200:
-                    print(f"season not available: HTTP {resp.status_code}")
-                    continue
-                df = pd.read_csv(io.StringIO(resp.text))
-            except requests.exceptions.Timeout:
-                print(f"⛔ timeout de descarga: {league} {s} — se salta")
+            df, why = fetch_csv(SEASON_URL.format(season=s, code=code))
+            if df is None:
+                print(f"season not available: {why}")
+                if not is_missing(why):
+                    failed.append(f"{code} {s}: {why}")
                 continue
-            except (Exception,) as _dl_err:
-                print(f"season not available: {_dl_err}")
+            problem = check_division(df, code)
+            if problem:
+                log.error(f"❌ Histórico {league} {s}: {problem} — no se carga")
                 continue
 
             # liga+temporada completa en DB → skip (weekly idempotente).
@@ -241,6 +224,8 @@ def load_historical_data():
                 log.error(f"❌ Histórico {league} {s}: {res['errors']} filas no se "
                           f"pudieron insertar — {res['first_error']}")
 
+    if failed:
+        log.error(f"❌ Histórico: {len(failed)} descargas fallaron — " + "; ".join(failed[:4]))
     print("🔥 HISTORICAL READY")
 
 

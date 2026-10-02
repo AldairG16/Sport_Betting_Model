@@ -165,6 +165,9 @@ def audit_duplicate_matches() -> tuple[str, str]:
             """), merge_params(keep, donor))
             to_delete.append(int(donor["id"]))
         if to_delete:
+            # copia antes de borrar (1-oct-26): en matches no se borra nada sin respaldo
+            from src.utils.match_backup import backup_matches
+            backup_matches(conn, to_delete, "delete_duplicate", delete_ids=to_delete)
             conn.execute(text("DELETE FROM matches WHERE id = ANY(:ids)"),
                          {"ids": to_delete})
 

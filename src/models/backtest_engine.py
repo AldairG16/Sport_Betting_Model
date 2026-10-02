@@ -142,7 +142,9 @@ def run_backtest(min_bets: int = 5) -> dict:
     avg_edge     = df["edge"].mean()
     max_dd       = _max_drawdown(df["cum_profit"])
 
-    # Racha de pérdidas
+    # Racha de pérdidas: la máxima de TODA la historia y la actual (la que
+    # sigue abierta al final). Hasta el 1-oct-26 se avisaba "Racha de 20
+    # pérdidas consecutivas" con la máxima histórica, como si fuera de ahora.
     streak = 0
     max_streak = 0
     for r in df["result"]:
@@ -151,6 +153,7 @@ def run_backtest(min_bets: int = 5) -> dict:
             max_streak = max(max_streak, streak)
         else:
             streak = 0
+    current_streak = streak
 
     # Significancia
     sig = _significance(df["profit"])
@@ -170,7 +173,7 @@ def run_backtest(min_bets: int = 5) -> dict:
     print(f"  Odds promedio:      {avg_odds:.2f}")
     print(f"  Edge promedio:      {avg_edge*100:.1f}%")
     print(f"  Max drawdown:       ${max_dd:.2f}")
-    print(f"  Racha max perdidas: {max_streak}")
+    print(f"  Racha max perdidas: {max_streak} (histórica) · actual: {current_streak}")
 
     if sig["p_value"] is not None:
         sig_str = "SI ✅" if sig["significant"] else "NO ❌"
@@ -220,24 +223,23 @@ def run_backtest(min_bets: int = 5) -> dict:
     # =========================
 
     if "clv" in df.columns:
-        clv_data = df["clv"].dropna()
-        if len(clv_data) >= 5:
-            print("=" * 55)
-            print("  CLOSING LINE VALUE (CLV)")
-            print("=" * 55)
+        # Solo cierres VÁLIDOS (descargados cerca del kickoff, con hora): el
+        # resto era la cuota de apertura repetida y daba CLV ≈ 0 falso. Antes
+        # de esto el log concluía "modelo funciona, continuar" con esos datos.
+        valid = (df["closing_fetched_at"].notna() if "closing_fetched_at" in df.columns
+                 else pd.Series(False, index=df.index))
+        clv_data = df.loc[valid, "clv"].dropna()
+        print("=" * 55)
+        print(f"  CLOSING LINE VALUE (CLV) — cierres válidos, n={len(clv_data)}")
+        print("=" * 55)
+        if len(clv_data) < 30:
+            print("  Muestra insuficiente para concluir (se necesitan ≥30 cierres válidos).")
+        else:
             print(f"  CLV promedio:    {clv_data.mean():+.4f}")
             print(f"  CLV positivo:    {(clv_data > 0).mean()*100:.1f}% de bets")
             print(f"  CLV > 2%:        {(clv_data > 0.02).mean()*100:.1f}% de bets")
-            print()
-            print("  Interpretación:")
-            if clv_data.mean() > 0.01:
-                print("  ✅ CLV positivo: apostamos ANTES de que el mercado ajuste.")
-                print("     Señal fuerte de edge real a largo plazo.")
-            elif clv_data.mean() > 0:
-                print("  ⚠️  CLV levemente positivo: modelo funciona, continuar.")
-            else:
-                print("  ❌ CLV negativo: el mercado sabe más. Revisar timing y edge mínimo.")
-            print()
+            print("  (el veredicto con IC está en el CLV gate y en la referencia Pinnacle)")
+        print()
 
     # =========================
     # RECOMENDACIONES
@@ -257,8 +259,8 @@ def run_backtest(min_bets: int = 5) -> dict:
     if avg_edge < 0.06:
         print("  ⚠️  Edge promedio < 6%. Considera subir umbral mínimo.")
 
-    if max_streak > 8:
-        print(f"  ⚠️  Racha de {max_streak} pérdidas consecutivas. Revisa bankroll.")
+    if current_streak > 8:
+        print(f"  ⚠️  Racha ACTUAL de {current_streak} pérdidas consecutivas. Revisa bankroll.")
 
     if sig["n"] < 100:
         print(f"  ℹ️  {sig['n']} bets resueltas. Necesitas ~100 para significancia robusta.")

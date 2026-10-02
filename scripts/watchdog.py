@@ -6,12 +6,14 @@ Monitoreo de ausencia del pipeline. Corre cada 6 horas vía watchdog.yml.
 Detecta silenciosamente y alerta SOLO si algo está mal:
   1. DB inaccesible (causa raíz del silencio apr-jun 2026: contraseña expirada)
   2. upcoming_matches sin actualizar en >26h (morning/evening no corrió)
-  3. Muchas bets bloqueadas en 'pending' viejo sin resolver (resolución rota)
+  3. Apuestas reales sin liquidar: 'pending' de hace más de 4 días
   4. Analyst heartbeat con gap largo durante ventana activa
-  5-6. Sin partidos cargados / sin apuestas nuevas en una semana
-  7-8. Closing parado o irregular, weekly parado (src/utils/pipeline_runs.py)
+  5-6. Sin partidos cargados / sin candidatas nuevas en 4 días
+  7-10. Closing parado o irregular, weekly, reintento de resultados y
+        resolvedor sin correr (src/utils/pipeline_runs.py)
 
-Si todo está bien → no envía nada. Silencio = salud.
+Si todo está bien → no envía nada. Silencio = salud. Si la alerta no se
+puede entregar, la corrida termina en rojo (GitHub avisa por correo).
 """
 
 import os
@@ -25,21 +27,38 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
-def _send_alert(msg: str):
+def _send_alert(msg: str) -> bool:
+    """True si Telegram aceptó el mensaje. Hasta el 1-oct-26 no se miraba la
+    respuesta: un 400 (HTML inválido) o un token vencido pasaban en silencio,
+    y el watchdog es justamente el que tiene que avisar."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat  = os.environ.get("TELEGRAM_CHAT_ID", "")
     if not token or not chat:
         print(f"[WATCHDOG] Sin credenciales Telegram — alert no enviada:\n{msg}")
-        return
-    try:
-        import requests
-        requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat, "text": msg, "parse_mode": "HTML"},
-            timeout=10,
-        )
-    except Exception as e:
-        print(f"[WATCHDOG] No se pudo enviar Telegram: {e}")
+        return False
+    import requests
+    for attempt in range(3):
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat, "text": msg, "parse_mode": "HTML"},
+                timeout=10,
+            )
+            if r.status_code == 200:
+                return True
+            print(f"[WATCHDOG] Telegram respondió {r.status_code}: {r.text[:200]}")
+            if r.status_code == 400:
+                # HTML inválido: se manda en texto plano para que llegue igual
+                r = requests.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={"chat_id": chat, "text": msg},
+                    timeout=10,
+                )
+                if r.status_code == 200:
+                    return True
+        except Exception as e:
+            print(f"[WATCHDOG] No se pudo enviar Telegram (intento {attempt + 1}/3): {e}")
+    return False
 
 
 def _hours_ago(dt) -> float:
@@ -53,13 +72,20 @@ def _hours_ago(dt) -> float:
     return (datetime.now(timezone.utc) - ts).total_seconds() / 3600
 
 
-# Dias sin una sola apuesta nueva antes de alertar. Holgado a proposito: el
-# modelo es selectivo y puede pasar un dia sin encontrar valor; una semana
-# significa que algo corriente arriba dejo de producir.
-DIAS_SIN_BETS_ALERTA = 7
+# Días sin una sola candidata nueva antes de alertar. Desde el modo recolección
+# (25-sep-26) pueden pasar semanas sin una apuesta REAL, así que lo que prueba
+# que el pipeline produce son las candidatas en sombra (todos los días hay).
+DIAS_SIN_CANDIDATAS_ALERTA = 4
+# Una apuesta real todavía 'pending' a los 4 días = la liquidación no corrió:
+# su propio timeout la pasa a 'unresolved' a los 3 (save_bets.update_bet_results).
+# Las que terminan sin resultado ('stale') avisan UNA vez, como ERROR, en la
+# corrida que las marca; aquí se repetirían cada 6 horas.
+DIAS_PENDING_ATASCADA = 4
 
 
-def run_watchdog():
+def run_watchdog() -> int:
+    """0 = sano o alerta entregada; 1 = DB caída o alerta NO entregada (la
+    corrida queda en rojo y GitHub avisa por correo: segundo canal)."""
     now_utc = datetime.now(timezone.utc)
     print(f"[WATCHDOG] {now_utc.strftime('%Y-%m-%d %H:%M UTC')}")
 
@@ -80,14 +106,14 @@ def run_watchdog():
             f"<code>{short}</code>\n"
             "→ Verifica el secret DB_URL en GitHub Actions Settings."
         )
-        # Sin DB no podemos hacer más checks — alertar y salir
+        # Sin DB no podemos hacer más checks — alertar y salir en rojo
         _send_alert(
             "🚨 <b>WATCHDOG — DB CAÍDA</b>\n\n"
             + issues[0]
             + "\n\n<i>El pipeline está completamente detenido.</i>"
         )
         print(f"  ❌ DB inaccesible: {e}")
-        return
+        return 1
 
     # ── CHECK 2: upcoming_matches actualizado en las últimas 26 horas ────────
     # update_upcoming_matches corre en morning (06:00 MX) y evening (07:30 MX).
@@ -113,27 +139,28 @@ def run_watchdog():
     except Exception as e:
         issues.append(f"⚠️ No se pudo leer upcoming_matches: {e}")
 
-    # ── CHECK 3: bets 'pending' muy antiguas sin resolver (>5 días) ──────────
-    # Más de 10 bets bloqueadas 5+ días = resolver roto o mercado sin fuente.
+    # ── CHECK 3: apuestas REALES sin liquidar ────────────────────────────────
+    # Antes: más de 10 bets 'pending' de >5 días. Hoy hay pocas apuestas
+    # reales y basta una (1-oct-26): si sigue 'pending' a los 4 días, la
+    # liquidación del evening / late_results no está corriendo.
     try:
         stuck = pd.read_sql(
-            """
-            SELECT COUNT(*) AS n
-            FROM bets_history
+            f"""
+            SELECT COUNT(*) AS n FROM bets_history
             WHERE result = 'pending'
-              AND match_date < NOW() - INTERVAL '5 days'
+              AND match_date < NOW() - INTERVAL '{DIAS_PENDING_ATASCADA} days'
             """,
             engine,
         )
         n_stuck = int(stuck.iloc[0]["n"]) if not stuck.empty else 0
-        print(f"  Bets pending >5d: {n_stuck}")
+        print(f"  Bets pending >{DIAS_PENDING_ATASCADA}d: {n_stuck}")
 
-        if n_stuck > 10:
+        if n_stuck:
             issues.append(
-                f"🟡 <b>{n_stuck} BETS ATASCADAS</b>\n"
-                f"Hay {n_stuck} bets con result='pending' de hace más de 5 días.\n"
-                f"→ Puede indicar que resolve_pending.yml no está corriendo "
-                f"o que hay ligas sin fuente de resultados."
+                f"🟡 <b>{n_stuck} APUESTAS SIN LIQUIDAR</b>\n"
+                f"Siguen 'pending' {DIAS_PENDING_ATASCADA}+ días después del partido.\n"
+                f"→ La liquidación (evening / late_results) no está corriendo: "
+                f"sin ella no cuentan en el bankroll."
             )
         else:
             print("  ✅ Sin bets atascadas")
@@ -213,34 +240,29 @@ def run_watchdog():
     except Exception as e:
         issues.append(f"⚠️ No se pudo verificar partidos cargados: {e}")
 
-    # ── CHECK 6: hace cuanto que no se registra una apuesta ──────────────────
+    # ── CHECK 6: el pipeline sigue produciendo candidatas ────────────────────
     # Complemento del anterior y mas rapido de disparar: sin cuotas no hay
-    # picks, asi que bets_history deja de crecer desde el dia uno, mientras que
-    # upcoming_matches tarda dos o tres dias en vaciarse por el cleanup.
-    #
-    # Se mide sobre match_date (el kickoff) porque el INSERT de save_bets.py no
-    # guarda timestamp de creacion. Con el modelo sano ese maximo esta en el
-    # FUTURO, porque se apuesta a partidos por jugar; cuando el pipeline deja de
-    # producir, retrocede hacia el pasado. Umbral holgado a proposito: el modelo
-    # es selectivo y puede pasar un dia sin encontrar valor, no una semana.
+    # candidatas, mientras que upcoming_matches tarda dos o tres dias en
+    # vaciarse por el cleanup. Hasta el 1-oct-26 se medía la última apuesta
+    # REAL; con el modo recolección pueden pasar semanas sin una, y la alerta
+    # habría sonado cada semana sin que nada estuviera roto.
     try:
-        ub = pd.read_sql("SELECT MAX(match_date) AS last_bet FROM bets_history", engine)
-        last_bet = ub.iloc[0]["last_bet"] if not ub.empty else None
-        bet_age_d = _hours_ago(last_bet) / 24
-        print(f"  Ultima apuesta registrada: {bet_age_d:.1f}d atras")
+        sb = pd.read_sql("SELECT MAX(created_at) AS last_shadow FROM shadow_bets", engine)
+        last_shadow = sb.iloc[0]["last_shadow"] if not sb.empty else None
+        shadow_age_d = _hours_ago(last_shadow) / 24
+        print(f"  Ultima candidata registrada: {shadow_age_d:.1f}d atras")
 
-        if bet_age_d > DIAS_SIN_BETS_ALERTA:
+        if shadow_age_d > DIAS_SIN_CANDIDATAS_ALERTA:
             issues.append(
-                "🔴 <b>SIN APUESTAS NUEVAS</b>\n"
-                f"La apuesta mas reciente en `bets_history` es de hace "
-                f"{bet_age_d:.0f} dias.\n"
-                "→ O el fetch no trae cuotas, o los filtros rechazan todo. "
-                "Empieza por el log de morning.yml."
+                "🔴 <b>SIN CANDIDATAS NUEVAS</b>\n"
+                f"La última candidata en `shadow_bets` es de hace {shadow_age_d:.0f} días.\n"
+                "→ El pipeline no está evaluando partidos: o el fetch no trae "
+                "cuotas o la etapa de predicción falla. Empieza por el log de morning.yml."
             )
         else:
-            print("  ✅ Se siguen registrando apuestas")
+            print("  ✅ Se siguen registrando candidatas")
     except Exception as e:
-        issues.append(f"⚠️ No se pudo verificar apuestas recientes: {e}")
+        issues.append(f"⚠️ No se pudo verificar candidatas recientes: {e}")
 
     # ── CHECK 7-8: closing y weekly, que dispara un servicio externo ─────────
     # CHECK 2 solo ve morning/evening. Si cron-job.org deja de disparar el
@@ -261,16 +283,20 @@ def run_watchdog():
     # ── Resultado ─────────────────────────────────────────────────────────────
     if not issues:
         print("[WATCHDOG] Todo OK — sin alertas.")
-        return
+        return 0
 
     alert = (
         "🚨 <b>WATCHDOG — PROBLEMAS DETECTADOS</b>\n"
         f"<i>{now_utc.strftime('%Y-%m-%d %H:%M UTC')}</i>\n\n"
         + "\n\n".join(issues)
     )
-    _send_alert(alert)
-    print(f"[WATCHDOG] {len(issues)} problema(s) detectado(s) — alerta enviada.")
+    if _send_alert(alert):
+        print(f"[WATCHDOG] {len(issues)} problema(s) detectado(s) — alerta enviada.")
+        return 0
+    print(f"::error::Watchdog: {len(issues)} problema(s) y la alerta de Telegram NO se entregó")
+    print(alert)
+    return 1
 
 
 if __name__ == "__main__":
-    run_watchdog()
+    sys.exit(run_watchdog())

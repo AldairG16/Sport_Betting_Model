@@ -282,6 +282,8 @@ def flb_side(market: str) -> str:
 BLOCKED_LEAGUES = {
     # K1 (ronda 16): n=21 partidos con resultado en 3 años — no medible
     # para LEAGUE_FACTORS (Q-CA) → bloqueada en vez de correr con defaults.
+    # (1-oct-26: los demás estaban guardados como K-League; con su historia
+    # ya en su liga y sus factores medidos, reactivarla es decisión del dueño.)
     "soccer_norway_eliteserien",
     "soccer_fifa_world_cup_qualifiers_europe",
     "soccer_uefa_europa_league",
@@ -378,7 +380,8 @@ def load_learned_state() -> dict:
     from src.models.shade_learner import load_shade_scales
     from src.models.side_bias import load_side_bias
     state = {"blocked_markets": set(), "blocked_leagues": set(),
-             "reactivated": set(), "anchor": {}, "shades": {}, "side_bias": {}}
+             "reactivated": set(), "anchor": {}, "shades": {}, "side_bias": {},
+             "load_errors": []}
     loaders = (("blocked_markets", load_clv_blocked_markets),
                ("blocked_leagues", load_clv_blocked_leagues),
                ("reactivated", load_shadow_reactivated),
@@ -389,8 +392,23 @@ def load_learned_state() -> dict:
         try:
             state[key] = fn()
         except Exception as e:
-            log.warning(f"⚠️  Estado aprendido '{key}' no disponible — uso el default: {e}")
+            # ERROR y falla CERRADA (1-oct-26): con el default se levantaban en
+            # silencio los bloqueos y los pesos aprendidos. La corrida sigue
+            # midiendo (shadow), pero no registra apuestas reales.
+            log.error(f"❌ Estado aprendido '{key}' no disponible: {e} — sin apuestas reales en esta corrida")
+            state["load_errors"].append(key)
     return state
+
+
+def real_bets_with_state(learned: dict, real_bets: list) -> list:
+    """Falla CERRADA: si faltó alguna parte del estado aprendido (bloqueos,
+    peso del modelo, sesgos), las apuestas reales de la corrida no se
+    registran; las candidatas en sombra se guardan igual."""
+    if learned.get("load_errors") and real_bets:
+        log.error(f"❌ {len(real_bets)} apuestas reales NO registradas: faltó el estado aprendido "
+                  f"({', '.join(learned['load_errors'])})")
+        return []
+    return real_bets
 
 # =========================
 # LAMBDAS DIXON-COLES (función pura — testeable, ronda 4)
@@ -2867,6 +2885,7 @@ def run_prediction_pipeline(dry_run: bool = False):
               f"{', '.join(sorted(PAPER_ONLY_LEAGUES))} → data/paper_trades.jsonl "
               f"(NO insertadas en bets_history)")
 
+    real_bets = real_bets_with_state(learned, real_bets)
     if dry_run:
         print(f"🧪 ENSAYO: {len(real_bets)} bets y {len(paper_bets)} de papel NO guardadas")
     else:

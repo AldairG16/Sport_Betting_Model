@@ -240,7 +240,11 @@ SPORT_KEYS = [
 
     # ── Tier 4: Asia + Scandinavia — calendario verano, blandos ──
     # "soccer_japan_j_league",            # BLOQUEADA 04-may-26: -12.46u/24 bets en 60d, 17% WR — peor liga del modelo
-    "soccer_korea_kleague1",              # 3403 matches, predecible
+    # K-League: los "3403 matches" de esta nota eran NORUEGOS (football-data no
+    # tiene Corea y redirigía KOR.csv a NOR.csv, 1-oct-26). Partidos coreanos
+    # reales: ~60, solo desde abril-26; sus factores de liga quedan neutros.
+    "soccer_korea_kleague1",
+    # Noruega no tenía "solo 32 partidos": sus 3,541 estaban como K-League.
     # "soccer_norway_eliteserien",        # BLOQUEADA 04-may-26: solo 32 partidos historicos — sample insuficiente
     "soccer_sweden_allsvenskan",          # 3392 matches, liga verano
     # "soccer_china_superleague",         # BLOQUEADA 06-may-26: -1.12u/5 bets en 60d (-22% ROI), liga lejana → ahorra créditos API
