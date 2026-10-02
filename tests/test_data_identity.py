@@ -217,7 +217,14 @@ def test_plan_restores_altered_removes_invented_and_fills_missing():
     assert summarize(plan) == {"rows": 3, "changed": 2, "invented": 1, "filled": 6}
 
 
+def _binds(sql: str) -> set:
+    import re
+    return set(re.findall(r"(?<!:):(\w+)", sql))
+
+
 def test_stats_update_goes_in_batches_with_explicit_types():
+    """Cada parámetro del SQL tiene su valor: el 2-oct-26 un ':id{k}' sin f
+    rompió el --apply (la transacción se revirtió entera)."""
     from scripts.fix_match_stats import COLS, update_stats
     eng = FakeEngine()
     plan = [{"id": i, **{c: None for c in COLS}} for i in range(1500)]
@@ -225,6 +232,17 @@ def test_stats_update_goes_in_batches_with_explicit_types():
         update_stats(conn, plan, chunk=1000)
     stmts = eng.statements("UPDATE matches m SET home_shots = v.home_shots")
     assert len(stmts) == 2 and "CAST(:home_corners0 AS integer)" in stmts[0][0]
+    for sql, params in stmts:
+        assert _binds(sql) == set(params), sorted(_binds(sql) ^ set(params))[:5]
+
+
+def test_name_and_relabel_updates_bind_every_parameter():
+    from scripts.fix_team_identities import update_names
+    eng = FakeEngine()
+    with eng.begin() as conn:
+        update_names(conn, [(1, "a", "b", "a", "b"), (2, "c", "d", "c", "d")])
+    (sql, params), = eng.statements("UPDATE matches m SET home_team = v.h")
+    assert _binds(sql) == set(params)
 
 
 # ============================================================

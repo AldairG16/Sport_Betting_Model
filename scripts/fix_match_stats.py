@@ -109,7 +109,7 @@ def update_stats(conn, plan: list[dict], chunk: int = 1000) -> None:
     for start in range(0, len(plan), chunk):
         part = plan[start:start + chunk]
         values = ", ".join(
-            "(CAST(:id{k} AS integer), " + ", ".join(f"CAST(:{c}{k} AS integer)" for c in COLS) + ")"
+            f"(CAST(:id{k} AS integer), " + ", ".join(f"CAST(:{c}{k} AS integer)" for c in COLS) + ")"
             for k in range(len(part)))
         params = {}
         for k, p in enumerate(part):
