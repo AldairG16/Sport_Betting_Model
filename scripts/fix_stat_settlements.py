@@ -39,8 +39,9 @@ from src.models.save_bets import audit_stat_settlements
 NOTE = "Corrección de liquidación (bug NaN, 22-sep-26)"
 
 
-def apply_corrections(corrections: list[dict]) -> list[dict]:
-    """Aplica las correcciones; devuelve las que se escribieron de verdad."""
+def apply_corrections(corrections: list[dict], note: str = NOTE) -> list[dict]:
+    """Aplica las correcciones; devuelve las que se escribieron de verdad.
+    `note` es el motivo que queda en bankroll_history."""
     ensure_bankroll_schema()
     done = []
     with engine.begin() as conn:
@@ -57,14 +58,14 @@ def apply_corrections(corrections: list[dict]) -> list[dict]:
                     continue
                 balance = update_bankroll(
                     profit=c["new_profit"] - c["old_profit"],
-                    notes=(f"{NOTE}: {c['match']} | {c['market']} | "
+                    notes=(f"{note}: {c['match']} | {c['market']} | "
                            f"{c['old_result']} → {c['new_result']}"),
                     conn=conn)
             done.append({**c, "balance": balance})
     return done
 
 
-def main(apply: bool) -> int:
+def main(apply: bool, note: str = NOTE) -> int:
     a = audit_stat_settlements()
     print(f"Revisadas {a['checked']} bets de córners/tarjetas/tiros · "
           f"sin datos: {a['no_data']} · resultado distinto hoy: {a['different']} · "
@@ -80,7 +81,7 @@ def main(apply: bool) -> int:
     if not apply:
         print("EN SECO: no se escribió nada. Repetir con --apply para corregir.")
         return 0
-    done = apply_corrections(fixes)
+    done = apply_corrections(fixes, note)
     for c in done:
         print(f"   ✅ #{c['id']} {c['match']} | {c['market']}: {c['old_result']} "
               f"{c['old_profit']:+.2f}u → {c['new_result']} {c['new_profit']:+.2f}u "
@@ -92,4 +93,6 @@ def main(apply: bool) -> int:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--apply", action="store_true", help="escribe las correcciones")
-    sys.exit(main(ap.parse_args().apply))
+    ap.add_argument("--motivo", default=NOTE, help="motivo que queda en bankroll_history")
+    args = ap.parse_args()
+    sys.exit(main(args.apply, args.motivo))

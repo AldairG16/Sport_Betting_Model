@@ -63,7 +63,7 @@ def _rows(n, start=0):
 def test_one_statement_per_chunk_and_exact_counts():
     conn = FakeConn(existing={("2026-01-01", "h0", "a")})
     res = insert_ignore_conflicts(conn, "matches", COLS, _rows(1200), KEY, chunk=500)
-    assert res == {"inserted": 1199, "existing": 1, "errors": 0, "first_error": None}
+    assert res == {"inserted": 1199, "filled": 0, "existing": 1, "errors": 0, "first_error": None}
     assert conn.statements == 3                      # 500 + 500 + 200, no 1200
 
 
@@ -112,3 +112,45 @@ def test_native_timestamp():
 
 def test_empty():
     assert insert_ignore_conflicts(FakeConn(), "matches", COLS, [], KEY)["inserted"] == 0
+
+
+class FillConn(FakeConn):
+    """Como FakeConn, con filas existentes y ON CONFLICT DO UPDATE de las
+    columnas fill_null que estén en NULL (RETURNING True = insertada)."""
+
+    def __init__(self, existing: dict, fill):
+        super().__init__(existing=set(existing))
+        self.rows = {k: dict(v) for k, v in existing.items()}
+        self.fill = fill
+
+    def execute(self, stmt, params):
+        sql = str(stmt)
+        assert "DO UPDATE SET" in sql and "RETURNING (xmax = 0)" in sql
+        for c in self.fill:
+            assert f"COALESCE(matches.{c}, EXCLUDED.{c})" in sql
+        n = len(params) // len(COLS)
+        returned = []
+        for r in [{c: params[f"{c}_{i}"] for c in COLS} for i in range(n)]:
+            k = tuple(r[c] for c in KEY)
+            if k not in self.rows:
+                self.rows[k] = dict(r)
+                returned.append((True,))
+                continue
+            changed = [c for c in self.fill if self.rows[k].get(c) is None and r.get(c) is not None]
+            for c in changed:
+                self.rows[k][c] = r[c]
+            if changed:
+                returned.append((False,))
+        return type("R", (), {"fetchall": lambda self_: returned})()
+
+
+def test_fill_null_completes_only_what_is_missing():
+    """Un partido que insertó antes The Odds API (sin estadísticas) recibe las
+    del CSV; un dato que ya existe nunca se pisa (2-oct-26)."""
+    k0, k1 = ("2026-01-01", "h0", "a"), ("2026-01-02", "h1", "a")
+    conn = FillConn({k0: dict(zip(COLS, (*k0, None))), k1: dict(zip(COLS, (*k1, 3)))}, ["home_goals"])
+    rows = [dict(zip(COLS, (*k0, 2))), dict(zip(COLS, (*k1, 1))), dict(zip(COLS, ("2026-01-03", "h2", "a", 0)))]
+    res = insert_ignore_conflicts(conn, "matches", COLS, rows, KEY, fill_null=["home_goals"])
+    assert res == {"inserted": 1, "filled": 1, "existing": 1, "errors": 0, "first_error": None}
+    assert conn.rows[k0]["home_goals"] == 2 and conn.rows[k1]["home_goals"] == 3
+    assert describe(res) == "1 nuevas, 1 ya existían, 1 completadas"

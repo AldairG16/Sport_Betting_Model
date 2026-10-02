@@ -70,6 +70,15 @@ def test_apply_corrections_updates_the_bet_and_adjusts_the_bankroll_by_the_diffe
     assert hist["notes"].startswith(fix.NOTE) and "loss → win" in hist["notes"]
 
 
+def test_the_reason_written_in_the_bankroll_history_is_configurable(monkeypatch):
+    eng = _bankroll_db()
+    monkeypatch.setattr(fix, "engine", eng)
+    monkeypatch.setattr(fix, "ensure_bankroll_schema", lambda: None)
+    fix.apply_corrections([CORRECTION], note="Corrección (córners reales, 2-oct-26)")
+    (_, hist), = eng.statements("INSERT INTO bankroll_history")
+    assert hist["notes"].startswith("Corrección (córners reales, 2-oct-26): atalanta vs cagliari")
+
+
 def test_already_corrected_bets_are_skipped_without_touching_the_bankroll(monkeypatch):
     eng = _bankroll_db(bet_rowcount=0)
     monkeypatch.setattr(fix, "engine", eng)

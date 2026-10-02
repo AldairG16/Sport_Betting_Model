@@ -125,6 +125,34 @@ def test_historical_loader_skips_a_wrong_division_and_reports_failed_downloads(m
     assert msg.startswith("❌ Histórico: 1 descargas fallaron") and "SP1 2627" in msg
 
 
+def test_historical_loader_stores_the_csv_stats_as_they_are(monkeypatch):
+    """Hasta el 2-oct-26 advanced_impute() multiplicaba córners y tiros por
+    0.8 + 0.4·goles/2.5 y rellenaba huecos con promedios (Burnley 0-3 City:
+    córners 6-5 guardados como 8-6)."""
+    import scripts.load_historical_data as lhd
+    captured = {}
+    monkeypatch.setattr(lhd, "_ensure_cards_schema", lambda: None)
+    monkeypatch.setattr(lhd, "engine", FakeEngine(lambda sql, p: FakeResult(rows=[])))
+    monkeypatch.setattr(lhd, "leagues", {"E0": "soccer_epl"})
+    monkeypatch.setattr(lhd, "seasons", ["2324"])
+    csv = pd.DataFrame({"Div": ["E0", "E0"], "Date": ["11/08/2023", "12/08/2023"],
+                        "HomeTeam": ["Burnley", "Brighton"], "AwayTeam": ["Man City", "Luton"],
+                        "FTHG": [0, 4], "FTAG": [3, 1], "HC": [6, None], "AC": [5, 7],
+                        "HS": [6, 20], "AS": [17, 9]})
+    monkeypatch.setattr(lhd, "fetch_csv", lambda url: (csv.copy(), ""))
+
+    def fake_insert(conn, table, cols, rows, key, chunk=500, fill_null=()):
+        captured.update(rows=rows, fill=list(fill_null))
+        return {"inserted": len(rows), "filled": 0, "existing": 0, "errors": 0, "first_error": None}
+    monkeypatch.setattr(lhd, "insert_ignore_conflicts", fake_insert)
+    lhd.load_historical_data()
+    burnley, brighton = captured["rows"]
+    assert (burnley["home_corners"], burnley["away_corners"], burnley["home_shots"]) == (6, 5, 6)
+    assert brighton["home_corners"] is None and brighton["away_corners"] == 7    # sin imputar
+    assert brighton["home_shots_target"] is None                                  # el CSV no la trae
+    assert {"home_corners", "away_shots_target", "season"} <= set(captured["fill"])
+
+
 def test_extra_league_redirect_or_other_country_is_an_error(monkeypatch):
     import scripts.load_extra_leagues as lel
     monkeypatch.setattr(lel, "fetch_csv", lambda url: (None, "no existe: el servidor redirige KOR.csv a NOR.csv"))
@@ -150,6 +178,53 @@ def test_league_factors_after_the_label_fixes():
     nor = LEAGUE_FACTORS["soccer_norway_eliteserien"]                          # lo que r16 midió
     assert (nor["tempo"], nor["over25_rate"], nor["btts_rate"]) == (1.212, 0.582, 0.557)
     assert get_btts_rate("soccer_uefa_champs_league") == DEFAULT_FACTORS["btts_rate"]
+
+
+# ============================================================
+# Estadísticas reales (scripts/fix_match_stats.py)
+# ============================================================
+
+def test_csv_stats_reads_raw_values_and_missing_as_none():
+    from scripts.fix_match_stats import csv_stats
+    t = csv_stats(pd.DataFrame({"Date": ["11/08/2023"], "HomeTeam": ["Burnley"], "AwayTeam": ["Man City"],
+                                "HS": [6], "AS": [17], "HC": [6], "AC": [None]}))
+    assert t[("2023-08-11", "burnley", "manchester city")] == {
+        "home_shots": 6, "away_shots": 17, "home_shots_target": None, "away_shots_target": None,
+        "home_corners": 6, "away_corners": None}
+
+
+def test_plan_restores_altered_removes_invented_and_fills_missing():
+    from scripts.fix_match_stats import COLS, plan_updates, summarize
+    real = {"home_shots": 6, "away_shots": 17, "home_shots_target": 2, "away_shots_target": 6,
+            "home_corners": 6, "away_corners": 5}
+    truth = {("2023-08-11", "burnley", "manchester city"): real,
+             ("2023-08-12", "arsenal", "nottm forest"): {**real, "home_corners": None},
+             ("2026-05-13", "manchester city", "crystal palace"): real,
+             ("2023-08-13", "brentford", "tottenham"): real}
+
+    def row(i, d, h, a, **stats):
+        return {"id": i, "d": d, "home_team": h, "away_team": a, **{c: stats.get(c) for c in COLS}}
+    rows = pd.DataFrame([
+        row(1, "2023-08-11", "burnley", "manchester city", **{**real, "home_corners": 8, "away_corners": 6}),
+        row(2, "2023-08-12", "arsenal", "nottm forest", **{**real, "home_corners": 10}),   # inventado
+        row(3, "2026-05-13", "manchester city", "crystal palace"),                          # sin datos
+        row(4, "2023-08-14", "brentford", "tottenham", **real),                             # ±1 día, igual
+        row(5, "2024-01-01", "x", "y", home_corners=3)])                                    # no está en CSV
+    plan = plan_updates(rows, truth)
+    assert [p["id"] for p in plan] == [1, 2, 3]
+    assert (plan[0]["home_corners"], plan[0]["away_corners"]) == (6, 5)
+    assert plan[1]["home_corners"] is None
+    assert summarize(plan) == {"rows": 3, "changed": 2, "invented": 1, "filled": 6}
+
+
+def test_stats_update_goes_in_batches_with_explicit_types():
+    from scripts.fix_match_stats import COLS, update_stats
+    eng = FakeEngine()
+    plan = [{"id": i, **{c: None for c in COLS}} for i in range(1500)]
+    with eng.begin() as conn:
+        update_stats(conn, plan, chunk=1000)
+    stmts = eng.statements("UPDATE matches m SET home_shots = v.home_shots")
+    assert len(stmts) == 2 and "CAST(:home_corners0 AS integer)" in stmts[0][0]
 
 
 # ============================================================

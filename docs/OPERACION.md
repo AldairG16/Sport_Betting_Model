@@ -198,7 +198,10 @@ trae los tiempos de los partidos viejos: el medio tiempo sale del detalle del pa
 > las apuestas reales que quedaron sin fuente; nunca las canceladas antes del kickoff.
 
 `late_results.yml` cubre el caso barato: re-corre `--mode results` a las 00:00 y 06:30
-MX para partidos que acaban después del evening, sin llamar a la LLM.
+MX para partidos que acaban después del evening, sin llamar a la LLM. Y el weekly
+liquida las apuestas reales `stale` cuyo dato ya llegó con sus cargas
+(`resolve_stale_bets`, paso "Apuestas sin fuente con dato nuevo", gratis). Antes no lo
+corría nadie.
 
 **4 · Aprendizaje semanal** — el modo `weekly` recalcula todo lo que el sistema
 aprende de los datos que recolecta solo, y lo guarda en `model_state` (§7):
@@ -321,6 +324,21 @@ esperada (si no, ERROR y no se carga). Los tres cargadores la usan. Lo ya guarda
 reetiquetó `scripts/fix_league_labels.py`. Desde r17 la K-League usa factores neutros
 (~60 partidos coreanos reales), Noruega los que r16 midió y la BTTS de la Champions el
 default.
+
+**El cargador histórico alteraba córners y tiros.** Hasta el 2-oct-2026,
+`load_historical_data` pasaba las estadísticas por `advanced_impute()`. Rellenaba los
+huecos con promedios de liga y multiplicaba córners y tiros, también los reales, por
+`0.8 + 0.4·goles/2.5`; en Burnley 0-3 City, los córners 6-5 quedaron guardados como 8-6.
+En la base, 28,993 de 45,001 partidos tenían estadísticas que no eran las del CSV (solo
+13% de los córners de la Premier 2023-24 eran los reales), con 9,684 valores inventados.
+Los modelos de córners y tiros y el xG proxy aprendían de esos números, y una apuesta de
+córners se liquidó con un dato alterado. Hoy se guarda lo que publica football-data y, sin
+dato, NULL. Si un modelo quiere imputar, lo hace al calcular sus features, nunca al
+guardar. `scripts/fix_match_stats.py` restauró los valores reales con respaldo en
+`matches_identity_backup`, y `scripts/fix_stat_settlements.py --motivo "..."` corrigió las
+liquidaciones afectadas. El cargador además **completa** las estadísticas que falten en un
+partido que ya existe (`fill_null` de `src/utils/db_batch.py`): antes, un partido que había
+insertado The Odds API sin estadísticas no las recibía nunca.
 
 **El mismo club con dos nombres.** football-data escribe "Man United", "Leeds", "Paris
 SG"; The Odds API, "Manchester United", "Leeds United", "Paris Saint Germain". El mismo
@@ -705,9 +723,10 @@ python scripts/learn_team_aliases.py --check     # solo avisa pares nuevos sin u
 python scripts/fix_league_labels.py              # en seco; --apply reetiqueta ligas (respaldo antes)
 python scripts/fix_team_identities.py            # en seco; --apply une nombres y repetidos (después del anterior)
 python scripts/audit_analyst_calibration.py --days 60
-python scripts/db_smoke_test.py                  # 35 checks contra la base real, solo lectura
+python scripts/db_smoke_test.py                  # 36 checks contra la base real, solo lectura
 python -c "from scripts.revalidate_pending_bets import revalidate_pending_bets as r; r(dry_run=True)"  # qué cancelaría ahora
-python scripts/fix_stat_settlements.py           # en seco; --apply corrige liquidaciones
+python scripts/fix_stat_settlements.py           # en seco; --apply corrige liquidaciones (--motivo "...")
+python scripts/fix_match_stats.py                # en seco; --apply restaura córners y tiros reales del CSV
 
 # Tests
 python -m pytest tests/ -v
