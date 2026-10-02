@@ -175,7 +175,9 @@ esperando el CSV de football-data, o ligas que The Odds API no puntúa). Pide a 
 resultado FT vía `web_search`, completa `matches` y llama a `update_bet_results()`.
 **Gasta tokens.** Corre a las 07:00 y 19:00 MX (lo dispara el latido del closing, §2) y
 como paso del evening antes del resumen. Una respuesta con `confidence: low` no se usa:
-con ella se liquidaría dinero.
+con ella se liquidaría dinero. En su corrida suelta no existe el reporte de errores
+tolerados del orquestador: si una consulta a Claude falla, avisa por Telegram y sale en
+rojo.
 
 > **No corrió nunca hasta el 1-oct-2026.** `resolve_pending.yml` no tenía disparador
 > desde el 11-may y el paso del evening no recibía `ANTHROPIC_API_KEY` (`evening.yml`
@@ -333,6 +335,12 @@ así que dejó de cargar la 2025/26 antes de terminar.
 fotos eran copias idénticas (~8 MB/día; en el plan gratuito de Neon, la base se llenaba
 en ~2 meses). Desde el 25-sep-2026 solo entra una foto si la cuota de ese partido cambió
 y nada se borra.
+
+**La base corta una conexión inactiva.** Un script que intercala consultas con
+descargas largas deja la conexión del pool quieta, y la siguiente consulta revienta con
+`server closed the connection unexpectedly` (2-oct-2026, en el primer intento de
+`fix_league_labels.py`). En scripts largos: descargar todo primero y después la parte de
+base de datos seguida, con `engine.dispose()` antes para empezar con conexiones nuevas.
 
 **No edites archivos con `Get-Content`/`Set-Content` de Windows PowerShell 5.1.** Lee
 UTF-8 sin BOM como ANSI y escribe con BOM: rompe todos los acentos del archivo.
