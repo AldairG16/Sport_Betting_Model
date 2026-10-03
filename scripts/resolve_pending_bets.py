@@ -318,12 +318,18 @@ VALID_INT_FIELDS = {
 def _upsert_match_row(home_raw: str, away_raw: str, date_str: str,
                       data: dict, league_hint: str = "") -> bool:
     """
-    UPSERT en `matches`. Solo escribe campos no-NULL del dict para no
-    pisar datos correctos con NULL. Devuelve True si insertó/actualizó.
+    Guarda en `matches` lo que trajo Claude. Si el partido ya tiene fila
+    (±1 día) se COMPLETAN solo sus campos NULL, y solo si el marcador final
+    coincide; si no tiene fila, se inserta. True si escribió algo; un error
+    de la base se propaga (quien llama lo cuenta).
+
+    Hasta el 2-oct-26 era un UPSERT por fecha exacta que PISABA los datos de
+    football-data o de la API con los de Claude (COALESCE(EXCLUDED, matches))
+    e insertaba un partido repetido si la fila estaba un día antes o después.
     """
     # Normalizar nombres (igual que fbdata backup y update_bet_results)
-    home_norm = normalize_team(home_raw)
-    away_norm = normalize_team(away_raw)
+    home_norm = normalize_team(home_raw).lower()
+    away_norm = normalize_team(away_raw).lower()
 
     # Filtrar solo campos válidos y no-nulos
     payload = {}
@@ -340,48 +346,38 @@ def _upsert_match_row(home_raw: str, away_raw: str, date_str: str,
         # El LLM no devolvió ningún dato útil → no hacemos nada
         return False
 
-    # Para el INSERT path, completamos también goals con 0 si solo vinieron
-    # secundarios (porque la unique constraint requiere row existente).
-    # Si los goals no vinieron pero hay corners/cards, intentamos UPDATE only.
-    cols_to_set = ", ".join(f"{k} = COALESCE(EXCLUDED.{k}, matches.{k})"
-                            for k in payload.keys())
-
-    cols_insert = ["date", "home_team", "away_team",
-                    "team_home_norm", "team_away_norm"]
-    vals_insert = [":date", ":home", ":away", ":home_norm", ":away_norm"]
-    params = {
-        "date": date_str,
-        "home": home_norm.lower(),
-        "away": away_norm.lower(),
-        "home_norm": home_norm.lower(),
-        "away_norm": away_norm.lower(),
-    }
-
-    if league_hint:
-        cols_insert.append("league")
-        vals_insert.append(":league")
-        params["league"] = league_hint
-
-    # Agregar columnas del payload
-    for k, v in payload.items():
-        cols_insert.append(k)
-        vals_insert.append(f":{k}")
-        params[k] = v
-
-    sql = f"""
-        INSERT INTO matches ({", ".join(cols_insert)})
-        VALUES ({", ".join(vals_insert)})
-        ON CONFLICT (date, home_team, away_team)
-        DO UPDATE SET {cols_to_set}
-    """
-
-    try:
-        with engine.begin() as conn:
-            conn.execute(text(sql), params)
+    with engine.begin() as conn:
+        row = conn.execute(text("""
+            SELECT id, home_goals, away_goals FROM matches
+            WHERE LOWER(home_team) = :h AND LOWER(away_team) = :a
+              AND date BETWEEN CAST(:d AS date) - 1 AND CAST(:d AS date) + 1
+            ORDER BY ABS(date - CAST(:d AS date)) LIMIT 1
+        """), {"h": home_norm, "a": away_norm, "d": date_str}).first()
+        if row is not None:
+            claude_ft = (payload.get("home_goals"), payload.get("away_goals"))
+            if row.home_goals is not None and None not in claude_ft and \
+                    (int(row.home_goals), int(row.away_goals)) != claude_ft:
+                print(f"     ✗ Claude dice {claude_ft[0]}-{claude_ft[1]} y la base "
+                      f"{row.home_goals}-{row.away_goals}: no se toca")
+                return False
+            sets = ", ".join(f"{k} = COALESCE({k}, :{k})" for k in payload)
+            conn.execute(text(f"UPDATE matches SET {sets} WHERE id = :id"),
+                         {**payload, "id": row.id})
+            return True
+        cols = ["date", "home_team", "away_team", "team_home_norm", "team_away_norm"]
+        params = {"date": date_str, "home_team": home_norm, "away_team": away_norm,
+                  "team_home_norm": home_norm, "team_away_norm": away_norm}
+        if league_hint:
+            cols.append("league")
+            params["league"] = league_hint
+        cols += list(payload)
+        params.update(payload)
+        conn.execute(text(f"""
+            INSERT INTO matches ({", ".join(cols)})
+            VALUES ({", ".join(":" + c for c in cols)})
+            ON CONFLICT (date, home_team, away_team) DO NOTHING
+        """), params)
         return True
-    except Exception as e:
-        print(f"   ❌ Upsert error: {e}")
-        return False
 
 
 # ============================================================
@@ -506,7 +502,12 @@ def _run(hours_lag: int, limit_matches: int, silent_telegram: bool,
             print(f"     ⚠️  confianza baja — no se usa (notes={data.get('notes')})")
             continue
 
-        ok = _upsert_match_row(home_raw, away_raw, date_str, data)
+        try:
+            ok = _upsert_match_row(home_raw, away_raw, date_str, data)
+        except Exception as e:
+            print(f"     ❌ no se pudo guardar: {e}")
+            errors.append(f"{match}: guardar: {type(e).__name__}: {str(e)[:120]}")
+            continue
         if ok:
             n_upserted += 1
             conf = data.get("confidence", "?")

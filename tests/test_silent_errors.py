@@ -368,6 +368,47 @@ def test_resolver_without_json_is_an_error_not_a_print(monkeypatch):
                                          stop="max_tokens"), "a", "b", "2026-04-10", {"home_goals"})
 
 
+def _resolver_db(monkeypatch, existing):
+    import scripts.resolve_pending_bets as rp
+
+    def respond(sql, params):
+        if sql.startswith("SELECT id, home_goals, away_goals FROM matches"):
+            return FakeResult(rows=[existing] if existing else [])
+        return FakeResult()
+    eng = FakeEngine(respond)
+    monkeypatch.setattr(rp, "engine", eng)
+    return rp, eng
+
+
+def test_resolver_only_fills_the_missing_fields_of_the_existing_row(monkeypatch):
+    """Antes el valor de Claude PISABA el de football-data, y con otra fecha
+    (±1 día) se insertaba un partido repetido (2-oct-26)."""
+    from types import SimpleNamespace
+    rp, eng = _resolver_db(monkeypatch, SimpleNamespace(id=9, home_goals=2, away_goals=2))
+    data = {"home_goals": 2, "away_goals": 2, "home_goals_ht": 1, "away_goals_ht": 0, "completed": True}
+    assert rp._upsert_match_row("orgryte is", "if elfsborg", "2026-05-30", data) is True
+    (sql, params), = eng.statements("UPDATE matches SET")
+    assert "home_goals_ht = COALESCE(home_goals_ht, :home_goals_ht)" in sql and params["id"] == 9
+    assert not eng.statements("INSERT INTO matches")
+
+
+def test_resolver_leaves_a_row_with_another_score(monkeypatch):
+    from types import SimpleNamespace
+    rp, eng = _resolver_db(monkeypatch, SimpleNamespace(id=9, home_goals=2, away_goals=2))
+    data = {"home_goals": 0, "away_goals": 0, "home_goals_ht": 0, "away_goals_ht": 0}
+    assert rp._upsert_match_row("orgryte is", "if elfsborg", "2026-05-29", data) is False
+    assert not eng.statements("UPDATE matches") and not eng.statements("INSERT INTO matches")
+
+
+def test_resolver_inserts_only_a_match_that_has_no_row(monkeypatch):
+    rp, eng = _resolver_db(monkeypatch, None)
+    data = {"home_goals": 1, "away_goals": 0, "home_goals_ht": 0, "away_goals_ht": 0}
+    assert rp._upsert_match_row("Mjallby AIF", "Djurgardens IF", "2026-05-31", data) is True
+    (sql, params), = eng.statements("INSERT INTO matches")
+    assert "ON CONFLICT (date, home_team, away_team) DO NOTHING" in sql
+    assert (params["home_team"], params["away_team"], params["home_goals"]) == ("mjallby aif", "djurgardens if", 1)
+
+
 def test_standalone_resolver_reports_failed_queries():
     """Fuera del orquestador no hay reporte de errores tolerados: el
     resolvedor suelto avisa por Telegram y sale en rojo."""
