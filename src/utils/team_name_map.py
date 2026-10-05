@@ -7,6 +7,7 @@ TEAM_NAME_MAP = {
     # EXISTENTE
     # =========================
     "atletico madrid": "ath madrid",
+    "atl madrid": "ath madrid",   # así entró un partido de agosto-26 (lo fusionó el weekly del 5-oct)
     "real sociedad": "sociedad",
 
     # =========================

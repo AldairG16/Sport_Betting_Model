@@ -353,9 +353,19 @@ contiene al otro o casi iguales); los demás, solo verificados a mano (`ALLOW`);
 `DENY` guarda los clubes distintos que los datos mezclaban (PSG y Paris FC). Si los dos
 equipos estaban escritos distinto, el par sale en una segunda ronda. El mapa vive en
 `config/team_aliases.json` (canónico = el nombre de la API); `scripts/learn_team_aliases.py
---write` lo regenera y el weekly avisa como ERROR si aparece un par nuevo sin unir (un
-ascendido, una fuente nueva). `scripts/fix_team_identities.py` pasó lo guardado al
-canónico y unió los repetidos, con respaldo en `matches_identity_backup`. Efecto
+--write` lo regenera. El weekly (paso "Nombres de equipo y repetidos") busca pares nuevos
+sin unir (un ascendido, una fuente nueva), fusiona los partidos repetidos antes del ajuste
+Dixon-Coles y avisa como ERROR solo si el nombre raro sigue en la base o ya se había
+fusionado en otra corrida (la fuente lo sigue mandando). Si estaba solo en partidos
+repetidos y es la primera vez, la fusión lo resolvió y queda una nota en el log. Así pasó el
+5-oct-2026 con "atl madrid": un partido de agosto que entró con ese nombre. La primera carga
+completa de la temporada lo volvió a meter como "ath madrid", el aviso salió y la auditoría
+lo fusionó un minuto después. Cuando avisa, hay que agregar el alias: `--write` si la
+evidencia sigue en la base, o a mano en `TEAM_NAME_MAP` si la fusión ya la borró. Después,
+pasar lo guardado con `fix_team_identities.py` (en seco primero). La fusión conserva el
+nombre de siempre (el de más partidos), no la fila que salga primero. Si conservaba la
+rara, la carga siguiente volvía a meter el partido cada semana. `scripts/fix_team_identities.py`
+pasó lo guardado al canónico y unió los repetidos, con respaldo en `matches_identity_backup`. Efecto
 colateral que dejó de pasar: el "temporada ya cargada" del weekly contaba los repetidos,
 así que dejó de cargar la 2025/26 antes de terminar.
 
@@ -719,7 +729,7 @@ python scripts/resolve_pending_bets.py --include-stale   # una vez: suma las rea
 python scripts/watchdog.py
 python scripts/heartbeat_dispatch.py             # lo corre el closing; necesita gh y GH_TOKEN
 python scripts/learn_team_aliases.py             # en seco: nombres del mismo club; --write reescribe el mapa
-python scripts/learn_team_aliases.py --check     # solo avisa pares nuevos sin unir (lo hace el weekly)
+python scripts/learn_team_aliases.py --check     # solo avisa pares nuevos sin unir; no fusiona (el weekly fusiona antes de avisar)
 python scripts/fix_league_labels.py              # en seco; --apply reetiqueta ligas (respaldo antes)
 python scripts/fix_team_identities.py            # en seco; --apply une nombres y repetidos (después del anterior)
 python scripts/audit_analyst_calibration.py --days 60
