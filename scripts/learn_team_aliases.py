@@ -10,10 +10,14 @@ Uso:
     python scripts/learn_team_aliases.py --write    # escribe config/team_aliases.json
     python scripts/learn_team_aliases.py --check    # solo avisa pares NUEVOS sin cubrir
 
-`--check` lo corre el weekly: un club recién ascendido o una fuente nueva
-puede traer otro nombre. Los pares compatibles que el normalizador todavía no
-une se reportan como ERROR (llegan a Telegram); se agregan revisando y
-corriendo --write en una rama.
+El weekly corre check_new_aliases con la fusión de repetidos del auditor: un
+club recién ascendido o una fuente nueva puede traer otro nombre. Busca los
+pares ANTES de fusionar (el partido repetido es la evidencia), fusiona, y
+avisa como ERROR (llega a Telegram) solo si el nombre raro sigue en la base o
+ya se había fusionado en otra corrida: ahí falta el alias (docs/OPERACION.md).
+Si estaba solo en partidos repetidos y es la primera vez, la fusión lo
+resolvió y queda como nota en el log (5-oct-26: "atl madrid", un partido de
+agosto que entró con otro nombre).
 """
 
 import argparse
@@ -88,22 +92,110 @@ def uncovered(accepted) -> list:
     return [(a, b) for a, b in accepted if normalize_team(a) != normalize_team(b)]
 
 
-def check_new_aliases(verbose: bool = True) -> list:
-    """Para el weekly: avisa (ERROR) los pares nuevos sin cubrir."""
+def variants_of(missing, alias_map: dict, freq: Counter, pairs: Counter) -> list:
+    """[(nombre raro, canónico, partidos de soporte)] de los pares sin cubrir.
+    Canónico: el que elige el mapa aprendido (el nombre de la API de cuotas);
+    si el par no queda resuelto en el mapa (conflicto), el de más partidos."""
+    out = []
+    for a, b in missing:
+        ca, cb = alias_map.get(a, a), alias_map.get(b, b)
+        canonical = ca if ca == cb else max((a, b), key=lambda n: (freq.get(n, 0), n))
+        out += [(n, canonical, pairs[(a, b)]) for n in (a, b) if n != canonical]
+    return out
+
+
+def classify_new_pairs(found, left: dict, seen_before: set) -> tuple[list, list]:
+    """(resueltos, pendientes). found: variants_of(...) de antes de fusionar;
+    left: {nombre: partidos que le quedan después}; seen_before: nombres que
+    ya se habían fusionado o renombrado en corridas anteriores.
+
+    Resuelto: el raro estaba solo en partidos repetidos, la fusión los borró
+    y es la primera vez. Pendiente: sigue en la base (la historia del club
+    partida en dos nombres) o vuelve (la fuente lo sigue mandando)."""
+    resolved, pending = [], []
+    for variant, canonical, n in found:
+        k = left.get(variant, 0)
+        again = variant in seen_before
+        if k == 0 and not again:
+            resolved.append((variant, canonical, n))
+        else:
+            pending.append((variant, canonical, k, again))
+    return resolved, pending
+
+
+def names_left(names) -> dict:
+    """{nombre: partidos que tiene hoy en matches} (sin distinguir mayúsculas:
+    las selecciones se guardan con ellas y el aprendizaje compara en minúsculas)."""
+    from config.database import engine
+    if not names:
+        return {}
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT name, COUNT(*) FROM (
+                SELECT LOWER(home_team) AS name FROM matches WHERE LOWER(home_team) = ANY(:n)
+                UNION ALL
+                SELECT LOWER(away_team) FROM matches WHERE LOWER(away_team) = ANY(:n)
+            ) t GROUP BY name
+        """), {"n": sorted(names)}).fetchall()
+    return {r[0]: int(r[1]) for r in rows}
+
+
+def merged_before(names) -> set:
+    """Nombres que ya pasaron por una fusión o un renombre (sus filas viejas
+    están en matches_identity_backup; los reetiquetados de liga y las stats
+    restauradas no cuentan). Se consulta antes de fusionar, así que lo de esta
+    corrida no cuenta."""
+    from config.database import engine
+    if not names:
+        return set()
+    with engine.connect() as conn:
+        if conn.execute(text("SELECT to_regclass('matches_identity_backup')")).scalar() is None:
+            return set()
+        rows = conn.execute(text("""
+            SELECT LOWER(name) FROM (
+                SELECT home_team AS name, backup_action FROM matches_identity_backup
+                UNION ALL
+                SELECT away_team, backup_action FROM matches_identity_backup
+            ) t
+            WHERE LOWER(name) = ANY(:n)
+              AND backup_action IN ('delete_duplicate', 'update_identity')
+            GROUP BY 1
+        """), {"n": sorted(names)}).fetchall()
+    return {r[0] for r in rows}
+
+
+def check_new_aliases(merge=None, verbose: bool = True) -> list:
+    """
+    Para el weekly: avisa (ERROR) los pares nuevos que siguen pendientes.
+
+    merge: la fusión de repetidos (audit_duplicate_matches del auditor). Corre
+    DESPUÉS de buscar los pares, porque el partido repetido es la evidencia.
+    Sin merge (--check a mano), todo par nuevo queda pendiente.
+    """
     rows, live, freq = read_inputs()
-    pairs, accepted, review, *_ = learn(rows, live, freq)
-    missing = uncovered(accepted)
-    if missing:
-        log.error(f"❌ Nombres de equipo sin unificar: {len(missing)} par(es) nuevos — "
-                  + "; ".join(f"{a} = {b} ({pairs[(a, b)]}x)" for a, b in missing[:6])
-                  + " → correr scripts/learn_team_aliases.py --write")
-    elif verbose:
+    pairs, accepted, review, alias_map, *_ = learn(rows, live, freq)
+    found = variants_of(uncovered(accepted), alias_map, freq, pairs)
+    names = {v for v, _, _ in found}
+    seen = merged_before(names)
+    if merge is not None:
+        _, msg = merge()
+        print(f"   Partidos repetidos: {msg}")
+    resolved, pending = classify_new_pairs(found, names_left(names), seen)
+    for variant, canonical, n in resolved:
+        print(f"ℹ️  '{variant}' (= '{canonical}') estaba solo en {n} partido(s) guardado(s) "
+              f"dos veces; la fusión los unió y ese nombre ya no está en la base")
+    if pending:
+        log.error("❌ Mismo club con dos nombres: " + "; ".join(
+            f"'{v}' → '{c}' ({k} partido(s) con el nombre raro"
+            + (", ya se había fusionado antes: la fuente lo sigue mandando" if again else "") + ")"
+            for v, c, k, again in pending[:6]) + " → falta el alias (docs/OPERACION.md)")
+    elif verbose and not resolved:
         print("✅ Nombres de equipo: sin pares nuevos por unificar")
     if review and verbose:
         print("ℹ️  Pares para revisar a mano (nombres que no se parecen):")
         for (a, b), n in review[:10]:
             print(f"   {n:>4}x  {a} = {b}")
-    return missing
+    return pending
 
 
 def main(write: bool) -> int:

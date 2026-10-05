@@ -470,10 +470,16 @@ def step_resolve_stale():
 
 def step_team_names_check():
     """Un ascendido o una fuente nueva puede traer otro nombre del mismo club
-    (el mismo partido guardado dos veces). Avisa como ERROR los pares nuevos
-    que el normalizador todavía no une (scripts/learn_team_aliases.py)."""
+    (el mismo partido guardado dos veces). Busca los pares nuevos, fusiona
+    los partidos repetidos (con respaldo) y avisa como ERROR solo si el
+    nombre raro sigue en la base o vuelve (scripts/learn_team_aliases.py).
+
+    La fusión corre aquí desde el 5-oct-26, antes del ajuste Dixon-Coles:
+    solo la hacía la auditoría al final, así que el modelo se ajustaba con
+    los repetidos y el aviso salía por uno que se fusionaba un minuto después."""
     from scripts.learn_team_aliases import check_new_aliases
-    check_new_aliases()
+    from scripts.weekly_sanity_audit import audit_duplicate_matches
+    check_new_aliases(merge=audit_duplicate_matches)
 
 
 # ============================================================
@@ -982,7 +988,7 @@ def main():
             run_step(logger, "Load international data",  step_load_international)
             run_step(logger, "Collect match events",     step_collect_events)
             run_step(logger, "Load extra leagues",       step_load_extra_leagues)
-            run_step(logger, "Nombres de equipo nuevos", step_team_names_check)
+            run_step(logger, "Nombres de equipo y repetidos", step_team_names_check)
             run_step(logger, "Apuestas sin fuente con dato nuevo", step_resolve_stale)
             # run_step(logger, "Load MLB data",            step_load_mlb)  # desactivado — sin creditos MLB
             run_step(logger, "Soccerdata refresh (xG real)", step_soccerdata_refresh)

@@ -52,7 +52,7 @@ def test_merge_params_have_no_nan():
     donor = _match(99, "nott'm forest", "arsenal", home_corners=np.float64(6.0))
     params = sa.merge_params(keep, donor)
     assert params["kid"] == 1425318
-    assert params["hc"] == 6
+    assert params["home_corners"] == 6
     assert all(v is None or isinstance(v, int) for v in params.values())
     assert not any(isinstance(v, float) and math.isnan(v) for v in params.values())
 
@@ -84,6 +84,50 @@ def test_keep_prefers_row_with_more_stats_when_both_names_are_clean():
     b = _match(2, "man utd", "chelsea", home_corners=5, away_corners=3)
     keep, donor = sa.choose_keep(a, b)
     assert keep["id"] == 2
+
+
+def test_keep_prefers_the_established_name_over_a_one_off_variant():
+    """5-oct-26: "atl madrid" (1 partido) y "ath madrid" (428) con las mismas
+    stats. Quedaba la que saliera primero; si quedaba la rara, la carga
+    siguiente volvía a meter el partido con el nombre bueno cada semana."""
+    freq = {"ath madrid": 428, "atl madrid": 1, "malaga": 60}
+    rara = _match(1275476, "atl madrid", "malaga", home_corners=6)
+    buena = _match(1945271, "ath madrid", "malaga", home_corners=6)
+    for a, b in ((rara, buena), (buena, rara)):
+        keep, donor = sa.choose_keep(a, b, freq)
+        assert keep["id"] == 1945271 and donor["id"] == 1275476
+
+
+def test_merge_keeps_the_established_name_with_counts_from_the_db(monkeypatch):
+    from tests.fake_db import FakeEngine, FakeResult
+    counts = [("ath madrid", 428), ("atl madrid", 1), ("malaga", 60)]
+    rows = {1275476: _match(1275476, "atl madrid", "malaga", date="2026-08-19", hg=2, ag=0, home_corners=6),
+            1945271: _match(1945271, "ath madrid", "malaga", date="2026-08-19", hg=2, ag=0, home_corners=6)}
+    for order in ((1275476, 1945271), (1945271, 1275476)):
+        eng = FakeEngine(lambda sql, p: FakeResult(rows=counts)
+                         if sql.startswith("SELECT name, COUNT(*)") else FakeResult())
+        monkeypatch.setattr(sa, "engine", eng)
+        monkeypatch.setattr(sa.pd, "read_sql",
+                            lambda *a, o=order, **k: pd.DataFrame([rows[i] for i in o]))
+        status, _ = sa.audit_duplicate_matches()
+        assert status == "ok"
+        assert eng.statements("DELETE FROM matches")[0][1]["ids"] == [1275476]
+        sql, params = eng.statements("UPDATE matches")[0]
+        assert params["kid"] == 1945271
+        assert "home_goals_ht = COALESCE(k.home_goals_ht, :home_goals_ht)" in sql
+        # cada parámetro del UPDATE tiene valor (el error del --apply de fix_match_stats)
+        from sqlalchemy import text
+        assert set(text(sql).compile().params) == set(params)
+
+
+def test_merge_also_passes_half_time_and_red_cards():
+    """El medio tiempo liquida los mercados de primer tiempo: si solo lo
+    traía la fila que se borra, se perdía (5-oct-26)."""
+    keep = _match(1, "ath madrid", "malaga")
+    donor = _match(2, "atl madrid", "malaga", home_goals_ht=1, away_goals_ht=0, away_red=1)
+    params = sa.merge_params(keep, donor)
+    assert (params["home_goals_ht"], params["away_goals_ht"], params["away_red"]) == (1, 0, 1)
+    assert params["home_red"] is None
 
 
 def test_merged_duplicates_are_backed_up_before_the_delete(monkeypatch):

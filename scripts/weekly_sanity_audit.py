@@ -36,8 +36,12 @@ sys.path.append(str(Path(__file__).parent.parent))
 from config.database import engine
 
 
+# Lo que la fusión pasa de la fila que se borra a la que queda (solo donde
+# esta tiene NULL). Medio tiempo y rojas desde el 5-oct-26: liquidan los
+# mercados de primer tiempo y se perdían si solo los traía la borrada.
 _STAT_COLS = ("home_corners", "away_corners", "home_yellow", "away_yellow",
-              "home_shots", "away_shots", "home_shots_target", "away_shots_target")
+              "home_shots", "away_shots", "home_shots_target", "away_shots_target",
+              "home_red", "away_red", "home_goals_ht", "away_goals_ht")
 
 # Por encima de esto no se fusiona solo: tantos "duplicados" de golpe
 # indican que la heurística se descontroló (o una recarga masiva), y borrar
@@ -92,41 +96,66 @@ def find_duplicate_pairs(df: pd.DataFrame) -> list[tuple[dict, dict]]:
     return pairs
 
 
-def choose_keep(a: dict, b: dict) -> tuple[dict, dict]:
-    """(keep, donor): nombre limpio sobre variante con apóstrofe; si ambos
-    limpios, la fila con más stats."""
+def choose_keep(a: dict, b: dict, freq: dict | None = None) -> tuple[dict, dict]:
+    """(keep, donor): nombre limpio sobre variante con apóstrofe; después, el
+    nombre de siempre sobre el raro (`freq`: partidos de cada nombre en la
+    base); si empatan, la fila con más stats.
+
+    El nombre de siempre va antes que las stats desde el 5-oct-26: "atl
+    madrid" (1 partido) y "ath madrid" (428) traían las mismas stats y quedó
+    la que saliera primero. Si queda la rara, la próxima carga vuelve a meter
+    el partido con el nombre bueno y el repetido regresa cada semana."""
     def stats_count(r):
         return sum(1 for c in _STAT_COLS if _sql_value(r.get(c)) is not None)
 
     def has_apostrophe(r):
         return "'" in r["home_team"] or "'" in r["away_team"]
 
+    def known(r):
+        # el nombre menos visto de la fila: el raro la delata
+        return min(freq.get(r["home_team"], 0), freq.get(r["away_team"], 0))
+
     if has_apostrophe(a) and not has_apostrophe(b):
         return b, a
     if has_apostrophe(b) and not has_apostrophe(a):
         return a, b
+    if freq and known(a) != known(b):
+        return (a, b) if known(a) > known(b) else (b, a)
     return (a, b) if stats_count(a) >= stats_count(b) else (b, a)
 
 
 def merge_params(keep: dict, donor: dict) -> dict:
     """Parámetros del UPDATE de fusión, sin NaN (ver _sql_value)."""
-    keys = ("hc", "ac", "hy", "ay", "hs", "asx", "hst", "ast")
-    params = {k: _sql_value(donor.get(c)) for k, c in zip(keys, _STAT_COLS)}
+    params = {c: _sql_value(donor.get(c)) for c in _STAT_COLS}
     params["kid"] = int(keep["id"])
     return params
+
+
+def name_counts(conn, names) -> dict:
+    """{nombre: partidos en matches} de `names` (los de los pares repetidos)."""
+    rows = conn.execute(text("""
+        SELECT name, COUNT(*) FROM (
+            SELECT home_team AS name FROM matches WHERE home_team = ANY(:names)
+            UNION ALL
+            SELECT away_team FROM matches WHERE away_team = ANY(:names)
+        ) t GROUP BY name
+    """), {"names": sorted(names)}).fetchall()
+    return {r[0]: int(r[1]) for r in rows}
 
 
 def audit_duplicate_matches() -> tuple[str, str]:
     """
     AUTO-REPARADOR: detecta pares duplicados (misma fecha, mismo marcador,
     nombres similares) y los fusiona en el acto — stats hacia la fila con
-    nombre limpio, se borra la del apóstrofe/variante. Fue alerta hasta que
-    demostró recrearse en cada recarga de datasets (13-sep-26).
+    el nombre de siempre (choose_keep), se borra la de la variante. Fue
+    alerta hasta que demostró recrearse en cada recarga de datasets
+    (13-sep-26). Desde el 5-oct-26 la corre también el weekly, antes del
+    ajuste Dixon-Coles (step_team_names_check); aquí, al final, queda de
+    red por si el weekly no llegó a ese paso.
     """
-    df = pd.read_sql(text("""
+    df = pd.read_sql(text(f"""
         SELECT id, date, league, home_team, away_team, home_goals, away_goals,
-               home_corners, away_corners, home_yellow, away_yellow,
-               home_shots, away_shots, home_shots_target, away_shots_target
+               {", ".join(_STAT_COLS)}
         FROM matches
         WHERE date >= CURRENT_DATE - 60 AND home_goals IS NOT NULL
         ORDER BY date
@@ -142,25 +171,21 @@ def audit_duplicate_matches() -> tuple[str, str]:
         return "alerta", (f"{len(dups)} pares duplicados — demasiados para fusionar "
                           f"solo (tope {MAX_AUTO_MERGE_PAIRS}); revisar a mano (ej: {sample})")
 
+    fill = ",\n                    ".join(f"{c} = COALESCE(k.{c}, :{c})" for c in _STAT_COLS)
     to_delete: list[int] = []
     with engine.begin() as conn:
+        freq = name_counts(conn, {r[c] for pair in dups for r in pair
+                                  for c in ("home_team", "away_team")})
         for a, b in dups:
             # Triplicados: una fila ya marcada para borrar no participa en
             # otro par (ni como destino de stats ni como donante).
             if int(a["id"]) in to_delete or int(b["id"]) in to_delete:
                 continue
-            keep, donor = choose_keep(a, b)
+            keep, donor = choose_keep(a, b, freq)
             # fusionar stats faltantes del donor hacia keep
-            conn.execute(text("""
+            conn.execute(text(f"""
                 UPDATE matches k SET
-                    home_corners      = COALESCE(k.home_corners,      :hc),
-                    away_corners      = COALESCE(k.away_corners,      :ac),
-                    home_yellow       = COALESCE(k.home_yellow,       :hy),
-                    away_yellow       = COALESCE(k.away_yellow,       :ay),
-                    home_shots        = COALESCE(k.home_shots,        :hs),
-                    away_shots        = COALESCE(k.away_shots,        :asx),
-                    home_shots_target = COALESCE(k.home_shots_target, :hst),
-                    away_shots_target = COALESCE(k.away_shots_target, :ast)
+                    {fill}
                 WHERE k.id = :kid
             """), merge_params(keep, donor))
             to_delete.append(int(donor["id"]))

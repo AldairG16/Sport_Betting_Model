@@ -447,6 +447,83 @@ def test_uncovered_lists_only_pairs_the_normalizer_does_not_join():
         [("club nuevo", "club nuevo fc")]
 
 
+def test_the_api_name_is_the_canonical_side_of_a_new_pair():
+    from scripts.learn_team_aliases import variants_of
+    pairs = Counter({("ath madrid", "atl madrid"): 1})
+    freq = Counter({"ath madrid": 428, "atl madrid": 1})
+    assert variants_of([("ath madrid", "atl madrid")], {"atl madrid": "ath madrid"}, freq, pairs) == \
+        [("atl madrid", "ath madrid", 1)]
+    # par sin resolver en el mapa (conflicto): manda el de más partidos
+    assert variants_of([("ath madrid", "atl madrid")], {}, freq, pairs) == \
+        [("atl madrid", "ath madrid", 1)]
+
+
+def test_a_variant_only_in_merged_repeats_is_resolved_the_first_time():
+    from scripts.learn_team_aliases import classify_new_pairs
+    found = [("atl madrid", "ath madrid", 1), ("club b", "club b fc", 3), ("club c", "club c fc", 1)]
+    resolved, pending = classify_new_pairs(found, {"club b": 7}, seen_before={"club c"})
+    assert resolved == [("atl madrid", "ath madrid", 1)]
+    assert pending == [("club b", "club b fc", 7, False), ("club c", "club c fc", 0, True)]
+
+
+def _weekly_check(monkeypatch, pair, alias_map, left, seen, calls):
+    """check_new_aliases del weekly sin base: el par ya aprendido, y lo que
+    queda en matches y en el respaldo, programados."""
+    import scripts.learn_team_aliases as lta
+
+    def history(names):
+        calls.append("respaldo")
+        return set(seen)
+
+    def remaining(names):
+        calls.append("quedan")
+        return dict(left)
+
+    def merge():
+        calls.append("fusión")
+        return "ok", "1 duplicados detectados y AUTO-FUSIONADOS"
+
+    monkeypatch.setattr(lta, "read_inputs", lambda: (None, [], Counter()))
+    monkeypatch.setattr(lta, "learn", lambda rows, live, freq: (Counter({pair: 1}), [pair], [], alias_map, [], []))
+    monkeypatch.setattr(lta, "uncovered", lambda accepted: list(accepted))
+    monkeypatch.setattr(lta, "merged_before", history)
+    monkeypatch.setattr(lta, "names_left", remaining)
+    return lta.check_new_aliases(merge=merge)
+
+
+def test_weekly_merges_after_finding_and_stays_quiet_when_the_variant_is_gone(monkeypatch, capsys):
+    """5-oct-26: "atl madrid" solo estaba en un partido repetido. Salía como
+    ERROR y la auditoría lo fusionaba un minuto después."""
+    calls = []
+    pending = _weekly_check(monkeypatch, ("ath madrid", "atl madrid"), {"atl madrid": "ath madrid"},
+                            left={}, seen=set(), calls=calls)
+    assert pending == [] and _errors("Mismo club") == []
+    assert calls == ["respaldo", "fusión", "quedan"]       # el respaldo se lee antes de fusionar
+    assert "ya no está en la base" in capsys.readouterr().out
+
+
+def test_weekly_errors_when_the_variant_keeps_its_own_matches(monkeypatch):
+    """El nombre raro con partidos propios: la historia del club partida en dos."""
+    pending = _weekly_check(monkeypatch, ("club nuevo", "club nuevo fc"), {"club nuevo": "club nuevo fc"},
+                            left={"club nuevo": 5}, seen=set(), calls=[])
+    assert pending == [("club nuevo", "club nuevo fc", 5, False)]
+    assert _errors("'club nuevo' → 'club nuevo fc' (5 partido(s) con el nombre raro)")
+
+
+def test_weekly_errors_when_a_merged_variant_comes_back(monkeypatch):
+    """Fusionado en una corrida anterior y otra vez aquí: la fuente lo sigue
+    mandando y sin el alias se repetiría cada semana."""
+    _weekly_check(monkeypatch, ("ath madrid", "atl madrid"), {"atl madrid": "ath madrid"},
+                  left={}, seen={"atl madrid"}, calls=[])
+    assert _errors("la fuente lo sigue mandando")
+
+
+def test_atl_madrid_is_atletico():
+    from src.utils.team_normalizer import normalize_team
+    assert normalize_team("Atl. Madrid") == normalize_team("Ath Madrid") == \
+        normalize_team("Atlético Madrid") == "ath madrid"
+
+
 def test_normalize_team_applies_the_learned_aliases_last():
     from src.utils.team_normalizer import LEARNED_TEAM_ALIASES, base_normalize_team, normalize_team
     assert normalize_team("Man United") == normalize_team("Manchester United") == "manchester united"
