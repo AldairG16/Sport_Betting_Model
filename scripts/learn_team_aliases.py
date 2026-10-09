@@ -164,6 +164,67 @@ def merged_before(names) -> set:
     return {r[0] for r in rows}
 
 
+def without_history(live, counts: dict, league_names: dict) -> list:
+    """
+    live: [(liga, nombre de la API)] de los próximos partidos. counts:
+    {nombre: partidos en matches}. league_names: {liga: nombres de su historial}.
+    Devuelve [(liga, nombre normalizado, sugerencia o None)] de los que no
+    tienen ni un partido con su nombre.
+
+    El aprendizaje de alias necesita el mismo partido guardado con los dos
+    nombres; un ascendido que la API escribe distinto ("FC Schalke 04", el
+    historial "schalke 04") nunca deja esa evidencia. El 8-oct-26 había 12
+    así en las ligas principales: el modelo los veía sin historia.
+    """
+    import difflib
+    out = []
+    for league, raw in sorted(set(live)):
+        team = normalize_team(raw)
+        if counts.get(team, 0) > 0:
+            continue
+        pool = sorted(league_names.get(league, ()))
+        near = [n for n in pool if n in team or team in n]
+        near = near or difflib.get_close_matches(team, pool, n=1, cutoff=0.6)
+        out.append((league, team, near[0] if near else None))
+    return out
+
+
+def check_names_without_history(days: int = 10) -> list:
+    """Para el weekly: ERROR si un equipo de los próximos `days` días (ligas de
+    club; las copas europeas traen clubes de ligas que no se cargan) no
+    tiene historial con su nombre."""
+    from config.database import engine
+    with engine.connect() as conn:
+        live = conn.execute(text("""
+            SELECT sport_key, home_team FROM upcoming_matches
+            WHERE match_date BETWEEN NOW() AND NOW() + make_interval(days => :d)
+              AND sport_key LIKE 'soccer%%' AND sport_key NOT LIKE 'soccer_uefa%%'
+            UNION
+            SELECT sport_key, away_team FROM upcoming_matches
+            WHERE match_date BETWEEN NOW() AND NOW() + make_interval(days => :d)
+              AND sport_key LIKE 'soccer%%' AND sport_key NOT LIKE 'soccer_uefa%%'
+        """), {"d": days}).fetchall()
+        rows = conn.execute(text("""
+            SELECT league, name, COUNT(*) FROM (
+                SELECT league, home_team AS name FROM matches
+                UNION ALL SELECT league, away_team FROM matches
+            ) t GROUP BY league, name
+        """)).fetchall()
+    counts: Counter = Counter()
+    league_names: dict = {}
+    for league, name, n in rows:
+        counts[name] += int(n)
+        league_names.setdefault(league, set()).add(name)
+    missing = without_history([(l, r) for l, r in live if r], counts, league_names)
+    if missing:
+        log.error("❌ Equipos sin historial con el nombre de la API: " + "; ".join(
+            f"'{t}' ({l.replace('soccer_', '')}" + (f", ¿= '{s}'?" if s else "") + ")"
+            for l, t, s in missing[:8]) + " → falta el alias en TEAM_NAME_MAP")
+    else:
+        print("✅ Equipos de los próximos partidos: todos con historial")
+    return missing
+
+
 def check_new_aliases(merge=None, verbose: bool = True) -> list:
     """
     Para el weekly: avisa (ERROR) los pares nuevos que siguen pendientes.

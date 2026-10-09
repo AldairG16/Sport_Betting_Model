@@ -364,7 +364,12 @@ lo fusionó un minuto después. Cuando avisa, hay que agregar el alias: `--write
 evidencia sigue en la base, o a mano en `TEAM_NAME_MAP` si la fusión ya la borró. Después,
 pasar lo guardado con `fix_team_identities.py` (en seco primero). La fusión conserva el
 nombre de siempre (el de más partidos), no la fila que salga primero. Si conservaba la
-rara, la carga siguiente volvía a meter el partido cada semana. `scripts/fix_team_identities.py`
+rara, la carga siguiente volvía a meter el partido cada semana. El aprendizaje no ve a un
+ascendido que la API escribe distinto ("FC Schalke 04" y el historial "schalke 04"): nunca
+queda el mismo partido con los dos nombres. Para eso el mismo paso avisa como ERROR si un
+equipo de los próximos 10 días (ligas de club) no tiene ni un partido con su nombre, y sugiere
+el parecido de su liga. El 8-oct-2026 había 12 así y el modelo los veía sin historia; van en
+`TEAM_NAME_MAP`. `scripts/fix_team_identities.py`
 pasó lo guardado al canónico y unió los repetidos, con respaldo en `matches_identity_backup`. Efecto
 colateral que dejó de pasar: el "temporada ya cargada" del weekly contaba los repetidos,
 así que dejó de cargar la 2025/26 antes de terminar.

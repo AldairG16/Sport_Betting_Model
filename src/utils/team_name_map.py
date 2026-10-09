@@ -10,6 +10,23 @@ TEAM_NAME_MAP = {
     "atl madrid": "ath madrid",   # así entró un partido de agosto-26 (lo fusionó el weekly del 5-oct)
     "real sociedad": "sociedad",
 
+    # Ascendidos 2026/27 y nombres de la API sin historial (8-oct-26): la
+    # API los escribe con prefijo o sufijo y el historial de football-data
+    # sin él, y sin un partido repetido no hay evidencia para aprenderlo.
+    # El modelo los veía sin un solo partido previo.
+    "fc schalke 04": "schalke 04",
+    "deportivo la coruna": "la coruna",
+    "cs maritimo": "maritimo",
+    "kv kortrijk": "kortrijk",
+    "sk beveren": "beveren",
+    "le mans fc": "le mans",
+    "kalamata fc": "kalamata",
+    "ado den haag": "den haag",
+    "sc cambuur": "cambuur",
+    "amed sk": "amedspor",
+    "corum fk": "corum",
+    "sc paderborn": "paderborn",
+
     # =========================
     # 🔥 NUEVOS (PEGAR AQUÍ)
     # =========================

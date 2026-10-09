@@ -477,9 +477,12 @@ def step_team_names_check():
     La fusión corre aquí desde el 5-oct-26, antes del ajuste Dixon-Coles:
     solo la hacía la auditoría al final, así que el modelo se ajustaba con
     los repetidos y el aviso salía por uno que se fusionaba un minuto después."""
-    from scripts.learn_team_aliases import check_new_aliases
+    from scripts.learn_team_aliases import check_names_without_history, check_new_aliases
     from scripts.weekly_sanity_audit import audit_duplicate_matches
     check_new_aliases(merge=audit_duplicate_matches)
+    # Un ascendido con otro nombre en la API no deja partidos repetidos que
+    # aprender: se busca por el otro lado, equipos próximos sin historial (8-oct-26).
+    check_names_without_history()
 
 
 # ============================================================
