@@ -518,6 +518,35 @@ def test_weekly_errors_when_a_merged_variant_comes_back(monkeypatch):
     assert _errors("la fuente lo sigue mandando")
 
 
+@pytest.mark.parametrize("api_name,history", [
+    ("FC Schalke 04", "schalke 04"), ("Deportivo La Coruña", "la coruna"), ("CS Maritimo", "maritimo"),
+    ("KV Kortrijk", "kortrijk"), ("SK Beveren", "beveren"), ("Le Mans FC", "le mans"),
+    ("Kalamata FC", "kalamata"), ("ADO Den Haag", "den haag"), ("SC Cambuur", "cambuur"),
+    ("Amed SK", "amedspor"), ("Çorum FK", "corum"), ("SC Paderborn", "paderborn"),
+])
+def test_api_names_of_promoted_teams_reach_their_history(api_name, history):
+    """8-oct-26: la API y football-data escriben distinto a estos 12 y el
+    modelo los veía sin un solo partido previo."""
+    from src.utils.team_normalizer import normalize_team
+    assert normalize_team(api_name) == history == normalize_team(history)
+
+
+def test_upcoming_teams_without_history_are_flagged_with_a_suggestion():
+    from scripts.learn_team_aliases import without_history
+    live = [("soccer_germany_bundesliga", "Bayern Munich"),          # llega como "bayern munchen": tiene historia
+            ("soccer_germany_bundesliga", "Club Nuevo XYZ"),         # sin parecido en su liga
+            ("soccer_germany_bundesliga", "SV Albatros 09"),         # historial como "albatros 09"
+            ("soccer_netherlands_eredivisie", "Puerto Ventoso")]     # casi igual a "puerto ventosa"
+    counts = {"bayern munchen": 300, "albatros 09": 200, "puerto ventosa": 150}
+    league_names = {"soccer_germany_bundesliga": {"bayern munchen", "albatros 09"},
+                    "soccer_netherlands_eredivisie": {"puerto ventosa"}}
+    assert without_history(live, counts, league_names) == [
+        ("soccer_germany_bundesliga", "club nuevo xyz", None),
+        ("soccer_germany_bundesliga", "sv albatros 09", "albatros 09"),
+        ("soccer_netherlands_eredivisie", "puerto ventoso", "puerto ventosa"),
+    ]
+
+
 def test_atl_madrid_is_atletico():
     from src.utils.team_normalizer import normalize_team
     assert normalize_team("Atl. Madrid") == normalize_team("Ath Madrid") == \
