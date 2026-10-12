@@ -55,7 +55,8 @@ def test_weekly_report_counts_only_played_bets_and_lists_cancelled_apart(monkeyp
     assert "Canceladas antes del partido (no se apostaron): 14" in msg
     assert "Bets totales: 8  (WR: 38%)" in msg
     # la base filtra: solo jugadas y liquidadas; las canceladas, en su conteo
-    assert all(RESOLVED_SQL in s for s in seen if "COUNT(*)" not in s)
+    # (el bloque de propuestas del modelo no mide apuestas: es aparte)
+    assert all(RESOLVED_SQL in s for s in seen if "COUNT(*)" not in s and "model_proposals" not in s)
     assert any("result = 'stale'" in s and CANCELLED_SQL in s for s in seen)
 
 
