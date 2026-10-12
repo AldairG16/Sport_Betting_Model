@@ -79,7 +79,20 @@ def test_summary_counts_what_would_have_happened_and_what_was_bet():
     assert s["by_reason"][0] == (P.NO_GANA_PINNACLE, 3, -2.0)
 
 
+def test_weekly_block_is_empty_and_quiet_before_the_table_exists(monkeypatch):
+    """12-oct-26: el weekly corrió antes que la primera corrida que crea la
+    tabla y el resumen salió como ERROR en Telegram."""
+    from tests.fake_db import FakeResult
+    RUN_ISSUES.reset()
+    monkeypatch.setattr(P, "engine", FakeEngine(lambda sql, p: FakeResult(rows=[(None,)])))
+    monkeypatch.setattr(P.pd, "read_sql", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no debe leer")))
+    assert P.weekly_lines() == []
+    assert RUN_ISSUES.errors() == []
+
+
 def test_weekly_block_is_plain_and_empty_without_data(monkeypatch):
+    from tests.fake_db import FakeResult
+    monkeypatch.setattr(P, "engine", FakeEngine(lambda sql, p: FakeResult(rows=[("model_proposals",)])))
     monkeypatch.setattr(P.pd, "read_sql", lambda *a, **k: pd.DataFrame(columns=["decision", "result", "profit"]))
     assert P.weekly_lines() == []
     monkeypatch.setattr(P.pd, "read_sql", lambda *a, **k: pd.DataFrame([
