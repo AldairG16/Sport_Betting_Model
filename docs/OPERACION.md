@@ -374,6 +374,15 @@ pasó lo guardado al canónico y unió los repetidos, con respaldo en `matches_i
 colateral que dejó de pasar: el "temporada ya cargada" del weekly contaba los repetidos,
 así que dejó de cargar la 2025/26 antes de terminar.
 
+**`model_proposals` guarda lo que el modelo propuso y por qué no se apostó.** Desde el
+12-oct-2026, cada apuesta que llega a la selección final (`_stage_select_bets`) queda con su
+decisión: `apostada` o el motivo del descarte en palabras (`no le gana a Pinnacle por 2 pt`,
+`ventaja menor al mínimo`, `límite de cartera del día`…; ver `src/models/proposals.py`). Antes
+solo quedaba el conteo en el log ("55 sin valor frente a Pinnacle"). Un partido evaluado
+varias veces conserva la última decisión. Se liquida con la misma función que las apuestas
+(stake 1) en el paso de resultados sombra, y el reporte semanal resume qué habría pasado si
+se jugaban todas.
+
 **`odds_history` guarda cambios, no fotos.** Con el closing cada 30 min, el 97% de las
 fotos eran copias idénticas (~8 MB/día; en el plan gratuito de Neon, la base se llenaba
 en ~2 meses). Desde el 25-sep-2026 solo entra una foto si la cuota de ese partido cambió

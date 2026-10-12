@@ -1211,6 +1211,10 @@ def send_weekly_report():
             "",
         ]
 
+    # ── Lo que el modelo propuso (apostado o descartado) y cómo habría ido ──
+    from src.models.proposals import weekly_lines
+    lines += weekly_lines()
+
     # ── Bankroll ──────────────────────────────────────────────────────────
     drawdown_str = f"  Max DD: -{bk['drawdown_pct']:.1f}%" if bk["drawdown_pct"] > 0 else ""
     lines += [

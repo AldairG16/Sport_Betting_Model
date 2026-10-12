@@ -2019,8 +2019,12 @@ def _stage_candidates(clean_probabilities, odds, line, confidence, home, away, s
     return bets
 
 
-def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=None):
-    """Etapa 11 — selección final por partido: bloqueos, filtro Pinnacle, umbrales de edge, techo de desvío, grupos excluyentes, stake Kelly y decision_log."""
+def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=None,
+                       proposals=None):
+    """Etapa 11 — selección final por partido: bloqueos, filtro Pinnacle, umbrales de edge, techo de desvío, grupos excluyentes, stake Kelly y decision_log.
+
+    proposals: lista donde queda cada apuesta evaluada con su decisión
+    ('apostada' o el motivo del descarte) — src/models/proposals.py."""
     stats = stats if stats is not None else Counter()
     selected: list = []
     home = T.home
@@ -2079,7 +2083,21 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=Non
     # -23.7% ROI (overfit). Ahora filtramos sobre edge_market real.
     _league = _row_league_of(row)
     _is_paper = _league in PAPER_ONLY_LEAGUES
+
+    from src.models import proposals as P
+    _sink = proposals if proposals is not None else []
+
+    def _propose(bet, decision, stake=None):
+        try:
+            _pin_p = pinnacle_prob(bet["market"], row)
+        except Exception:
+            _pin_p = None
+        _sink.append(P.proposal(bet, f"{home} vs {away}", date, _league, decision,
+                                pin_prob=_pin_p, stake=stake))
+
     if _league in blocked_leagues:
+        for _b in bets:
+            _propose(_b, P.LIGA_BLOQUEADA)
         return selected
     # ── MEJORA #12: filtro de partidos "raros" ─────────────────
     # Dead rubber (ambos en zona media, fin de temporada) o asimetría
@@ -2089,6 +2107,8 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=Non
             row.get("home_team",""), row.get("away_team",""), _league
         )
         if _unreliable:
+            for _b in bets:
+                _propose(_b, P.PARTIDO_RARO)
             return selected
     except Exception:
         pass   # si la feature falla, no bloquea
@@ -2108,14 +2128,17 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=Non
     match_bets_count = 0
     groups_used = set()
 
-    for bet in bets:
+    for _i, bet in enumerate(bets):
         if match_bets_count >= MAX_BETS_PER_MATCH:
+            for _b in bets[_i:]:
+                _propose(_b, P.TOPE_PARTIDO)
             break
 
         mkt = bet["market"]
 
         # ── Mercados desactivados ─────────────────────────────────
         if mkt in _DISABLED_MARKETS:
+            _propose(bet, P.MERCADO_DESACTIVADO)
             continue
 
         # ── Mercados bloqueados por ROI negativo en clubes ────────
@@ -2127,22 +2150,28 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=Non
             # porque esta línea seguía aquí; desde el 22-sep vuelve solo
             # con evidencia shadow (clv_gate.run_shadow_reactivation).
             if mkt == "away_win" and "away_win" not in reactivated:
+                _propose(bet, P.MERCADO_BLOQUEADO)
                 continue
             if mkt in blocked_markets:
+                _propose(bet, P.MERCADO_BLOQUEADO)
                 continue
             if mkt.startswith("corners_over_") or mkt.startswith("cards_over_"):
+                _propose(bet, P.MERCADO_BLOQUEADO)
                 continue
         else:
             # En paper: solo bloquear mercados sin odds reales
             if mkt in _DISABLED_MARKETS:
+                _propose(bet, P.MERCADO_DESACTIVADO)
                 continue
         # AH con línea 0 (pk): bloqueado siempre, paper o no. Se compara
         # el número (no el texto) para no dejar pasar "-0.00".
         if mkt.startswith("ah_"):
             try:
                 if abs(float(mkt.rsplit("_", 1)[-1])) < 1e-9:
+                    _propose(bet, P.HANDICAP_BLOQUEADO)
                     continue
             except ValueError:
+                _propose(bet, P.HANDICAP_BLOQUEADO)
                 continue
 
         # ── B1(b) ronda 7: AH con el local favorito, bloqueados ──
@@ -2160,6 +2189,7 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=Non
         _grp = _ah_group(mkt)
         if (not _is_paper and _grp in ("ah_home_fav", "ah_away_dog")
                 and _grp not in reactivated):
+            _propose(bet, P.HANDICAP_BLOQUEADO)
             continue
 
         # ── Filtro Pinnacle: modo recolección (25-sep-26) ─────────
@@ -2176,9 +2206,11 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=Non
             if _pin is None:
                 if no_reference_group(mkt) not in reactivated:
                     stats['sharp_no_ref'] += 1
+                    _propose(bet, P.SIN_PINNACLE)
                     continue
             elif _pin - 1.0 / bet["odds"] < SHARP_MIN_EDGE:
                 stats['sharp_no_value'] += 1
+                _propose(bet, P.NO_GANA_PINNACLE)
                 continue
 
         # ── Mejora 4: Sweet spots de odds por mercado ────────────
@@ -2189,6 +2221,7 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=Non
         _odds = bet["odds"]
         _band = SWEET_SPOTS.get(mkt)
         if _band and not (_band[0] <= _odds <= _band[1]):
+            _propose(bet, P.CUOTA_FUERA_DE_RANGO)
             continue
 
         # ── Edge mínimo dinámico (Mejora #3 — por mercado) ──────
@@ -2229,6 +2262,7 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=Non
             _min_edge *= 1.4
 
         if _edge_real < _min_edge:
+            _propose(bet, P.VENTAJA_CORTA)
             continue
 
         # 4) Techo de desvío del modelo (A1/R9, ronda 6). El piso de edge
@@ -2237,21 +2271,22 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=Non
         # (ver derivación en MAX_MODEL_DEVIATION). Sin desvío medido
         # (mercado sin precio de referencia) no hay apuesta.
         _dev = _model_deviation.get(mkt)
-        if _dev is None:
-            continue
-        if _dev > MAX_MODEL_DEVIATION:
+        if _dev is None or _dev > MAX_MODEL_DEVIATION:
+            _propose(bet, P.DESVIO)
             continue
 
         # MAX_ODDS: en paper usamos 6.0 para capturar underdogs del Mundial
         # (ej. France @5.35 sería bloqueada con el límite de clubes de 3.80)
         _max_odds = 6.0 if _is_paper else MAX_ODDS
         if bet["odds"] > _max_odds:
+            _propose(bet, P.CUOTA_ALTA)
             continue
 
         # ── Filtro de contradicción ───────────────────────────────
         # Si ya apostamos en un grupo, no apostar en el mismo grupo
         group = _exclusive_group(mkt)
         if group and group in groups_used:
+            _propose(bet, P.EXCLUYENTE)
             continue
 
         # MEJORA #14: pasar market+league para que kelly_stake module la
@@ -2351,6 +2386,7 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=Non
             "stake":       stake,
             "decision_log": _decision_log
         })
+        _propose(bet, P.APOSTADA, stake=stake)
 
         match_bets_count += 1
         if group:
@@ -2736,6 +2772,8 @@ def run_prediction_pipeline(dry_run: bool = False):
     model_sharp_records: list = []
     # Contadores del resumen (antes 14 variables nonlocal).
     stats = Counter()
+    # Cada apuesta evaluada con su decisión (src/models/proposals.py, 12-oct-26)
+    proposals: list = []
 
 
     # Contexto compartido por las etapas de cada partido
@@ -2787,7 +2825,8 @@ def run_prediction_pipeline(dry_run: bool = False):
                                  T.home, T.away, stats)
         if not bets:
             return
-        all_bets.extend(_stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats))
+        all_bets.extend(_stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats,
+                                           proposals))
 
 
     failed_matches: list = []
@@ -2891,6 +2930,12 @@ def run_prediction_pipeline(dry_run: bool = False):
     else:
         save_bets(real_bets)
 
+    # La lista exacta de lo propuesto y su decisión final (apostada o motivo).
+    from src.models.proposals import final_decisions, persist_proposals
+    proposals = final_decisions(proposals, real_bets, paper_bets)
+    if not dry_run:
+        persist_proposals(proposals)
+
     # ── B2/C1 (ronda 8): candidatas no apostadas → shadow_bets ──
     print(f"🌑 Shadow sweep: {stats['shadow_swept']} candidatas barridas en {total_matches} partidos | "
           f"pares con cuota: {stats['sweep_total']} · con referencia: {stats['sweep_ref']} "
@@ -2914,6 +2959,7 @@ def run_prediction_pipeline(dry_run: bool = False):
         "dry_run": dry_run, "matches": total_matches, "failed_matches": len(failed_matches),
         "bets": len(real_bets), "paper_bets": len(paper_bets), "shadow": len(shadow_records),
         "markets": dict(Counter(b["market"] for b in all_bets)),
+        "proposals": len(proposals),
     })
 
     # Devolvemos TODAS (real + paper) para que notify_telegram las muestre

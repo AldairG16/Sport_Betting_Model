@@ -443,6 +443,9 @@ def step_shadow_results():
     reglas manuales contra resultados reales (ver step_rule_evidence)."""
     from src.models.save_bets import resolve_shadow_outcomes
     resolve_shadow_outcomes()
+    # Las propuestas del modelo se liquidan igual (12-oct-26)
+    from src.models.proposals import resolve_proposals
+    resolve_proposals()
 
 
 def step_mlb_predict():
