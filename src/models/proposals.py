@@ -209,6 +209,11 @@ def weekly_lines(days: int = 7) -> list:
     """Bloque del reporte semanal de Telegram: lo que el modelo propuso y
     cómo habría terminado. Vacío si la tabla todavía no tiene datos."""
     try:
+        with engine.connect() as conn:
+            # La tabla nace con la primera corrida del pipeline que guarda
+            # propuestas: el weekly del 12-oct-26 corrió antes y avisó ERROR.
+            if conn.execute(text("SELECT to_regclass('model_proposals')")).scalar() is None:
+                return []
         df = pd.read_sql(text("""
             SELECT decision, result, profit FROM model_proposals
             WHERE match_date >= NOW() - make_interval(days => :d) AND match_date < NOW()
