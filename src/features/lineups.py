@@ -17,11 +17,21 @@ Flujo (lo llama revalidate_pending_bets en el closing horario):
 
 Defensivo total: sin API_FOOTBALL_KEY, sin alineación publicada o ante
 cualquier error → no-op. Nunca rompe el closing.
+
+Pero no callado (13-oct-26): la API contesta 200 con el motivo en "errors"
+(clave inválida, cuota del día agotada, temporada fuera del plan gratuito)
+y el filtro quedaba apagado sin que nadie lo supiera. Ahora ese motivo se
+registra, y self_check() lo revisa una vez al día desde el closing.
 """
 
+import json
 import unicodedata
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
+
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 BASE = "https://v3.football.api-sports.io"
 
@@ -31,17 +41,38 @@ def _norm(name: str) -> str:
     return " ".join(n.lower().replace("'", "").split())
 
 
-def _get(url: str) -> dict | None:
+def api_errors(data) -> str | None:
+    """El motivo que API-Football pone en "errors" (dict o lista), o None."""
+    errs = (data or {}).get("errors") if isinstance(data, dict) else None
+    if not errs:
+        return None
+    if isinstance(errs, dict):
+        return "; ".join(f"{k}: {v}" for k, v in errs.items())
+    return "; ".join(str(e) for e in errs)
+
+
+def _fetch(url: str) -> tuple[dict | None, str | None]:
+    """(respuesta, motivo del fallo). Sin clave: (None, None)."""
     import os
     key = os.environ.get("API_FOOTBALL_KEY", "")
     if not key:
-        return None
+        return None, None
     try:
         req = urllib.request.Request(url, headers={"x-apisports-key": key})
         with urllib.request.urlopen(req, timeout=12) as r:
-            return __import__("json").loads(r.read())
-    except Exception:
+            data = json.loads(r.read())
+    except Exception as e:
+        return None, f"{type(e).__name__}: {str(e)[:160]}"
+    return data, api_errors(data)
+
+
+def _get(url: str) -> dict | None:
+    data, err = _fetch(url)
+    if err:
+        # WARNING: el chequeo diario (self_check) es el que avisa a Telegram
+        log.warning(f"⚠️  API-Football no respondió datos: {err}")
         return None
+    return data
 
 
 def find_fixture(kickoff_utc: datetime, home: str, away: str) -> int | None:
@@ -81,6 +112,34 @@ def get_lineup_surnames(fixture_id: int) -> dict[str, set[str]] | None:
                 surnames.add(name.split()[-1])
         out[_norm(team.get("team", {}).get("name", ""))] = surnames
     return out or None
+
+
+def self_check(today: datetime | None = None) -> dict:
+    """
+    ¿Funciona la API de alineaciones? /status no gasta cuota; los partidos
+    de hoy gastan 1 de las 100 consultas diarias del plan gratuito y prueban
+    lo que el filtro necesita de verdad (la temporada actual).
+    """
+    import os
+    if not os.environ.get("API_FOOTBALL_KEY"):
+        return {"ok": False, "error": "sin API_FOOTBALL_KEY"}
+    day = (today or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
+    status, err = _fetch(f"{BASE}/status")
+    if err or not status:
+        return {"ok": False, "error": err or "sin respuesta en /status"}
+    resp = status.get("response") or {}
+    resp = resp if isinstance(resp, dict) else {}
+    plan = (resp.get("subscription") or {}).get("plan")
+    req = resp.get("requests") or {}
+    fixtures, err = _fetch(f"{BASE}/fixtures?date={day}")
+    n = len((fixtures or {}).get("response") or [])
+    out = {"ok": err is None and n > 0, "plan": plan, "fixtures_today": n,
+           "requests": f"{req.get('current')}/{req.get('limit_day')}", "day": day}
+    if err:
+        out["error"] = err
+    elif n == 0:
+        out["error"] = f"0 partidos el {day}: el plan no devuelve la temporada actual"
+    return out
 
 
 def star_missing(lineup_surnames: set[str], top_scorers: list[str]) -> str | None:

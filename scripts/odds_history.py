@@ -37,7 +37,15 @@ SNAPSHOT_COLS = (
     "btts_yes_odds", "btts_no_odds",
     "ah_line", "ah_home_odds", "ah_away_odds",
     "corners_line", "cards_line", "bookmaker_count",
+    # 13-oct-26: Pinnacle (la referencia) y el promedio entre casas. Con su
+    # historia se mide cuándo Pinnacle se mueve y las casas comerciales
+    # tardan en seguirlo — la ventaja que sí está al alcance de PlayDoit.
+    "pin_home_odds", "pin_draw_odds", "pin_away_odds",
+    "pin_over25_odds", "pin_under25_odds",
+    "consensus_home_odds", "consensus_draw_odds", "consensus_away_odds",
+    "consensus_over25_odds", "consensus_under25_odds",
 )
+NUMERIC_ADDED = SNAPSHOT_COLS[SNAPSHOT_COLS.index("pin_home_odds"):]
 
 
 def _ensure_table(conn):
@@ -56,6 +64,15 @@ def _ensure_table(conn):
             corners_line NUMERIC, cards_line NUMERIC,
             bookmaker_count INT
         )
+    """))
+    conn.execute(text("ALTER TABLE odds_history "
+                      + ", ".join(f"ADD COLUMN IF NOT EXISTS {c} NUMERIC" for c in NUMERIC_ADDED)))
+    # el promedio de totales nace en update_upcoming_matches; si la foto
+    # corre antes que esa carga con el código nuevo, la columna ya existe
+    conn.execute(text("""
+        ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS consensus_over25_odds FLOAT,
+            ADD COLUMN IF NOT EXISTS consensus_under25_odds FLOAT
     """))
     conn.execute(text("""
         CREATE INDEX IF NOT EXISTS idx_odds_history_key_time
@@ -84,6 +101,9 @@ def snapshot_sql() -> str:
         ) prev ON TRUE
         WHERE u.home_odds IS NOT NULL AND u.home_odds > 1
           AND u.away_odds IS NOT NULL AND u.away_odds > 1
+          -- solo antes del partido: después la API trae cuotas en vivo
+          -- (13-oct-26: fichas con 130/21/1.05 de un partido ya empezado)
+          AND u.match_date > NOW()
           AND (prev.home_odds IS NULL OR ({new}) IS DISTINCT FROM ({old}))
     """
 

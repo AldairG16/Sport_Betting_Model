@@ -391,6 +391,29 @@ Pinnacle sin el modelo, etc. Usa la misma estadística y el mismo veredicto que
 semanal de la referencia Pinnacle y en `model_state` (`strategy_lab`, con historia). Solo
 mide: pasar una estrategia a dinero real es decisión del dueño.
 
+**"La mejor cuota" no es la cuota del dueño.** `home_odds`, `over25_odds`, etc. son la más
+alta entre ~20 casas europeas, incluidos los intercambios (Betfair, Matchbook). Medido el
+13-oct-2026 sobre 205 partidos, contra el precio justo de Pinnacle:
+
+| Precio | Valor medio | Apuestas con +2% o más |
+|---|---|---|
+| Mejor cuota | −0.4% | 19% |
+| Promedio entre casas | −7.7% | 0.2% |
+
+Una casa típica como PlayDoit paga cerca del promedio. Por eso las candidatas guardan
+también `odds_avg`, el promedio entre casas para 1X2 y over/under 2.5 (`consensus_*` en
+`upcoming_matches`), y el laboratorio mide a los dos precios. Cuenta el del promedio.
+`odds_history` guarda además Pinnacle y el promedio, y solo antes del kickoff (después la API
+trae cuotas en vivo). Es la base para medir cuándo Pinnacle se mueve y las casas comerciales
+tardan en seguirlo.
+
+**El filtro de alineaciones avisa si su API no responde.** API-Football contesta 200 con el
+motivo en `errors` (clave inválida, cuota agotada o temporada fuera del plan gratuito), y el
+filtro quedaba apagado sin aviso. `self_check()` lo revisa el primer closing de cada día UTC.
+Avisa como ERROR al fallar o si cambia el motivo, no todos los días. El ajuste por clima está
+apagado: `WEATHER_API_KEY` nunca se cargó en GitHub y consultaba el clima actual, no el de la
+hora del partido.
+
 **`odds_history` guarda cambios, no fotos.** Con el closing cada 30 min, el 97% de las
 fotos eran copias idénticas (~8 MB/día; en el plan gratuito de Neon, la base se llenaba
 en ~2 meses). Desde el 25-sep-2026 solo entra una foto si la cuota de ese partido cambió
