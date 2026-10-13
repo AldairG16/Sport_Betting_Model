@@ -824,10 +824,14 @@ def step_sharp_reference():
     en resultados (src/models/sharp_reference.py). Solo mide. Telegram cada
     semana en cuanto haya cierres válidos: es el termómetro del dueño."""
     from src.models.sharp_reference import format_report, has_data, run_sharp_reference
+    from src.models.strategy_lab import format_lines, run_strategy_lab
     report = run_sharp_reference(verbose=True)
+    # Laboratorio de estrategias (13-oct-26): varias formas de elegir
+    # apuestas medidas a la vez contra el mismo cierre, sin dinero.
+    lab = run_strategy_lab(verbose=True)
     if has_data(report):
         from scripts.notify_telegram import send_message
-        send_message(format_report(report, html=True))
+        send_message(format_report(report, html=True) + "\n" + "\n".join(format_lines(lab)))
 
 
 def step_shadow_reactivation():
