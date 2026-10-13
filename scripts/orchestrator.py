@@ -333,6 +333,33 @@ def step_closing_odds():
     update_closing_odds()
 
 
+def step_api_football_check():
+    """Una vez al día (el primer closing del día UTC): ¿la API de
+    alineaciones responde con la temporada actual? Si no, el filtro de
+    alineaciones de las apuestas reales está apagado: ERROR a Telegram,
+    una sola vez ese día (13-oct-26; antes se apagaba sin avisar)."""
+    from datetime import datetime, timezone
+    from src.features.lineups import self_check
+    from src.utils.model_state import load_state, save_state
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    last = load_state("api_football_check") or {}
+    if last.get("day") == today:
+        print(f"   API-Football: ya revisada hoy ({'OK' if last.get('ok') else last.get('error')})")
+        return
+    res = self_check()
+    res["day"] = today
+    save_state("api_football_check", res)
+    if res.get("ok"):
+        print(f"✅ API-Football: plan {res.get('plan')}, {res.get('fixtures_today')} partidos hoy, "
+              f"consultas {res.get('requests')}")
+    elif last.get("ok", True) or last.get("error") != res.get("error"):
+        # se avisa al fallar o si cambia el motivo; repetirlo a diario es ruido
+        log.error(f"❌ API-Football no funciona ({res.get('error')}): el filtro de alineaciones "
+                  f"de las apuestas reales está apagado")
+    else:
+        log.warning(f"⚠️  API-Football sigue sin funcionar ({res.get('error')}) — ya avisado")
+
+
 def step_pre_kickoff_closing():
     """
     Captura de cierres antes del kickoff (corre cada ~30 min).
@@ -977,6 +1004,7 @@ def main():
             # Ejecutar 30-60 min antes de los primeros partidos del dia
             # Esto captura las odds de cierre reales para calcular CLV
             run_step(logger, "Pre-kickoff closing odds", step_pre_kickoff_closing)
+            run_step(logger, "Chequeo diario API-Football", step_api_football_check)
         elif args.mode == "weekly":
             # 1) PRIMERO lo que aprende de datos ya recolectados (bets y
             #    shadow resueltos por evening/closing): solo DB, segundos en

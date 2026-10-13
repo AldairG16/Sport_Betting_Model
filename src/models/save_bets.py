@@ -124,7 +124,8 @@ SHADOW_ALTER_SQL = """
         ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS pin_prob NUMERIC,
         ADD COLUMN IF NOT EXISTS pin_close_prob NUMERIC,
-        ADD COLUMN IF NOT EXISTS pin_close_at TIMESTAMPTZ
+        ADD COLUMN IF NOT EXISTS pin_close_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS odds_avg NUMERIC
 """
 BETS_CLOSING_ALTER_SQL = """
     ALTER TABLE bets_history
@@ -172,6 +173,7 @@ def persist_shadow_bets(records: list):
                 clean.setdefault("p_pre_shade", None)
                 clean.setdefault("shade_delta", None)
                 clean.setdefault("pin_prob", None)
+                clean.setdefault("odds_avg", None)
                 try:
                     # savepoint por fila: un fallo no aborta el lote
                     with conn.begin_nested():
@@ -179,12 +181,17 @@ def persist_shadow_bets(records: list):
                             INSERT INTO shadow_bets
                                 (match, match_date, league, market, p_final,
                                  p_ref, deviation, odds, edge_market, reason,
-                                 p_pre_shade, shade_delta, pin_prob)
+                                 p_pre_shade, shade_delta, pin_prob, odds_avg)
                             VALUES
                                 (:match, :match_date, :league, :market, :p_final,
                                  :p_ref, :deviation, :odds, :edge_market, :reason,
-                                 :p_pre_shade, :shade_delta, :pin_prob)
-                            ON CONFLICT (match, market, match_date) DO NOTHING
+                                 :p_pre_shade, :shade_delta, :pin_prob, :odds_avg)
+                            ON CONFLICT (match, market, match_date) DO UPDATE
+                                SET odds_avg = EXCLUDED.odds_avg
+                                -- la candidata ya registrada se queda como estaba; solo
+                                -- recibe el precio promedio si nació sin él (13-oct-26)
+                                WHERE shadow_bets.odds_avg IS NULL
+                                  AND EXCLUDED.odds_avg IS NOT NULL
                         """), clean)
                     inserted += 1
                 except Exception as row_err:

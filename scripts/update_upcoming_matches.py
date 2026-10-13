@@ -559,8 +559,14 @@ def parse_match(m: dict, sport: str) -> dict | None:
         all_away_prices = []
         bookmaker_count = 0
 
+        # Promedio de over/under 2.5 entre casas (13-oct-26): el precio que
+        # paga una casa típica, no la mejor de ~20 — ver strategy_lab.
+        all_over25_prices: list = []
+        all_under25_prices: list = []
+
         for bookmaker in m.get("bookmakers", []):
             bk_home = bk_draw = bk_away = None
+            bk_o25 = bk_u25 = None
 
             for market in bookmaker.get("markets", []):
                 if market["key"] == "h2h":
@@ -585,9 +591,11 @@ def parse_match(m: dict, sport: str) -> dict | None:
                         if o.get("point") == 2.5:
                             price = o["price"]
                             if o["name"].lower() == "over":
+                                bk_o25 = price
                                 if over25_odds is None or price > over25_odds:
                                     over25_odds = price
                             elif o["name"].lower() == "under":
+                                bk_u25 = price
                                 if under25_odds is None or price > under25_odds:
                                     under25_odds = price
 
@@ -719,6 +727,10 @@ def parse_match(m: dict, sport: str) -> dict | None:
                         bk_cl_c = min(_common_c, key=lambda p: abs(p - CARDS_TARGET_LINE))
                         all_cards_data.append((bk_cl_c, _ov_c[bk_cl_c], _un_c[bk_cl_c]))
 
+            if bk_o25 and bk_u25:
+                all_over25_prices.append(bk_o25)
+                all_under25_prices.append(bk_u25)
+
             # Agregar precios a las listas solo si el bookmaker tiene h2h completo
             if bk_home and bk_away:
                 all_home_prices.append(bk_home)
@@ -772,6 +784,8 @@ def parse_match(m: dict, sport: str) -> dict | None:
         consensus_home_odds = _avg(all_home_prices)
         consensus_draw_odds = _avg(all_draw_prices)
         consensus_away_odds = _avg(all_away_prices)
+        consensus_over25_odds  = _avg(all_over25_prices)
+        consensus_under25_odds = _avg(all_under25_prices)
         h2h_spread_pct      = _spread_pct(all_home_prices)   # spread del local como proxy
 
         return {
@@ -794,6 +808,8 @@ def parse_match(m: dict, sport: str) -> dict | None:
             "consensus_home_odds":  consensus_home_odds,
             "consensus_draw_odds":  consensus_draw_odds,
             "consensus_away_odds":  consensus_away_odds,
+            "consensus_over25_odds":  consensus_over25_odds,
+            "consensus_under25_odds": consensus_under25_odds,
             "bookmaker_count":      bookmaker_count,
             "h2h_spread_pct":       h2h_spread_pct,
             "ah_home_odds":         ah_home_odds,
@@ -870,6 +886,11 @@ def ensure_schema():
         """))
         conn.execute(text("""
             ALTER TABLE upcoming_matches
+            ADD COLUMN IF NOT EXISTS consensus_over25_odds FLOAT,
+            ADD COLUMN IF NOT EXISTS consensus_under25_odds FLOAT
+        """))
+        conn.execute(text("""
+            ALTER TABLE upcoming_matches
             ADD COLUMN IF NOT EXISTS consensus_draw_odds FLOAT
         """))
         conn.execute(text("""
@@ -939,6 +960,7 @@ def upsert_matches(rows: list[dict]):
             # filas no anotadas (otros callers): frescura desconocida y sin
             # precio de Pinnacle
             r = {"odds_fetched_at": None, "specialty_fetched_at": None,
+                 "consensus_over25_odds": None, "consensus_under25_odds": None,
                  **dict.fromkeys(PIN_COLS), **r}
             conn.execute(text("""
                 INSERT INTO upcoming_matches (
@@ -949,6 +971,7 @@ def upsert_matches(rows: list[dict]):
                     over25_odds, under25_odds,
                     btts_yes_odds, btts_no_odds,
                     consensus_home_odds, consensus_draw_odds, consensus_away_odds,
+                    consensus_over25_odds, consensus_under25_odds,
                     bookmaker_count, h2h_spread_pct,
                     ah_home_odds, ah_away_odds, ah_line,
                     dnb_home_odds, dnb_away_odds,
@@ -970,6 +993,7 @@ def upsert_matches(rows: list[dict]):
                     :over25_odds, :under25_odds,
                     :btts_yes_odds, :btts_no_odds,
                     :consensus_home_odds, :consensus_draw_odds, :consensus_away_odds,
+                    :consensus_over25_odds, :consensus_under25_odds,
                     :bookmaker_count, :h2h_spread_pct,
                     :ah_home_odds, :ah_away_odds, :ah_line,
                     :dnb_home_odds, :dnb_away_odds,
@@ -998,6 +1022,8 @@ def upsert_matches(rows: list[dict]):
                     consensus_home_odds = EXCLUDED.consensus_home_odds,
                     consensus_draw_odds = EXCLUDED.consensus_draw_odds,
                     consensus_away_odds = EXCLUDED.consensus_away_odds,
+                    consensus_over25_odds  = EXCLUDED.consensus_over25_odds,
+                    consensus_under25_odds = EXCLUDED.consensus_under25_odds,
                     bookmaker_count     = EXCLUDED.bookmaker_count,
                     h2h_spread_pct      = EXCLUDED.h2h_spread_pct,
                     -- AH: se actualiza siempre (línea de mercado puede cambiar)

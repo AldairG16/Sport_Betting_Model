@@ -878,6 +878,10 @@ def _stage_lambdas(row, T, ctx, stats):
     # Lluvia/viento/nieve reducen la tasa de goles.
     # 0 créditos extra (OpenWeatherMap gratis 1,000 calls/día).
     # Requiere WEATHER_API_KEY en .env — sin clave, no hay ajuste.
+    # APAGADO en producción (13-oct-26): la clave nunca se cargó en GitHub,
+    # así que jamás ajustó un partido; y consulta el clima ACTUAL, no el de
+    # la hora del partido. Con el modelo pesando ~5% frente al mercado, no
+    # vale la pena rehacerlo; queda documentado en vez de aparentar que corre.
 
     weather_mult = get_weather_multiplier(home)
     if weather_mult < 1.0:
@@ -1828,6 +1832,25 @@ def _stage_final_probabilities(row, T, L, probabilities, market_probs, odds, ctx
     )
 
 
+_CONSENSUS_COL = {
+    "home_win": "consensus_home_odds", "draw": "consensus_draw_odds",
+    "away_win": "consensus_away_odds", "over25": "consensus_over25_odds",
+    "under25": "consensus_under25_odds",
+}
+
+
+def _consensus_odds(market: str, row):
+    """Precio promedio entre casas del mercado, o None si no se guarda."""
+    col = _CONSENSUS_COL.get(market)
+    if col is None:
+        return None
+    try:
+        v = float(row.get(col))
+    except (TypeError, ValueError):
+        return None
+    return v if v == v and v > 1.0 else None
+
+
 def _stage_shadow_sweep(row, T, F, market_probs, market_probs_raw, signed_deviation, odds, stats):
     """Etapa 8 — candidatas shadow (todas las que tienen precio real, antes de filtrar) para medir CLV sin apostar."""
     records: list = []
@@ -1885,6 +1908,10 @@ def _stage_shadow_sweep(row, T, F, market_probs, market_probs_raw, signed_deviat
             # Referencia sharp (24-sep-26): Pinnacle sin margen al registrar.
             # Solo mide (src/models/sharp_reference.py).
             "pin_prob":    pinnacle_prob(_sm, row),
+            # Precio PROMEDIO entre casas (13-oct-26): lo que paga una casa
+            # típica como PlayDoit. `odds` es la mejor de ~20 casas europeas,
+            # ~8% arriba del promedio — medir solo con ella era optimista.
+            "odds_avg":    _consensus_odds(_sm, row),
         })
         _sweep_n += 1
     stats['shadow_swept'] += _sweep_n
@@ -2874,7 +2901,8 @@ def run_prediction_pipeline(dry_run: bool = False):
     print("Corners model:      ", stats['corners_used'])
     print("Shots model:        ", stats['shots_used'])
     print("Fatiga detectada:   ", stats['fatigued_teams'])
-    print("Weather ajustado:   ", stats['weather_adjusted'])
+    from config.settings import WEATHER_API_KEY as _wkey
+    print("Weather ajustado:   ", stats['weather_adjusted'] if _wkey else "apagado (sin WEATHER_API_KEY)")
     print("MC divergio:        ", stats['mc_diverged'])
     print("Sharp confirmados:  ", stats['sharp_confirmed'])
     print("Sharp rechazados:   ", stats['sharp_rejected'])
