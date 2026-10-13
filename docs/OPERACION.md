@@ -383,6 +383,14 @@ varias veces conserva la última decisión. Se liquida con la misma función que
 (stake 1) en el paso de resultados sombra, y el reporte semanal resume qué habría pasado si
 se jugaban todas.
 
+**El laboratorio de estrategias mide sin dinero.** Desde el 13-oct-2026, el weekly mide
+contra el cierre válido de Pinnacle varias formas de elegir apuestas entre las candidatas
+shadow (`src/models/strategy_lab.py`): lo que quiere el modelo, el filtro actual, precio sobre
+Pinnacle sin el modelo, etc. Usa la misma estadística y el mismo veredicto que
+`sharp_reference`, con 100 cierres válidos en 30 partidos. El resultado va en el mensaje
+semanal de la referencia Pinnacle y en `model_state` (`strategy_lab`, con historia). Solo
+mide: pasar una estrategia a dinero real es decisión del dueño.
+
 **`odds_history` guarda cambios, no fotos.** Con el closing cada 30 min, el 97% de las
 fotos eran copias idénticas (~8 MB/día; en el plan gratuito de Neon, la base se llenaba
 en ~2 meses). Desde el 25-sep-2026 solo entra una foto si la cuota de ese partido cambió

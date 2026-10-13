@@ -315,8 +315,11 @@ def test_weekly_step_sends_only_with_data(monkeypatch):
     import scripts.orchestrator as orch
     import scripts.notify_telegram as nt
     import src.models.sharp_reference as sr
+    import src.models.strategy_lab as lab
     sent = []
     monkeypatch.setattr(nt, "send_message", lambda m: sent.append(m) or True)
+    # el laboratorio de estrategias (13-oct-26) va en el mismo mensaje
+    monkeypatch.setattr(lab, "run_strategy_lab", lambda verbose=True: lab.build_lab(_rows()))
     monkeypatch.setattr(sr, "run_sharp_reference",
                         lambda verbose=True: sr.build_sharp_report(pd.DataFrame(), pd.DataFrame(), 0.05))
     orch.step_sharp_reference()
@@ -325,6 +328,7 @@ def test_weekly_step_sends_only_with_data(monkeypatch):
                         lambda verbose=True: sr.build_sharp_report(_rows(), _rows(), 0.05))
     orch.step_sharp_reference()
     assert len(sent) == 1 and "REFERENCIA PINNACLE" in sent[0]
+    assert "LABORATORIO DE ESTRATEGIAS" in sent[0]
 
 
 # ============================================================
