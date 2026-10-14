@@ -80,9 +80,64 @@ def value_at_average(sel: pd.DataFrame) -> dict:
     return value_at_close(sel[m].assign(odds=avg[m]))
 
 
-def build_lab(shadow: pd.DataFrame) -> dict:
+# Mercados que Pinnacle no publica en el feed y Kalshi sí (14-oct-26):
+# se miden contra el cierre de Kalshi, con la misma regla de cierre válido.
+KALSHI_MARKETS = ("btts", "btts_no", "h1_home", "h1_draw", "h1_away")
+KALSHI_STRATEGIES = (
+    ("k_modelo", "Sin Pinnacle (ambos anotan, 1er tiempo): lo que quiere el modelo",
+     lambda d: _model_edge(d) >= 0.02),
+    ("k_precio", "Sin Pinnacle: precio sobre Kalshi, sin preguntar al modelo",
+     lambda d: _pin_adv(d) >= 0.0),
+)
+
+
+def with_kalshi(shadow: pd.DataFrame, kh: pd.DataFrame) -> pd.DataFrame:
+    """
+    Candidatas sin precio de Pinnacle en mercados que Kalshi cubre, con la
+    referencia de Kalshi en las columnas de Pinnacle (función pura): pin_prob
+    = la de Kalshi al registrarse la candidata (la última antes, o la primera
+    después si aún no había foto) y pin_close_prob / pin_close_at = la última
+    foto antes del kickoff. valid_pin_close decide si ese cierre vale.
+    """
+    cols = list(shadow.columns)
+    if shadow.empty or kh is None or kh.empty:
+        return shadow.iloc[0:0]
+    s = shadow[shadow["pin_prob"].isna() & shadow["market"].isin(KALSHI_MARKETS)].copy()
+    if s.empty:
+        return s
+    teams = s["match"].astype(str).str.split(" vs ", n=1, expand=True)
+    s["home"], s["away"] = teams[0], teams[1]
+    s["ko"] = pd.to_datetime(s["match_date"], utc=True)
+    k = kh.copy()
+    k["ko"] = pd.to_datetime(k["kickoff"], utc=True)
+    k["at"] = pd.to_datetime(k["captured_at"], utc=True)
+    k["prob"] = pd.to_numeric(k["prob"], errors="coerce")
+    m = s.reset_index().merge(k[["home", "away", "ko", "market", "at", "prob"]],
+                              on=["home", "away", "ko", "market"], how="inner")
+    if m.empty:
+        return s.iloc[0:0][cols]
+    created = pd.to_datetime(m["created_at"], utc=True)
+    out = []
+    for idx, g in m.assign(created=created).groupby("index"):
+        g = g.sort_values("at")
+        before = g[g["at"] <= g["created"]]
+        open_p = (before["prob"].iloc[-1] if len(before) else g["prob"].iloc[0])
+        pre = g[g["at"] <= g["ko"]]
+        row = s.loc[idx, cols].copy()
+        row["pin_prob"] = open_p
+        if len(pre):
+            row["pin_close_prob"] = pre["prob"].iloc[-1]
+            row["pin_close_at"] = pre["at"].iloc[-1]
+        else:
+            row["pin_close_prob"], row["pin_close_at"] = None, None
+        out.append(row)
+    return pd.DataFrame(out, columns=cols)
+
+
+def build_lab(shadow: pd.DataFrame, kalshi: pd.DataFrame | None = None) -> dict:
     """Función pura: cada estrategia con su valor contra el cierre (a la
-    mejor cuota y a la promedio), veredicto y resultados a 1u."""
+    mejor cuota y a la promedio), veredicto y resultados a 1u; y, con los
+    precios de Kalshi, las de los mercados sin Pinnacle."""
     extra = {c: shadow[c].reset_index(drop=True) for c in ("profit", "odds_avg")
              if c in shadow.columns}
     d = prepare(shadow)
@@ -94,7 +149,17 @@ def build_lab(shadow: pd.DataFrame) -> dict:
         out[key] = {"name": name, "candidates": int(len(sel)),
                     "value": value_at_close(sel), "value_avg": value_at_average(sel),
                     "results": results(sel)}
-    return {"strategies": out, "updated_at": datetime.now(timezone.utc).isoformat()}
+    kal = {}
+    ks = with_kalshi(shadow, kalshi)
+    if len(ks):
+        kprofit = ks["profit"].reset_index(drop=True) if "profit" in ks.columns else None
+        kd = prepare(ks)
+        kd["profit"] = kprofit
+        for key, name, rule in KALSHI_STRATEGIES:
+            sel = kd[rule(kd).fillna(False).astype(bool)]
+            kal[key] = {"name": name, "candidates": int(len(sel)),
+                        "value": value_at_close(sel), "results": results(sel)}
+    return {"strategies": out, "kalshi": kal, "updated_at": datetime.now(timezone.utc).isoformat()}
 
 
 def format_lines(lab: dict, html: bool = True) -> list:
@@ -124,6 +189,23 @@ def format_lines(lab: dict, html: bool = True) -> list:
             lines.append(f"   a precio promedio (tu casa): ⏳ midiendo ({va.get('n', 0)} de 100)")
     lines.append("Cuenta la de precio promedio: es lo que paga una casa como PlayDoit. "
                  "Cuando una salga ✅ ahí con 100 o más, se puede pasar a dinero real (decisión tuya).")
+    kal = lab.get("kalshi") or {}
+    lines += ["", b("📈 Mercados sin Pinnacle, contra el cierre de Kalshi") + " (mejor cuota europea)"]
+    if not kal:
+        lines.append("⏳ juntando precios de Kalshi (empezó el 14-oct)")
+    for key, _, _ in KALSHI_STRATEGIES:
+        st = kal.get(key)
+        if not st:
+            continue
+        v, r = st["value"], st["results"]
+        if v.get("verdict") == VERDICT_THIN or v.get("mean") is None:
+            verdict, value = f"⏳ faltan datos ({v.get('n', 0)} de 100)", ""
+        else:
+            verdict = VERDICT_TEXT.get(v["verdict"], v["verdict"])
+            value = f"{v['mean'] * 100:+.1f}% (±{1.96 * v['se'] * 100:.1f}) · "
+        res = (f"a 1u: {r['wins']}G/{r['losses']}P {r['profit']:+.2f}u"
+               if r["played"] else "sin resultados aún")
+        lines.append(f"• {st['name']}: {value}{verdict} · {res}")
     return lines
 
 
@@ -142,10 +224,24 @@ def read_shadow() -> pd.DataFrame:
     """), engine, params={"since": LEARNING_SINCE})
 
 
+def read_kalshi() -> pd.DataFrame:
+    """Fotos de Kalshi (src/features/kalshi.py); vacío si aún no hay tabla."""
+    from config.database import engine
+    from config.settings import LEARNING_SINCE
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        if conn.execute(text("SELECT to_regclass('kalshi_history')")).scalar() is None:
+            return pd.DataFrame(columns=["home", "away", "kickoff", "market", "prob", "captured_at"])
+    return pd.read_sql(text("""
+        SELECT home, away, kickoff, market, prob, captured_at FROM kalshi_history
+        WHERE kickoff >= CAST(:since AS timestamptz)
+    """), engine, params={"since": LEARNING_SINCE})
+
+
 def run_strategy_lab(verbose: bool = True) -> dict:
     """Paso semanal: mide, guarda en model_state (con historia) y devuelve."""
     from src.utils.model_state import save_state
-    lab = build_lab(read_shadow())
+    lab = build_lab(read_shadow(), read_kalshi())
     save_state(STATE_KEY, lab)
     if verbose:
         print("\n".join(format_lines(lab, html=False)))

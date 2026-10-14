@@ -333,6 +333,14 @@ def step_closing_odds():
     update_closing_odds()
 
 
+def step_kalshi():
+    """Precios de Kalshi de los próximos 4 días (src/features/kalshi.py):
+    segunda referencia sin margen para ambos anotan y primer tiempo, que
+    Pinnacle no publica en el feed. Solo mide, sin créditos."""
+    from src.features.kalshi import capture_kalshi
+    capture_kalshi(horizon_hours=96, verbose=True)
+
+
 def step_api_football_check():
     """Una vez al día (el primer closing del día UTC): ¿la API de
     alineaciones responde con la temporada actual? Si no, el filtro de
@@ -400,6 +408,14 @@ def step_pre_kickoff_closing():
         capture_snapshot(verbose=False)
     except Exception as e:
         log.warning(f"   ⚠️  odds_history: {e}")
+
+    # Cierre de Kalshi (14-oct-26): referencia sin margen para los mercados
+    # que Pinnacle no publica en el feed. Solo mide; gratis.
+    try:
+        from src.features.kalshi import capture_kalshi
+        capture_kalshi(horizon_hours=3, every=True, verbose=True)
+    except Exception as e:
+        log.warning(f"   ⚠️  Kalshi: {type(e).__name__}: {e}")
 
     # Revalidar bets del día contra las odds frescas recién descargadas:
     # si la línea se movió en contra y el edge murió, cancelar la bet ANTES
@@ -556,6 +572,7 @@ def run_morning(logger: Logger, force_fetch: bool = False):
         capture_snapshot(verbose=True)
     except Exception as e:
         log.error(f"⚠️  odds_history falló: {e}")
+    run_step(logger, "Precios Kalshi (referencia)", step_kalshi)
 
     predict_ok = run_step(logger, "Predictions", step_predict)
     # run_step(logger, "MLB Predictions",   step_mlb_predict)  # desactivado — sin creditos MLB
@@ -663,6 +680,7 @@ def run_evening(logger: Logger):
     # y envía el resumen por Telegram. Así el usuario puede preparar sus
     # apuestas antes de dormir aunque la laptop esté apagada por la mañana.
     run_step(logger, "Fetch odds (mañana)",       step_fetch_odds)
+    run_step(logger, "Precios Kalshi (referencia)", step_kalshi)
     predict_ok = run_step(logger, "Predictions (mañana)", step_predict)
     # run_step(logger, "MLB Predictions (mañana)",  step_mlb_predict)  # desactivado — sin creditos MLB
 

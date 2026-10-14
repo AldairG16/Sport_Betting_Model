@@ -407,6 +407,25 @@ también `odds_avg`, el promedio entre casas para 1X2 y over/under 2.5 (`consens
 trae cuotas en vivo). Es la base para medir cuándo Pinnacle se mueve y las casas comerciales
 tardan en seguirlo.
 
+**Kalshi es la segunda referencia sin margen.** Desde el 14-oct-2026, `src/features/kalshi.py`
+lee la API pública de Kalshi, sin clave y sin créditos. Es un mercado de predicciones de EE. UU.
+cuyo precio es la probabilidad.
+
+- **1X2:** difiere de Pinnacle 0.75 pt en promedio (104 partidos, correlación 0.998), así que
+  no aporta información nueva.
+- **Donde sí sirve:** ambos anotan y ganador del primer tiempo, que Pinnacle no publica en el
+  feed.
+- **Captura:**
+  - morning y evening guardan en `kalshi_history` los cambios de los próximos 4 días;
+  - el closing guarda todo lo que arranca en las próximas 3 h, porque esa última foto es el
+    cierre.
+- **Emparejamiento:** Kalshi abrevia nombres ("bilbao", "m gladbach") y publica la hora de FIN
+  estimada (+3 h en ganador y 1T, +4 h en ambos anotan y totales). Por eso se empareja por liga,
+  inicio a ±90 min y parecido de nombres, y se guarda con los nombres y la hora del sistema.
+- **Medición:** el laboratorio mide esos mercados contra el cierre de Kalshi.
+- **Qué no cubre:** córners y tarjetas casi no se operan en Kalshi (25-46 c de diferencia
+  entre compra y venta). Apostar ahí no está al alcance del dueño (cuentas de EE. UU.).
+
 **El filtro de alineaciones avisa si su API no responde.** API-Football contesta 200 con el
 motivo en `errors` (clave inválida, cuota agotada o temporada fuera del plan gratuito), y el
 filtro quedaba apagado sin aviso. `self_check()` lo revisa el primer closing de cada día UTC.
