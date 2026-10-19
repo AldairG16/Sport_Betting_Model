@@ -383,6 +383,11 @@ varias veces conserva la última decisión. Se liquida con la misma función que
 (stake 1) en el paso de resultados sombra, y el reporte semanal resume qué habría pasado si
 se jugaban todas.
 
+El resumen semanal no cuenta los mercados desactivados (desde el 19-oct-2026). Su cuota es
+una constante inventada, no la de una casa: más/menos 1.5 y 3.5 goles, tiros. El reporte
+del 19-oct sumaba "+8.10u" con ellos, y esa ganancia no se podía tomar. En la tabla siguen
+guardados.
+
 **El laboratorio de estrategias mide sin dinero.** Desde el 13-oct-2026, el weekly mide
 contra el cierre válido de Pinnacle varias formas de elegir apuestas entre las candidatas
 shadow (`src/models/strategy_lab.py`): lo que quiere el modelo, el filtro actual, precio sobre
@@ -390,6 +395,13 @@ Pinnacle sin el modelo, etc. Usa la misma estadística y el mismo veredicto que
 `sharp_reference`, con 100 cierres válidos en 30 partidos. El resultado va en el mensaje
 semanal de la referencia Pinnacle y en `model_state` (`strategy_lab`, con historia). Solo
 mide: pasar una estrategia a dinero real es decisión del dueño.
+
+El 19-oct-2026 se sumó **"precio sobre Pinnacle sin cuotas altas"** (hasta +250).
+- **Por qué:** "precio sobre Pinnacle" ganaba al cierre (+1.4%), pero a 1u perdía. Toda esa
+  pérdida vino de cuotas mayores a +250: acertaron 12% cuando Pinnacle daba 20%.
+- **Cómo se mide:** la idea salió de esos mismos resultados, así que solo cuentan partidos
+  desde el 20-oct (`NO_LONGSHOTS_SINCE`). Con los datos viejos se vería ganar por
+  construcción.
 
 **"La mejor cuota" no es la cuota del dueño.** `home_odds`, `over25_odds`, etc. son la más
 alta entre ~20 casas europeas, incluidos los intercambios (Betfair, Matchbook). Medido el

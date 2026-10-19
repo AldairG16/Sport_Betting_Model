@@ -76,3 +76,16 @@ def test_message_speaks_the_owners_language():
     assert "⏳ faltan datos" not in text.split("Precio sobre Pinnacle, sin preguntar")[1].split("\n")[0]
     empty = "\n".join(L.format_lines(L.build_lab(pd.DataFrame(_rows(10, 0.52, 0.53, 0.55)))))
     assert "⏳ faltan datos (10 de 100)" in empty
+
+
+def test_no_longshots_variant_only_counts_new_matches():
+    """19-oct-26: la hipótesis "sin cuotas altas" salió de mirar resultados,
+    así que solo cuentan partidos desde el 20-oct y con cuota hasta +250."""
+    old = _rows(5, pin_prob=0.52, p_final=0.53, close=0.53)                    # 10-oct: no cuenta
+    new = _rows(6, pin_prob=0.52, p_final=0.53, close=0.53, start=300)         # 22-oct
+    longshot = _rows(4, pin_prob=0.30, p_final=0.30, close=0.30, odds=4.0, start=320)  # +300
+    lab = L.build_lab(pd.DataFrame(old + new + longshot))["strategies"]
+    assert lab["precio_0"]["candidates"] == 15
+    assert lab["precio_sin_altas"]["candidates"] == 6
+    text = "\n".join(L.format_lines({"strategies": lab, "kalshi": {}}))
+    assert "sin cuotas altas (hasta +250)" in text

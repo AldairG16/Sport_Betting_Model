@@ -41,6 +41,19 @@ def _model_edge(d):
     return d["p_final"] - 1.0 / d["odds"]
 
 
+# "Sin cuotas altas" (19-oct-26): en "precio sobre Pinnacle" toda la pérdida a
+# 1u vino de cuotas mayores a +250 (185 apuestas, acertaron 12% cuando Pinnacle
+# daba 20%). La hipótesis salió de mirar esos resultados, así que se juzga
+# SOLO con partidos posteriores: con los mismos datos se vería ganar por
+# construcción.
+MAX_ODDS_NO_LONGSHOTS = 3.50          # +250
+NO_LONGSHOTS_SINCE = pd.Timestamp("2026-10-20T06:00:00Z")   # 20-oct, hora de México
+
+
+def _from(d, since):
+    return pd.to_datetime(d["match_date"], utc=True, errors="coerce") >= since
+
+
 # (clave, nombre para el dueño, filtro sobre las candidatas preparadas)
 STRATEGIES = (
     ("modelo", "Lo que el modelo quiere (ve 2 pt o más)",
@@ -53,6 +66,10 @@ STRATEGIES = (
      lambda d: _pin_adv(d) >= 0.01),
     ("precio_y_modelo", "Precio sobre Pinnacle y el modelo de acuerdo",
      lambda d: (_pin_adv(d) >= 0.0) & (_model_edge(d) >= 0.02)),
+    ("precio_sin_altas", "Precio sobre Pinnacle sin cuotas altas (hasta +250), "
+                         "partidos desde el 20-oct",
+     lambda d: ((_pin_adv(d) >= 0.0) & (d["odds"] <= MAX_ODDS_NO_LONGSHOTS)
+                & _from(d, NO_LONGSHOTS_SINCE))),
 )
 
 VERDICT_TEXT = {
