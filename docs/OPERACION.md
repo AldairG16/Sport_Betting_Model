@@ -207,8 +207,8 @@ corría nadie.
 aprende de los datos que recolecta solo, y lo guarda en `model_state` (§7):
 calibración, CLV gate, caché de CLV para Kelly, **peso del modelo frente al
 mercado**, **sesgo por lado contra Pinnacle**, **reactivaciones por shadow**,
-**evidencia de las reglas contra resultados reales** y **escala de los ajustes
-manuales**. Las corridas diarias lo leen de la DB
+**evidencia de las reglas contra resultados reales**, **escala de los ajustes
+manuales**, **filtros de selección** y **horario de apuesta** (§7). Las corridas diarias lo leen de la DB
 al arrancar (`load_learned_state()` en el pipeline). Solo aprende de datos de la
 cohorte actual (`LEARNING_SINCE`, §7). Estos pasos corren **al inicio** del weekly,
 antes de las cargas de datos: las cargas tardan ~62 min (histórico 11', eventos 21',
@@ -613,7 +613,9 @@ fuente de verdad; los archivos de `config/` y `data/` son espejo local.
 | `side_bias` | `side_bias.run_side_bias` | **sesgo por lado** que se descuenta del 1X2 del modelo |
 | `shadow_reactivation` | `clv_gate.run_shadow_reactivation` | `away_win`, AH con local favorito y grupos `sinref:*` |
 | `shade_scales` | `shade_learner.run_shade_learning` | **escala de los ajustes manuales** (FLB, tabla, empates) |
-| `rule_evidence` | `rule_evidence.run_rule_evidence` | solo reporte: veredicto de cada regla contra resultados |
+| `rule_evidence` | `rule_evidence.run_rule_evidence` | veredicto de cada regla contra resultados (reporte; los filtros lo usan abajo) |
+| `filter_switches` | `filter_learner.run_filter_learning` | filtros de selección prendidos/apagados (entre semana, rango de cuota, ligas difíciles) |
+| `timing_windows` | `timing_learner.run_timing_learning` | horarios antes del kickoff sin dinero real |
 | `sharp_reference` | `sharp_reference.run_sharp_reference` | solo reporte: apuestas y modelo contra Pinnacle |
 
 **Cierres válidos:** todo lo que aprende del CLV (gate, caché de Kelly, reactivación,
@@ -671,8 +673,19 @@ y **sin escalar**), y el evening la liquida (`result`, `profit` por unidad).
   cuota, si el edge de las apostables es real (brecha prob. − acierto y ROI), y los
   filtros de selección (entre semana, sweet spots, ligas duras) comparando la brecha de
   su grupo penalizado contra el resto. IC 95% robusto por partido; sin veredicto con
-  n < 100 o < 30 partidos. Los filtros **no** se ajustan solos: son decisiones discretas
-  y quedan a criterio del dueño con esta evidencia a la vista.
+  n < 100 o < 30 partidos.
+- **Filtros que se apagan solos** (`filter_learner`, clave `filter_switches`, desde el
+  19-oct-2026, a pedido del dueño). Los tres filtros afirman que su grupo es peor. Cada
+  uno se **apaga** solo si los resultados lo contradicen con fuerza:
+  - qué cuenta como evidencia fuerte: n ≥ 100 en ≥ 30 partidos en cada grupo, y el IC
+    entero de la diferencia de brechas por debajo de 0 (su grupo acierta mejor que el
+    resto);
+  - cuándo vuelve: apagado, regresa cuando la media deja de ser negativa;
+  - con pocos datos, o si el estado no se lee, quedan prendidos.
+
+  Nunca agrega ni endurece un filtro. El filtro Pinnacle sigue igual. Al 12-oct ninguno
+  tenía datos suficientes (ligas difíciles 57-63, entre semana 31-36 apostables).
+  Telegram solo cuando uno cambia.
 
 Llega a Telegram en el weekly solo si algún veredicto ya tiene datos suficientes o si
 la escala se movió. Push y medias (AH de cuarto, DNB con empate) cuentan en el ROI pero
@@ -732,6 +745,32 @@ lo demás se sigue midiendo en sombra:
   real frente a Pinnacle. No apuestes nada: el sistema sigue recolectando datos en
   sombra." Si el modelo demuestra ventaja (referencia Pinnacle con veredicto, peso del
   modelo al alza), el filtro se puede relajar; es una decisión del dueño.
+
+### Horario de apuesta (`src/models/timing_learner.py`, 19-oct-2026)
+
+El filtro Pinnacle compara con el precio de Pinnacle **de ese momento**, pero Pinnacle se
+sigue moviendo hasta el kickoff (13-19 oct: 2.4 pt de media con más de 48 h, 1.2 pt en
+las últimas 6 h). El weekly mide, por horario (menos de 12 h, 12-24, 24-48, más de 48 h
+antes del kickoff), cuánto valían al cierre de Pinnacle las cuotas que pasaban el
+filtro, y bloquea para dinero real el horario que pierde.
+
+- **Datos:** `odds_history` en 1X2 y más/menos 2.5, desde el 13-oct-2026, cuando se le
+  sumaron Pinnacle y la mejor cuota. El cierre es la última foto de los 150 min previos
+  al kickoff; sin ella el partido no cuenta.
+- **Señal:** una por partido, mercado y horario: la primera foto del horario que pasaba
+  el filtro. Su valor es `p_pinnacle_cierre × cuota − 1`.
+- **Política:** la de siempre (n ≥ 100 en 30 partidos, IC 95% por partido). Se bloquea
+  si el IC entero es negativo; vuelve cuando la media deja de ser negativa. Con pocos
+  datos no se bloquea nada.
+- **Pipeline:** la apuesta que ya pasó el filtro Pinnacle en un horario bloqueado queda
+  como propuesta con el motivo "a esta hora la ventaja no aguanta al cierre". Se vuelve
+  a evaluar en la corrida siguiente (morning 12:00 UTC, evening 03:00 UTC). Rige en
+  todos los mercados con precio de Pinnacle; los demás no pasan por aquí.
+- **Ritmo:** la primera semana hubo 19 señales en 13 partidos (11 con más de 48 h). Con
+  ese ritmo, el horario de más de 48 h tiene veredicto en ~2 meses; los demás tardan
+  más. Contar cada foto como señal daba cientos por semana, pero repetía la misma
+  cuota.
+- **Telegram:** si un horario se bloquea o vuelve, o si alguno ya tiene veredicto.
 
 ### Sesgo por lado (`src/models/side_bias.py`)
 

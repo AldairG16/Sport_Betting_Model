@@ -863,6 +863,31 @@ def step_rule_evidence():
                      + scale_report(scales, html=True))
 
 
+def step_filter_learning():
+    """Filtros de selección (entre semana, rango de cuota, ligas difíciles)
+    prendidos o apagados según la evidencia de rule_evidence de esta semana
+    (src/models/filter_learner.py). Telegram solo si alguno cambia."""
+    from src.models.filter_learner import changed, format_report, load_filter_state, run_filter_learning
+    previous = load_filter_state()
+    state = run_filter_learning(verbose=True)
+    if changed(previous, state):
+        from scripts.notify_telegram import send_message
+        send_message(format_report(state, previous, html=True))
+
+
+def step_timing_learning():
+    """¿A qué hora se sostiene la ventaja contra Pinnacle? Bloquea para dinero
+    real el horario que pierde contra el cierre (src/models/timing_learner.py).
+    Telegram si un horario cambia o si ya hay veredicto con datos suficientes."""
+    from src.models.timing_learner import (changed, format_report, has_verdict,
+                                           load_timing_state, run_timing_learning)
+    previous = load_timing_state()
+    state = run_timing_learning(verbose=True)
+    if changed(previous, state) or has_verdict(state):
+        from scripts.notify_telegram import send_message
+        send_message(format_report(state, previous, html=True))
+
+
 def step_sharp_reference():
     """¿Hay ventaja real? Apuestas y candidatas contra el cierre sin margen
     de Pinnacle, si su precio se mueve hacia el modelo y modelo vs Pinnacle
@@ -1036,7 +1061,9 @@ def main():
             run_step(logger, "Peso del modelo (ancla)",  step_anchor_learning)
             run_step(logger, "Sesgo por lado (Pinnacle)", step_side_bias)
             run_step(logger, "Evidencia de reglas",      step_rule_evidence)
+            run_step(logger, "Filtros aprendidos",       step_filter_learning)
             run_step(logger, "Referencia Pinnacle",      step_sharp_reference)
+            run_step(logger, "Horario de apuesta",       step_timing_learning)
             run_step(logger, "Refresh CLV cache",        step_refresh_clv_cache)   # Mejora #14
             run_step(logger, "Holdout evaluation",       step_evaluate_holdout)
             # 2) Cargas de datos (lentas) y el ajuste que depende de ellas

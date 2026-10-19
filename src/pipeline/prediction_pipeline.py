@@ -373,21 +373,27 @@ _BLOCKED_MARKETS = {
 #   anchor: peso del modelo vs mercado por familia (anchor_learner)
 #   shades: escala de los ajustes manuales por familia (shade_learner)
 #   side_bias: sesgo del modelo por lado contra Pinnacle (side_bias)
+#   filters: filtros de selección prendidos/apagados (filter_learner)
+#   timing_blocked: horarios sin dinero real (timing_learner)
 def load_learned_state() -> dict:
     from scripts.clv_gate import (load_clv_blocked_markets, load_clv_blocked_leagues,
                                   load_shadow_reactivated)
     from src.models.anchor_learner import load_anchor_weights
+    from src.models.filter_learner import load_filter_switches
     from src.models.shade_learner import load_shade_scales
     from src.models.side_bias import load_side_bias
+    from src.models.timing_learner import load_blocked_windows
     state = {"blocked_markets": set(), "blocked_leagues": set(),
              "reactivated": set(), "anchor": {}, "shades": {}, "side_bias": {},
-             "load_errors": []}
+             "filters": {}, "timing_blocked": set(), "load_errors": []}
     loaders = (("blocked_markets", load_clv_blocked_markets),
                ("blocked_leagues", load_clv_blocked_leagues),
                ("reactivated", load_shadow_reactivated),
                ("anchor", load_anchor_weights),
                ("shades", load_shade_scales),
-               ("side_bias", load_side_bias))
+               ("side_bias", load_side_bias),
+               ("filters", load_filter_switches),
+               ("timing_blocked", load_blocked_windows))
     for key, fn in loaders:
         try:
             state[key] = fn()
@@ -2097,6 +2103,10 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=Non
     reactivated = ctx.reactivated
     current_bankroll = ctx.current_bankroll
     confidence = C.confidence
+    # Aprendidos por el weekly (19-oct-26): filtros apagados con evidencia
+    # fuerte y horarios que pierden contra el cierre de Pinnacle.
+    _filters_on = getattr(ctx, "filters_on", None) or {}
+    _timing_blocked = getattr(ctx, "timing_blocked", None) or set()
 
 
     # =========================
@@ -2151,6 +2161,11 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=Non
         # Loguear permite detectar formatos raros en upcoming_matches.
         log.warning(f"⚠️  No se pudo parsear match_date={date!r} para weekday: {e}")
     _midweek = _match_dow in MIDWEEK_DAYS if _match_dow is not None else False
+    _midweek = _midweek and _filters_on.get("entre_semana", True)
+    _hours_to_ko = None
+    if _timing_blocked:
+        from src.models.timing_learner import hours_until
+        _hours_to_ko = hours_until(date)
 
     match_bets_count = 0
     groups_used = set()
@@ -2239,6 +2254,15 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=Non
                 stats['sharp_no_value'] += 1
                 _propose(bet, P.NO_GANA_PINNACLE)
                 continue
+            # Horario aprendido (timing_learner, 19-oct-26): a esta distancia
+            # del kickoff las ventajas contra Pinnacle no aguantaron al cierre.
+            # La decisión queda para una corrida más cercana al partido.
+            elif _timing_blocked:
+                from src.models.timing_learner import is_blocked
+                if is_blocked(_hours_to_ko, _timing_blocked):
+                    stats['sharp_bad_hour'] += 1
+                    _propose(bet, P.HORARIO_SIN_VENTAJA)
+                    continue
 
         # ── Mejora 4: Sweet spots de odds por mercado ────────────
         # Rangos donde el modelo ha demostrado edge real:
@@ -2246,7 +2270,7 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=Non
         #   over25   @2.0-2.5 → 53% WR, +16% ROI
         #   draw     @2.5-4.0 → 100% WR (muestra chica, mantener amplio)
         _odds = bet["odds"]
-        _band = SWEET_SPOTS.get(mkt)
+        _band = SWEET_SPOTS.get(mkt) if _filters_on.get("fuera_de_sweet_spot", True) else None
         if _band and not (_band[0] <= _odds <= _band[1]):
             _propose(bet, P.CUOTA_FUERA_DE_RANGO)
             continue
@@ -2272,7 +2296,7 @@ def _stage_select_bets(bets, row, ctx, T, L, M, F, C, model_deviation, stats=Non
                 _min_edge = MIN_EDGE
 
         # 2) Bump por liga problemática (Italia, MLS, Ligue 1)
-        if _league in TOUGH_LEAGUES:
+        if _league in TOUGH_LEAGUES and _filters_on.get("liga_dura", True):
             _min_edge = max(_min_edge, 0.07)
 
         # 2b) Bump por liquidez de bookmakers.
@@ -2738,6 +2762,17 @@ def run_prediction_pipeline(dry_run: bool = False):
     anchor_state    = learned["anchor"] or {}
     shade_state     = learned.get("shades") or {}
     side_bias_state = learned.get("side_bias") or {}
+    # Filtros y horario aprendidos (19-oct-26). Sin estado: filtros prendidos
+    # y ningún horario bloqueado, que es lo de antes.
+    from src.models.filter_learner import FILTERS
+    filters_on      = {n: bool((learned.get("filters") or {}).get(n, True)) for n in FILTERS}
+    timing_blocked  = set(learned.get("timing_blocked") or ())
+    if not all(filters_on.values()):
+        print("🎛️ Filtros apagados por evidencia: "
+              + ", ".join(n for n, on in filters_on.items() if not on))
+    if timing_blocked:
+        print(f"⏱️ Horarios sin dinero real (pierden contra el cierre de Pinnacle): "
+              f"{sorted(timing_blocked)}")
     if any(side_bias_state.get(s) for s in ("home", "draw", "away")):
         print("⚖️ Sesgo por lado descontado (vs Pinnacle): " + ", ".join(
             f"{s}={side_bias_state.get(s, 0) * 100:+.1f}pt" for s in ("home", "draw", "away")))
@@ -2820,6 +2855,8 @@ def run_prediction_pipeline(dry_run: bool = False):
         blocked_markets=blocked_markets,
         blocked_leagues=blocked_leagues,
         reactivated=reactivated,
+        filters_on=filters_on,
+        timing_blocked=timing_blocked,
         current_bankroll=current_bankroll,
     )
 
@@ -2981,6 +3018,9 @@ def run_prediction_pipeline(dry_run: bool = False):
     if stats['sharp_no_value'] or stats['sharp_no_ref']:
         print(f"🔒 Filtro Pinnacle: {stats['sharp_no_value']} sin valor frente a Pinnacle · "
               f"{stats['sharp_no_ref']} sin referencia (solo en sombra hasta tener evidencia)")
+    if stats['sharp_bad_hour']:
+        print(f"⏱️ Horario aprendido: {stats['sharp_bad_hour']} con valor frente a Pinnacle esperan "
+              f"una corrida más cercana al partido")
 
     LAST_RUN_SUMMARY.clear()
     LAST_RUN_SUMMARY.update({
