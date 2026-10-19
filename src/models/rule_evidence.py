@@ -32,9 +32,9 @@ Honestidad estadística:
     la regla en toda la región donde actúa.
 
 Este módulo solo MIDE. Con estos mismos datos se aprende sola la escala de
-los ajustes manuales (shade_learner); los filtros quedan a decisión del
-dueño con la evidencia a la vista — son decisiones discretas y su señal
-(win/loss) necesita mucha más muestra que la del CLV.
+los ajustes manuales (shade_learner), y desde el 19-oct-26 los filtros se
+apagan solos con evidencia fuerte en contra (filter_learner). Su señal
+(win/loss) necesita mucha más muestra que la del CLV: tardan en moverse.
 """
 
 from datetime import datetime, timezone
