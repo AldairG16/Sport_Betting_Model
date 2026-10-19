@@ -101,3 +101,19 @@ def test_weekly_block_is_plain_and_empty_without_data(monkeypatch):
     text = "\n".join(P.weekly_lines())
     assert "Propuestas: 2  ·  apostadas: 1" in text
     assert "1 ganadas, 1 perdidas, -0.10u" in text
+
+
+def test_weekly_block_leaves_out_invented_odds(monkeypatch):
+    """19-oct-26: los mercados desactivados (más/menos 1.5 y 3.5) llevan una
+    cuota fija inventada; su "+8.10u" del reporte no se podía tomar."""
+    from tests.fake_db import FakeResult
+    seen = {}
+    monkeypatch.setattr(P, "engine", FakeEngine(lambda sql, p: FakeResult(rows=[("model_proposals",)])))
+
+    def fake_read_sql(sql, con=None, params=None, **kw):
+        seen["sql"], seen["params"] = str(sql), params
+        return pd.DataFrame([{"decision": P.NO_GANA_PINNACLE, "result": "loss", "profit": -1.0}])
+    monkeypatch.setattr(P.pd, "read_sql", fake_read_sql)
+    assert "Propuestas: 1" in "\n".join(P.weekly_lines())
+    assert "decision <> :disabled" in seen["sql"]
+    assert seen["params"]["disabled"] == P.MERCADO_DESACTIVADO

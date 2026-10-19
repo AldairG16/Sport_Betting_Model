@@ -215,10 +215,14 @@ def weekly_lines(days: int = 7) -> list:
             # propuestas: el weekly del 12-oct-26 corrió antes y avisó ERROR.
             if conn.execute(text("SELECT to_regclass('model_proposals')")).scalar() is None:
                 return []
+        # Sin los mercados desactivados (19-oct-26): su cuota es una constante
+        # inventada (más/menos 1.5 y 3.5 goles, tiros), no la de una casa, y
+        # su "si se hubieran jugado" sumaba ganancias que nadie podía tomar.
         df = pd.read_sql(text("""
             SELECT decision, result, profit FROM model_proposals
             WHERE match_date >= NOW() - make_interval(days => :d) AND match_date < NOW()
-        """), engine, params={"d": days})
+              AND decision <> :disabled
+        """), engine, params={"d": days, "disabled": MERCADO_DESACTIVADO})
     except Exception as e:
         log.error(f"❌ Resumen de propuestas: {type(e).__name__}: {str(e)[:160]}")
         return []
