@@ -417,6 +417,16 @@ def step_pre_kickoff_closing():
     except Exception as e:
         log.warning(f"   ⚠️  Kalshi: {type(e).__name__}: {e}")
 
+    # Alertas de alineación (20-oct-26): sale el XI ~1 h antes; si a un equipo
+    # le faltan titulares habituales o su goleador, se avisa el momio mínimo
+    # que debe pagar PlayDoit por el rival (src/models/lineup_alerts.py).
+    # ERROR al fallar: es un aviso al dueño, no solo medición.
+    try:
+        from src.models.lineup_alerts import run_lineup_alerts
+        run_lineup_alerts()
+    except Exception as e:
+        log.error(f"   ❌ Alertas de alineación: {type(e).__name__}: {e}")
+
     # Revalidar bets del día contra las odds frescas recién descargadas:
     # si la línea se movió en contra y el edge murió, cancelar la bet ANTES
     # del kickoff en vez de apostar un número que ya no existe.
@@ -888,6 +898,13 @@ def step_timing_learning():
         send_message(format_report(state, previous, html=True))
 
 
+def step_lineup_history():
+    """Alineaciones de los partidos terminados de los últimos 10 días (ESPN,
+    gratis) para saber quién es titular habitual y goleador."""
+    from src.features.espn_lineups import backfill_lineups
+    backfill_lineups(days=10)
+
+
 def step_historical_odds():
     """Momios de cierre de football-data (Pinnacle, promedio y mejor cuota)
     → historical_odds: temporada en curso más las que falten."""
@@ -919,9 +936,16 @@ def step_sharp_reference():
     # Laboratorio de estrategias (13-oct-26): varias formas de elegir
     # apuestas medidas a la vez contra el mismo cierre, sin dinero.
     lab = run_strategy_lab(verbose=True)
+    from src.models.lineup_alerts import resolve_alerts, weekly_lines as lineup_lines
+    try:
+        print(f"📋 Alertas de alineación liquidadas: {resolve_alerts()}")
+        alerts = lineup_lines()
+    except Exception as e:
+        log.error(f"❌ Resumen de alertas de alineación: {type(e).__name__}: {e}")
+        alerts = []
     if has_data(report):
         from scripts.notify_telegram import send_message
-        send_message(format_report(report, html=True) + "\n" + "\n".join(format_lines(lab)))
+        send_message(format_report(report, html=True) + "\n" + "\n".join(format_lines(lab) + alerts))
 
 
 def step_shadow_reactivation():
@@ -1092,6 +1116,7 @@ def main():
             run_step(logger, "Collect match events",     step_collect_events)
             run_step(logger, "Load extra leagues",       step_load_extra_leagues)
             run_step(logger, "Momios históricos",        step_historical_odds)
+            run_step(logger, "Alineaciones (ESPN)",      step_lineup_history)
             run_step(logger, "Buscador de ventajas",     step_edge_finder)
             run_step(logger, "Nombres de equipo y repetidos", step_team_names_check)
             run_step(logger, "Apuestas sin fuente con dato nuevo", step_resolve_stale)
