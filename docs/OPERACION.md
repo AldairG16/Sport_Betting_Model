@@ -894,6 +894,44 @@ jugador) en 4,389 partidos de 2024-26 de 7 ligas, contra el momio de cierre:
 Lo único que podría quedar es el tiempo: los minutos entre que sale la alineación y una
 casa como PlayDoit ajusta. No se puede medir con historia, solo en vivo.
 
+**Alertas de alineación** (`src/features/espn_lineups.py` + `src/models/lineup_alerts.py`,
+20-oct-2026):
+- **Historial** (weekly, paso "Alineaciones (ESPN)"):
+  - Guarda en la tabla `lineups` los titulares y los goles de los partidos terminados de los
+    últimos 10 días, en las 24 ligas de `ESPN_LEAGUES`. La carga inicial cubrió 120 días.
+  - Los nombres son los de `matches` (`system_names`: misma fecha ±1 día y parecido de
+    nombres), para que el historial se encuentre con el nombre de `upcoming_matches`.
+- **En vivo** (closing, cada 30 min, `run_lineup_alerts`):
+  - Para los partidos que arrancan en 5-80 min, lee la alineación publicada.
+  - **Titular habitual:** 70%+ de las titularidades en los últimos 15 partidos terminados,
+    con al menos 6.
+  - **Goleador:** el que más goles lleva en esos partidos, con 3 o más.
+  - **Cuándo avisa:** si faltan 4+ titulares habituales, una rotación grande. Manda a
+    Telegram el momio mínimo que debe pagar PlayDoit por el rival y por "empate o rival".
+  - **Por qué 4:** contra el cierre, el rival gana más de lo esperado cuanto más faltan
+    (2 fuera +0.8 pt, 3 +1.9, 4 +2.6, 5+ +8.2 con n=101). Con 2 saldría en la mitad de los
+    partidos: es rotación normal. Con 4 sale en el 4%, unas 10 alertas en un fin de
+    semana completo.
+  - **Longshots:** "el rival gana" solo sale si Pinnacle le da 20% o más (con 15% o menos,
+    el buscador de ventajas mide −24%); "empate o rival" sale siempre.
+  - **El goleador no avisa:** cuando falta, la casa exagera (el rival ganó 34.4% contra
+    36.0% esperado). Solo se menciona en el mensaje.
+  - **Cómo calcula el mínimo:** con el precio de Pinnacle de `upcoming_matches` y 2 pt de
+    margen (`min_american`).
+  - **Si no hay precio fresco:** con más de 12 h no sale alerta, y el mensaje dice la
+    antigüedad del precio.
+  - Una alerta por equipo, partido y mercado (`lineup_alerts`, `UNIQUE`). Una falla es
+    ERROR.
+- **Medición** (weekly, paso "Referencia Pinnacle", `resolve_alerts`):
+  - **Precio de cierre:** la última foto de `odds_history` en los 150 min previos.
+  - **Resultado:** de `matches`.
+  - **Reporte:** el mensaje semanal suma "Alertas de alineación": cuánto valía el momio
+    mínimo contra el cierre de Pinnacle y cómo terminaron.
+  - Si en semanas el valor contra el cierre no es positivo, PlayDoit no tarda lo
+    suficiente y las alertas no sirven.
+- **Costo:** gratis. En el closing son 1-3 consultas a ESPN por liga con partidos en la
+  ventana, más una por partido.
+
 ### Sesgo por lado (`src/models/side_bias.py`)
 
 Medido el 25-sep: el modelo daba en promedio +5.1 pt al local, −2.2 al empate y −3.3 al
