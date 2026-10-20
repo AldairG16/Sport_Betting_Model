@@ -72,6 +72,10 @@ jobs:
           MAX_CREDITS_PER_RUN:          ${{ secrets.MAX_CREDITS_PER_RUN }}
           MAX_ENRICHMENTS_PER_RUN:      ${{ secrets.MAX_ENRICHMENTS_PER_RUN }}
           API_FOOTBALL_KEY:             ${{ secrets.API_FOOTBALL_KEY }}
+          # Revisión con Claude de las alertas de alineación (20-oct-26):
+          # tope propio de $0.50/semana (src/models/lineup_review.py) + el diario.
+          ANTHROPIC_API_KEY:            ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_DAILY_BUDGET_USD:   ${{ secrets.ANTHROPIC_DAILY_BUDGET_USD }}
           USER_TIMEZONE:                America/Mexico_City
         run: python scripts/orchestrator.py --mode closing
 

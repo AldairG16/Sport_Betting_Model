@@ -68,6 +68,15 @@ DDL = f"""
         UNIQUE (sport_key, kickoff, weakened, market)
     )
 """
+# Revisión de Claude (src/models/lineup_review.py): una por equipo y partido;
+# el costo va solo en la primera fila del grupo para sumarlo una vez.
+ALTER = f"""
+    ALTER TABLE {TABLE}
+        ADD COLUMN IF NOT EXISTS analyst_verdict TEXT,
+        ADD COLUMN IF NOT EXISTS analyst_absences TEXT,
+        ADD COLUMN IF NOT EXISTS analyst_reason TEXT,
+        ADD COLUMN IF NOT EXISTS analyst_cost DOUBLE PRECISION
+"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -203,7 +212,7 @@ def load_profiles(engine, teams: list) -> dict:
     return {t: team_profile(h) for t, h in hist.items()}
 
 
-def run_lineup_alerts(engine=None, window_min: tuple = (5, 80), send=None) -> list:
+def run_lineup_alerts(engine=None, window_min: tuple = (5, 80), send=None, use_review: bool = True) -> list:
     """Closing: lee las alineaciones publicadas, detecta bajas y avisa una sola
     vez por equipo y partido. Devuelve las alertas nuevas."""
     from src.features.espn_lineups import capture_upcoming
@@ -220,6 +229,7 @@ def run_lineup_alerts(engine=None, window_min: tuple = (5, 80), send=None) -> li
     new = []
     with engine.begin() as conn:
         conn.execute(text(DDL))
+        conn.execute(text(ALTER))
         for (sport_key, kick), lineups in by_match.items():
             fx = conn.execute(text("""
                 SELECT DISTINCT ON (home_team_norm, away_team_norm) *
@@ -230,9 +240,7 @@ def run_lineup_alerts(engine=None, window_min: tuple = (5, 80), send=None) -> li
             """), {"s": sport_key, "k": kick, "t": list(lineups)}).mappings().first()
             if not fx:
                 continue
-            alerts = alerts_for_match(dict(fx), lineups, profiles)
-            fresh = []
-            for a in alerts:
+            for a in alerts_for_match(dict(fx), lineups, profiles):
                 got = conn.execute(text(f"""
                     INSERT INTO {TABLE} (sport_key, kickoff, home, away, weakened, missing, top_scorer_out,
                                          market, pin_prob, pin_fetched_at, min_american)
@@ -242,13 +250,28 @@ def run_lineup_alerts(engine=None, window_min: tuple = (5, 80), send=None) -> li
                     RETURNING id
                 """), {**a, "missing": json.dumps(a["missing"], ensure_ascii=False)}).first()
                 if got:
-                    fresh.append(a)
-            if fresh:
-                new += fresh
-                if send is None:
-                    from scripts.notify_telegram import send_message as send
-                for team in dict.fromkeys(a["weakened"] for a in fresh):       # un mensaje por equipo
-                    send(format_alerts([a for a in fresh if a["weakened"] == team]))
+                    new.append({**a, "id": got[0]})
+    # Fuera de la transacción: la revisión de Claude tarda ~10-20 s por grupo.
+    if new:
+        from src.models.lineup_review import review_alert, review_line
+        if send is None:
+            from scripts.notify_telegram import send_message as send
+        groups = {}
+        for a in new:                                           # un grupo por equipo y partido
+            groups.setdefault((a["sport_key"], str(a["kickoff"]), a["weakened"]), []).append(a)
+        for group in groups.values():
+            review = review_alert(group, engine) if use_review else None
+            if review:
+                with engine.begin() as conn:
+                    for i, a in enumerate(group):
+                        conn.execute(text(f"""
+                            UPDATE {TABLE} SET analyst_verdict = :v, analyst_absences = :b,
+                                analyst_reason = :r, analyst_cost = :c WHERE id = :id
+                        """), {"v": review["verdict"], "b": review["absences"], "r": review["reason"],
+                               "c": review["cost"] if i == 0 else None, "id": a["id"]})
+            line = review_line(review)
+            msg = format_alerts(group)
+            send(f"{msg}\n{line}" if line else msg)
     print(f"📋 Alineaciones: {len(rows) // 2} partidos con alineación, {len(new)} alertas nuevas")
     return new
 
@@ -313,4 +336,14 @@ def weekly_lines(engine=None) -> list:
     if len(v):
         lines.append(f"  contra el cierre de Pinnacle: {v.mean() * 100:+.1f}% (n={len(v)}). "
                      "Positivo = el momio mínimo seguía teniendo valor al cierre.")
+    # ¿sirve la revisión de Claude? (src/models/lineup_review.py)
+    if "analyst_verdict" in df.columns and df["analyst_verdict"].notna().any():
+        label = {"CONFIRMA": "Claude confirmó", "DUDA": "Claude sin info", "DESCARTA": "Claude descartó"}
+        for verdict, g in df.groupby("analyst_verdict"):
+            pg = profit[g.index]
+            lines.append(f"  {label.get(verdict, verdict)}: {len(g)} · "
+                         f"{int((g['result'] == 'win').sum())}G/{int((g['result'] == 'loss').sum())}P · "
+                         f"{pg.sum():+.2f}u")
+        cost = pd.to_numeric(df.get("analyst_cost"), errors="coerce").sum()
+        lines.append(f"  revisiones de Claude: ${cost:.2f} en total")
     return lines
