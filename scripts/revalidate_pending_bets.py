@@ -143,20 +143,41 @@ def _fresh_odds_for(result, market: str):
 
 
 
+def espn_starter_surnames(conn, team: str, kickoff) -> set | None:
+    """Apellidos de los 11 titulares del equipo según ESPN (tabla lineups,
+    la llena src/features/espn_lineups.capture_upcoming en el mismo closing,
+    antes de revalidar). None si la alineación no está publicada."""
+    import json
+    from src.features.lineups import _norm
+    if conn.execute(text("SELECT to_regclass('lineups')")).scalar() is None:
+        return None
+    row = conn.execute(text("""
+        SELECT starters, names FROM lineups
+        WHERE team = :t AND kickoff BETWEEN CAST(:k AS timestamptz) - INTERVAL '90 minutes'
+                                        AND CAST(:k AS timestamptz) + INTERVAL '90 minutes'
+        ORDER BY captured_at DESC LIMIT 1
+    """), {"t": team, "k": str(kickoff)}).first()
+    if row is None:
+        return None
+    load = lambda v: v if isinstance(v, (list, dict)) else json.loads(v or "null")
+    starters, names = load(row[0]) or [], load(row[1]) or {}
+    out = {_norm(names.get(str(pid), "")).split()[-1] for pid in starters if _norm(names.get(str(pid), ""))}
+    return out or None
+
+
 def lineup_guard(verbose: bool = True) -> int:
     """
-    GUARDIA DE ALINEACIONES (API-Football): para bets con kickoff en <75min,
-    verifica si el goleador de élite del equipo apostado está en el once
-    confirmado. Si falta → cancela la bet (result='stale') con la razón en
-    decision_log. Sin API key o sin alineación publicada → no-op.
+    GUARDIA DE ALINEACIONES: para bets con kickoff en <75 min, verifica si el
+    goleador de élite del equipo apostado está en el once confirmado. Si falta
+    → cancela la bet (result='stale') con la razón en decision_log. Sin
+    alineación publicada → no-op.
+
+    Desde el 20-oct-26 lee los onces de ESPN (gratis), no de API-Football: la
+    cuenta gratuita de API-Football quedó suspendida el 16-oct y el filtro
+    estaba apagado.
     """
-    import os
-    if not os.environ.get("API_FOOTBALL_KEY"):
-        if verbose:
-            print("   Lineup guard: sin API_FOOTBALL_KEY — omitido")
-        return 0
     try:
-        from src.features.lineups import find_fixture, get_lineup_surnames, star_missing
+        from src.features.lineups import star_missing
         from src.models.scorer_model import load_scorer_rates
     except Exception as e:
         print(f"   Lineup guard import fallo: {e}")
@@ -192,19 +213,10 @@ def lineup_guard(verbose: bool = True) -> int:
                 continue
             h_n = normalize_team(h_raw)
             a_n = normalize_team(a_raw)
-            fid = find_fixture(pd.to_datetime(md).to_pydatetime().replace(tzinfo=None),
-                               h_raw, a_raw)
-            if not fid:
-                continue
-            lineups = get_lineup_surnames(fid)
-            if not lineups:
-                continue
-            import difflib
-            key_h = max(lineups, key=lambda k: difflib.SequenceMatcher(None, h_n, k).ratio())
-            key_a = max(lineups, key=lambda k: difflib.SequenceMatcher(None, a_n, k).ratio())
-
-            miss_home = star_missing(lineups[key_h], top_scorers(h_n))
-            miss_away = star_missing(lineups[key_a], top_scorers(a_n))
+            xi_home = espn_starter_surnames(conn, h_n, md)
+            xi_away = espn_starter_surnames(conn, a_n, md)
+            miss_home = star_missing(xi_home, top_scorers(h_n)) if xi_home else None
+            miss_away = star_missing(xi_away, top_scorers(a_n)) if xi_away else None
             if not miss_home and not miss_away:
                 continue
 

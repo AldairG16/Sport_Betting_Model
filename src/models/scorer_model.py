@@ -157,8 +157,34 @@ def _merge_club_scorers(out: dict, team_matches: dict) -> None:
         })
 
 
+_team_goals_cache: dict = {}
+_team_goals_ts: float = 0.0
+
+
+def load_team_goal_rates(force: bool = False) -> dict:
+    """Goles por partido de cada equipo en el último año (matches), para
+    escalar la tasa del jugador al partido de hoy."""
+    global _team_goals_cache, _team_goals_ts
+    now = datetime.now(timezone.utc).timestamp()
+    if not force and _team_goals_cache and (now - _team_goals_ts) < _CACHE_TTL_S:
+        return _team_goals_cache
+    df = pd.read_sql(text("""
+        SELECT team, AVG(goals) AS gpm, COUNT(*) AS n FROM (
+            SELECT LOWER(home_team) AS team, home_goals AS goals FROM matches
+            WHERE date >= CURRENT_DATE - 380 AND home_goals IS NOT NULL
+            UNION ALL
+            SELECT LOWER(away_team), away_goals FROM matches
+            WHERE date >= CURRENT_DATE - 380 AND away_goals IS NOT NULL
+        ) t GROUP BY team HAVING COUNT(*) >= 8
+    """), engine)
+    _team_goals_cache = {r.team: float(r.gpm) for r in df.itertuples()}
+    _team_goals_ts = now
+    return _team_goals_cache
+
+
 def anytime_scorer_prob(player: str, team_expected_goals: float,
-                        rates: dict | None = None) -> dict | None:
+                        rates: dict | None = None,
+                        team_avg_goals: float | None = None) -> dict | None:
     """
     P(jugador anota ≥1) dado los goles esperados de su equipo HOY.
 
@@ -185,11 +211,19 @@ def anytime_scorer_prob(player: str, team_expected_goals: float,
     if info["rate_raw"] < MIN_BASE_RATE:
         return None
 
-    # Escalar por el contexto ofensivo del partido: la tasa base está
-    # calculada sobre TODOS los partidos del equipo; hoy el equipo puede
-    # rendir más o menos que su media histórica.
-    team_avg_goals = max(info["rate_raw"], 0.05)  # proxy: tasa del jugador ~ media del equipo
-    lam = info["rate_weighted"] * (team_expected_goals / team_avg_goals)
+    # Escalar por el contexto ofensivo del partido: hoy el equipo puede rendir
+    # más o menos que su media histórica de GOLES DEL EQUIPO. Hasta el
+    # 20-oct-26 se dividía entre la tasa del propio JUGADOR ("proxy"): la
+    # tasa se cancelaba, λ quedaba igual a los goles esperados de todo el
+    # equipo y, con el tope de 1.2, TODOS los picks salían en 70%.
+    if team_avg_goals is None:
+        try:
+            team_avg_goals = load_team_goal_rates().get(info["team"])
+        except Exception as e:                 # sin la base: sin escalar
+            print(f"   ⚠️  goles por equipo ilegibles ({type(e).__name__}) — sin escalar")
+            team_avg_goals = None
+    scale = (team_expected_goals / team_avg_goals) if team_avg_goals and team_avg_goals > 0.2 else 1.0
+    lam = info["rate_weighted"] * float(np.clip(scale, 0.5, 2.0))
     lam = float(np.clip(lam, 0.01, 1.2))
     prob = float(1.0 - np.exp(-lam))
     return {

@@ -16,30 +16,33 @@ RATES = {
     "suplente":      {"team": "equipo y", "goals": 1,  "team_matches": 20,
                       "rate_weighted": 0.05, "rate_raw": 0.05},
 }
+TEAM_AVG = 1.6      # goles por partido del equipo en el último año
 
 
 class TestAnytimeScorer:
 
     def test_elite_returns_valid_prob(self):
-        r = anytime_scorer_prob("Kylian Mbappé", 2.0, rates=RATES)
+        r = anytime_scorer_prob("Kylian Mbappé", 2.0, rates=RATES, team_avg_goals=TEAM_AVG)
         assert r is not None
         assert 0 < r["prob"] < 1
-        # P = 1 - exp(-λ) con λ escalado por contexto y cap a 1.2
-        lam = min(0.85 * (2.0 / 0.94), 1.2)
+        # P = 1 - exp(-λ): tasa del jugador × (goles esperados hoy / media del
+        # equipo), cap a 1.2. Hasta el 20-oct-26 se dividía entre la tasa del
+        # jugador (0.94) y todos los picks salían en 70%.
+        lam = min(0.85 * (2.0 / TEAM_AVG), 1.2)
         assert abs(r["prob"] - (1 - math.exp(-lam))) < 0.01
         assert abs(r["fair_odds"] - 1 / r["prob"]) < 0.05
 
     def test_accent_insensitive_lookup(self):
         # "Mbappé" (acento, como en match_events) debe matchear con/sin acento
-        r1 = anytime_scorer_prob("kylian mbappé", 1.5, rates=RATES)
+        r1 = anytime_scorer_prob("kylian mbappé", 1.5, rates=RATES, team_avg_goals=TEAM_AVG)
         assert r1 is not None and r1["prob"] > 0
         # El key sin acento resuelve al mismo jugador vía tolerancia
-        r2 = anytime_scorer_prob("kylian mbappe", 1.5, rates=RATES)
+        r2 = anytime_scorer_prob("kylian mbappe", 1.5, rates=RATES, team_avg_goals=TEAM_AVG)
         assert r2 is not None and r2["prob"] == r1["prob"]
 
     def test_more_expected_goals_higher_prob(self):
-        p1 = anytime_scorer_prob("kylian mbappe", 1.0, rates=RATES)["prob"]
-        p2 = anytime_scorer_prob("kylian mbappe", 2.5, rates=RATES)["prob"]
+        p1 = anytime_scorer_prob("kylian mbappe", 1.0, rates=RATES, team_avg_goals=TEAM_AVG)["prob"]
+        p2 = anytime_scorer_prob("kylian mbappe", 2.5, rates=RATES, team_avg_goals=TEAM_AVG)["prob"]
         assert p2 > p1  # monotonía en goles esperados del equipo
 
     def test_low_sample_rejected(self):
@@ -52,7 +55,7 @@ class TestAnytimeScorer:
 
     def test_lambda_capped(self):
         # Contexto extremo (5 goles esperados) no produce λ infinito
-        r = anytime_scorer_prob("kylian mbappe", 5.0, rates=RATES)
+        r = anytime_scorer_prob("kylian mbappe", 5.0, rates=RATES, team_avg_goals=TEAM_AVG)
         assert r["lambda"] <= 1.2
 
     def test_parse_scorers_formats(self):

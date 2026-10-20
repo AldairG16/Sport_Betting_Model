@@ -341,33 +341,6 @@ def step_kalshi():
     capture_kalshi(horizon_hours=96, verbose=True)
 
 
-def step_api_football_check():
-    """Una vez al día (el primer closing del día UTC): ¿la API de
-    alineaciones responde con la temporada actual? Si no, el filtro de
-    alineaciones de las apuestas reales está apagado: ERROR a Telegram,
-    una sola vez ese día (13-oct-26; antes se apagaba sin avisar)."""
-    from datetime import datetime, timezone
-    from src.features.lineups import self_check
-    from src.utils.model_state import load_state, save_state
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    last = load_state("api_football_check") or {}
-    if last.get("day") == today:
-        print(f"   API-Football: ya revisada hoy ({'OK' if last.get('ok') else last.get('error')})")
-        return
-    res = self_check()
-    res["day"] = today
-    save_state("api_football_check", res)
-    if res.get("ok"):
-        print(f"✅ API-Football: plan {res.get('plan')}, {res.get('fixtures_today')} partidos hoy, "
-              f"consultas {res.get('requests')}")
-    elif last.get("ok", True) or last.get("error") != res.get("error"):
-        # se avisa al fallar o si cambia el motivo; repetirlo a diario es ruido
-        log.error(f"❌ API-Football no funciona ({res.get('error')}): el filtro de alineaciones "
-                  f"de las apuestas reales está apagado")
-    else:
-        log.warning(f"⚠️  API-Football sigue sin funcionar ({res.get('error')}) — ya avisado")
-
-
 def step_pre_kickoff_closing():
     """
     Captura de cierres antes del kickoff (corre cada ~30 min).
@@ -620,37 +593,24 @@ def step_resolve_pending():
         log.error(f"⚠️  resolve_pending (chained) error non-fatal: {e}")
 
 
+def evening_target_day(now_local):
+    """Día local que resume el evening: el de hoy (lo dispara el closing a las
+    21:00 MX); el de ayer solo si el run se atrasó pasada la medianoche.
+
+    Hasta el 20-oct-26 se anclaba al último día con apuestas REALES resueltas
+    y, si no había (modo recolección: semanas sin apuestas reales), caía a
+    "ayer": el resumen de las 21:00 hablaba del día anterior."""
+    from datetime import timedelta
+    today = now_local.date()
+    return today if now_local.hour >= 12 else today - timedelta(days=1)
+
+
 def step_notify_evening():
     from scripts.notify_telegram import send_evening_summary
-    # Fecha objetivo DATA-DRIVEN: el día local más reciente con apuestas ya
-    # resueltas, acotado a [ayer, hoy]. Inmune a los retrasos de GitHub (el
-    # cron de 21:07 MX llegó a ejecutarse a las 02:13 MX del día siguiente,
-    # y el anclaje por reloj resumía el día NUEVO — todo pendiente, inútil).
-    from datetime import datetime, timedelta
+    from datetime import datetime
     from zoneinfo import ZoneInfo as _ZI
     from config.settings import USER_TIMEZONE as _TZ
-    import pandas as pd
-    from sqlalchemy import text as _t
-    from config.database import engine as _eng
-    today_local = datetime.now(_ZI(_TZ)).date()
-    target_day = today_local - timedelta(days=1)   # default: ayer
-    try:
-        df = pd.read_sql(_t("""
-            SELECT (match_date AT TIME ZONE 'UTC'
-                    AT TIME ZONE :tz)::date AS d
-            FROM bets_history
-            WHERE result IN ('win','loss','push','half_win','half_loss')
-            ORDER BY match_date DESC LIMIT 1
-        """), _eng, params={"tz": _TZ})
-        if not df.empty:
-            d = df.iloc[0]["d"]
-            if d == today_local:
-                target_day = today_local          # ya hay resueltas hoy
-            elif d == today_local - timedelta(days=1):
-                target_day = d                    # hoy aún no resuelve nada
-            # d más viejo → default ayer
-    except Exception as e:
-        log.warning(f"   ⚠️  No se pudo anclar por datos ({e}) — usando ayer")
+    target_day = evening_target_day(datetime.now(_ZI(_TZ)))
     print(f"   Resumen nocturno anclado al día local: {target_day}")
     send_evening_summary(target_date=target_day)
 
@@ -724,11 +684,6 @@ def step_backtest():
 def step_clv():
     from src.models.clv_tracker import update_clv
     update_clv()
-
-
-def step_optimize_thresholds():
-    from src.models.threshold_optimizer import optimize_thresholds
-    optimize_thresholds(verbose=False)
 
 
 def step_walkforward():
@@ -1091,7 +1046,6 @@ def main():
             # Ejecutar 30-60 min antes de los primeros partidos del dia
             # Esto captura las odds de cierre reales para calcular CLV
             run_step(logger, "Pre-kickoff closing odds", step_pre_kickoff_closing)
-            run_step(logger, "Chequeo diario API-Football", step_api_football_check)
         elif args.mode == "weekly":
             # 1) PRIMERO lo que aprende de datos ya recolectados (bets y
             #    shadow resueltos por evening/closing): solo DB, segundos en
@@ -1129,7 +1083,6 @@ def main():
             # La auditoría de sanidad NO corre aquí: la ejecuta su propio paso
             # en weekly.yml (if: always(), corre aunque el weekly falle).
             # Correrla en los dos sitios mandaba el mismo mensaje dos veces.
-            run_step(logger, "Optimize thresholds",      step_optimize_thresholds)
             run_step(logger, "Walk-forward backtest",    step_walkforward)
             run_step(logger, "Weekly Telegram report",   step_weekly_report)
     except Exception as fatal:

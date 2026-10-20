@@ -136,4 +136,25 @@ TEAM_ALIASES.update({
     "rb leipzig": "leipzig",
     # "paris fc" es un equipo distinto a PSG — NO se mapea
 
+    # 20-oct-26: historia partida en dos nombres (split_identities en
+    # scripts/learn_team_aliases.py). El canónico es el nombre con la
+    # historia; los otros son el de The Odds API y el de football-data.
+    "atletico mineiro mg": "atleticomg",
+    "atletico mg": "atleticomg",
+    "athletico paranaense": "athleticopr",
+    "athletico pr": "athleticopr",
+    "chapecoense sc": "chapecoensesc",
+    "pumas unam": "unam pumas",
+    "atlante fc": "atlante",
+    "club america": "america",
+    "club leon": "leon",
+    "club tijuana": "tijuana",
+    "aldosivi mar del plata": "aldosivi",
+    "atletico huracan": "huracan",
+    "union de santa fe": "union santa fe",
+    "atlanta utd": "atlanta united",
+    "st louis city": "st louis city sc",
+    "beveren": "waasland beveren",          # SK Beveren (antes Waasland-Beveren)
+    "dorados de sinaloa": "dorados sinaloa",
+
 })

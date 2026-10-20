@@ -176,6 +176,7 @@ class _FakeApi:
                     "btts_yes_odds": 1.8 if has_btts else None}
 
         monkeypatch.setattr(uum, "_preflight_credits_check", lambda: remaining)
+        monkeypatch.setattr(uum, "_closing_budget", lambda r: (None, float("inf")))   # sin tope diario
         monkeypatch.setattr(uum, "ensure_schema", lambda: None)
         monkeypatch.setattr(uum, "load_cache", lambda: cache)
         monkeypatch.setattr(uum, "save_cache", lambda c: None)
@@ -186,9 +187,10 @@ class _FakeApi:
         self.uum = uum
 
 
-def _target(sport, home, away, specialty=False, shadow_specialty=False):
+def _target(sport, home, away, specialty=False, shadow_specialty=False, bet=False):
     return {"sport_key": sport, "home_norm": _norm(home), "away_norm": _norm(away),
-            "match_date": KICKOFF, "specialty": specialty, "shadow_specialty": shadow_specialty}
+            "match_date": KICKOFF, "specialty": specialty, "shadow_specialty": shadow_specialty,
+            "bet": bet or specialty}
 
 
 def test_only_target_leagues_are_refetched_and_fresh_ones_skipped(monkeypatch):
@@ -248,6 +250,51 @@ def test_shadow_refresh_needs_spare_credits_and_has_its_own_cap(monkeypatch):
     monkeypatch.setattr(uum, "CLOSING_MAX_SHADOW_EVENTS_PER_RUN", 0)
     api.uum.refresh_for_closing(both)
     assert api.event_calls == ["soccer_epl-1"]
+
+
+def _with_budget(monkeypatch, api, budget):
+    day = {"day": "2026-10-20", "start": 6000, "allowance": float(budget)}
+    monkeypatch.setattr(api.uum, "_closing_budget", lambda r: (day, float(budget)))
+
+
+def test_daily_budget_stops_shadow_only_leagues_but_not_real_bets(monkeypatch):
+    """20-oct-26: el closing gastaba ~925 créditos/día; ahora tiene presupuesto
+    diario. Una liga cuesta 3 (h2h, totals, spreads) y un evento 7."""
+    import scripts.update_upcoming_matches as uum
+    monkeypatch.setattr(uum, "_last_known_remaining", None)
+    targets = [_target("soccer_l1", "everton", "fulham", shadow_specialty=True),
+               _target("soccer_l2", "everton", "fulham"),
+               _target("soccer_l3", "arsenal", "chelsea", bet=True)]
+
+    api = _FakeApi(monkeypatch, cache={})
+    _with_budget(monkeypatch, api, 5)                          # una liga y nada más
+    stats = api.uum.refresh_for_closing(targets)
+    assert [c[0] for c in api.league_calls] == ["soccer_l1", "soccer_l3"]   # l2 se salta, la bet no
+    assert api.event_calls == [] and stats["stopped_budget"] is True       # el shadow no cabe (3+7 > 5)
+
+    api = _FakeApi(monkeypatch, cache={})
+    _with_budget(monkeypatch, api, 0)                          # presupuesto del día ya usado
+    stats = api.uum.refresh_for_closing(targets)
+    assert [c[0] for c in api.league_calls] == ["soccer_l3"]   # solo el partido con bet real
+
+    api = _FakeApi(monkeypatch, cache={})
+    _with_budget(monkeypatch, api, 0)
+    stats = api.uum.refresh_for_closing(targets[:2])
+    assert api.league_calls == [] and stats["skipped_budget"] is True
+
+
+def test_closing_targets_mark_real_bets():
+    from scripts.update_closing_odds import plan_closing_targets
+    upcoming = pd.DataFrame([
+        {"sport_key": "soccer_epl", "home_team_norm": _norm("arsenal"),
+         "away_team_norm": _norm("chelsea"), "match_date": KICKOFF},
+        {"sport_key": "soccer_epl", "home_team_norm": _norm("everton"),
+         "away_team_norm": _norm("fulham"), "match_date": KICKOFF}])
+    bets = pd.DataFrame([{"match": f"{_norm('arsenal')} vs {_norm('chelsea')}", "market": "home_win"}])
+    shadow = pd.DataFrame([{"match": f"{_norm('everton')} vs {_norm('fulham')}", "market": "btts"}])
+    t = {x["home_norm"]: x for x in plan_closing_targets(upcoming, bets, shadow)}
+    assert (t[_norm("arsenal")]["bet"], t[_norm("arsenal")]["specialty"]) == (True, False)
+    assert (t[_norm("everton")]["bet"], t[_norm("everton")]["shadow_specialty"]) == (False, True)
 
 
 def test_league_cap_per_run(monkeypatch):

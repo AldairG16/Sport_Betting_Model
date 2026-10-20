@@ -101,7 +101,10 @@ def test_no_loader_asks_for_files_football_data_does_not_have():
     from scripts.load_extra_leagues import EXTRA_LEAGUES
     from scripts.load_historical_data import leagues
     assert "soccer_uefa_champs_league" not in leagues.values() and "ECL" not in leagues
-    assert LEAGUES == leagues                     # una sola fuente para los dos cargadores
+    # una sola fuente para los dos cargadores; las segundas divisiones solo
+    # en el semanal (historia de los ascendidos, 20-oct-26)
+    from src.utils.football_data import HISTORY_LEAGUES, SEASON_LEAGUES
+    assert LEAGUES == SEASON_LEAGUES and leagues == {**SEASON_LEAGUES, **HISTORY_LEAGUES}
     assert "KOR" not in EXTRA_LEAGUES
 
 
@@ -520,7 +523,7 @@ def test_weekly_errors_when_a_merged_variant_comes_back(monkeypatch):
 
 @pytest.mark.parametrize("api_name,history", [
     ("FC Schalke 04", "schalke 04"), ("Deportivo La Coruña", "la coruna"), ("CS Maritimo", "maritimo"),
-    ("KV Kortrijk", "kortrijk"), ("SK Beveren", "beveren"), ("Le Mans FC", "le mans"),
+    ("KV Kortrijk", "kortrijk"), ("SK Beveren", "waasland beveren"), ("Le Mans FC", "le mans"),
     ("Kalamata FC", "kalamata"), ("ADO Den Haag", "den haag"), ("SC Cambuur", "cambuur"),
     ("Amed SK", "amedspor"), ("Çorum FK", "corum"), ("SC Paderborn", "paderborn"),
 ])
