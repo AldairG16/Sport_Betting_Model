@@ -912,6 +912,8 @@ casa como PlayDoit ajusta. No se puede medir con historia, solo en vivo.
     (2 fuera +0.8 pt, 3 +1.9, 4 +2.6, 5+ +8.2 con n=101). Con 2 saldría en la mitad de los
     partidos: es rotación normal. Con 4 sale en el 4%, unas 10 alertas en un fin de
     semana completo.
+  - **Longshots:** "el rival gana" solo sale si Pinnacle le da 20% o más (con 15% o menos,
+    el buscador de ventajas mide −24%); "empate o rival" sale siempre.
   - **El goleador no avisa:** cuando falta, la casa exagera (el rival ganó 34.4% contra
     36.0% esperado). Solo se menciona en el mensaje.
   - **Cómo calcula el mínimo:** con el precio de Pinnacle de `upcoming_matches` y 2 pt de

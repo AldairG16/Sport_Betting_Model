@@ -104,6 +104,8 @@ def test_alert_prices_the_rival_with_pinnacle():
     assert all(a["weakened"] == "alpha" for a in alerts)
     assert LA.alerts_for_match(_fixture(age_h=13), lineups, profiles, now=NOW) == []   # precio viejo
     assert LA.alerts_for_match(_fixture(), {"alpha": XI, "beta": XI}, profiles, now=NOW) == []
+    longshot = {**_fixture(), "pin_home_odds": 1.30, "pin_draw_odds": 5.5, "pin_away_odds": 11.0}
+    assert [a["market"] for a in LA.alerts_for_match(longshot, lineups, profiles, now=NOW)] == ["dc_x2"]
 
 
 def test_message_and_value_at_close():

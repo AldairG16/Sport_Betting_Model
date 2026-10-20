@@ -43,6 +43,8 @@ MIN_TEAM_MATCHES = 6
 MIN_TOP_GOALS = 3
 TRIGGER_MISSING = 4
 MAX_PIN_AGE_H = 12          # precio de Pinnacle más viejo que esto: sin alerta
+MIN_WIN_PROB = 0.20         # "el rival gana" solo si Pinnacle le da 20%+: los longshots pierden
+                            # aun contra el precio justo (buscador de ventajas: −24% con ≤15%)
 
 TABLE = "lineup_alerts"
 DDL = f"""
@@ -135,7 +137,7 @@ def alerts_for_match(fixture: dict, lineups: dict, profiles: dict, now=None) -> 
         rival_win, rival_dc = ("away_win", "dc_x2") if is_home else ("home_win", "dc_1x")
         for market in (rival_win, rival_dc):
             p = pinnacle_prob(market, fixture)
-            if p is None:
+            if p is None or (market == rival_win and p < MIN_WIN_PROB):
                 continue
             out.append({"sport_key": fixture["sport_key"], "kickoff": fixture["match_date"],
                         "home": home, "away": away, "weakened": team,
