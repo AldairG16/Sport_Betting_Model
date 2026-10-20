@@ -837,6 +837,63 @@ Los mismos CSV de football-data que descarga el weekly traen el cierre de Pinnac
 - **Ojo con las temporadas:** los códigos de mmz4281 se leen con `code_start` ('1920' →
   2019). El primer backfill guardó '1920' y '2021' como años y se corrigió en la tabla.
 
+### Córners y tarjetas calibrados (`src/models/props_fair.py`, 20-oct-2026)
+
+**El modelo de córners del pipeline exagera.** Medido sobre 25,046 partidos de 2022 en
+adelante (18 ligas): cuando dice 15% de "más de 9.5", salen 42%; cuando dice 85%, salen 60%.
+Acierta menos que usar solo el promedio de la liga (pérdida logarítmica 0.7119 contra
+0.6898). Tiene tres fallas:
+- usa un promedio europeo fijo (5 córners por equipo);
+- le cree del todo a los últimos 20 partidos de cada equipo;
+- supone Poisson.
+
+En el pipeline casi no pesa, porque los córners van anclados al mercado con 2% de peso del
+modelo. Se reemplaza fuera del pipeline, en `props_fair`:
+- **base:** el promedio de local y de visitante de la liga en el último año;
+- **equipos:** su desvío, encogido y creído solo en parte; ALPHA ajustado en 2012-21: 0.3
+  en córners y 0.4 en tarjetas;
+- **distribución:** binomial negativa en córners (k = 48) y Poisson en tarjetas.
+
+Resultado en 2022+:
+- **córners:** 0.6487 contra 0.6515 del promedio de liga;
+- **tarjetas:** 0.6196 contra 0.6273;
+- **partidos que se apartan 4 pt o más de su liga** (30% en córners, 50% en tarjetas):
+  - córners: el modelo dice 56%, la liga diría 50%, salen 55.4%;
+  - tarjetas: el modelo dice 59%, la liga 52%, salen 59.8%;
+  - se repite igual en cada temporada.
+
+**Que esté calibrado no prueba que le gane a una casa:** solo que sabe más que un precio
+"de promedio de liga". Contra la mejor cuota europea (candidatas sombra, 20-oct):
+- 95 apuestas, 55G/39P, +4.31u;
+- acierto 59%, cuando la cuota daba 55% y el modelo 63%;
+- todavía sin veredicto.
+
+El laboratorio lo mide cada semana con resultados, porque no hay un cierre sin margen de
+referencia (sección "Córners y tarjetas"). Mandarle al dueño el momio mínimo de córners y
+tarjetas para PlayDoit espera a que salga ✅.
+
+**Datos:**
+- **Lectura:** una sola consulta (`load_history`) y todo en memoria. Antes, una consulta
+  por equipo tardaba 7 min por 122 partidos.
+- **Nombre del equipo:** se lee `home_team` (canónico, en minúsculas). `team_home_norm`
+  quedó vacío en los partidos recientes de `matches`, y solo lo usan dos scripts viejos de
+  limpieza.
+- **Tarjetas:** `matches` solo las tiene completas desde 2025-26 (Premier: 616 de 4,250
+  partidos desde 2015). Alcanza para los últimos 20 partidos de cada equipo. Para
+  investigar el pasado se usan los CSV.
+
+### Alineaciones: el momio final ya las cuenta (20-oct-2026)
+
+Se probaron las alineaciones de ESPN (API pública, titulares, formación y goles por
+jugador) en 4,389 partidos de 2024-26 de 7 ligas, contra el momio de cierre:
+- **Al local le faltan 2+ titulares habituales** (70%+ de titularidades en la
+  temporada): gana 42.5% y el cierre esperaba 45.5%. Apostar al visitante en esos casos da
+  −2.4% a precio promedio: el margen se come los 3 pt.
+- **Sin su goleador:** el cierre ya lo cuenta.
+
+Lo único que podría quedar es el tiempo: los minutos entre que sale la alineación y una
+casa como PlayDoit ajusta. No se puede medir con historia, solo en vivo.
+
 ### Sesgo por lado (`src/models/side_bias.py`)
 
 Medido el 25-sep: el modelo daba en promedio +5.1 pt al local, −2.2 al empate y −3.3 al

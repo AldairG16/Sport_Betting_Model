@@ -151,7 +151,35 @@ def with_kalshi(shadow: pd.DataFrame, kh: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(out, columns=cols)
 
 
-def build_lab(shadow: pd.DataFrame, kalshi: pd.DataFrame | None = None) -> dict:
+# Córners y tarjetas (20-oct-26): sin precio de Pinnacle, la referencia es el
+# modelo calibrado (src/models/props_fair.py, medido contra 78k partidos). Se
+# juzga con RESULTADOS: no hay un cierre sin margen contra el cual medir. El
+# 20-oct, contra la mejor cuota europea: 111 apuestas en 85 partidos, 51.4% de
+# acierto (el modelo decía 58.9%), +1.3% — todavía nada.
+PROPS_MIN_EDGE = 0.02
+PROPS_NAME = "Córners y tarjetas: el modelo calibrado ve 2 pt o más sobre la cuota"
+
+
+def props_lab(rows: pd.DataFrame) -> dict:
+    """rows: candidatas de córners/tarjetas liquidadas con `p_model` (función pura)."""
+    from src.models.rule_evidence import cluster_mean, verdict
+    if rows is None or rows.empty or "p_model" not in rows.columns:
+        return {}
+    d = rows[rows["p_model"].notna() & (rows["odds"] > 1.01)].copy()
+    d["cluster"] = d["match"].astype(str) + "|" + d["match_date"].astype(str)
+    sel = d[d["p_model"] - 1.0 / d["odds"] >= PROPS_MIN_EDGE]
+    played = sel[sel["result"].isin(SETTLED)]
+    st = cluster_mean(pd.to_numeric(played["profit"], errors="coerce").fillna(0.0), played["cluster"])
+    st["verdict"] = verdict(st, lower_supports=False)
+    binary = played[played["result"].isin(("win", "loss"))]
+    return {"name": PROPS_NAME, "candidates": int(len(sel)), "roi": st, "results": results(sel),
+            "hit": float((binary["result"] == "win").mean()) if len(binary) else None,
+            "model_says": float(binary["p_model"].mean()) if len(binary) else None,
+            "odds_say": float((1.0 / binary["odds"]).mean()) if len(binary) else None}
+
+
+def build_lab(shadow: pd.DataFrame, kalshi: pd.DataFrame | None = None,
+              props: pd.DataFrame | None = None) -> dict:
     """Función pura: cada estrategia con su valor contra el cierre (a la
     mejor cuota y a la promedio), veredicto y resultados a 1u; y, con los
     precios de Kalshi, las de los mercados sin Pinnacle."""
@@ -176,7 +204,8 @@ def build_lab(shadow: pd.DataFrame, kalshi: pd.DataFrame | None = None) -> dict:
             sel = kd[rule(kd).fillna(False).astype(bool)]
             kal[key] = {"name": name, "candidates": int(len(sel)),
                         "value": value_at_close(sel), "results": results(sel)}
-    return {"strategies": out, "kalshi": kal, "updated_at": datetime.now(timezone.utc).isoformat()}
+    return {"strategies": out, "kalshi": kal, "props": props_lab(props),
+            "updated_at": datetime.now(timezone.utc).isoformat()}
 
 
 def format_lines(lab: dict, html: bool = True) -> list:
@@ -223,7 +252,51 @@ def format_lines(lab: dict, html: bool = True) -> list:
         res = (f"a 1u: {r['wins']}G/{r['losses']}P {r['profit']:+.2f}u"
                if r["played"] else "sin resultados aún")
         lines.append(f"• {st['name']}: {value}{verdict} · {res}")
+    pr = lab.get("props") or {}
+    if pr:
+        lines += ["", b("🚩 Córners y tarjetas") + " (modelo calibrado; se juzga con resultados)"]
+        roi, r = pr["roi"], pr["results"]
+        if roi.get("verdict") == VERDICT_THIN or roi.get("mean") is None:
+            verdict = f"⏳ faltan datos ({roi.get('n', 0)} de 100)"
+        else:
+            verdict = (f"{roi['mean'] * 100:+.1f}% (±{1.96 * roi['se'] * 100:.1f}) · "
+                       + VERDICT_TEXT.get(roi["verdict"], roi["verdict"]))
+        res = (f"a 1u: {r['wins']}G/{r['losses']}P {r['profit']:+.2f}u" if r["played"] else "sin resultados aún")
+        lines.append(f"• {pr['name']}: {verdict} · {res}")
+        if pr.get("hit") is not None:
+            lines.append(f"   acierta {pr['hit'] * 100:.0f}% · el modelo decía {pr['model_says'] * 100:.0f}% · "
+                         f"la cuota {pr['odds_say'] * 100:.0f}%")
     return lines
+
+
+def read_props(shadow: pd.DataFrame) -> pd.DataFrame:
+    """Candidatas de córners y tarjetas con la probabilidad del modelo
+    calibrado, calculada solo con partidos ANTERIORES al partido."""
+    import re
+    from src.models import props_fair as PF
+    if shadow is None or shadow.empty or "league" not in shadow.columns:
+        return pd.DataFrame()
+    pat = re.compile(r"^(corners|cards)_(over|under)_([\d.]+)$")
+    d = shadow[shadow["market"].astype(str).str.match(pat)].copy()
+    if d.empty:
+        return d
+    hist = PF.load_history()
+    cache, probs = {}, []
+    for r in d.itertuples(index=False):
+        prop, side, line = pat.match(r.market).groups()
+        day = str(r.match_date)[:10]
+        key = (r.match, day)
+        if key not in cache:
+            home, _, away = str(r.match).partition(" vs ")
+            cache[key] = PF.match_props(hist, home, away, r.league, day) if away else {}
+        mp = cache[key].get(prop)
+        if not mp:
+            probs.append(None)
+            continue
+        p = PF.prob_over(mp["mu"], float(line), PF.PROPS[prop]["dispersion"])
+        probs.append(p if side == "over" else 1.0 - p)
+    d["p_model"] = probs
+    return d
 
 
 def read_shadow() -> pd.DataFrame:
@@ -234,7 +307,7 @@ def read_shadow() -> pd.DataFrame:
     with engine.begin() as conn:
         conn.execute(text(SHADOW_ALTER_SQL))     # odds_avg existe antes de la 1ª corrida nueva
     return pd.read_sql(text("""
-        SELECT match, match_date, created_at, market, p_final, odds, edge_market,
+        SELECT match, match_date, created_at, league, market, p_final, odds, edge_market,
                pin_prob, pin_close_prob, pin_close_at, result, profit, odds_avg
         FROM shadow_bets
         WHERE match_date >= CAST(:since AS timestamptz) AND odds > 1.01
@@ -258,7 +331,8 @@ def read_kalshi() -> pd.DataFrame:
 def run_strategy_lab(verbose: bool = True) -> dict:
     """Paso semanal: mide, guarda en model_state (con historia) y devuelve."""
     from src.utils.model_state import save_state
-    lab = build_lab(read_shadow(), read_kalshi())
+    shadow = read_shadow()
+    lab = build_lab(shadow, read_kalshi(), read_props(shadow))
     save_state(STATE_KEY, lab)
     if verbose:
         print("\n".join(format_lines(lab, html=False)))
