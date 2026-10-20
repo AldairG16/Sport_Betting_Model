@@ -888,6 +888,26 @@ def step_timing_learning():
         send_message(format_report(state, previous, html=True))
 
 
+def step_historical_odds():
+    """Momios de cierre de football-data (Pinnacle, promedio y mejor cuota)
+    → historical_odds: temporada en curso más las que falten."""
+    from scripts.load_historical_odds import load_historical_odds
+    load_historical_odds()
+
+
+def step_edge_finder():
+    """Buscador de ventajas: prueba cada idea contra años de momios reales,
+    en tres periodos (src/models/edge_finder.py). Solo mide. Telegram si
+    cambia lo que pasa o lo prometedor."""
+    from src.models.edge_finder import changed, format_report, run_edge_finder
+    from src.utils.model_state import load_state
+    previous = load_state("edge_finder")
+    report = run_edge_finder(verbose=True)
+    if changed(previous, report):
+        from scripts.notify_telegram import send_message
+        send_message(format_report(report, html=True))
+
+
 def step_sharp_reference():
     """¿Hay ventaja real? Apuestas y candidatas contra el cierre sin margen
     de Pinnacle, si su precio se mueve hacia el modelo y modelo vs Pinnacle
@@ -1071,6 +1091,8 @@ def main():
             run_step(logger, "Load international data",  step_load_international)
             run_step(logger, "Collect match events",     step_collect_events)
             run_step(logger, "Load extra leagues",       step_load_extra_leagues)
+            run_step(logger, "Momios históricos",        step_historical_odds)
+            run_step(logger, "Buscador de ventajas",     step_edge_finder)
             run_step(logger, "Nombres de equipo y repetidos", step_team_names_check)
             run_step(logger, "Apuestas sin fuente con dato nuevo", step_resolve_stale)
             # run_step(logger, "Load MLB data",            step_load_mlb)  # desactivado — sin creditos MLB

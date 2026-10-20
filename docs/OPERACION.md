@@ -628,6 +628,7 @@ fuente de verdad; los archivos de `config/` y `data/` son espejo local.
 | `rule_evidence` | `rule_evidence.run_rule_evidence` | veredicto de cada regla contra resultados (reporte; los filtros lo usan abajo) |
 | `filter_switches` | `filter_learner.run_filter_learning` | filtros de selección prendidos/apagados (entre semana, rango de cuota, ligas difíciles) |
 | `timing_windows` | `timing_learner.run_timing_learning` | horarios antes del kickoff sin dinero real |
+| `edge_finder` | `edge_finder.run_edge_finder` | solo reporte: qué ideas le ganan al momio histórico en los tres periodos |
 | `sharp_reference` | `sharp_reference.run_sharp_reference` | solo reporte: apuestas y modelo contra Pinnacle |
 
 **Cierres válidos:** todo lo que aprende del CLV (gate, caché de Kelly, reactivación,
@@ -783,6 +784,58 @@ filtro, y bloquea para dinero real el horario que pierde.
   más. Contar cada foto como señal daba cientos por semana, pero repetía la misma
   cuota.
 - **Telegram:** si un horario se bloquea o vuelve, o si alguno ya tiene veredicto.
+
+### Momios históricos y buscador de ventajas (19-oct-2026)
+
+Hasta esta fecha la base tenía 94k partidos con resultado y **ningún momio**. El modelo
+nunca se había comparado con el mercado en años de datos, solo en las semanas de sombra.
+Los mismos CSV de football-data que descarga el weekly traen el cierre de Pinnacle (desde
+2012-13), el promedio y la mejor cuota entre casas, más/menos 2.5 y hándicap. Se tiraban.
+
+**Tabla `historical_odds`** (`scripts/load_historical_odds.py`, paso "Momios históricos"):
+- **Qué guarda:** una fila por partido con goles, tiros a puerta, córners y los momios.
+  Aparte de `matches`: es la base de investigación y no toca nada de lo que ya funciona.
+- **Qué precio guarda:** el de cierre cuando existe (`pin_closing`, `avg_closing`). Si no, el
+  de apertura, o el promedio Betbrain en las temporadas viejas.
+- **Ligas:**
+  - las 12 de `SEASON_LEAGUES`;
+  - las segundas divisiones que ofrece PlayDoit (League One y Two, 2. Bundesliga, Serie B,
+    Segunda, Ligue 2);
+  - los archivos `/new/` de México, EE. UU., Brasil, Argentina, Japón, Noruega, Suecia y
+    China.
+- **Qué descarga el weekly:** la temporada en curso y las que falten. Una descarga fallida se
+  reintenta sola la semana siguiente.
+- **Carga completa:** `python scripts/load_historical_odds.py --backfill`.
+- **Si una fila ya existe:** se completan los momios que faltaban (`fill_null`) y nunca se
+  pisa un dato existente.
+
+**Buscador de ventajas** (`src/models/edge_finder.py`, paso "Buscador de ventajas", clave
+`edge_finder`):
+- **Qué prueba:** más de 30 ideas en palabras del dueño (racha, goles, descanso, recién
+  ascendidos, suerte, resultado anterior, pelea por el descenso y sesgos del momio) contra
+  esos momios.
+- **Precio:** el promedio entre casas, porque PlayDoit paga casi igual. Medido el 19-oct en la
+  Bundesliga: PlayDoit −2.2 pt contra el precio justo de Pinnacle, promedio −2.4.
+- **Sin mirar el futuro:** cada rasgo usa solo partidos anteriores de la misma liga y
+  temporada.
+- **Veredicto:**
+  - **pasa** si gana en 2012-18, en 2019-22 y en 2023 en adelante (≥ 50 apuestas en cada
+    periodo), y la ganancia junta no puede ser suerte aun probando todas las ideas
+    (Bonferroni);
+  - **prometedora** si gana en los tres, pero todavía puede ser suerte.
+- **Por qué tanto rigor:** "el recién ascendido de local pierde" ganaba +10% y +15% en
+  2019-25 y perdió −11% en 2012-19.
+- **Solo mide.** Una idea que pase va primero al laboratorio y después al dinero real.
+- **Telegram:** solo cuando cambia lo que pasa o lo prometedor.
+- **Primera corrida (20-oct-2026):** 132,218 partidos de 26 ligas, 2012-2026. Ninguna de las
+  32 ideas pasó y casi todas pierden lo que cobra la casa (−4% a −8%).
+  - Lo menos malo: el local muy favorito (+0.4%), sin repetirse en los tres periodos.
+  - Lo peor: el visitante con 15% o menos (−24%), por el sesgo favorito-longshot.
+  - "Local en racha" gana 59% cuando la casa esperaba 58%: −4.8% a precio común.
+  - Apostar temprano no cambia nada: la casa común arriba de Pinnacle en el mismo momento
+    salió en 181 de 10,706 partidos y valía −4.8% contra el cierre.
+- **Ojo con las temporadas:** los códigos de mmz4281 se leen con `code_start` ('1920' →
+  2019). El primer backfill guardó '1920' y '2021' como años y se corrigió en la tabla.
 
 ### Sesgo por lado (`src/models/side_bias.py`)
 
