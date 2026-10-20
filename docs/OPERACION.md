@@ -932,6 +932,27 @@ casa como PlayDoit ajusta. No se puede medir con historia, solo en vivo.
 - **Costo:** gratis. En el closing son 1-3 consultas a ESPN por liga con partidos en la
   ventana, más una por partido.
 
+**Revisión con Claude** (`src/models/lineup_review.py`, 20-oct-2026). El dueño la aprobó con
+tope de **$0.50 por semana**.
+- **Qué hace:** antes de mandar cada alerta, Claude Haiku 5.5 (`claude-haiku-5-5`) busca
+  noticias con hasta 2 búsquedas web (`web_search_20250305`; Haiku no tiene la versión con
+  filtrado dinámico).
+- **Qué responde:** en JSON, si las bajas son lesión o sanción (`CONFIRMA`), descanso
+  planeado con suplentes de nivel (`DESCARTA`) o falta de información (`DUDA`).
+- **Dónde queda:** el veredicto va en el mensaje ("Claude revisó noticias: confirma / sugiere
+  no apostar") y en `lineup_alerts` (`analyst_*`).
+- **Costo:** ~2-3 centavos por revisión, casi todo en búsquedas ($0.01 cada una).
+- **Topes:**
+  - el semanal (`LINEUP_REVIEW_WEEKLY_USD`) se cuenta en `lineup_alerts.analyst_cost` de los
+    últimos 7 días;
+  - el diario de la cuenta es `anthropic_budget.can_call`;
+  - sin tope, sin clave o con error, la alerta sale igual, sin revisión. Una falla de Claude
+    es ERROR.
+- **Clave:** `closing.yml` recibe `ANTHROPIC_API_KEY` desde el 20-oct.
+- **Medición:** el reporte semanal separa las alertas por veredicto (confirmó / sin info /
+  descartó) y suma el gasto. Si las que Claude confirma no rinden más que las que descarta,
+  la revisión no vale lo que cuesta y se apaga.
+
 ### Sesgo por lado (`src/models/side_bias.py`)
 
 Medido el 25-sep: el modelo daba en promedio +5.1 pt al local, −2.2 al empate y −3.3 al

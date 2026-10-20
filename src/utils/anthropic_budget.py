@@ -24,6 +24,9 @@ from sqlalchemy import text
 # ============================================================
 # https://docs.anthropic.com/claude/docs/models-overview
 PRICING = {
+    # Haiku 5.5 (20-oct-26, revisión de alertas de alineación): prompts de hasta
+    # 100K tokens; más largos cuestan $0.50 / $2.50 (no se usan aquí).
+    "claude-haiku-5-5":       {"input": 0.10, "output": 0.50},
     "claude-haiku-4-5":       {"input": 1.00, "output": 5.00},   # ~5x más barato que Sonnet
     "claude-haiku-4-5-20251001": {"input": 1.00, "output": 5.00},
     "claude-sonnet-4-5":      {"input": 3.00, "output": 15.00},
