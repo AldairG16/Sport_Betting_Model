@@ -189,10 +189,82 @@ def without_history(live, counts: dict, league_names: dict) -> list:
     return out
 
 
+# Nombre partido en dos (20-oct-26): con menos de SPLIT_MAX_OWN partidos con
+# su nombre se busca en su liga un nombre parecido con SPLIT_MIN_OLD o más que
+# dejó de aparecer cuando apareció este.
+SPLIT_MAX_OWN = 60
+SPLIT_MIN_OLD = 20
+MIN_RECENT = 4          # partidos en los últimos 13 meses
+RECENT_DAYS = 395
+
+
+def _similarity(a: str, b: str) -> float:
+    import difflib
+    return difflib.SequenceMatcher(None, a.replace(" ", ""), b.replace(" ", "")).ratio()
+
+
+def _looks_alike(a: str, b: str) -> bool:
+    """Uno dentro del otro, las mismas palabras en otro orden, o el mismo
+    arranque y muy parecidos ("atleticomg" / "atletico mineiro mg", 0.74).
+    Sin el arranque, "kalamata" se parecía a "lamia" y "amedspor" a
+    "kayserispor"; con 0.6, "academico de viseu" a "academica" (0.64)."""
+    a0, b0 = a.replace(" ", ""), b.replace(" ", "")
+    return (a0 in b0 or b0 in a0 or set(a.split()) == set(b.split())
+            or (a0[:4] == b0[:4] and _similarity(a, b) >= 0.7))
+
+
+def split_identities(live, counts: dict, league_names: dict, dates: dict) -> list:
+    """
+    [(liga, nombre, nombre viejo)] de los equipos próximos con poca historia
+    con su nombre y, en su liga, un nombre parecido con mucha que casi no
+    aparece mientras aparece este. dates: {nombre: [fechas de sus partidos]}.
+
+    without_history solo ve a los que no tienen NI UN partido: cuando cambia
+    la fuente, el nombre nuevo junta partidos desde ese día y el aviso se
+    apagaba. El 20-oct-26 Atlético Mineiro tenía 16 partidos como "atletico
+    mineiro mg" y 539 como "atleticomg"; igual Athletico, Pumas, Atlante,
+    Huracán y Aldosivi. Dos clubes de verdad de la misma liga juegan casi
+    todas las jornadas a la vez; un nombre viejo solo se cruza con el nuevo
+    en algún partido suelto de otra fuente (Huracán, 2-ago-26).
+    """
+    out = []
+    for league, raw in sorted(set(live)):
+        team = normalize_team(raw)
+        own = len(dates.get(team, ()))
+        if own == 0 or own >= SPLIT_MAX_OWN:
+            continue
+        first, last = min(dates[team]), max(dates[team])
+        cands = []
+        for name in league_names.get(league, ()):
+            if name == team or counts.get(name, 0) < SPLIT_MIN_OLD or not _looks_alike(name, team):
+                continue
+            overlap = sum(first <= d <= last for d in dates.get(name, ()))
+            if overlap > max(2, own // 2):
+                continue
+            cands.append((_similarity(name, team), name))
+        if cands:
+            out.append((league, team, max(cands)[1]))
+    return out
+
+
+def thin_recent(live, recent: dict, min_recent: int = MIN_RECENT) -> list:
+    """[(liga, nombre, partidos)] de los equipos próximos con menos de
+    `min_recent` partidos en los últimos 13 meses (ascendido de una liga que
+    no se carga, o club nuevo): el modelo los ve casi sin datos."""
+    out = []
+    for league, raw in sorted(set(live)):
+        team = normalize_team(raw)
+        n = int(recent.get(team, 0))
+        if 0 < n < min_recent:
+            out.append((league, team, n))
+    return out
+
+
 def check_names_without_history(days: int = 10) -> list:
     """Para el weekly: ERROR si un equipo de los próximos `days` días (ligas de
     club; las copas europeas traen clubes de ligas que no se cargan) no
-    tiene historial con su nombre."""
+    tiene historial con su nombre o lo tiene partido en dos nombres. Los que
+    tienen poca historia reciente van como WARNING: no hay alias que poner."""
     from config.database import engine
     with engine.connect() as conn:
         live = conn.execute(text("""
@@ -205,24 +277,41 @@ def check_names_without_history(days: int = 10) -> list:
               AND sport_key LIKE 'soccer%%' AND sport_key NOT LIKE 'soccer_uefa%%'
         """), {"d": days}).fetchall()
         rows = conn.execute(text("""
-            SELECT league, name, COUNT(*) FROM (
-                SELECT league, home_team AS name FROM matches
-                UNION ALL SELECT league, away_team FROM matches
-            ) t GROUP BY league, name
+            SELECT league, name, date::date, home_goals IS NOT NULL FROM (
+                SELECT league, home_team AS name, date, home_goals FROM matches
+                UNION ALL SELECT league, away_team, date, home_goals FROM matches
+            ) t WHERE league IS NULL OR league NOT LIKE 'baseball%%'
         """)).fetchall()
+    from datetime import date, timedelta
+    since = date.today() - timedelta(days=RECENT_DAYS)
     counts: Counter = Counter()
+    recent: Counter = Counter()
     league_names: dict = {}
-    for league, name, n in rows:
-        counts[name] += int(n)
+    dates: dict = {}
+    for league, name, d, played in rows:
+        counts[name] += 1
+        recent[name] += int(bool(played) and d >= since)
         league_names.setdefault(league, set()).add(name)
-    missing = without_history([(l, r) for l, r in live if r], counts, league_names)
+        dates.setdefault(name, []).append(d)
+    live = [(l, r) for l, r in live if r]
+    missing = without_history(live, counts, league_names)
+    split = split_identities(live, counts, league_names, dates)
+    thin = [t for t in thin_recent(live, recent)
+            if t[1] not in {s[1] for s in split}]
     if missing:
         log.error("❌ Equipos sin historial con el nombre de la API: " + "; ".join(
             f"'{t}' ({l.replace('soccer_', '')}" + (f", ¿= '{s}'?" if s else "") + ")"
             for l, t, s in missing[:8]) + " → falta el alias en TEAM_NAME_MAP")
-    else:
+    if split:
+        log.error("❌ Historia partida en dos nombres: " + "; ".join(
+            f"'{t}' ({counts[t]} partidos) y '{s}' ({counts[s]}, hasta {max(dates[s])})"
+            for _, t, s in split[:8]) + " → falta el alias en TEAM_ALIASES")
+    if thin:
+        log.warning("⚠️  Equipos con poca historia reciente (13 meses): " + "; ".join(
+            f"'{t}' ({l.replace('soccer_', '')}, {n})" for l, t, n in thin[:10]))
+    if not (missing or split or thin):
         print("✅ Equipos de los próximos partidos: todos con historial")
-    return missing
+    return missing + split
 
 
 def check_new_aliases(merge=None, verbose: bool = True) -> list:

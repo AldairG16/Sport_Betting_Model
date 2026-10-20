@@ -18,6 +18,7 @@ Se guarda en kalshi_history solo cuando el precio cambió (como odds_history).
 """
 
 import json
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -84,10 +85,27 @@ KALSHI_INDEX = """
 """
 
 
-def _get(path: str) -> dict:
-    req = urllib.request.Request(BASE + path, headers={"User-Agent": "sport-betting-model"})
-    with urllib.request.urlopen(req, timeout=25) as r:
-        return json.loads(r.read())
+RETRY_STATUS = (429, 500, 502, 503, 504)
+PAUSE_S = 0.25          # entre llamadas: ~4 por segundo
+
+
+def _get(path: str, tries: int = 4, sleep=None) -> dict:
+    """GET a la API de Kalshi con reintento. Desde GitHub, 5-9 ligas por corrida
+    fallaban con HTTPError (20-oct-26) — las mismas respondían bien desde otra
+    máquina: el límite de llamadas de Kalshi con ~90 seguidas. Se espera
+    1, 2, 4 s ante 429/5xx y se hace una pausa corta entre llamadas."""
+    import time
+    sleep = sleep or time.sleep
+    for attempt in range(tries):
+        sleep(PAUSE_S)
+        req = urllib.request.Request(BASE + path, headers={"User-Agent": "sport-betting-model"})
+        try:
+            with urllib.request.urlopen(req, timeout=25) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code not in RETRY_STATUS or attempt == tries - 1:
+                raise
+            sleep(2 ** attempt)
 
 
 def _quote(m: dict):
@@ -247,7 +265,7 @@ def capture_kalshi(horizon_hours: float = 96, every: bool = False, verbose: bool
         try:
             rows += fetch_league(lg)
         except Exception as e:
-            failed.append(f"{lg}: {type(e).__name__}")
+            failed.append(f"{lg}: {type(e).__name__} {getattr(e, 'code', '')}".strip())
     limit = now + timedelta(hours=horizon_hours)
     seen = len(rows)
     matched, cache = [], {}

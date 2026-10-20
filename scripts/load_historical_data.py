@@ -12,8 +12,8 @@ from sqlalchemy import text
 from config.database import engine
 from src.utils.team_normalizer import normalize_team
 from src.utils.db_batch import insert_ignore_conflicts, describe
-from src.utils.football_data import (SEASON_LEAGUES, SEASON_URL, check_division,
-                                     fetch_csv, is_missing)
+from src.utils.football_data import (HISTORY_LEAGUES, SEASON_LEAGUES, SEASON_URL,
+                                     check_division, fetch_csv, is_missing)
 from src.utils.log import get_logger
 
 log = get_logger(__name__)
@@ -30,7 +30,8 @@ def _ensure_cards_schema():
 # "ECL": "soccer_uefa_champs_league", el servidor redirigía ECL.csv a EC.csv y
 # la National League inglesa (5ª división) se guardaba como Champions desde
 # 2015 (src/utils/football_data.py).
-leagues = SEASON_LEAGUES
+# + las segundas divisiones, solo como historia de los ascendidos (20-oct-26)
+leagues = {**SEASON_LEAGUES, **HISTORY_LEAGUES}
 
 def season_codes(today=None, first_start: int = 2015) -> list[str]:
     """Códigos de football-data ('1516' … temporada en curso). La temporada

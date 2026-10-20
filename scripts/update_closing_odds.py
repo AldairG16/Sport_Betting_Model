@@ -57,6 +57,8 @@ def plan_closing_targets(upcoming: pd.DataFrame, bets: pd.DataFrame,
                         ambos anotan y empate anulado nunca tenían un cierre
                         válido y el aprendizaje no recibía esos datos; ver
                         update_upcoming_matches.refresh_for_closing).
+      bet               tiene alguna BET real (20-oct-26): se recarga aunque el
+                        presupuesto diario de créditos ya se haya usado.
     """
     wanted: dict[tuple, dict] = {}
     for df, flag in ((bets, "specialty"), (shadow, "shadow_specialty")):
@@ -66,7 +68,9 @@ def plan_closing_targets(upcoming: pd.DataFrame, bets: pd.DataFrame,
             except ValueError:
                 continue
             flags = wanted.setdefault((_norm(h), _norm(a)),
-                                      {"specialty": False, "shadow_specialty": False})
+                                      {"specialty": False, "shadow_specialty": False, "bet": False})
+            if flag == "specialty":
+                flags["bet"] = True
             if str(r.get("market", "")).startswith(_SPECIALTY_PREFIXES):
                 flags[flag] = True
     targets = []

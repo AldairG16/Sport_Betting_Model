@@ -13,7 +13,7 @@ ver §2.
 
 | Servicio | Para qué | Credencial | Coste |
 |---|---|---|---|
-| **The Odds API** | Cuotas (`/odds`) y resultados (`/scores`). Es la fuente crítica: sin ella no hay apuestas ni resolución. | `ODDS_API_KEY` | Plan de pago. 1 crédito por liga y llamada; ~600-700 créditos/día sobre 20K al mes. |
+| **The Odds API** | Cuotas (`/odds`) y resultados (`/scores`). Es la fuente crítica: sin ella no hay apuestas ni resolución. | `ODDS_API_KEY` | Plan de pago de 20,000 créditos que se renueva el **día 1** de cada mes (medido: 9,548 → 19,958 el 1-oct-26 a las 03:06 UTC). Una liga cuesta 3 (h2h, totals, spreads) y un evento 7. El closing tiene presupuesto diario (§5, "Presupuesto diario de créditos"). |
 | **PostgreSQL** | Todo el estado: `matches`, `upcoming_matches`, `bets_history`, `shadow_bets`, `bankroll`, `pre_kickoff_analyses`, `analyst_heartbeat`, `anthropic_usage`, y lo aprendido en `model_state` (§7). | `DB_URL` | Alojada fuera del repo. Ver §7. |
 | **Anthropic** | Los dos agentes LLM: analista pre-kickoff y resolver de pendientes. | `ANTHROPIC_API_KEY` | ~$0.014-0.020 por llamada. Ver §6. |
 | **Telegram** | Único canal de salida: picks, resumen diario, alertas del watchdog. | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`; el analista usa `*_PREKICKOFF` y cae al bot principal si no están. | Gratis. |
@@ -305,6 +305,21 @@ agosto a mayo desde 2026-27): se guarda el año de inicio (`season_start()` en
 `scripts/load_extra_leagues.py`); el texto rompía la columna entera y el weekly del
 28-sep perdió 80 partidos.
 
+**Segundas divisiones y ligas americanas (20-oct-2026).** Un ascendido llegaba con 6-9
+partidos (los de esta temporada): Schalke, Elversberg, Venezia, Monza, Frosinone, Troyes,
+Le Mans, Racing de Santander, Málaga, Cardiff o Bolton. El weekly carga ahora como
+historia League One, 2. Bundesliga, Serie B, Segunda, Ligue 2 y la Championship escocesa
+(`HISTORY_LEAGUES` en `src/utils/football_data.py`; no se predicen). Se cargaron 25,000
+partidos desde 2015-16. Bélgica, Países Bajos, Portugal, Grecia y Turquía no tienen
+segunda división en football-data: sus ascendidos siguen con poca historia, y el weekly
+lo avisa como WARNING. MLS, Liga MX, Brasil y Argentina solo tenían los marcadores de
+The Odds API, desde abril de 2026 y con huecos: la MLS no tenía ni un partido de 2025.
+Ahora salen de football-data (`/new/USA.csv`, `MEX`, `BRA`, `ARG`). Se agregaron 6,016
+partidos de la MLS y 6,085 de Argentina. Esos archivos traen la fecha local y The Odds API
+la de UTC: un partido ya guardado con los mismos equipos a ±1 día no se repite
+(`already_stored`). La K-League no está en football-data: solo tiene los marcadores de la
+API.
+
 **football-data manda OTRO archivo cuando el pedido no existe.** El servidor corrige el
 nombre y redirige a uno que difiere en una letra, con HTTP 200. Así entraron, sin un solo
 error, partidos con la etiqueta de otra liga (medido el 1-oct-2026):
@@ -353,7 +368,16 @@ contiene al otro o casi iguales); los demás, solo verificados a mano (`ALLOW`);
 `DENY` guarda los clubes distintos que los datos mezclaban (PSG y Paris FC). Si los dos
 equipos estaban escritos distinto, el par sale en una segunda ronda. El mapa vive en
 `config/team_aliases.json` (canónico = el nombre de la API); `scripts/learn_team_aliases.py
---write` lo regenera. El weekly (paso "Nombres de equipo y repetidos") busca pares nuevos
+--write` lo regenera. El aprendizaje necesita el mismo partido guardado con los dos nombres.
+Cuando cambia la fuente no hay repetidos y la historia queda partida. El 20-oct-2026 había 7
+casos: Atlético Mineiro tenía 16 partidos como "atletico mineiro mg" y 539 como
+"atleticomg"; igual Athletico, Pumas, Atlante, Huracán, Aldosivi y Beveren. Desde entonces el
+weekly busca ese patrón (`split_identities`): un equipo próximo con menos de 60 partidos con
+su nombre y, en su liga, un nombre parecido con 20 o más que casi no aparece mientras
+aparece este. Dos clubes de verdad de la misma liga juegan las mismas jornadas. Lo avisa
+como ERROR con el alias que falta. Esos alias van en `TEAM_ALIASES` (`src/utils/team_alias_map.py`),
+con canónico = el nombre que tiene la historia; `scripts/fix_team_identities.py --apply`
+pasa las filas guardadas al canónico, con respaldo. El weekly (paso "Nombres de equipo y repetidos") busca pares nuevos
 sin unir (un ascendido, una fuente nueva), fusiona los partidos repetidos antes del ajuste
 Dixon-Coles y avisa como ERROR solo si el nombre raro sigue en la base o ya se había
 fusionado en otra corrida (la fuente lo sigue mandando). Si estaba solo en partidos
@@ -438,10 +462,12 @@ cuyo precio es la probabilidad.
 - **Qué no cubre:** córners y tarjetas casi no se operan en Kalshi (25-46 c de diferencia
   entre compra y venta). Apostar ahí no está al alcance del dueño (cuentas de EE. UU.).
 
-**El filtro de alineaciones avisa si su API no responde.** API-Football contesta 200 con el
-motivo en `errors` (clave inválida, cuota agotada o temporada fuera del plan gratuito), y el
-filtro quedaba apagado sin aviso. `self_check()` lo revisa el primer closing de cada día UTC.
-Avisa como ERROR al fallar o si cambia el motivo, no todos los días. El ajuste por clima está
+**El filtro de alineaciones lee los onces de ESPN.** Cancela la bet de un lado si su
+goleador de élite no sale de titular (`lineup_guard` en `scripts/revalidate_pending_bets.py`).
+Hasta el 20-oct-2026 los onces venían de API-Football; la cuenta gratuita quedó suspendida el
+16-oct y el filtro estaba apagado (el chequeo diario solo avisaba). Ahora lee la tabla
+`lineups`, que `capture_upcoming` llena en el mismo closing, antes de revalidar; ESPN es gratis
+y no pide clave. Se quitó el chequeo diario de API-Football. El ajuste por clima está
 apagado: `WEATHER_API_KEY` nunca se cargó en GitHub y consultaba el clima actual, no el de la
 hora del partido.
 
@@ -497,6 +523,25 @@ otra corrida deba leer va a `model_state` con `src/utils/model_state.py`
 (`save_state` / `load_state`). Hasta el 22-sep-2026 la calibración y el caché de CLV
 de producción eran la copia commiteada del 7-may, y el CLV gate nunca aplicó.
 
+**Goleadores (papel, `scripts/goalscorer_picks.py`).** Hasta el 20-oct-2026 todos los picks
+salían en 70% y ninguno se liquidaba. La probabilidad dividía entre la tasa del propio
+jugador, así que λ quedaba igual a los goles esperados de todo el equipo y el tope de 1.2
+daba 70% para cualquiera. Ahora λ = tasa del jugador × (goles esperados hoy / goles por
+partido del equipo en el último año), con la escala entre 0.5 y 2. La liquidación solo
+buscaba en `match_events` (selecciones). Ahora usa los goles por jugador de ESPN (tabla
+`lineups`, mismo equipo y mismo rival, ±1 día). Si el jugador no estuvo en el partido, el
+pick queda 'void', como en las casas. Sin datos a los 10 días queda 'stale'. **Los picks
+anteriores al 20-oct llevan el 70% del error: no sirven para medir el modelo.**
+
+**Resumen nocturno: el día de hoy.** Se anclaba al último día con apuestas reales resueltas.
+En modo recolección no hay, así que caía a "ayer": el resumen de las 21:00 hablaba del día
+anterior. Ahora resume hoy, y ayer solo si el run se atrasó pasada la medianoche
+(`evening_target_day` en `scripts/orchestrator.py`).
+
+**Kalshi: reintento ante el límite de llamadas.** Desde GitHub, 5-9 ligas por corrida
+fallaban con HTTPError, y las mismas respondían bien desde otra máquina. Ahora `_get`
+espera 0.25 s entre llamadas y reintenta ante 429/5xx (1, 2 y 4 s).
+
 **Un cierre solo vale si se DESCARGÓ cerca del kickoff.** La cuota de una fila de
 `upcoming_matches` puede tener horas: sin una recarga cerca del partido, el "cierre"
 de una bet o candidata shadow era la misma cuota de apertura (CLV 0 exacto — se veía
@@ -513,11 +558,25 @@ shadow (`refresh_for_closing`), con topes por corrida: `CLOSING_MAX_LEAGUES_PER_
 en **cada** corrida para los eventos con **bets** en ellos. Para los que solo tienen
 candidatas **shadow** en esos mercados, desde el 24-sep-2026 hay **una** recarga por
 evento: si su último enrichment ya cae en la ventana de cierre no paga otra vez. Tiene
-tope propio (`CLOSING_MAX_SHADOW_EVENTS_PER_RUN`, 6) y solo corre con más de
-`CLOSING_SHADOW_MIN_CREDITS` (3000) créditos. Antes quedaban sin cierre válido: el
+tope propio (`CLOSING_MAX_SHADOW_EVENTS_PER_RUN`, 2 desde el 20-oct; antes 6) y solo corre
+con más de `CLOSING_SHADOW_MIN_CREDITS` (3000) créditos. Antes quedaban sin cierre válido: el
 24-sep, ambos anotan y empate anulado de Seattle–Salt Lake tenían "cierre" de 12 h
-antes, y así el aprendizaje de esas familias nunca recibía datos. Costo medido: 8-12
-eventos por día de fin de semana × ~5-7 créditos.
+antes, y así el aprendizaje de esas familias nunca recibía datos. El costo estimado eran
+8-12 eventos por día de fin de semana; medido del 10 al 20 de octubre fueron 55-78 (× 7).
+
+**Presupuesto diario de créditos (20-oct-2026).** Del 10 al 20 de octubre se gastaron ~925
+créditos por día, el 90% en el closing: unas 90 recargas de liga (× 3) y 55-78 recargas por
+evento solo para candidatas sombra (× 7) en un día de fin de semana. A ese ritmo el saldo
+se acababa el 26-oct y los topes fijos (sin cierres bajo 1,500, sin cuotas bajo 500) dejaban
+al sistema sin aprender la última semana del mes. Ahora el closing gasta como máximo
+(saldo al empezar el día UTC − 600 de reserva) / días hasta el día 1
+(`src/utils/credit_budget.py`; el estado del día va en `model_state.odds_credit_day`). El
+gasto del día cuenta todo lo que bajó el saldo (morning, evening y closing); lo que no se
+gasta queda para los días siguientes. Orden: primero las recargas de liga; los eventos
+sombra, solo con lo que sobre. Los partidos con una **bet real** se recargan siempre,
+aunque el presupuesto del día ya se haya usado (marca `bet` de `plan_closing_targets`).
+Morning y evening no se frenan: sin sus cuotas no hay predicciones. Variables:
+`ODDS_API_RESET_DAY` (1) y `ODDS_API_RESERVE` (600).
 
 **Cuotas de cierre: mismo mercado, misma línea.** Hay UN mapeo mercado → cierre
 (`_closing_odds_for` en `src/models/save_bets.py`) para apuestas y shadow. Si la línea
@@ -986,10 +1045,11 @@ estabilice, no necesariamente para reentrenar. Precedente: `ah_home_fav` y
 `ah_away_fav` saltaron con factores ≈0.78 en mayo; se arregló subiendo MIN_EDGE y
 corrigiendo un bug de lookup, sin reentrenar.
 
-Otros ficheros de parámetros calibrados que el código lee en runtime:
+Otro fichero de parámetros calibrados que el código lee en runtime:
 `config/ensemble_weights.json` (`src/models/ensemble_model.py`, que cae a pesos por
-defecto **en silencio** si falta) y `config/thresholds.json`
-(`src/models/threshold_optimizer.py`).
+defecto **en silencio** si falta). `config/thresholds.json` y su optimizador semanal se
+quitaron el 20-oct-26: nadie leía ese archivo, y en GitHub Actions se escribía en una
+máquina que se borra al terminar.
 
 ---
 

@@ -26,6 +26,11 @@ TEAM_NAME_MAP = {
     "amed sk": "amedspor",
     "corum fk": "corum",
     "sc paderborn": "paderborn",
+    # 20-oct-26: The Odds API escribe "Erzurum BB" y football-data
+    # "Erzurumspor" (BB Erzurumspor, ascendido). Los nombres no se parecen lo
+    # suficiente para unirse solos: la historia quedaba partida (2 partidos
+    # con un nombre, el resto con el otro) y un partido repetido.
+    "erzurum bb": "erzurumspor",
 
     # =========================
     # 🔥 NUEVOS (PEGAR AQUÍ)

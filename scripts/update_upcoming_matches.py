@@ -74,7 +74,11 @@ CLOSING_MIN_REFRESH_MIN     = env_int("CLOSING_MIN_REFRESH_MIN", 20)
 # por evento (basta una cuota dentro de la ventana de cierre), tope propio
 # por corrida y solo con créditos de sobra. Medido: 8-12 eventos por día
 # de fin de semana × ~5-7 créditos.
-CLOSING_MAX_SHADOW_EVENTS_PER_RUN = env_int("CLOSING_MAX_SHADOW_EVENTS_PER_RUN", 6)
+# 20-oct-26: 6 → 2. Medido del 10 al 20 de oct: 55-78 recargas por día de fin de
+# semana (no 8-12) a 7 créditos — ~500 créditos diarios para mercados donde
+# el modelo pesa 2-7%. Además, todo el closing respeta el presupuesto diario
+# (src/utils/credit_budget.py) y estas van con lo que sobre.
+CLOSING_MAX_SHADOW_EVENTS_PER_RUN = env_int("CLOSING_MAX_SHADOW_EVENTS_PER_RUN", 2)
 CLOSING_SHADOW_MIN_CREDITS        = env_int("CLOSING_SHADOW_MIN_CREDITS", 3000)
 
 # Columnas que llegan por evento (/events/{id}/odds). Su frescura es
@@ -1199,6 +1203,19 @@ def _credits_left(preflight: int | None) -> int:
     return preflight if preflight is not None else 0
 
 
+def _closing_budget(remaining):
+    """(estado del día, créditos que le quedan hoy al closing). Sin saldo
+    conocido o si la base falla: sin tope (siguen valiendo el mínimo del
+    closing y el auto-stop)."""
+    from src.utils.credit_budget import load_and_update, run_budget
+    try:
+        day = load_and_update(remaining)
+    except Exception as e:
+        log.warning(f"⚠️  Presupuesto de créditos ilegible ({type(e).__name__}: {e}) — sin tope diario")
+        day = None
+    return day, (run_budget(day, remaining) if day else float("inf"))
+
+
 def refresh_for_closing(targets: list[dict]) -> dict:
     """
     Recarga DIRIGIDA para capturar el cierre (22-sep-26).
@@ -1235,6 +1252,27 @@ def refresh_for_closing(targets: list[dict]) -> dict:
         stats["skipped_credits"] = True
         return stats
 
+    # Presupuesto diario hasta la renovación del plan (20-oct-26): primero los
+    # cierres de liga (1X2 y goles, con Pinnacle); los mercados por evento de
+    # candidatas sombra solo con lo que sobre. Los partidos con bets reales se
+    # recargan aunque el presupuesto del día ya se haya usado.
+    day, budget = _closing_budget(remaining)
+    n_regions = len(str(ODDS_REGION).split(","))
+    league_cost = len(str(ODDS_MARKETS).split(",")) * n_regions
+    event_cost = len(SPECIALTY_MARKETS.split(",")) * n_regions
+    spent = 0
+    if budget < league_cost:
+        from src.utils.credit_budget import next_reset
+        reset = next_reset(datetime.now(timezone.utc))
+        used = (f"{day['start'] - remaining} de {day['allowance']:.0f} créditos; "
+                f"el plan se renueva el {reset:%d-%m}")
+        targets = [t for t in targets if t.get("bet")]
+        if not targets:
+            print(f"   ⏸ Recarga de cierre en pausa: presupuesto del día usado ({used})")
+            stats["skipped_budget"] = True
+            return stats
+        print(f"   ⏸ Presupuesto del día usado ({used}): solo los {len(targets)} partidos con bets reales")
+
     ensure_schema()
     cache = load_cache()
 
@@ -1255,8 +1293,15 @@ def refresh_for_closing(targets: list[dict]) -> dict:
             data = cache[sport]["data"]
             stats["skipped_fresh"] += 1
         else:
+            if spent + league_cost > budget and not any(t.get("bet") for t in league_targets):
+                if not stats.get("stopped_budget"):
+                    print(f"   ⏸ Presupuesto del día: sin más recargas de liga solo-sombra en esta "
+                          f"corrida ({spent} de {budget:.0f} créditos)")
+                stats["stopped_budget"] = True
+                continue                      # otra liga puede traer una bet real
             data = fetch_data(sport, cache, force=True)
             stats["leagues"] += 1
+            spent += league_cost
 
         want_specialty = {(t["home_norm"], t["away_norm"]) for t in league_targets if t.get("specialty")}
         want_shadow = {(t["home_norm"], t["away_norm"]): t["match_date"] for t in league_targets
@@ -1274,12 +1319,15 @@ def refresh_for_closing(targets: list[dict]) -> dict:
                 if ev_age is None or ev_age >= CLOSING_MIN_REFRESH_MIN:
                     refresh = True
                     stats["events"] += 1
+                    spent += event_cost
             elif (key in want_shadow
                   and stats["shadow_events"] < CLOSING_MAX_SHADOW_EVENTS_PER_RUN
                   and _credits_left(remaining) >= CLOSING_SHADOW_MIN_CREDITS
+                  and spent + event_cost <= budget
                   and not _enriched_in_closing_window(cached_ev.get("fetched_at"), want_shadow[key])):
                 refresh = True
                 stats["shadow_events"] += 1
+                spent += event_cost
             if refresh:
                 cache.pop(ek, None)            # fuerza la llamada por evento
                 extra = fetch_event_specialty_markets(sport, m["id"], cache)
@@ -1304,6 +1352,8 @@ def refresh_for_closing(targets: list[dict]) -> dict:
     print(f"   🎯 Recarga de cierre: {stats['leagues']} ligas, {stats['events']} eventos "
           f"con bets + {stats['shadow_events']} shadow (ya frescas: {stats['skipped_fresh']}) "
           f"para {len(targets)} partidos")
+    if day:
+        print(f"   💳 Presupuesto del día: ~{day['start'] - remaining + spent} de {day['allowance']:.0f} créditos")
     return stats
 
 

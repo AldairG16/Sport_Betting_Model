@@ -39,6 +39,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+from sqlalchemy import text
+
 from config.database import engine
 from src.utils.team_normalizer import normalize_team
 from src.utils.db_batch import insert_ignore_conflicts, describe
@@ -54,6 +56,12 @@ EXTRA_LEAGUES = {
     "NOR": "soccer_norway_eliteserien",
     "SWE": "soccer_sweden_allsvenskan",
     "CHN": "soccer_china_superleague",
+    # 20-oct-26: estas cuatro se predicen y solo tenían los marcadores de The
+    # Odds API (desde abr-26, con huecos): la MLS no tenía ni un partido de 2025
+    "USA": "soccer_usa_mls",
+    "MEX": "soccer_mexico_ligamx",
+    "BRA": "soccer_brazil_campeonato",
+    "ARG": "soccer_argentina_primera_division",
     # Potenciales futuras adiciones:
     # "DNK": "soccer_denmark_superliga",
     # "FIN": "soccer_finland_veikkausliiga",
@@ -64,6 +72,7 @@ EXTRA_LEAGUES = {
 # País que debe traer la columna Country de cada CSV
 EXPECTED_COUNTRY = {
     "JPN": "Japan", "NOR": "Norway", "SWE": "Sweden", "CHN": "China",
+    "USA": "USA", "MEX": "Mexico", "BRA": "Brazil", "ARG": "Argentina",
     "DNK": "Denmark", "FIN": "Finland", "POL": "Poland", "AUT": "Austria",
 }
 
@@ -108,6 +117,21 @@ def season_start(value) -> int | None:
     import re
     m = re.search(r"\d{4}", str(value if value is not None else ""))
     return int(m.group(0)) if m else None
+
+
+def already_stored(rows: list, existing: list) -> list:
+    """Las filas que ya están en matches con los mismos equipos a ±1 día.
+    football-data escribe la fecha local y The Odds API la de UTC: un partido
+    de la MLS a las 19:30 de Seattle es del día siguiente en UTC, y con la
+    llave exacta (fecha, local, visitante) entraba dos veces."""
+    from datetime import timedelta
+    have = {(h, a, d) for d, h, a in existing}
+    out = []
+    for r in rows:
+        d = pd.Timestamp(r["date"]).date()
+        if any((r["home_team"], r["away_team"], d + timedelta(days=k)) in have for k in (-1, 0, 1)):
+            out.append(r)
+    return out
 
 
 def load_extra_leagues(leagues: dict = None):
@@ -171,10 +195,19 @@ def load_extra_leagues(leagues: dict = None):
         # entero en silencio, y "nuevas insertadas" contaba las procesadas.
         cols = ["date", "league", "season", "home_team", "away_team",
                 "home_goals", "away_goals"]
+        records = df[cols].to_dict("records")
         with engine.begin() as conn:
-            res = insert_ignore_conflicts(conn, "matches", cols,
-                                          df[cols].to_dict("records"),
+            existing = conn.execute(text("""
+                SELECT date::date, home_team, away_team FROM matches
+                WHERE date >= CAST(:lo AS date) - 1 AND date <= CAST(:hi AS date) + 1
+                  AND (league = :l OR league IS NULL)
+            """), {"lo": min(df["date"]), "hi": max(df["date"]), "l": sport_key}).fetchall()
+            dup = {id(r) for r in already_stored(records, existing)}
+            records = [r for r in records if id(r) not in dup]
+            res = insert_ignore_conflicts(conn, "matches", cols, records,
                                           ["date", "home_team", "away_team"])
+        if dup:
+            print(f"  {code}: {len(dup)} ya estaban con fecha ±1 día — no se repiten")
         total_new += res["inserted"]
         print(f"  {code}: {len(df)} filas — {describe(res)}")
         if res["errors"]:

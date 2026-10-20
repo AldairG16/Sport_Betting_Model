@@ -55,6 +55,12 @@ OTHER_SEASON_LEAGUES = {
     "SP2": "soccer_spain_segunda_division",
     "F2":  "soccer_france_ligue_two",
 }
+# Segundas divisiones que se cargan a matches solo como historia (20-oct-26):
+# un ascendido llegaba a la liga con 6-9 partidos (los de esta temporada) y el
+# modelo lo veía casi sin datos (Schalke, Elversberg, Venezia, Monza,
+# Frosinone, Troyes, Le Mans, Racing de Santander, Málaga, Cardiff, Bolton...).
+# No se predicen: no están en The Odds API del sistema.
+HISTORY_LEAGUES = {c: OTHER_SEASON_LEAGUES[c] for c in ("E2", "D2", "I2", "SP2", "F2", "SC1")}
 SEASON_URL = "https://www.football-data.co.uk/mmz4281/{season}/{code}.csv"
 
 
