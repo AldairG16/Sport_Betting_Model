@@ -47,7 +47,11 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
-from config.settings import LEARNING_SINCE
+from config.settings import LEARNING_SINCE, MODEL_SINCE
+
+# El peso se aprende de la opinión del modelo: solo cuenta desde que el
+# modelo dejó de estar roto (config/settings.py, MODEL_SINCE).
+SINCE = max(LEARNING_SINCE, MODEL_SINCE)
 from src.utils.model_state import load_state, save_state
 
 STATE_KEY = "anchor_weights"
@@ -178,7 +182,7 @@ def learn_anchor_weights(df: pd.DataFrame, previous: dict | None = None) -> dict
         "policy": {
             "prior": PRIOR_MODEL_WEIGHT, "prior_sd": PRIOR_SD,
             "range": [W_MIN, W_MAX], "max_weekly_step": MAX_WEEKLY_STEP,
-            "min_n": MIN_N, "since": LEARNING_SINCE,
+            "min_n": MIN_N, "since": SINCE,
         },
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -219,7 +223,7 @@ def read_shadow_with_closing() -> pd.DataFrame:
           AND match_date >= CAST(:since AS timestamptz)
           AND {valid_closing_sql()}
           AND closing_fetched_at > created_at
-    """), engine, params={"since": LEARNING_SINCE})
+    """), engine, params={"since": SINCE})
 
 
 def run_anchor_learning(verbose: bool = True) -> dict:

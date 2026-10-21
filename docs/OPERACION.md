@@ -523,6 +523,37 @@ otra corrida deba leer va a `model_state` con `src/utils/model_state.py`
 (`save_state` / `load_state`). Hasta el 22-sep-2026 la calibración y el caché de CLV
 de producción eran la copia commiteada del 7-may, y el CLV gate nunca aplicó.
 
+**El modelo estuvo roto del 28-sep al 21-oct-2026 en las 5 grandes ligas y la Champions.**
+La demostración con los partidos del 21-oct destapó dos errores silenciosos.
+
+- **xG de Understat.** `team_xg_real` guarda el total de la temporada, y `get_real_xg` lo
+  devolvía como si fuera por partido: el Real Madrid tenía 23 xG "por partido". Se mezclaba
+  al 40% en el ataque y la defensa, y los goles esperados chocaban con el tope (3.5 y 3.5).
+  El 1X2 del modelo salía ~40/17/43 en todos esos partidos: Real Madrid–Leipzig 42/18/40
+  contra 79/13/8 de Pinnacle. Ahora `get_real_xg` divide entre los partidos, y el pipeline
+  descarta cualquier xG por partido fuera de 0-4 (`_credible_xg`).
+- **Peso de Dixon-Coles.** Se elegía por la historia del equipo (25%, 40% o 55%), pero esa
+  historia se contaba con la ventana de la forma, que tiene 8 partidos como máximo: pesaba
+  25% siempre. La forma son goles crudos sin ajustar por la fuerza del rival ni de la liga.
+  - Ahora cuenta los partidos de los últimos 3 años (`load_team_history_counts`): 30 o más
+    → 75%, 15 o más → 55%, si no 25%.
+  - Prueba fuera de muestra con los ajustes semanales guardados (526 partidos, del 23-sep al
+    20-oct), log-loss del 1X2: 1.066 con 25%, 1.014 con 55%, 0.996 con 75%. Mejoró en 21 de
+    27 ligas.
+  - En los 165 partidos con precio de Pinnacle, la distancia al mercado bajó de +0.167 a
+    +0.080. Sigue peor que Pinnacle: el mercado manda.
+- **Confianza ajustada.** `_stage_market_context` pisaba la confianza ya ajustada (Monte
+  Carlo, acuerdo del ensemble, córners y tiros) con la cruda.
+- **Historia corta.** Un equipo con menos de 5 partidos en la base (`MIN_FORM_MATCHES`) ya no
+  se evalúa. En la Champions, Shakhtar y LASK tenían 2 porque sus ligas no se cargan, y el
+  modelo daba 46/22/32 al Inter contra 77/14/9 de Pinnacle. Antes solo se saltaban los que
+  tenían 0.
+
+**Lo aprendido de la opinión del modelo empieza de nuevo.** El peso del ancla (`anchor_learner`)
+y el sesgo por lado (`side_bias`) solo leen partidos desde `MODEL_SINCE` (2026-10-22). Con las
+semanas del modelo roto, el sistema había aprendido que el modelo valía 1-7%. El resto del
+aprendizaje sigue desde `LEARNING_SINCE`: no depende de la opinión del modelo.
+
 **Goleadores (papel, `scripts/goalscorer_picks.py`).** Hasta el 20-oct-2026 todos los picks
 salían en 70% y ninguno se liquidaba. La probabilidad dividía entre la tasa del propio
 jugador, así que λ quedaba igual a los goles esperados de todo el equipo y el tope de 1.2

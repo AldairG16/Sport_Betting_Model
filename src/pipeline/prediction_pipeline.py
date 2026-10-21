@@ -136,7 +136,7 @@ from src.models.calibration_monitor import (
     MIN_BETS_FOR_CALIBRATION,
     _ah_group,
 )
-from src.models.dc_mle_fitter import get_dc_lambdas, is_params_fresh, DC_MLE_WEIGHT
+from src.models.dc_mle_fitter import get_dc_lambdas, is_params_fresh
 from src.models.anchor_learner import model_weight_for, market_family, FAMILIES as ANCHOR_FAMILIES
 from src.models.shade_learner import shade_scale_for, family_scale
 from config.settings import PAPER_ONLY_LEAGUES
@@ -584,6 +584,69 @@ def _previous_fit_rho():
 # de cada una es el mismo que antes (verificado con los goldens de
 # tests/test_pipeline_end_to_end.py y tests/test_pipeline_extended.py).
 
+MIN_FORM_MATCHES = 5
+
+# xG por partido fuera de este rango es un dato roto (21-oct-26: el xG de
+# Understat llegaba como total de la temporada, 23 "por partido").
+XG_PER_MATCH_RANGE = (0.0, 4.0)
+
+
+def _credible_xg(xg: dict | None) -> dict | None:
+    """El xG solo entra al ataque/defensa si es creíble como goles por partido."""
+    if not xg:
+        return None
+    lo, hi = XG_PER_MATCH_RANGE
+    try:
+        ok = lo <= float(xg["xg_for"]) <= hi and lo <= float(xg["xg_against"]) <= hi
+    except (KeyError, TypeError, ValueError):
+        ok = False
+    if not ok:
+        log.warning(f"⚠️  xG descartado por fuera de escala: {xg}")
+        return None
+    return xg
+
+
+# Peso de Dixon-Coles frente a la forma según la historia del equipo en los
+# últimos 3 años (21-oct-26). Prueba fuera de muestra con los ajustes
+# semanales guardados (526 partidos, 23-sep → 20-oct): log-loss 1X2 1.066
+# con 25% (lo que corría), 1.014 con 55% y 0.996 con 75%; mejor en 21 de
+# 27 ligas. La forma son goles crudos de los últimos 8 partidos, sin
+# ajustar por la fuerza del rival ni de la liga; Dixon-Coles sí.
+DC_WEIGHT_BY_HISTORY = ((30, 0.75), (15, 0.55), (0, 0.25))
+
+
+def dc_weight_for(history: int) -> float:
+    for min_matches, w in DC_WEIGHT_BY_HISTORY:
+        if history >= min_matches:
+            return w
+    return DC_WEIGHT_BY_HISTORY[-1][1]
+
+
+def load_team_history_counts(years: int = 3) -> dict:
+    """{equipo en minúsculas: partidos con resultado en los últimos `years`
+    años}. Hasta el 21-oct-26 el peso de Dixon-Coles miraba los partidos de
+    la ventana de la forma (8 como máximo): los umbrales de 15 y 30 nunca se
+    cumplían y Dixon-Coles pesaba siempre 25%."""
+    df = pd.read_sql(_sql_text("""
+        SELECT team, COUNT(*) AS n FROM (
+            SELECT LOWER(home_team) AS team FROM matches
+            WHERE date >= CURRENT_DATE - make_interval(years => :y) AND home_goals IS NOT NULL
+            UNION ALL
+            SELECT LOWER(away_team) FROM matches
+            WHERE date >= CURRENT_DATE - make_interval(years => :y) AND home_goals IS NOT NULL
+        ) t GROUP BY team
+    """), engine, params={"y": years})
+    return {r.team: int(r.n) for r in df.itertuples()}
+
+
+def _safe_history_counts() -> dict | None:
+    try:
+        return load_team_history_counts()
+    except Exception as e:
+        log.warning(f"⚠️  Historia por equipo ilegible ({type(e).__name__}) — peso de Dixon-Coles por la forma")
+        return None
+
+
 def _stage_team_strengths(row, stats):
     """Etapa 1 — fuerzas de ataque/defensa de ambos equipos (forma, xG, fatiga, motivación). None = no evaluar el partido."""
 
@@ -624,6 +687,15 @@ def _stage_team_strengths(row, stats):
         log.warning(f"⚠️  Skip fallback: {home} vs {away} — datos insuficientes")
         stats['skipped_no_odds'] += 1
         return None
+    # Con menos de MIN_FORM_MATCHES partidos en la base el modelo no tiene
+    # opinión (21-oct-26: Shakhtar y LASK en la Champions, con 2 partidos
+    # porque sus ligas no se cargan: el modelo daba 46/22/32 al Inter contra
+    # 77/14/9 de Pinnacle). Antes solo se saltaban los equipos con 0.
+    if min(home_form["matches"], away_form["matches"]) < MIN_FORM_MATCHES:
+        stats['thin_history'] += 1
+        log.warning(f"⚠️  Skip historia corta: {home} ({home_form['matches']}) vs "
+                    f"{away} ({away_form['matches']}) — menos de {MIN_FORM_MATCHES} partidos")
+        return None
     # 🔥 CONFIDENCE
     min_matches = min(home_form["matches"], away_form["matches"])
     confidence  = min(1.0, min_matches / 10)
@@ -652,8 +724,8 @@ def _stage_team_strengths(row, stats):
 
     # xG REAL (Understat, semanal) tiene prioridad sobre el proxy de
     # tiros — mismo contrato (xg_for/xg_against por partido).
-    home_xg = get_real_xg(home) or get_team_xg(home)
-    away_xg = get_real_xg(away) or get_team_xg(away)
+    home_xg = _credible_xg(get_real_xg(home)) or _credible_xg(get_team_xg(home))
+    away_xg = _credible_xg(get_real_xg(away)) or _credible_xg(get_team_xg(away))
     _xg_source = "understat" if (home_xg and home_xg.get("source") == "understat"
                                  and away_xg and away_xg.get("source") == "understat") else "proxy"
 
@@ -914,16 +986,12 @@ def _stage_lambdas(row, T, ctx, stats):
             # Peso adaptativo por volumen de datos del equipo: el MLE es
             # más fiable que la forma simple cuando ambos equipos tienen
             # historia suficiente; con poca data, mandar la forma actual.
-            _min_hist = min(
-                int(home_form.get("matches", 0)),
-                int(away_form.get("matches", 0)),
-            )
-            if _min_hist >= 30:
-                _mle_w = 0.55
-            elif _min_hist >= 15:
-                _mle_w = DC_MLE_WEIGHT
-            else:
-                _mle_w = 0.25
+            counts = getattr(ctx, "hist_counts", None)
+            if counts:
+                _min_hist = min(counts.get(home.lower(), 0), counts.get(away.lower(), 0))
+            else:   # sin conteo (base caída o arnés de pruebas): lo que diga la forma
+                _min_hist = min(int(home_form.get("matches", 0)), int(away_form.get("matches", 0)))
+            _mle_w = dc_weight_for(_min_hist)
             lambda_home = lambda_home * (1 - _mle_w) + mle_lh * _mle_w
             lambda_away = lambda_away * (1 - _mle_w) + mle_la * _mle_w
 
@@ -1926,10 +1994,13 @@ def _stage_shadow_sweep(row, T, F, market_probs, market_probs_raw, signed_deviat
 
 
 def _stage_market_context(row, T, confidence, stats):
-    """Etapa 9 — contexto del mercado: movimiento de línea, consenso, liquidez. None = mercado ilíquido, no apostar."""
+    """Etapa 9 — contexto del mercado: movimiento de línea, consenso, liquidez. None = mercado ilíquido, no apostar.
+
+    confidence: la del modelo ya ajustada (Monte Carlo, acuerdo del ensemble,
+    córners y tiros). Hasta el 21-oct-26 se pisaba aquí con T.confidence y
+    esos ajustes se calculaban para nada."""
     home = T.home
     away = T.away
-    confidence = T.confidence
 
     # =========================
     # LINE MOVEMENT
@@ -2858,6 +2929,7 @@ def run_prediction_pipeline(dry_run: bool = False):
         filters_on=filters_on,
         timing_blocked=timing_blocked,
         current_bankroll=current_bankroll,
+        hist_counts=_safe_history_counts(),
     )
 
     # =========================

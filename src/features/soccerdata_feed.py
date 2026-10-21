@@ -184,10 +184,21 @@ def refresh_understat(seasons: list[str] | None = None, verbose: bool = True) ->
     return result
 
 
+# xG por partido más alto que esto es un dato roto, no un equipo.
+MAX_XG_PER_MATCH = 4.0
+
+
 def get_real_xg(team: str) -> dict | None:
     """
-    xG real del equipo desde team_xg_real (fuente: Understat).
-    None si no hay dato fresco (<= STALE_DAYS).
+    xG real del equipo POR PARTIDO desde team_xg_real (fuente: Understat).
+    None si no hay dato fresco (<= STALE_DAYS) o si no es creíble.
+
+    La tabla guarda el total de la temporada (parse_understat suma el
+    historial). Hasta el 21-oct-26 se devolvía ese total como si fuera por
+    partido: desde el weekly del 28-sep, el Real Madrid tenía 23 xG "por
+    partido", el pipeline lo mezclaba al 40% en el ataque y los goles
+    esperados chocaban con el tope (3.5 y 3.5) en las 5 grandes ligas y en
+    la Champions. El 1X2 del modelo salía ~40/17/43 en todos esos partidos.
     """
     team = team.strip().lower()
     try:
@@ -208,10 +219,16 @@ def get_real_xg(team: str) -> dict | None:
         return None
     if pd.isna(row["xg_for"]) or pd.isna(row["xg_against"]):
         return None
+    n = int(row["matches"]) if pd.notna(row["matches"]) else 0
+    if n <= 0:
+        return None
+    xg_for, xg_against = float(row["xg_for"]) / n, float(row["xg_against"]) / n
+    if not (0 <= xg_for <= MAX_XG_PER_MATCH and 0 <= xg_against <= MAX_XG_PER_MATCH):
+        return None
     return {
-        "xg_for": float(row["xg_for"]),
-        "xg_against": float(row["xg_against"]),
-        "matches": int(row["matches"]) if pd.notna(row["matches"]) else None,
+        "xg_for": round(xg_for, 4),
+        "xg_against": round(xg_against, 4),
+        "matches": n,
         "source": "understat",
     }
 

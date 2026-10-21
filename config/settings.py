@@ -121,6 +121,15 @@ INITIAL_BANKROLL = env_float("INITIAL_BANKROLL", 100.0)
 # se mueve esta fecha (variable LEARNING_SINCE en GitHub, sin tocar código).
 LEARNING_SINCE = env_str("LEARNING_SINCE", "2026-09-14")
 
+# Lo que aprende de la OPINIÓN del modelo (peso del ancla, sesgo por lado)
+# mira solo partidos desde que el modelo dejó de estar roto. Del 28-sep al
+# 21-oct-26 el xG de Understat entraba como total de la temporada y los
+# goles esperados chocaban con el tope en las 5 grandes ligas y la Champions
+# (1X2 ~40/17/43 en todos), y Dixon-Coles pesaba 25% fijo: con esos datos
+# el sistema aprendió que el modelo valía 1-7%. Estas semanas no describen
+# al modelo corregido.
+MODEL_SINCE = env_str("MODEL_SINCE", "2026-10-22")
+
 # ============================================================
 # WEATHER API (OpenWeatherMap — gratis 1,000 calls/día)
 # Registro: https://openweathermap.org/api

@@ -66,7 +66,7 @@ def test_extended_scenario_exercises_the_paths_it_claims(monkeypatch):
     assert not any(b["match"] == "alpha vs kappa" and b["market"] == "home_win"
                    for b in out["bets"])                                   # línea en contra
     mle = {k.split("|")[0]: v["model"]["mle_weight"] for k, v in out["decision_logs"].items()}
-    assert mle.get("lam vs mu") == 0.55                                    # ≥30 partidos
+    assert mle.get("lam vs mu") == 0.75                                    # ≥30 partidos (21-oct-26: antes 0.55)
     assert any(s["market"].startswith("cards_") for s in out["shadow"])
     assert any(s["market"].startswith("dc_") for s in out["shadow"])
 

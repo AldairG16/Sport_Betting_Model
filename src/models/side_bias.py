@@ -187,10 +187,13 @@ def read_pairs() -> pd.DataFrame:
     from config.database import engine
     with engine.begin() as conn:
         conn.execute(text(TABLE_SQL))
+    # solo partidos desde que el modelo dejó de estar roto (MODEL_SINCE)
+    from config.settings import MODEL_SINCE
     return pd.read_sql(text(f"""
         SELECT * FROM model_vs_sharp
         WHERE match_date >= NOW() - INTERVAL '{WINDOW_DAYS} days'
-    """), engine)
+          AND match_date >= CAST(:since AS timestamptz)
+    """), engine, params={"since": MODEL_SINCE})
 
 
 def run_side_bias(verbose: bool = True) -> dict:
