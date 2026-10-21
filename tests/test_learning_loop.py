@@ -75,7 +75,17 @@ def test_ah_home_favorite_blocked_but_still_observed(monkeypatch):
 
 
 def test_shadow_reactivation_unblocks_ah_group(monkeypatch):
-    out = run_pipeline(monkeypatch, learned={"reactivated": {"ah_home_fav"}})
+    # Hándicap -0.5 = gana local: desde el 21-oct-26 tienen la misma
+    # probabilidad (antes el hándicap salía de la Poisson y ganaba por eso).
+    # Se elige el hándicap cuando paga mejor el mismo resultado.
+    m = pd.DataFrame([_row("alpha", "beta", "soccer_spain_la_liga",
+                           home_odds=1.80, draw_odds=3.70, away_odds=4.60,
+                           over25_odds=1.95, under25_odds=1.90,
+                           btts_yes_odds=2.05, btts_no_odds=1.80,
+                           ah_line=-0.5, ah_home_odds=1.92, ah_away_odds=1.95,
+                           dnb_home_odds=1.32, dnb_away_odds=3.40)])
+    assert ("alpha vs beta", "ah_home_-0.50") not in _bets(run_pipeline(monkeypatch, matches=m))
+    out = run_pipeline(monkeypatch, matches=m, learned={"reactivated": {"ah_home_fav"}})
     bets = _bets(out)
     assert ("alpha vs beta", "ah_home_-0.50") in bets
     assert ("alpha vs beta", "home_win") not in bets   # mismo resultado

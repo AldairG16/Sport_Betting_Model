@@ -121,39 +121,56 @@ def prob_ah(lambda_home: float, lambda_away: float, line: float,
         line = +0.5  → home gana si home_goals + 0.5 > away_goals
                         es decir, home_goals >= away_goals  (home no pierde)
     """
-    matrix = _score_matrix(lambda_home, lambda_away, rho=rho)
+    return prob_ah_from_matrix(_score_matrix(lambda_home, lambda_away, rho=rho), line)
 
-    # La condición para que el LOCAL cubra: home_goals - away_goals > -line
-    # es decir: home_goals - away_goals > -line
-    # margen = home_goals - away_goals (puede ser negativo)
 
-    p_home  = 0.0
-    p_away  = 0.0
-    p_push  = 0.0
-
-    for i in range(MAX_GOALS + 1):
-        for j in range(MAX_GOALS + 1):
-            prob  = matrix[i, j]
-            margin = i - j   # positivo = home gana
-            diff  = margin + line   # si diff > 0, home cubre
-
+def prob_ah_from_matrix(matrix, line: float) -> tuple[float, float]:
+    """(p_home_covers, p_away_covers) con una matriz de marcadores dada (la
+    misma lógica de prob_ah). Ver consistent_score_matrix."""
+    p_home = 0.0
+    p_away = 0.0
+    p_push = 0.0
+    n = matrix.shape[0]
+    for i in range(n):
+        for j in range(n):
+            prob = matrix[i, j]
+            diff = (i - j) + line          # si diff > 0, home cubre
             if abs(diff) < 1e-9:
-                # Línea exacta → push (si línea entera)
-                p_push += prob
+                p_push += prob             # línea exacta → push
             elif diff > 0:
                 p_home += prob
             else:
                 p_away += prob
-
     # En push: mitad del stake se reembolsa (contamos 0.5 para cada lado)
     p_home += p_push * 0.5
     p_away += p_push * 0.5
-
     total = p_home + p_away
     if total < MIN_PROB:
         return 0.5, 0.5
-
     return float(p_home / total), float(p_away / total)
+
+
+def consistent_score_matrix(lambda_home: float, lambda_away: float, target_1x2,
+                            rho: float | None = None):
+    """
+    Matriz de marcadores cuyo 1X2 es exactamente `target_1x2` (21-oct-26).
+
+    El 1X2 del pipeline sale del ensemble (Dixon-Coles + ELO + forma + Monte
+    Carlo) y el hándicap y el empate anula salían de la Poisson de los goles
+    esperados: en 14 de 88 partidos "empate anula" no cuadraba con el 1X2
+    por más de 5 pts. Aquí cada región (gana local, empate, gana visitante)
+    conserva la forma de la Poisson y su total se escala al 1X2 final.
+    """
+    m = _score_matrix(lambda_home, lambda_away, rho=rho)
+    t = np.asarray(target_1x2, dtype=float)
+    t = t / t.sum()
+    i, j = np.indices(m.shape)
+    out = m.copy()
+    for mask, p in zip((i > j, i == j, i < j), t):
+        s = m[mask].sum()
+        if s > 0:
+            out[mask] = m[mask] * (p / s)
+    return out
 
 
 def find_best_ah_line(

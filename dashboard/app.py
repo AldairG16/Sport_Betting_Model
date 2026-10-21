@@ -554,8 +554,10 @@ def api_predictions_history():
         FROM matches
         WHERE date >= CURRENT_DATE - make_interval(days => :d2) AND home_goals IS NOT NULL
     """, {"d2": d + 2})
+    from src.utils.team_normalizer import normalize_team
     out = _vis.history(mvs, res if not res.empty else
-                       pd.DataFrame(columns=["h", "a", "d", "home_goals", "away_goals"]))
+                       pd.DataFrame(columns=["h", "a", "d", "home_goals", "away_goals"]),
+                       normalize_team)
     return jsonify({"ok": True, "days": d, **out})
 
 

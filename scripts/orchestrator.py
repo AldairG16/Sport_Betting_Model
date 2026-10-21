@@ -643,6 +643,7 @@ def run_evening(logger: Logger):
     run_step(logger, "Goalscorer resolve", step_goalscorer_resolve)
     run_step(logger, "CLV update",        step_clv)
     run_step(logger, "Backtest",          step_backtest)
+    run_step(logger, "Chequeo de salidas", step_output_checks)
     run_step(logger, "Telegram evening",  step_notify_evening)
 
     # ── Preview de mañana ────────────────────────────────────────────────
@@ -679,6 +680,15 @@ def run_full(logger: Logger, force_fetch: bool = False):
 def step_backtest():
     from src.models.backtest_engine import run_backtest
     run_backtest()
+
+
+def step_output_checks():
+    """Revisa que lo que sale tenga sentido (21-oct-26): liquidación con un
+    cálculo independiente, resultados que faltan, pendientes atorados, xG y
+    lo aprendido por el weekly. Cada problema es un ERROR y llega a Telegram
+    en "errores tolerados". Ver src/utils/output_checks.py."""
+    from src.utils.output_checks import run_output_checks
+    run_output_checks()
 
 
 def step_clv():

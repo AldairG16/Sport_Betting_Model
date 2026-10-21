@@ -14,8 +14,8 @@
    "market": "dnb_away",
    "league": "soccer_brazil_campeonato",
    "odds": 1.845,
-   "probability": 0.642413,
-   "edge": 0.100408,
+   "probability": 0.631559,
+   "edge": 0.089554,
    "stake": 1.64
   },
   {
@@ -32,20 +32,20 @@
   {
    "match": "alpha vs beta",
    "market": "ah_away_-0.50",
-   "p_final": 0.389472,
+   "p_final": 0.394172,
    "p_ref": 0.470284,
-   "deviation": -0.257085,
+   "deviation": -0.243974,
    "odds": 2.05,
-   "edge_market": -0.098332
+   "edge_market": -0.093633
   },
   {
    "match": "alpha vs beta",
    "market": "ah_home_-0.50",
-   "p_final": 0.658736,
+   "p_final": 0.653858,
    "p_ref": 0.529716,
-   "deviation": 0.257085,
+   "deviation": 0.243974,
    "odds": 1.82,
-   "edge_market": 0.109286
+   "edge_market": 0.104408
   },
   {
    "match": "alpha vs beta",
@@ -77,20 +77,20 @@
   {
    "match": "alpha vs beta",
    "market": "dnb_away",
-   "p_final": 0.198458,
+   "p_final": 0.203098,
    "p_ref": 0.279661,
-   "deviation": -0.209261,
+   "deviation": -0.195471,
    "odds": 3.4,
-   "edge_market": -0.09566
+   "edge_market": -0.09102
   },
   {
    "match": "alpha vs beta",
    "market": "dnb_home",
-   "p_final": 0.84358,
+   "p_final": 0.838754,
    "p_ref": 0.720339,
-   "deviation": 0.209261,
+   "deviation": 0.195471,
    "odds": 1.32,
-   "edge_market": 0.086005
+   "edge_market": 0.081178
   },
   {
    "match": "alpha vs beta",
@@ -131,20 +131,20 @@
   {
    "match": "epsilon vs zeta",
    "market": "ah_away_+0.50",
-   "p_final": 0.546603,
+   "p_final": 0.539533,
    "p_ref": 0.506494,
-   "deviation": 0.07069,
+   "deviation": 0.051058,
    "odds": 1.9,
-   "edge_market": 0.020287
+   "edge_market": 0.013217
   },
   {
    "match": "epsilon vs zeta",
    "market": "ah_home_+0.50",
-   "p_final": 0.49438,
+   "p_final": 0.501626,
    "p_ref": 0.493506,
-   "deviation": -0.07069,
+   "deviation": -0.051058,
    "odds": 1.95,
-   "edge_market": -0.018441
+   "edge_market": -0.011194
   },
   {
    "match": "epsilon vs zeta",
@@ -158,20 +158,20 @@
   {
    "match": "epsilon vs zeta",
    "market": "dnb_away",
-   "p_final": 0.642413,
+   "p_final": 0.631559,
    "p_ref": 0.54207,
-   "deviation": 0.23203,
+   "deviation": 0.201944,
    "odds": 1.845,
-   "edge_market": 0.100408
+   "edge_market": 0.089554
   },
   {
    "match": "epsilon vs zeta",
    "market": "dnb_home",
-   "p_final": 0.391638,
+   "p_final": 0.402585,
    "p_ref": 0.45793,
-   "deviation": -0.23203,
+   "deviation": -0.201944,
    "odds": 2.184,
-   "edge_market": -0.066238
+   "edge_market": -0.055291
   },
   {
    "match": "epsilon vs zeta",
@@ -221,20 +221,20 @@
   {
    "match": "eta vs theta",
    "market": "dnb_away",
-   "p_final": 0.326037,
+   "p_final": 0.328721,
    "p_ref": 0.368397,
-   "deviation": -0.123597,
+   "deviation": -0.115947,
    "odds": 2.714,
-   "edge_market": -0.042423
+   "edge_market": -0.039739
   },
   {
    "match": "eta vs theta",
    "market": "dnb_home",
-   "p_final": 0.724862,
+   "p_final": 0.722185,
    "p_ref": 0.631603,
-   "deviation": 0.123597,
+   "deviation": 0.115947,
    "odds": 1.583,
-   "edge_market": 0.09315
+   "edge_market": 0.090473
   },
   {
    "match": "eta vs theta",
@@ -284,20 +284,20 @@
   {
    "match": "gamma vs delta",
    "market": "dnb_away",
-   "p_final": 0.429089,
+   "p_final": 0.429192,
    "p_ref": 0.445405,
-   "deviation": -0.068105,
+   "deviation": -0.067816,
    "odds": 2.245,
-   "edge_market": -0.016345
+   "edge_market": -0.016243
   },
   {
    "match": "gamma vs delta",
    "market": "dnb_home",
-   "p_final": 0.615505,
+   "p_final": 0.615397,
    "p_ref": 0.554595,
-   "deviation": 0.068105,
+   "deviation": 0.067816,
    "odds": 1.803,
-   "edge_market": 0.060874
+   "edge_market": 0.060766
   },
   {
    "match": "gamma vs delta",
@@ -383,20 +383,20 @@
   {
    "match": "iota vs kappa",
    "market": "dnb_away",
-   "p_final": 0.20762,
+   "p_final": 0.212303,
    "p_ref": 0.267228,
-   "deviation": -0.132028,
+   "deviation": -0.117782,
    "odds": 3.743,
-   "edge_market": -0.059546
+   "edge_market": -0.054862
   },
   {
    "match": "iota vs kappa",
    "market": "dnb_home",
-   "p_final": 0.828982,
+   "p_final": 0.823996,
    "p_ref": 0.732772,
-   "deviation": 0.132028,
+   "deviation": 0.117782,
    "odds": 1.365,
-   "edge_market": 0.096381
+   "edge_market": 0.091395
   },
   {
    "match": "iota vs kappa",
