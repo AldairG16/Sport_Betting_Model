@@ -590,7 +590,7 @@ def api_picks():
         ORDER BY match_date DESC
     """, {"d": d})
     if df.empty:
-        return _no_data("Los picks se guardan desde el 21-oct: los primeros resultados llegan esta noche")
+        return _no_data("Los picks se guardan desde el 21-oct. Cada pick se califica unas horas después de que termina su partido (en la corrida de la noche o en la de las 6:30 am)")
     return jsonify({"ok": True, "days": d, **_vis.picks_board(df)})
 
 
