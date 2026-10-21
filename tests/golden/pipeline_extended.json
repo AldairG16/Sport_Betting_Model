@@ -5,8 +5,8 @@
    "market": "home_win",
    "league": "soccer_germany_bundesliga",
    "odds": 1.65,
-   "probability": 0.678138,
-   "edge": 0.072077,
+   "probability": 0.678025,
+   "edge": 0.071964,
    "stake": 1.23
   },
   {
@@ -14,8 +14,8 @@
    "market": "home_win",
    "league": "soccer_spain_la_liga",
    "odds": 1.8,
-   "probability": 0.657875,
-   "edge": 0.102319,
+   "probability": 0.651896,
+   "edge": 0.09634,
    "stake": 0.43
   },
   {
@@ -23,8 +23,8 @@
    "market": "over25",
    "league": "soccer_spain_la_liga",
    "odds": 2.45,
-   "probability": 0.465969,
-   "edge": 0.057806,
+   "probability": 0.465256,
+   "edge": 0.057093,
    "stake": 0.57
   },
   {
@@ -32,8 +32,8 @@
    "market": "home_win",
    "league": "soccer_belgium_first_div",
    "odds": 1.8,
-   "probability": 0.641766,
-   "edge": 0.08621,
+   "probability": 0.641788,
+   "edge": 0.086233,
    "stake": 0.6
   },
   {
@@ -41,8 +41,8 @@
    "market": "home_win",
    "league": "soccer_portugal_primeira_liga",
    "odds": 1.8,
-   "probability": 0.629747,
-   "edge": 0.074192,
+   "probability": 0.62982,
+   "edge": 0.074264,
    "stake": 1.23
   },
   {
@@ -50,8 +50,8 @@
    "market": "home_win",
    "league": "soccer_brazil_campeonato",
    "odds": 1.95,
-   "probability": 0.562826,
-   "edge": 0.050005,
+   "probability": 0.562831,
+   "edge": 0.050011,
    "stake": 0.6
   }
  ],
@@ -59,11 +59,11 @@
   {
    "match": "alpha vs kappa",
    "market": "away_win",
-   "p_final": 0.143106,
+   "p_final": 0.143134,
    "p_ref": 0.204383,
-   "deviation": -0.121573,
+   "deviation": -0.121483,
    "odds": 4.6,
-   "edge_market": -0.074285
+   "edge_market": -0.074257
   },
   {
    "match": "alpha vs kappa",
@@ -104,20 +104,20 @@
   {
    "match": "alpha vs kappa",
    "market": "draw",
-   "p_final": 0.217424,
+   "p_final": 0.217383,
    "p_ref": 0.25667,
-   "deviation": -0.08721,
+   "deviation": -0.08733,
    "odds": 3.7,
-   "edge_market": -0.052846
+   "edge_market": -0.052887
   },
   {
    "match": "alpha vs kappa",
    "market": "home_win",
-   "p_final": 0.65136,
+   "p_final": 0.651376,
    "p_ref": 0.538947,
-   "deviation": 0.208768,
+   "deviation": 0.208813,
    "odds": 1.8,
-   "edge_market": 0.095804
+   "edge_market": 0.095821
   },
   {
    "match": "alpha vs kappa",
@@ -140,11 +140,11 @@
   {
    "match": "eqa vs eqb",
    "market": "away_win",
-   "p_final": 0.28656,
+   "p_final": 0.286654,
    "p_ref": 0.314622,
-   "deviation": -0.042142,
+   "deviation": -0.041887,
    "odds": 3.0,
-   "edge_market": -0.046774
+   "edge_market": -0.046679
   },
   {
    "match": "eqa vs eqb",
@@ -185,11 +185,11 @@
   {
    "match": "eqa vs eqb",
    "market": "home_win",
-   "p_final": 0.378315,
+   "p_final": 0.378455,
    "p_ref": 0.365186,
-   "deviation": 0.050469,
+   "deviation": 0.050844,
    "odds": 2.6,
-   "edge_market": -0.0063
+   "edge_market": -0.006161
   },
   {
    "match": "eqa vs eqb",
@@ -212,11 +212,11 @@
   {
    "match": "gamma vs kappa",
    "market": "away_win",
-   "p_final": 0.173745,
+   "p_final": 0.173764,
    "p_ref": 0.204383,
-   "deviation": -0.022578,
+   "deviation": -0.022518,
    "odds": 4.6,
-   "edge_market": -0.043646
+   "edge_market": -0.043628
   },
   {
    "match": "gamma vs kappa",
@@ -239,11 +239,11 @@
   {
    "match": "gamma vs kappa",
    "market": "home_win",
-   "p_final": 0.585759,
+   "p_final": 0.585876,
    "p_ref": 0.538947,
-   "deviation": 0.032658,
+   "deviation": 0.032973,
    "odds": 1.8,
-   "edge_market": 0.030203
+   "edge_market": 0.03032
   },
   {
    "match": "gamma vs kappa",
@@ -266,11 +266,11 @@
   {
    "match": "iota vs beta",
    "market": "away_win",
-   "p_final": 0.123883,
+   "p_final": 0.123953,
    "p_ref": 0.1731,
-   "deviation": -0.069585,
+   "deviation": -0.069345,
    "odds": 5.4,
-   "edge_market": -0.061302
+   "edge_market": -0.061232
   },
   {
    "match": "iota vs beta",
@@ -329,20 +329,20 @@
   {
    "match": "iota vs beta",
    "market": "dc_1x",
-   "p_final": 0.734457,
+   "p_final": 0.734366,
    "p_ref": 0.847458,
-   "deviation": 0.049027,
+   "deviation": 0.048787,
    "odds": 1.18,
-   "edge_market": -0.113001
+   "edge_market": -0.113092
   },
   {
    "match": "iota vs beta",
    "market": "dc_x2",
-   "p_final": 0.311835,
+   "p_final": 0.311943,
    "p_ref": 0.384615,
-   "deviation": -0.09363,
+   "deviation": -0.09333,
    "odds": 2.6,
-   "edge_market": -0.07278
+   "edge_market": -0.072673
   },
   {
    "match": "iota vs beta",
@@ -365,20 +365,20 @@
   {
    "match": "iota vs beta",
    "market": "draw",
-   "p_final": 0.208496,
+   "p_final": 0.208516,
    "p_ref": 0.237208,
-   "deviation": -0.049738,
+   "deviation": -0.049678,
    "odds": 4.0,
-   "edge_market": -0.041504
+   "edge_market": -0.041484
   },
   {
    "match": "iota vs beta",
    "market": "home_win",
-   "p_final": 0.678138,
+   "p_final": 0.678025,
    "p_ref": 0.589692,
-   "deviation": 0.119323,
+   "deviation": 0.119023,
    "odds": 1.65,
-   "edge_market": 0.072077
+   "edge_market": 0.071964
   },
   {
    "match": "iota vs beta",
@@ -401,119 +401,137 @@
   {
    "match": "lam vs mu",
    "market": "away_win",
-   "p_final": 0.141156,
+   "p_final": 0.14386,
    "p_ref": 0.204383,
-   "deviation": -0.127873,
+   "deviation": -0.119138,
    "odds": 4.6,
-   "edge_market": -0.076235
+   "edge_market": -0.073532
   },
   {
    "match": "lam vs mu",
    "market": "dnb_away",
-   "p_final": 0.204087,
+   "p_final": 0.209715,
    "p_ref": 0.281181,
-   "deviation": -0.190481,
+   "deviation": -0.173581,
    "odds": 3.556,
-   "edge_market": -0.077128
+   "edge_market": -0.0715
   },
   {
    "match": "lam vs mu",
    "market": "dnb_home",
-   "p_final": 0.835488,
+   "p_final": 0.829573,
    "p_ref": 0.718819,
-   "deviation": 0.190481,
+   "deviation": 0.173581,
    "odds": 1.391,
-   "edge_market": 0.11658
+   "edge_market": 0.110665
   },
   {
    "match": "lam vs mu",
    "market": "draw",
-   "p_final": 0.213692,
+   "p_final": 0.216125,
    "p_ref": 0.25667,
-   "deviation": -0.0983,
+   "deviation": -0.09107,
    "odds": 3.7,
-   "edge_market": -0.056578
+   "edge_market": -0.054145
   },
   {
    "match": "lam vs mu",
    "market": "home_win",
-   "p_final": 0.657875,
+   "p_final": 0.651896,
    "p_ref": 0.538947,
-   "deviation": 0.226258,
+   "deviation": 0.210208,
    "odds": 1.8,
-   "edge_market": 0.102319
+   "edge_market": 0.09634
   },
   {
    "match": "lam vs mu",
    "market": "over25",
-   "p_final": 0.465969,
+   "p_final": 0.465256,
    "p_ref": 0.39206,
-   "deviation": 0.191496,
+   "deviation": 0.189488,
    "odds": 2.45,
-   "edge_market": 0.057806
+   "edge_market": 0.057093
   },
   {
    "match": "lam vs mu",
    "market": "under25",
-   "p_final": 0.569199,
+   "p_final": 0.569938,
    "p_ref": 0.60794,
-   "deviation": -0.191496,
+   "deviation": -0.189488,
    "odds": 1.58,
-   "edge_market": -0.063712
+   "edge_market": -0.062973
   },
   {
    "match": "nu vs xi",
    "market": "away_win",
-   "p_final": 0.165082,
+   "p_final": 0.16691,
    "p_ref": 0.204383,
-   "deviation": -0.050568,
+   "deviation": -0.044663,
    "odds": 4.6,
-   "edge_market": -0.052309
+   "edge_market": -0.050482
+  },
+  {
+   "match": "nu vs xi",
+   "market": "btts",
+   "p_final": 0.491256,
+   "p_ref": 0.467532,
+   "deviation": 0.024071,
+   "odds": 2.05,
+   "edge_market": 0.003451
+  },
+  {
+   "match": "nu vs xi",
+   "market": "btts_no",
+   "p_final": 0.546502,
+   "p_ref": 0.532468,
+   "deviation": -0.024071,
+   "odds": 1.8,
+   "edge_market": -0.009054
   },
   {
    "match": "nu vs xi",
    "market": "dnb_away",
-   "p_final": 0.240749,
+   "p_final": 0.244445,
    "p_ref": 0.281181,
-   "deviation": -0.080381,
+   "deviation": -0.069281,
    "odds": 3.556,
-   "edge_market": -0.040466
+   "edge_market": -0.036769
   },
   {
    "match": "nu vs xi",
    "market": "dnb_home",
-   "p_final": 0.796953,
+   "p_final": 0.793068,
    "p_ref": 0.718819,
-   "deviation": 0.080381,
+   "deviation": 0.069281,
    "odds": 1.391,
-   "edge_market": 0.078045
+   "edge_market": 0.07416
   },
   {
    "match": "nu vs xi",
    "market": "draw",
-   "p_final": 0.237609,
+   "p_final": 0.237272,
    "p_ref": 0.25667,
-   "deviation": -0.027225,
+   "deviation": -0.028225,
    "odds": 3.7,
-   "edge_market": -0.032661
+   "edge_market": -0.032998
   },
   {
    "match": "nu vs xi",
    "market": "home_win",
-   "p_final": 0.602571,
+   "p_final": 0.600744,
    "p_ref": 0.538947,
-   "deviation": 0.077793,
+   "deviation": 0.072888,
    "odds": 1.8,
-   "edge_market": 0.047016
+   "edge_market": 0.045189
   },
   {
    "match": "omi vs pi",
    "market": "away_win",
-   "p_final": 0.232373,
+   "p_final": 0.232412,
    "p_ref": 0.254745,
-   "deviation": -0.02315,
+   "deviation": -0.02303,
    "odds": 3.7,
-   "edge_market": -0.037898
+   "edge_market": -0.037858
   },
   {
    "match": "omi vs pi",
@@ -535,12 +553,21 @@
   },
   {
    "match": "omi vs pi",
+   "market": "draw",
+   "p_final": 0.274086,
+   "p_ref": 0.287095,
+   "deviation": -0.02002,
+   "odds": 3.3,
+   "edge_market": -0.028944
+  },
+  {
+   "match": "omi vs pi",
    "market": "home_win",
-   "p_final": 0.494555,
+   "p_final": 0.494523,
    "p_ref": 0.45816,
-   "deviation": 0.04314,
+   "deviation": 0.04305,
    "odds": 2.1,
-   "edge_market": 0.018365
+   "edge_market": 0.018332
   },
   {
    "match": "omi vs pi",
@@ -563,11 +590,11 @@
   {
    "match": "phi vs khi",
    "market": "away_win",
-   "p_final": 0.146381,
+   "p_final": 0.146469,
    "p_ref": 0.204383,
-   "deviation": -0.110993,
+   "deviation": -0.110708,
    "odds": 4.6,
-   "edge_market": -0.071011
+   "edge_market": -0.070922
   },
   {
    "match": "phi vs khi",
@@ -608,20 +635,20 @@
   {
    "match": "phi vs khi",
    "market": "draw",
-   "p_final": 0.222535,
+   "p_final": 0.222424,
    "p_ref": 0.25667,
-   "deviation": -0.07202,
+   "deviation": -0.07235,
    "odds": 3.7,
-   "edge_market": -0.047735
+   "edge_market": -0.047846
   },
   {
    "match": "phi vs khi",
    "market": "home_win",
-   "p_final": 0.641766,
+   "p_final": 0.641788,
    "p_ref": 0.538947,
-   "deviation": 0.183013,
+   "deviation": 0.183073,
    "odds": 1.8,
-   "edge_market": 0.08621
+   "edge_market": 0.086233
   },
   {
    "match": "phi vs khi",
@@ -662,11 +689,11 @@
   {
    "match": "rho vs sig",
    "market": "away_win",
-   "p_final": 0.151794,
+   "p_final": 0.151877,
    "p_ref": 0.204383,
-   "deviation": -0.093503,
+   "deviation": -0.093233,
    "odds": 4.6,
-   "edge_market": -0.065598
+   "edge_market": -0.065514
   },
   {
    "match": "rho vs sig",
@@ -707,29 +734,29 @@
   {
    "match": "rho vs sig",
    "market": "draw",
-   "p_final": 0.227478,
+   "p_final": 0.227322,
    "p_ref": 0.25667,
-   "deviation": -0.05733,
+   "deviation": -0.057795,
    "odds": 3.7,
-   "edge_market": -0.042792
+   "edge_market": -0.042948
   },
   {
    "match": "rho vs sig",
    "market": "home_win",
-   "p_final": 0.629747,
+   "p_final": 0.62982,
    "p_ref": 0.538947,
-   "deviation": 0.150748,
+   "deviation": 0.150943,
    "odds": 1.8,
-   "edge_market": 0.074192
+   "edge_market": 0.074264
   },
   {
    "match": "tau vs ups",
    "market": "away_win",
-   "p_final": 0.194447,
+   "p_final": 0.194383,
    "p_ref": 0.244484,
-   "deviation": -0.100689,
+   "deviation": -0.100884,
    "odds": 3.9,
-   "edge_market": -0.061964
+   "edge_market": -0.062027
   },
   {
    "match": "tau vs ups",
@@ -770,92 +797,92 @@
   {
    "match": "tau vs ups",
    "market": "draw",
-   "p_final": 0.255133,
+   "p_final": 0.255337,
    "p_ref": 0.281826,
-   "deviation": -0.057026,
+   "deviation": -0.056426,
    "odds": 3.4,
-   "edge_market": -0.038985
+   "edge_market": -0.03878
   },
   {
    "match": "tau vs ups",
    "market": "home_win",
-   "p_final": 0.55439,
+   "p_final": 0.554242,
    "p_ref": 0.47369,
-   "deviation": 0.157715,
+   "deviation": 0.15731,
    "odds": 2.05,
-   "edge_market": 0.066585
+   "edge_market": 0.066437
   },
   {
    "match": "wca vs wcb",
    "market": "away_win",
-   "p_final": 0.125845,
+   "p_final": 0.127647,
    "p_ref": 0.179435,
-   "deviation": -0.08752,
+   "deviation": -0.08143,
    "odds": 5.2,
-   "edge_market": -0.066463
+   "edge_market": -0.06466
   },
   {
    "match": "wca vs wcb",
    "market": "btts",
-   "p_final": 0.475789,
+   "p_final": 0.476979,
    "p_ref": 0.473684,
-   "deviation": -0.039049,
+   "deviation": -0.035762,
    "odds": 2.0,
-   "edge_market": -0.024211
+   "edge_market": -0.023021
   },
   {
    "match": "wca vs wcb",
    "market": "btts_no",
-   "p_final": 0.563125,
+   "p_final": 0.561925,
    "p_ref": 0.526316,
-   "deviation": 0.039049,
+   "deviation": 0.035762,
    "odds": 1.8,
-   "edge_market": 0.007569
+   "edge_market": 0.00637
   },
   {
    "match": "wca vs wcb",
    "market": "dnb_away",
-   "p_final": 0.182022,
+   "p_final": 0.186397,
    "p_ref": 0.24638,
-   "deviation": -0.13808,
+   "deviation": -0.12448,
    "odds": 4.059,
-   "edge_market": -0.064344
+   "edge_market": -0.059969
   },
   {
    "match": "wca vs wcb",
    "market": "dnb_home",
-   "p_final": 0.851948,
+   "p_final": 0.847188,
    "p_ref": 0.75362,
-   "deviation": 0.13808,
+   "deviation": 0.12448,
    "odds": 1.327,
-   "edge_market": 0.098369
+   "edge_market": 0.093609
   },
   {
    "match": "wca vs wcb",
    "market": "draw",
-   "p_final": 0.216599,
+   "p_final": 0.219298,
    "p_ref": 0.249472,
-   "deviation": -0.066212,
+   "deviation": -0.058157,
    "odds": 3.8,
-   "edge_market": -0.046559
+   "edge_market": -0.04386
   },
   {
    "match": "wca vs wcb",
    "market": "home_win",
-   "p_final": 0.669089,
+   "p_final": 0.663788,
    "p_ref": 0.571093,
-   "deviation": 0.153732,
+   "deviation": 0.139587,
    "odds": 1.7,
-   "edge_market": 0.080853
+   "edge_market": 0.075553
   },
   {
    "match": "zeta vs theta",
    "market": "away_win",
-   "p_final": 0.191545,
+   "p_final": 0.191535,
    "p_ref": 0.235014,
-   "deviation": -0.105924,
+   "deviation": -0.105954,
    "odds": 4.0,
-   "edge_market": -0.058455
+   "edge_market": -0.058465
   },
   {
    "match": "zeta vs theta",
@@ -878,20 +905,20 @@
   {
    "match": "zeta vs theta",
    "market": "draw",
-   "p_final": 0.253122,
+   "p_final": 0.253128,
    "p_ref": 0.270285,
-   "deviation": -0.06121,
+   "deviation": -0.061195,
    "odds": 3.5,
-   "edge_market": -0.032592
+   "edge_market": -0.032587
   },
   {
    "match": "zeta vs theta",
    "market": "home_win",
-   "p_final": 0.562826,
+   "p_final": 0.562831,
    "p_ref": 0.4947,
-   "deviation": 0.167135,
+   "deviation": 0.16715,
    "odds": 1.95,
-   "edge_market": 0.050005
+   "edge_market": 0.050011
   }
  ],
  "paper": [
@@ -899,7 +926,7 @@
    "match": "wca vs wcb",
    "market": "dnb_home",
    "odds": 1.327,
-   "probability": 0.851948,
+   "probability": 0.847188,
    "stake": 0.8
   }
  ],
@@ -908,10 +935,10 @@
    "model": {
     "lambda_home": 2.202,
     "lambda_away": 0.671,
-    "p_home": 0.709,
+    "p_home": 0.7087,
     "p_draw": 0.1875,
-    "p_away": 0.1035,
-    "mc_agreement": 0.984,
+    "p_away": 0.1038,
+    "mc_agreement": 0.986,
     "confidence": 0.82,
     "mle_weight": 0.0,
     "mle_converged": true,
@@ -996,14 +1023,14 @@
   },
   "lam vs mu|home_win": {
    "model": {
-    "lambda_home": 2.453,
-    "lambda_away": 0.673,
-    "p_home": 0.7652,
-    "p_draw": 0.1584,
-    "p_away": 0.0765,
-    "mc_agreement": 0.993,
+    "lambda_home": 2.385,
+    "lambda_away": 0.73,
+    "p_home": 0.7492,
+    "p_draw": 0.1656,
+    "p_away": 0.0852,
+    "mc_agreement": 0.986,
     "confidence": 1.0,
-    "mle_weight": 0.55,
+    "mle_weight": 0.75,
     "mle_converged": true,
     "dc_rho_global": -0.09,
     "dc_rho_score": -0.09,
@@ -1080,14 +1107,14 @@
   },
   "lam vs mu|over25": {
    "model": {
-    "lambda_home": 2.453,
-    "lambda_away": 0.673,
-    "p_home": 0.7652,
-    "p_draw": 0.1584,
-    "p_away": 0.0765,
-    "mc_agreement": 0.993,
+    "lambda_home": 2.385,
+    "lambda_away": 0.73,
+    "p_home": 0.7492,
+    "p_draw": 0.1656,
+    "p_away": 0.0852,
+    "mc_agreement": 0.986,
     "confidence": 1.0,
-    "mle_weight": 0.55,
+    "mle_weight": 0.75,
     "mle_converged": true,
     "dc_rho_global": -0.09,
     "dc_rho_score": -0.09,
@@ -1167,9 +1194,9 @@
     "lambda_home": 2.185,
     "lambda_away": 0.608,
     "p_home": 0.722,
-    "p_draw": 0.1847,
-    "p_away": 0.0934,
-    "mc_agreement": 0.99,
+    "p_draw": 0.1843,
+    "p_away": 0.0937,
+    "mc_agreement": 0.989,
     "confidence": 1.0,
     "mle_weight": 0.0,
     "mle_converged": true,
@@ -1250,10 +1277,10 @@
    "model": {
     "lambda_home": 2.079,
     "lambda_away": 0.66,
-    "p_home": 0.6897,
-    "p_draw": 0.1993,
-    "p_away": 0.1109,
-    "mc_agreement": 0.987,
+    "p_home": 0.6899,
+    "p_draw": 0.1989,
+    "p_away": 0.1111,
+    "mc_agreement": 0.985,
     "confidence": 1.0,
     "mle_weight": 0.0,
     "mle_converged": true,
@@ -1332,14 +1359,14 @@
   },
   "wca vs wcb|dnb_home": {
    "model": {
-    "lambda_home": 2.147,
-    "lambda_away": 0.626,
-    "p_home": 0.7248,
-    "p_draw": 0.1833,
-    "p_away": 0.0919,
-    "mc_agreement": 0.992,
+    "lambda_home": 2.06,
+    "lambda_away": 0.644,
+    "p_home": 0.7107,
+    "p_draw": 0.1913,
+    "p_away": 0.098,
+    "mc_agreement": 0.985,
     "confidence": 1.0,
-    "mle_weight": 0.4,
+    "mle_weight": 0.55,
     "mle_converged": true,
     "dc_rho_global": -0.09,
     "dc_rho_score": -0.09,
