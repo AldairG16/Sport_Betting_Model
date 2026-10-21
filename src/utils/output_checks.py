@@ -234,12 +234,14 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
 
     # 1) liquidación de lo resuelto en los últimos días
     rows = []
-    for table in ("bets_history", "shadow_bets", "model_proposals"):
+    for table in ("bets_history", "shadow_bets", "model_proposals", "program_picks"):
         try:
             df = q(f"""SELECT id, match, match_date, market, result FROM {table}
                        WHERE result IN {RESOLVED} AND match_date >= NOW() - make_interval(days => :d)""", d=days)
             rows += [{**r, "table": table} for r in df.to_dict("records")]
         except Exception as e:
+            if table == "program_picks" and "does not exist" in str(e):
+                continue                  # nace con el primer pick guardado (21-oct-26)
             problems.append(f"Liquidación: no se pudo leer {table} ({type(e).__name__})")
     bad = settlement_mismatches(rows, matches, normalize)
     if bad:

@@ -270,7 +270,7 @@ def test_daily_check_reports_every_problem_as_an_error(monkeypatch):
         if "FROM bets_history WHERE result IN" in s:
             return pd.DataFrame([{"id": 3, "match": "aa vs bb", "match_date": now, "market": "home_win",
                                   "result": "loss"}])
-        if "FROM shadow_bets WHERE" in s or "FROM model_proposals WHERE" in s:
+        if "FROM shadow_bets WHERE" in s or "FROM model_proposals WHERE" in s or "FROM program_picks WHERE" in s:
             return pd.DataFrame(columns=["id", "match", "match_date", "market", "result"])
         if "FROM model_vs_sharp" in s:
             return pd.DataFrame(columns=["match", "match_date"])

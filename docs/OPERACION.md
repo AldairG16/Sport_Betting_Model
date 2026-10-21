@@ -1236,6 +1236,48 @@ equipo (`load_profiles`: titulares habituales, 70%+ de sus últimos 15 partidos)
 El banner de actualización sale solo si la versión publicada es MÁS NUEVA (`_newer`).
 Antes bastaba con que fuera distinta.
 
+**Pestañas en lenguaje simple (v1.9.0, 21-oct-2026).** El dueño: "ahorita el dashboard es
+un desastre, necesito que sea amigable". Era una sola página con 80 partidos y columnas de
+tres números. Ahora tiene cinco pestañas (la última vista se recuerda; también `#resultados`
+en la dirección):
+
+- **Hoy:**
+  - el veredicto ("Hoy no apuestes", "Hay N que valen la pena" o "Tienes N apuestas
+    reales"), con aviso si hay alerta de alineaciones;
+  - tres tarjetas de cómo vamos: picks, bankroll y acierto del favorito;
+  - los partidos de hoy en una línea cada uno: qué jugaría el programa, el mínimo en
+    PlayDoit, lo que paga aprox. y ✅ / 🟡 / ❌. Tocando el partido sale el detalle
+    (probabilidades contra Pinnacle, goles, mínimos por resultado, alineaciones);
+  - una guía "¿Cómo leo esto?".
+- **Próximos días:** igual, agrupado por día, con un filtro de "solo los que valen la pena".
+- **Cómo nos ha ido:**
+  - picks del programa (`/api/picks`);
+  - acierto del favorito contra Pinnacle;
+  - lo que el modelo propuso por semana (`/api/scoreboard`), marcando las semanas del
+    modelo con error.
+- **Dinero real:** indicadores, apuestas por etapa (hasta el 13-sep, 14 al 24-sep, modo
+  recolección), bankroll, ganancia por día y la tabla de apuestas. Las gráficas avanzadas
+  quedan plegadas.
+- **Sistema:** alineaciones, goleadores, diagnóstico IA y corridas de GitHub.
+
+El JS se pide como `/ui_es5.js?v=<versión>`: tras actualizar el `.exe`, el navegador no
+reusa el JS viejo de su caché (página nueva con código viejo dejaba secciones vacías).
+
+**Picks del programa guardados (`src/models/program_picks.py`, tabla `program_picks`).**
+Hasta v1.8.0 el pick de cada partido se calculaba al vuelo y no quedaba en ningún lado:
+`upcoming_matches` se poda a los ~7 días y `model_vs_sharp` se sobrescribe. No había forma
+de responder "cómo nos fue con los picks".
+
+- **Una sola regla:** `pick()`, que el dashboard también usa vía `visibility.program_pick`.
+- **Cuándo se guarda:** `snapshot_picks` corre en morning, evening y cada closing para los
+  próximos 3 días, con los momios del momento. Hace upsert mientras el partido no empiece,
+  así que cuenta el último pick antes del inicio.
+- **Cómo se liquida:** `resolve_picks`, en "Shadow results" del evening, con la misma
+  función que las apuestas. Es a 1u al momio estimado de PlayDoit (`playdoit_odds`: el
+  promedio de las casas por `playdoit_ratio`). "Ambos anotan" no tiene promedio de casas:
+  cuenta en ganados y perdidos pero no en unidades.
+- **Chequeo:** el chequeo diario de salidas también re-liquida esta tabla.
+
 **Revisor de PlayDoit por captura (21-oct-2026).** PlayDoit no está en ninguna API y su
 página bloquea a los programas automáticos (no se raspa). El dueño manda una captura de
 PlayDoit al bot, en el mismo chat de los avisos, y el bot responde momio por momio:
