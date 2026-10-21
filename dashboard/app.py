@@ -459,7 +459,8 @@ def api_predictions():
         SELECT DISTINCT ON (home_team_norm, away_team_norm)
                home_team_norm, away_team_norm, home_team, away_team, home_odds, draw_odds, away_odds,
                pin_home_odds, pin_draw_odds, pin_away_odds, over25_odds, under25_odds,
-               consensus_over25_odds, consensus_under25_odds, btts_yes_odds, btts_no_odds
+               consensus_over25_odds, consensus_under25_odds, btts_yes_odds, btts_no_odds,
+               consensus_home_odds, consensus_draw_odds, consensus_away_odds
         FROM upcoming_matches
         WHERE match_date BETWEEN NOW() AND NOW() + INTERVAL '3 days'
         ORDER BY home_team_norm, away_team_norm, updated_at DESC NULLS LAST
@@ -476,8 +477,17 @@ def api_predictions():
                                    "home_odds", "draw_odds", "away_odds",
                                    "pin_home_odds", "pin_draw_odds", "pin_away_odds", "over25_odds",
                                    "under25_odds", "consensus_over25_odds", "consensus_under25_odds",
-                                   "btts_yes_odds", "btts_no_odds"])
-    return jsonify({"ok": True, "matches": _vis.predictions(mvs, up, pending, normalize_team)})
+                                   "btts_yes_odds", "btts_no_odds", "consensus_home_odds",
+                                   "consensus_draw_odds", "consensus_away_odds"])
+    # cuánto paga PlayDoit frente al promedio, de las capturas del dueño
+    from src.models.playdoit_prices import playdoit_ratio
+    pd_rows = _q("""
+        SELECT decimal, consensus_decimal, boosted FROM playdoit_prices
+        WHERE captured_at >= NOW() - INTERVAL '60 days'
+    """)
+    ratio = playdoit_ratio(pd_rows.to_dict("records")) if not pd_rows.empty else None
+    return jsonify({"ok": True, "playdoit_ratio": ratio,
+                    "matches": _vis.predictions(mvs, up, pending, normalize_team, ratio)})
 
 
 @app.route("/api/lineups")

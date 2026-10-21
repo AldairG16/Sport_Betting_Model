@@ -139,6 +139,8 @@ def test_new_endpoints_answer_with_synthetic_data(monkeypatch):
         if "FROM matches" in s:
             return pd.DataFrame([{"h": "bayern munchen", "a": "arsenal", "d": "2026-10-21",
                                   "home_goals": 2, "away_goals": 2}])
+        if "FROM playdoit_prices" in s:
+            return pd.DataFrame()
         if "FROM model_proposals" in s:
             return pd.DataFrame([{"match": "a vs b", "match_date": KICK, "league": "soccer_epl",
                                   "market": "home_win", "odds": 2.0, "probability": 0.55, "pin_prob": 0.5,

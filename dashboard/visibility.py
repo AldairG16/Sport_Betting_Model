@@ -108,7 +108,22 @@ def _devig2(a, b) -> float | None:
     return (1 / a) / (1 / a + 1 / b)
 
 
-def program_pick(model: list, pin: list, p_over25, p_btts, u) -> dict:
+CONSENSUS_COL = {"home": "consensus_home_odds", "draw": "consensus_draw_odds", "away": "consensus_away_odds"}
+
+
+def playdoit_estimate(consensus, ratio=None):
+    """Momio estimado de PlayDoit: el promedio de las casas por lo que PlayDoit
+    paga frente al promedio, aprendido de las capturas (playdoit_prices);
+    sin capturas suficientes, el promedio tal cual (medido el 19-oct-26:
+    PlayDoit ≈ promedio). Decimal o None."""
+    c = _num(consensus)
+    if not c or c <= 1:
+        return None
+    r = _num(ratio) or 1.0
+    return max(1.01, c * r)
+
+
+def program_pick(model: list, pin: list, p_over25, p_btts, u, ratio=None) -> dict:
     """
     Lo que jugaría el programa en el partido (v1.7.2, 21-oct-26: el dueño
     quería ver una apuesta aunque no tenga valor). Entre 1X2, más/menos 2.5 y
@@ -119,42 +134,48 @@ def program_pick(model: list, pin: list, p_over25, p_btts, u) -> dict:
     mínimo; en PlayDoit hay que revisarlo.
     """
     cands = []
+    g = (lambda col: getattr(u, col, None) if u is not None and col else None)
     for (name, _, _, odds_col), m, p in zip(SIDES, model, pin):
         if m is not None and p is not None:
-            cands.append((f"Gana {'el ' + SIDE_LABEL[name] if name != 'draw' else ''}".replace("Gana empate", "Empate").strip()
-                          if name != "draw" else "Empate", m, p, getattr(u, odds_col, None) if u is not None else None))
+            cands.append(("Gana el " + SIDE_LABEL[name] if name != "draw" else "Empate", m, p,
+                          g(odds_col), g(CONSENSUS_COL[name])))
     p_over = _num(p_over25)
     if p_over is not None and u is not None:
         mk = _devig2(getattr(u, "consensus_over25_odds", None), getattr(u, "consensus_under25_odds", None)) \
             or _devig2(getattr(u, "over25_odds", None), getattr(u, "under25_odds", None))
         if mk is not None:
-            cands.append(("Más de 2.5 goles", p_over, mk, getattr(u, "over25_odds", None)))
-            cands.append(("Menos de 2.5 goles", 1 - p_over, 1 - mk, getattr(u, "under25_odds", None)))
+            cands.append(("Más de 2.5 goles", p_over, mk, g("over25_odds"), g("consensus_over25_odds")))
+            cands.append(("Menos de 2.5 goles", 1 - p_over, 1 - mk, g("under25_odds"), g("consensus_under25_odds")))
     pb = _num(p_btts)
     if pb is not None and u is not None:
         mk = _devig2(getattr(u, "btts_yes_odds", None), getattr(u, "btts_no_odds", None))
         if mk is not None:
-            cands.append(("Ambos anotan", pb, mk, getattr(u, "btts_yes_odds", None)))
-            cands.append(("No anotan ambos", 1 - pb, 1 - mk, getattr(u, "btts_no_odds", None)))
+            cands.append(("Ambos anotan", pb, mk, g("btts_yes_odds"), None))
+            cands.append(("No anotan ambos", 1 - pb, 1 - mk, g("btts_no_odds"), None))
     if not cands:
         return {"label": "", "text": ""}
-    label, m, mk, best = max(cands, key=lambda c: c[1] - c[2])
+    label, m, mk, best, cons = max(cands, key=lambda c: c[1] - c[2])
     if m - mk < PICK_MIN_GAP:
         # nada mejor que el mercado: lo más probable del 1X2
-        label, m, mk, best = max(cands[:3], key=lambda c: c[1])
+        label, m, mk, best, cons = max(cands[:3], key=lambda c: c[1])
         lean = False
     else:
         lean = True
     min_us = min_american(m, pin_prob=mk)
     best_us = to_american(_num(best)) if _num(best) else None
     value = bool(min_us is not None and best_us is not None and best_us >= min_us)
+    est = playdoit_estimate(cons, ratio)
+    est_us = to_american(est) if est else None
     return {"label": label, "model": round(m, 3), "market": round(mk, 3), "lean": lean,
             "min_us": fmt_american(min_us) if min_us is not None else "",
-            "best_us": fmt_american(best_us) if best_us is not None else "", "value": value}
+            "best_us": fmt_american(best_us) if best_us is not None else "", "value": value,
+            "pd_est_us": fmt_american(est_us) if est_us is not None else "",
+            "pd_value": bool(min_us is not None and est_us is not None and est_us >= min_us),
+            "pd_learned": bool(_num(ratio))}
 
 
 def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
-                normalize=None) -> list:
+                normalize=None, ratio=None) -> list:
     """
     mvs: filas de model_vs_sharp de los próximos días. upcoming: la última
     fila de upcoming_matches por partido (nombres, mejores momios y
@@ -195,7 +216,7 @@ def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
             "p_over25": _num(getattr(r, "p_over25", None)),
             "p_btts": _num(getattr(r, "p_btts", None)),
             "reading": reading(model, pin),
-            "pick": program_pick(model, pin, getattr(r, "p_over25", None), getattr(r, "p_btts", None), u),
+            "pick": program_pick(model, pin, getattr(r, "p_over25", None), getattr(r, "p_btts", None), u, ratio),
             # sin goles esperados guardados = corrida anterior a la corrección
             # del modelo (21-oct-26): su lectura no vale
             "old_model": not (lam_h and lam_a),

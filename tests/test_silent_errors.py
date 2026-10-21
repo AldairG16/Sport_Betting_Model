@@ -438,11 +438,14 @@ def test_due_windows():
 
 
 class _FakeGh:
-    def __init__(self, last_created=None, fail_dispatch=False):
+    def __init__(self, last_created=None, fail_dispatch=False, checker_active=True):
         self.calls, self.last_created, self.fail = [], last_created, fail_dispatch
+        self.checker_active = checker_active
 
     def __call__(self, *args):
         self.calls.append(args)
+        if args[:2] == ("run", "list") and "status" in args:      # revisor de PlayDoit
+            return '[{"status": "in_progress"}]' if self.checker_active else '[{"status": "completed"}]'
         if args[:2] == ("run", "list"):
             if self.last_created is None:
                 return "[]"
@@ -488,4 +491,15 @@ def test_heartbeat_outside_every_window_does_nothing():
     from scripts.heartbeat_dispatch import main
     gh = _FakeGh()
     assert main(datetime(2026, 10, 1, 17, 40, tzinfo=timezone.utc), gh) == 0     # 11:40
-    assert gh.calls == []
+    assert _dispatched(gh) == []                    # solo revisó que el revisor siga escuchando
+
+
+def test_heartbeat_relaunches_the_playdoit_checker_when_it_is_not_listening():
+    """21-oct-26: el revisor de capturas escucha ~6 h y dispara su relevo;
+    si la cadena se corta, el siguiente closing lo relanza."""
+    from scripts.heartbeat_dispatch import main
+    now = datetime(2026, 10, 1, 17, 40, tzinfo=timezone.utc)
+    gh = _FakeGh(checker_active=False)
+    assert main(now, gh) == 0 and _dispatched(gh) == ["playdoit_checker.yml"]
+    gh = _FakeGh(checker_active=True)
+    assert main(now, gh) == 0 and _dispatched(gh) == []
