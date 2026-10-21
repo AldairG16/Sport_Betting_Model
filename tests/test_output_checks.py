@@ -10,7 +10,6 @@ Auditoría de salidas del 21-oct-26: lo que el sistema produce tiene sentido.
   G. chequeo diario de salidas (src/utils/output_checks.py).
 """
 
-import logging
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -18,6 +17,7 @@ import pandas as pd
 import pytest
 
 from src.utils import output_checks as oc
+from src.utils.log import RUN_ISSUES
 from tests.pipeline_harness import extended_kwargs, run_pipeline
 
 
@@ -86,14 +86,14 @@ def test_team_missing_from_the_fit_is_not_evaluated(monkeypatch):
     assert "tau vs ups" not in _evaluated(out)       # sin él
 
 
-def test_most_matches_without_dixon_coles_is_an_error(monkeypatch, caplog):
+def test_most_matches_without_dixon_coles_is_an_error(monkeypatch):
     kw = extended_kwargs()
     teams = {t for pair in kw["matches"][["home_team", "away_team"]].itertuples(index=False) for t in pair}
     _skip_on(kw, _safe_history_counts=lambda: {t: 5 for t in teams})
-    with caplog.at_level(logging.ERROR):
-        run_pipeline(monkeypatch, **kw)
-    assert any("sin Dixon-Coles confiable" in r.getMessage() for r in caplog.records
-               if r.levelno >= logging.ERROR)
+    RUN_ISSUES.reset()
+    run_pipeline(monkeypatch, **kw)
+    assert any("sin Dixon-Coles confiable" in e for e in RUN_ISSUES.errors())   # llega a Telegram
+    RUN_ISSUES.reset()
 
 
 def test_form_is_capped_before_blending_with_dixon_coles(monkeypatch):
@@ -257,7 +257,7 @@ def test_pipeline_invariants_flag_a_drifting_model():
     assert out == ["Modelo: distancia típica a Pinnacle de 11.0 pts (normal: ~6)"]
 
 
-def test_daily_check_reports_every_problem_as_an_error(monkeypatch, caplog):
+def test_daily_check_reports_every_problem_as_an_error(monkeypatch):
     import src.utils.output_checks as mod
     now = pd.Timestamp.now(tz="UTC")
 
@@ -280,12 +280,13 @@ def test_daily_check_reports_every_problem_as_an_error(monkeypatch, caplog):
             return pd.DataFrame([{"key": k, "updated_at": now} for k in oc.WEEKLY_KEYS])
         raise AssertionError(s[:80])
     monkeypatch.setattr(pd, "read_sql", fake_read_sql)
-    with caplog.at_level(logging.ERROR):
-        out = mod.run_output_checks(engine=object(), normalize=lambda t: t.lower())
+    RUN_ISSUES.reset()
+    out = mod.run_output_checks(engine=object(), normalize=lambda t: t.lower())
     assert len(out) == 3
     assert any("Liquidación: 1" in p and "loss≠win" in p for p in out)
     assert any("2 sombra" in p for p in out) and any("xG real: 12.3" in p for p in out)
-    assert sum(1 for r in caplog.records if r.levelno == logging.ERROR and "Chequeo de salidas" in r.getMessage()) == 3
+    assert sum(1 for e in RUN_ISSUES.errors() if "Chequeo de salidas" in e) == 3   # "errores tolerados"
+    RUN_ISSUES.reset()
 
 
 def test_evening_runs_the_check_before_the_telegram_summary(monkeypatch):
