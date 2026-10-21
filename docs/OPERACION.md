@@ -1168,6 +1168,21 @@ casi no hay apuestas reales y el dashboard se veía vacío. Tres secciones nueva
   con su decisión, su resultado y lo que habría dado a 1u, más un resumen por decisión.
   Los mercados desactivados (momio de prueba) no cuentan.
 
+**Veredicto de alineaciones (v1.7.1).** Sección arriba de todo (`/api/lineups`,
+`dashboard/lineup_verdict.py`) para los partidos de las próximas ~14 h. Usa los onces que
+el closing guarda en `lineups` (`capture_upcoming`, ~1 h antes) y el perfil de cada
+equipo (`load_profiles`: titulares habituales, 70%+ de sus últimos 15 partidos).
+
+- **Por equipo:** quién falta y si está en la banca o fuera de la convocatoria.
+- **Por partido, el veredicto:**
+  - la alerta de alineación con su momio mínimo y la revisión de Claude;
+  - 4+ fuera sin alerta (el rival tiene menos de 20%);
+  - rotación parcial (2-3 fuera);
+  - normal;
+  - o "sin publicar".
+- **Movimiento de Pinnacle:** el más grande desde la corrida de la mañana, solo antes del
+  inicio (después el momio es de en vivo).
+
 El banner de actualización sale solo si la versión publicada es MÁS NUEVA (`_newer`).
 Antes bastaba con que fuera distinta.
 
