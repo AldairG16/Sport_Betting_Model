@@ -233,6 +233,9 @@ function pickHtml(pk){
   if (!pk || !pk.label) return '—';
   var head = '<b>' + esc(pk.label) + '</b> · programa ' + Math.round(pk.model * 100) + '% vs mercado ' + Math.round(pk.market * 100) + '%';
   var tail = pk.min_us ? ' · PlayDoit ' + esc(pk.min_us) + ' o mejor' : '';
+  if (pk.pd_est_us) tail += ' · <span title="' + (pk.pd_learned ? 'Estimado con lo que PlayDoit pagó en tus capturas' :
+      'Estimado con el promedio de las casas (PlayDoit suele pagar parecido). Manda una captura al bot de Telegram para confirmarlo') +
+      '">PlayDoit est. ' + esc(pk.pd_est_us) + (pk.pd_value ? ' ✅' : ' ❌') + '</span>';
   var tag = pk.value ? ' <span class="pill win">con valor</span>' :
             pk.lean ? ' <span class="pill pending" title="El programa ve más que el mercado, pero el mejor momio todavía no paga el mínimo">sin valor aún</span>' :
             ' <span class="pill cancelled" style="text-decoration:none" title="No ve nada mejor que el mercado: es lo más probable, no una ventaja">lo más probable</span>';

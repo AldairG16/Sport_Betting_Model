@@ -1,0 +1,48 @@
+name: PlayDoit Checker
+
+# Revisor de momios de PlayDoit por captura (21-oct-26): el dueño manda una
+# captura al bot de Telegram y este responde, momio por momio, si vale la
+# pena (scripts/playdoit_checker.py). Escucha ~5 h 45 min con long polling y
+# antes de terminar dispara su relevo; el closing (heartbeat_dispatch) lo
+# vuelve a lanzar si la cadena se corta. Repositorio público: los minutos de
+# Actions no cuestan.
+on:
+  workflow_dispatch:
+
+# Una sola escucha a la vez: dos getUpdates sobre el mismo bot se pisan.
+concurrency:
+  group: playdoit-checker
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write          # dispara su relevo
+
+jobs:
+  listen:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Listen to Telegram
+        env:
+          DB_URL:                     ${{ secrets.DB_URL }}
+          TELEGRAM_BOT_TOKEN:         ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:           ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY:          ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_DAILY_BUDGET_USD: ${{ secrets.ANTHROPIC_DAILY_BUDGET_USD }}
+          GITHUB_TOKEN:               ${{ secrets.GITHUB_TOKEN }}
+          PYTHONUNBUFFERED: '1'
+        run: python scripts/playdoit_checker.py --listen --minutes 345

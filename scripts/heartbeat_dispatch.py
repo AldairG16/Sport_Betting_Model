@@ -37,6 +37,11 @@ SLOTS = {
 }
 WINDOW_MIN = 30
 RECENT_MIN = 25
+# Trabajos que deben estar SIEMPRE corriendo (21-oct-26): el revisor de
+# capturas de PlayDoit escucha ~6 h y dispara su relevo; si la cadena se
+# corta (falla, GitHub no crea la corrida), el siguiente closing lo relanza.
+KEEPALIVE = ("playdoit_checker.yml",)
+ACTIVE = ("in_progress", "queued", "waiting", "pending", "requested")
 
 
 def due(now_local: datetime, slots, window_min: int = WINDOW_MIN) -> bool:
@@ -62,6 +67,12 @@ def started_recently(workflow: str, now_utc: datetime, gh=_gh) -> bool:
     return now_utc - created < timedelta(minutes=RECENT_MIN)
 
 
+def is_active(workflow: str, gh=_gh) -> bool:
+    runs = json.loads(gh("run", "list", "--workflow", workflow, "--limit", "3",
+                         "--json", "status") or "[]")
+    return any(r.get("status") in ACTIVE for r in runs)
+
+
 def main(now_utc: datetime | None = None, gh=_gh) -> int:
     now_utc = now_utc or datetime.now(timezone.utc)
     now_local = now_utc.astimezone(TZ)
@@ -78,6 +89,16 @@ def main(now_utc: datetime | None = None, gh=_gh) -> int:
         except Exception as e:
             detail = getattr(e, "stderr", "") or str(e)
             print(f"::error::No se pudo disparar {workflow}: {str(detail)[:300]}")
+            failures += 1
+    for workflow in KEEPALIVE:
+        try:
+            if is_active(workflow, gh):
+                continue
+            gh("workflow", "run", workflow, "--ref", "master")
+            print(f"   ▶️  {workflow} relanzado (no estaba escuchando)")
+        except Exception as e:
+            detail = getattr(e, "stderr", "") or str(e)
+            print(f"::error::No se pudo relanzar {workflow}: {str(detail)[:300]}")
             failures += 1
     return 1 if failures else 0
 

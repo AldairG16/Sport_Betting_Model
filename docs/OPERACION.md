@@ -1186,6 +1186,29 @@ equipo (`load_profiles`: titulares habituales, 70%+ de sus últimos 15 partidos)
 El banner de actualización sale solo si la versión publicada es MÁS NUEVA (`_newer`).
 Antes bastaba con que fuera distinta.
 
+**Revisor de PlayDoit por captura (21-oct-2026).** PlayDoit no está en ninguna API y su
+página bloquea a los programas automáticos (no se raspa). El dueño manda una captura de
+PlayDoit al bot, en el mismo chat de los avisos, y el bot responde momio por momio:
+"✅ vale la pena" o "❌ no (necesita X o mejor)".
+
+- **Cómo decide** (`src/models/playdoit_prices.py`): la regla de siempre. La probabilidad
+  más baja entre el programa y el mercado sin margen (Pinnacle en 1X2, doble oportunidad y
+  empate anula; promedio de las casas en más/menos 2.5 y ambos anotan), menos 2 pts.
+- **Cómo lee la captura** (`scripts/playdoit_checker.py`): Claude Haiku 5.5, una fracción
+  de centavo por captura. Tope diario propio `PLAYDOIT_CHECKER_DAILY_USD` (0.25) además del
+  de la cuenta.
+- **Dónde corre** (`.github/workflows/playdoit_checker.yml`):
+  - en GitHub Actions, donde están las claves;
+  - escucha ~5 h 45 min con long polling y dispara su relevo;
+  - `heartbeat_dispatch.py` (en cada closing) lo relanza si no hay ninguno corriendo;
+  - el offset de Telegram va en `model_state.telegram_checker_offset`, así que un mensaje
+    nunca se procesa dos veces.
+- **Seguridad:** solo responde al chat `TELEGRAM_CHAT_ID`.
+- **Lo que guarda:** cada momio leído va a `playdoit_prices`. Con 10 o más capturas sin
+  momio mejorado se aprende la mediana de (momio PlayDoit / promedio de las casas)
+  (`playdoit_ratio`). El dashboard estima con ella el momio de PlayDoit ("PlayDoit est.");
+  sin muestra suficiente usa el promedio tal cual (medido el 19-oct: PlayDoit ≈ promedio).
+
 **Arranque y reinicio en la PC del dueño:** `installer\dist\BettingDashboard.exe`,
 lanzado por el acceso directo de la carpeta Inicio de Windows (`Betting Dashboard.lnk`,
 carpeta de trabajo `installer\dist`, donde vive el `.env`). Desde una sesión de agente
