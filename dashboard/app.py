@@ -69,6 +69,19 @@ def _app_version() -> str:
 
 REPO_RELEASES_API = "https://api.github.com/repos/AldairG16/Sport_Betting_Model/releases/latest"
 
+
+def _newer(latest: str | None, current: str) -> bool:
+    """¿La versión publicada es más nueva que la instalada? Antes bastaba con
+    que fuera distinta: instalada una versión antes de publicarla, el banner
+    ofrecía "actualizar" a una más vieja."""
+    def parts(v):
+        try:
+            return tuple(int(x) for x in str(v).split("."))
+        except ValueError:
+            return None
+    a, b = parts(latest), parts(current)
+    return bool(a and b and a > b)
+
 # ── JS del dashboard y Chart.js servidos localmente (sin depender del CDN) ──
 from flask import send_file, redirect as _redirect
 
@@ -130,7 +143,7 @@ def api_version():
     return jsonify({
         "current": current,
         "latest": latest,
-        "update_available": bool(latest and latest != current),
+        "update_available": _newer(latest, current),
         "release_url": url,
     })
 
@@ -419,6 +432,88 @@ def scorers():
 
 
 # ─────────────────────────────────────────────────────────────
+# LO QUE EL PROGRAMA ANALIZA AUNQUE NO APUESTE (v1.7.0, 21-oct-26)
+# En modo recolección casi no hay apuestas reales y el dashboard se veía
+# vacío. La lógica está en dashboard/visibility.py (funciones puras).
+# ─────────────────────────────────────────────────────────────
+from dashboard import visibility as _vis  # noqa: E402
+
+
+def _days(default: int = 14) -> int:
+    try:
+        return max(1, min(int(request.args.get("days", default)), 60))
+    except ValueError:
+        return default
+
+
+@app.route("/api/predictions")
+def api_predictions():
+    mvs = _q("""
+        SELECT * FROM model_vs_sharp
+        WHERE match_date BETWEEN NOW() AND NOW() + INTERVAL '3 days'
+        ORDER BY match_date
+    """)
+    if mvs.empty:
+        return _no_data("El programa todavía no analizó los próximos partidos")
+    up = _q("""
+        SELECT DISTINCT ON (home_team_norm, away_team_norm)
+               home_team_norm, away_team_norm, home_team, away_team, home_odds, draw_odds, away_odds,
+               pin_home_odds, pin_draw_odds, pin_away_odds
+        FROM upcoming_matches
+        WHERE match_date BETWEEN NOW() AND NOW() + INTERVAL '3 days'
+        ORDER BY home_team_norm, away_team_norm, updated_at DESC NULLS LAST
+    """)
+    bets = _q("SELECT match FROM bets_history WHERE result = 'pending'")
+    from src.utils.team_normalizer import normalize_team
+    pending = set()
+    for m in (bets["match"] if not bets.empty else []):
+        if " vs " in str(m):
+            h, a = str(m).split(" vs ", 1)
+            pending.add(f"{normalize_team(h)} vs {normalize_team(a)}".lower())
+    if up.empty:
+        up = pd.DataFrame(columns=["home_team_norm", "away_team_norm", "home_team", "away_team",
+                                   "home_odds", "draw_odds", "away_odds",
+                                   "pin_home_odds", "pin_draw_odds", "pin_away_odds"])
+    return jsonify({"ok": True, "matches": _vis.predictions(mvs, up, pending, normalize_team)})
+
+
+@app.route("/api/predictions/history")
+def api_predictions_history():
+    d = _days()
+    mvs = _q("""
+        SELECT * FROM model_vs_sharp
+        WHERE match_date BETWEEN NOW() - make_interval(days => :d) AND NOW() - INTERVAL '2 hours'
+        ORDER BY match_date DESC
+    """, {"d": d})
+    if mvs.empty:
+        return _no_data("Sin partidos analizados en esos días")
+    res = _q("""
+        SELECT LOWER(home_team) AS h, LOWER(away_team) AS a, date::date AS d, home_goals, away_goals
+        FROM matches
+        WHERE date >= CURRENT_DATE - make_interval(days => :d2) AND home_goals IS NOT NULL
+    """, {"d2": d + 2})
+    out = _vis.history(mvs, res if not res.empty else
+                       pd.DataFrame(columns=["h", "a", "d", "home_goals", "away_goals"]))
+    return jsonify({"ok": True, "days": d, **out})
+
+
+@app.route("/api/proposals")
+def api_proposals():
+    d = _days()
+    df = _q("""
+        SELECT DISTINCT ON (match, market) match, match_date, league, market, odds,
+               probability, pin_prob, decision, result
+        FROM model_proposals
+        WHERE match_date >= NOW() - make_interval(days => :d)
+        ORDER BY match, market, evaluated_at DESC
+    """, {"d": d})
+    if df.empty:
+        return _no_data("Sin propuestas del modelo en esos días")
+    df = df.sort_values("match_date", ascending=False)
+    return jsonify({"ok": True, "days": d, **_vis.proposals(df)})
+
+
+# ─────────────────────────────────────────────────────────────
 # PANEL DE CONTROL (GitHub Actions)
 # Requiere GH_TOKEN en .env (PAT con permiso Actions:write del repo).
 # Sin token, el panel explica cómo crearlo — nada se rompe.
@@ -564,6 +659,29 @@ PAGE = """<!DOCTYPE html>
 <div id="upd" style="display:none;background:#14351f;border:1px solid #22c55e44;color:var(--green);border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:.85rem"></div>
 <div id="err"></div>
 <div class="kpis" id="kpis"></div>
+<div class="card" style="font-size:.85rem;line-height:1.5;margin-bottom:6px;border:1px solid #3b82f644">
+  🔒 <b>Modo recolección.</b> El sistema solo apuesta dinero real cuando el momio le gana a Pinnacle por 2 puntos o más.
+  Abajo ves todo lo que analiza aunque no apueste: qué dice de cada partido, si acertó y qué propuso.
+  <span style="color:var(--muted)">El modelo se corrigió el 21-oct (antes estaba roto en las 5 grandes ligas y la Champions); lo marcado "desde la corrección" es lo que cuenta.</span>
+</div>
+<div class="section"><h2>🔮 Lo que dice el programa — próximos 3 días</h2>
+  <div class="tablewrap" style="max-height:520px"><table><thead><tr><th>Hora</th><th>Partido</th><th>Liga</th><th title="Goles esperados local - visitante">Goles esp.</th><th>Marcador más probable</th><th title="Local / Empate / Visitante">Programa</th><th title="Pinnacle sin margen: el precio más preciso del mercado">Pinnacle</th><th>Lectura</th><th title="Apuesta en PlayDoit solo si paga esto o mejor (local / empate / visitante)">PlayDoit mínimo</th><th>Estado</th></tr></thead>
+  <tbody id="predbody"><tr><td colspan="10" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
+  <div style="color:var(--muted);font-size:.75rem;margin-top:6px">Programa y Pinnacle en % (local / empate / visitante). "PlayDoit mínimo" usa la probabilidad más baja entre el programa y Pinnacle, menos 2 puntos: si PlayDoit paga eso o más, hay valor. __HOW_TO_READ__</div>
+</div>
+<div class="section"><h2>🎯 ¿Acertó el programa? — últimos 14 días</h2>
+  <div class="kpis" id="histkpis"></div>
+  <div class="tablewrap" style="max-height:360px"><table><thead><tr><th>Fecha</th><th>Partido</th><th>Liga</th><th>Resultado</th><th>Programa</th><th>Pinnacle</th><th>¿Programa?</th><th>¿Pinnacle?</th></tr></thead>
+  <tbody id="histbody"><tr><td colspan="8" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
+  <div style="color:var(--muted);font-size:.75rem;margin-top:6px">✓ = el favorito que marcaba acertó. "Prob. dada a lo que pasó": en promedio, qué probabilidad le dio cada uno al resultado real (más alto es mejor).</div>
+</div>
+<div class="section"><h2>🧪 Lo que el modelo propuso y cómo terminó — últimos 14 días</h2>
+  <div class="tablewrap" style="max-height:220px;margin-bottom:10px"><table><thead><tr><th>Decisión</th><th>Propuestas</th><th>Ganadas</th><th title="Si se hubiera apostado 1 unidad a cada una">Resultado a 1u</th><th>ROI</th></tr></thead>
+  <tbody id="propsum"><tr><td colspan="5" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
+  <div class="tablewrap" style="max-height:420px"><table><thead><tr><th>Fecha</th><th>Partido</th><th>Mercado</th><th>Prob</th><th>Pinnacle</th><th>Mejor cuota</th><th>PlayDoit mínimo</th><th>Decisión</th><th>Resultado</th><th>A 1u</th></tr></thead>
+  <tbody id="propbody"><tr><td colspan="10" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
+  <div style="color:var(--muted);font-size:.75rem;margin-top:6px">"No le gana a Pinnacle por 2 pt" son las que el filtro bloqueó. Los mercados desactivados usan un momio de prueba, no real: no cuentan en el resumen.</div>
+</div>
 <div class="section" id="narrsec" style="display:none;margin-top:0">
   <h2>🧠 Diagnóstico IA de la semana</h2>
   <div class="card" id="narrtext" style="font-size:.9rem;white-space:pre-wrap;line-height:1.5"></div>
