@@ -477,6 +477,55 @@ def api_predictions():
     return jsonify({"ok": True, "matches": _vis.predictions(mvs, up, pending, normalize_team)})
 
 
+@app.route("/api/lineups")
+def api_lineups():
+    """Veredicto por partido cuando salen las alineaciones (v1.7.1)."""
+    import json as _js
+    from dashboard.lineup_verdict import lineup_verdicts
+    from src.models.lineup_alerts import load_profiles
+    fx = _q("""
+        SELECT DISTINCT ON (home_team_norm, away_team_norm)
+               home_team_norm, away_team_norm, home_team, away_team, sport_key, match_date,
+               pin_home_odds, pin_draw_odds, pin_away_odds
+        FROM upcoming_matches
+        WHERE match_date BETWEEN NOW() - INTERVAL '2 hours' AND NOW() + INTERVAL '14 hours'
+        ORDER BY home_team_norm, away_team_norm, updated_at DESC NULLS LAST
+    """)
+    if fx.empty:
+        return _no_data("Sin partidos hoy")
+    fx = fx.sort_values("match_date")
+    teams = sorted(set(fx.home_team_norm) | set(fx.away_team_norm))
+    load = lambda v: v if isinstance(v, (list, dict)) else _js.loads(v or "null")
+    lu = _q("""
+        SELECT team, kickoff, formation, starters, names FROM lineups
+        WHERE team = ANY(:t) AND kickoff BETWEEN NOW() - INTERVAL '4 hours' AND NOW() + INTERVAL '16 hours'
+    """, {"t": teams})
+    lineups = {}
+    for r in (lu.itertuples(index=False) if not lu.empty else []):
+        lineups.setdefault(r.team, []).append({"kickoff": r.kickoff, "formation": r.formation,
+                                               "starters": load(r.starters), "names": load(r.names)})
+    try:
+        profiles = load_profiles(engine, teams)
+    except Exception as e:
+        app.logger.warning(f"perfiles de alineación: {e}")
+        profiles = {}
+    al = _q("""
+        SELECT home, away, weakened, missing, market, min_american, analyst_verdict, analyst_reason
+        FROM lineup_alerts WHERE kickoff BETWEEN NOW() - INTERVAL '4 hours' AND NOW() + INTERVAL '16 hours'
+        ORDER BY alerted_at
+    """) if teams else pd.DataFrame()
+    alerts = [{**r, "missing": load(r.get("missing"))} for r in (al.to_dict("records") if not al.empty else [])]
+    mv = _q("""
+        SELECT DISTINCT ON (match) match, pin_home, pin_draw, pin_away FROM model_vs_sharp
+        WHERE match_date BETWEEN NOW() - INTERVAL '4 hours' AND NOW() + INTERVAL '16 hours'
+        ORDER BY match, created_at ASC
+    """)
+    morning = {str(r.match).lower(): [float(r.pin_home), float(r.pin_draw), float(r.pin_away)]
+               for r in (mv.itertuples(index=False) if not mv.empty else [])}
+    now = pd.Timestamp.now(tz="UTC")
+    return jsonify({"ok": True, "matches": lineup_verdicts(fx, lineups, profiles, alerts, morning, now)})
+
+
 @app.route("/api/predictions/history")
 def api_predictions_history():
     d = _days()
@@ -663,6 +712,11 @@ PAGE = """<!DOCTYPE html>
   🔒 <b>Modo recolección.</b> El sistema solo apuesta dinero real cuando el momio le gana a Pinnacle por 2 puntos o más.
   Abajo ves todo lo que analiza aunque no apueste: qué dice de cada partido, si acertó y qué propuso.
   <span style="color:var(--muted)">El modelo se corrigió el 21-oct (antes estaba roto en las 5 grandes ligas y la Champions); lo marcado "desde la corrección" es lo que cuenta.</span>
+</div>
+<div class="section"><h2>📋 Alineaciones de hoy — veredicto</h2>
+  <div class="tablewrap" style="max-height:520px"><table><thead><tr><th>Hora</th><th>Partido</th><th>Local</th><th>Visitante</th><th>Veredicto</th></tr></thead>
+  <tbody id="lubody"><tr><td colspan="5" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
+  <div style="color:var(--muted);font-size:.75rem;margin-top:6px">Faltan = titulares habituales (70%+ de sus últimos 15 partidos) que no salen; "(banca)" si están en la banca y pueden entrar. Medido en 40,000 partidos: el momio de cierre ya cuenta las alineaciones; solo hay jugada si PlayDoit tarda en ajustar (alerta de 4+ titulares fuera con su momio mínimo).</div>
 </div>
 <div class="section"><h2>🔮 Lo que dice el programa — próximos 3 días</h2>
   <div class="tablewrap" style="max-height:520px"><table><thead><tr><th>Hora</th><th>Partido</th><th>Liga</th><th title="Goles esperados local - visitante">Goles esp.</th><th>Marcador más probable</th><th title="Local / Empate / Visitante">Programa</th><th title="Pinnacle sin margen: el precio más preciso del mercado">Pinnacle</th><th>Lectura</th><th title="Apuesta en PlayDoit solo si paga esto o mejor (local / empate / visitante)">PlayDoit mínimo</th><th>Estado</th></tr></thead>

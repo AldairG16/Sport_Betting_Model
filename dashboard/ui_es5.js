@@ -272,6 +272,32 @@ function loadPredictions(){
   }, function(msg){ body.innerHTML = '<tr><td colspan="10" style="color:var(--muted)">' + esc(msg) + '</td></tr>'; });
 }
 
+function _luTeam(t){
+  if (!t || !t.published) return '<span style="color:var(--muted)">sin publicar</span>';
+  var out = esc(t.formation || '');
+  if (t.known === false) return out + ' <span style="color:var(--muted)">(sin historial)</span>';
+  var miss = t.missing || [];
+  if (!miss.length) return out + ' · once habitual';
+  var names = [];
+  for (var i = 0; i < miss.length; i++) names.push(esc(miss[i].name) + (miss[i].bench ? ' <span style="color:var(--muted)">(banca)</span>' : ''));
+  return out + ' · faltan ' + miss.length + ': ' + names.join(', ');
+}
+function loadLineups(){
+  var body = document.getElementById('lubody');
+  if (!body) return;
+  getJSON('/api/lineups', function(d){
+    var html = '';
+    for (var i = 0; i < d.matches.length; i++) {
+      var m = d.matches[i];
+      var color = m.level === 'alert' || m.level === 'weak' ? '#fbbf24' : m.level === 'pending' ? 'var(--muted)' : 'var(--text)';
+      html += '<tr><td>' + mxdate(m.match_date) + '</td><td>' + esc(m.match) + '<div style="color:var(--muted);font-size:.72rem">' +
+              esc(m.league) + '</div></td><td>' + _luTeam(m.home) + '</td><td>' + _luTeam(m.away) +
+              '</td><td style="color:' + color + '">' + esc(m.text) + '</td></tr>';
+    }
+    body.innerHTML = html || '<tr><td colspan="5" style="color:var(--muted)">Sin partidos hoy</td></tr>';
+  }, function(msg){ body.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">' + esc(msg) + '</td></tr>'; });
+}
+
 var SIDE_ES = { home: 'Local', draw: 'Empate', away: 'Visitante' };
 function loadHistory(){
   var body = document.getElementById('histbody'), k = document.getElementById('histkpis');
@@ -427,7 +453,7 @@ var _refreshTimer = null;
 function setRefresh(mins){
   if (_refreshTimer) clearInterval(_refreshTimer);
   if (mins > 0) _refreshTimer = setInterval(function(){
-    loadKpis(); loadBets(); loadScorers(); loadGh(); loadPredictions(); loadHistory(); loadProposals();
+    loadKpis(); loadBets(); loadScorers(); loadGh(); loadPredictions(); loadHistory(); loadProposals(); loadLineups();
   }, mins * 60000);
 }
 
@@ -503,6 +529,7 @@ _onChange('frefresh', function(){
 
 loadVersion();
 loadKpis();
+loadLineups();
 loadPredictions();
 loadHistory();
 loadProposals();
