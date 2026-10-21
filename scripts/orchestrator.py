@@ -472,6 +472,9 @@ def step_shadow_results():
     # Las propuestas del modelo se liquidan igual (12-oct-26)
     from src.models.proposals import resolve_proposals
     resolve_proposals()
+    # ...y los picks del programa que muestra el dashboard (21-oct-26)
+    from src.models.program_picks import resolve_picks
+    resolve_picks()
 
 
 def step_mlb_predict():
@@ -558,6 +561,7 @@ def run_morning(logger: Logger, force_fetch: bool = False):
     run_step(logger, "Precios Kalshi (referencia)", step_kalshi)
 
     predict_ok = run_step(logger, "Predictions", step_predict)
+    run_step(logger, "Picks del programa", step_program_picks)
     # run_step(logger, "MLB Predictions",   step_mlb_predict)  # desactivado — sin creditos MLB
 
     # Si predict falló, NO mandamos "Sin value bets" — mandamos alerta.
@@ -653,6 +657,7 @@ def run_evening(logger: Logger):
     run_step(logger, "Fetch odds (mañana)",       step_fetch_odds)
     run_step(logger, "Precios Kalshi (referencia)", step_kalshi)
     predict_ok = run_step(logger, "Predictions (mañana)", step_predict)
+    run_step(logger, "Picks del programa", step_program_picks)
     # run_step(logger, "MLB Predictions (mañana)",  step_mlb_predict)  # desactivado — sin creditos MLB
 
     # El preview separado de mañana se ELIMINÓ (12-sep): duplicaba las
@@ -680,6 +685,13 @@ def run_full(logger: Logger, force_fetch: bool = False):
 def step_backtest():
     from src.models.backtest_engine import run_backtest
     run_backtest()
+
+
+def step_program_picks():
+    """Guarda el pick del programa de los próximos 3 días (lo que muestra el
+    dashboard) para medir después cómo terminó. Solo DB, segundos."""
+    from src.models.program_picks import snapshot_picks
+    snapshot_picks()
 
 
 def step_output_checks():
@@ -996,6 +1008,14 @@ def step_refresh_clv_cache():
         log.error(f"⚠️  CLV refresh falló: {e}")
 
 
+def run_closing(logger: Logger):
+    """Cada 30 min (cron-job.org): momios de cierre pre-kickoff para el CLV
+    (Mejora 6) y, con los momios recién recargados, el pick del programa de
+    cada partido: el último antes del partido es el que cuenta."""
+    run_step(logger, "Pre-kickoff closing odds", step_pre_kickoff_closing)
+    run_step(logger, "Picks del programa", step_program_picks)
+
+
 def run_results_only(logger: Logger):
     # Incluye fbdata backup: el late_results.yml a las 06:30 MX existe
     # justamente para atrapar corners/cards de Europa que ya sincronizó
@@ -1052,10 +1072,7 @@ def main():
         elif args.mode == "results":
             run_results_only(logger)
         elif args.mode == "closing":
-            # Mejora 6: Fetch closing odds pre-kickoff
-            # Ejecutar 30-60 min antes de los primeros partidos del dia
-            # Esto captura las odds de cierre reales para calcular CLV
-            run_step(logger, "Pre-kickoff closing odds", step_pre_kickoff_closing)
+            run_closing(logger)
         elif args.mode == "weekly":
             # 1) PRIMERO lo que aprende de datos ya recolectados (bets y
             #    shadow resueltos por evening/closing): solo DB, segundos en

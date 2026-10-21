@@ -20,6 +20,7 @@ import math
 import pandas as pd
 
 from dashboard.display import league_name, match_name
+from src.models.program_picks import fair_1x2, pick
 from src.utils.min_odds import fmt_american, min_american, to_american
 
 # Desde aquí el modelo corregido (PR #44: xG de Understat y peso de Dixon-Coles)
@@ -90,92 +91,28 @@ def _canon(match: str, normalize=None) -> str:
 
 
 def _fresh_pinnacle(u) -> list | None:
-    """1X2 de Pinnacle sin margen con la última recarga (cada 30 min en el
-    closing); el de model_vs_sharp es el de la corrida de la mañana."""
-    if u is None:
-        return None
-    odds = [_num(getattr(u, c, None)) for c in ("pin_home_odds", "pin_draw_odds", "pin_away_odds")]
-    if not all(o and o > 1 for o in odds):
-        return None
-    inv = [1 / o for o in odds]
-    return [x / sum(inv) for x in inv]
-
-
-PICK_MIN_GAP = 0.03      # el programa tiene que ver 3+ pts más que el mercado para "preferir" algo
-
-
-def _devig2(a, b) -> float | None:
-    """Probabilidad sin margen del primer lado de un mercado de dos."""
-    a, b = _num(a), _num(b)
-    if not a or not b or a <= 1 or b <= 1:
-        return None
-    return (1 / a) / (1 / a + 1 / b)
-
-
-CONSENSUS_COL = {"home": "consensus_home_odds", "draw": "consensus_draw_odds", "away": "consensus_away_odds"}
-
-
-def playdoit_estimate(consensus, ratio=None):
-    """Momio estimado de PlayDoit: el promedio de las casas por lo que PlayDoit
-    paga frente al promedio, aprendido de las capturas (playdoit_prices);
-    sin capturas suficientes, el promedio tal cual (medido el 19-oct-26:
-    PlayDoit ≈ promedio). Decimal o None."""
-    c = _num(consensus)
-    if not c or c <= 1:
-        return None
-    r = _num(ratio) or 1.0
-    return max(1.01, c * r)
+    return fair_1x2(u)
 
 
 def program_pick(model: list, pin: list, p_over25, p_btts, u, ratio=None) -> dict:
     """
     Lo que jugaría el programa en el partido (v1.7.2, 21-oct-26: el dueño
-    quería ver una apuesta aunque no tenga valor). Entre 1X2, más/menos 2.5 y
-    ambos anotan, el mercado donde el programa ve más que el mercado sin
-    margen (Pinnacle en el 1X2; el promedio de las casas en goles y ambos
-    anotan). Con menos de 3 pts de diferencia no prefiere nada y se muestra
-    lo más probable del 1X2. "value" = el mejor momio de Europa ya paga el
-    mínimo; en PlayDoit hay que revisarlo.
+    quería ver una apuesta aunque no tenga valor), con el texto para la
+    página. La regla vive en src/models/program_picks.pick: la misma con la
+    que se guarda cada pick para medir cómo terminó. "value" = el mejor
+    momio de Europa ya paga el mínimo; "pd_value" = el estimado de PlayDoit.
     """
-    cands = []
-    g = (lambda col: getattr(u, col, None) if u is not None and col else None)
-    for (name, _, _, odds_col), m, p in zip(SIDES, model, pin):
-        if m is not None and p is not None:
-            cands.append(("Gana el " + SIDE_LABEL[name] if name != "draw" else "Empate", m, p,
-                          g(odds_col), g(CONSENSUS_COL[name])))
-    p_over = _num(p_over25)
-    if p_over is not None and u is not None:
-        mk = _devig2(getattr(u, "consensus_over25_odds", None), getattr(u, "consensus_under25_odds", None)) \
-            or _devig2(getattr(u, "over25_odds", None), getattr(u, "under25_odds", None))
-        if mk is not None:
-            cands.append(("Más de 2.5 goles", p_over, mk, g("over25_odds"), g("consensus_over25_odds")))
-            cands.append(("Menos de 2.5 goles", 1 - p_over, 1 - mk, g("under25_odds"), g("consensus_under25_odds")))
-    pb = _num(p_btts)
-    if pb is not None and u is not None:
-        mk = _devig2(getattr(u, "btts_yes_odds", None), getattr(u, "btts_no_odds", None))
-        if mk is not None:
-            cands.append(("Ambos anotan", pb, mk, g("btts_yes_odds"), None))
-            cands.append(("No anotan ambos", 1 - pb, 1 - mk, g("btts_no_odds"), None))
-    if not cands:
+    pk = pick(model, pin, p_over25, p_btts, u, ratio)
+    if not pk:
         return {"label": "", "text": ""}
-    label, m, mk, best, cons = max(cands, key=lambda c: c[1] - c[2])
-    if m - mk < PICK_MIN_GAP:
-        # nada mejor que el mercado: lo más probable del 1X2
-        label, m, mk, best, cons = max(cands[:3], key=lambda c: c[1])
-        lean = False
-    else:
-        lean = True
-    min_us = min_american(m, pin_prob=mk)
-    best_us = to_american(_num(best)) if _num(best) else None
-    value = bool(min_us is not None and best_us is not None and best_us >= min_us)
-    est = playdoit_estimate(cons, ratio)
-    est_us = to_american(est) if est else None
-    return {"label": label, "model": round(m, 3), "market": round(mk, 3), "lean": lean,
-            "min_us": fmt_american(min_us) if min_us is not None else "",
-            "best_us": fmt_american(best_us) if best_us is not None else "", "value": value,
+    min_us, best = pk["min_us"], pk["best_odds"]
+    best_us = to_american(best) if best else None
+    est_us = to_american(pk["playdoit_odds"]) if pk["playdoit_odds"] else None
+    return {"label": pk["label"], "market_key": pk["market"], "model": pk["model"], "market": pk["market_prob"],
+            "lean": pk["lean"], "min_us": fmt_american(min_us) if min_us is not None else "",
+            "best_us": fmt_american(best_us) if best_us is not None else "", "value": pk["value"],
             "pd_est_us": fmt_american(est_us) if est_us is not None else "",
-            "pd_value": bool(min_us is not None and est_us is not None and est_us >= min_us),
-            "pd_learned": bool(_num(ratio))}
+            "pd_value": pk["playdoit_value"], "pd_learned": bool(_num(ratio))}
 
 
 def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
@@ -329,4 +266,108 @@ def proposals(df: pd.DataFrame) -> dict:
     return {"rows": rows, "summary": summary}
 
 
-__all__ = ["predictions", "history", "proposals", "likely_score", "reading", "profit_1u"]
+# ─────────────────────────────────────────────────────────────────────────────
+# Resultados (v1.9.0, 21-oct-26): "cómo nos fue con las apuestas de nuestros
+# modelos" en una sola pestaña.
+# ─────────────────────────────────────────────────────────────────────────────
+
+PLAYED = ("win", "loss", "push", "half_win", "half_loss")
+COLLECTION_MODE = pd.Timestamp("2026-09-25", tz="UTC")     # solo dinero real si le gana a Pinnacle
+REAL_PERIODS = ((pd.Timestamp("2026-09-14", tz="UTC"), "Hasta el 13-sep"),
+                (COLLECTION_MODE, "14 al 24-sep"),
+                (None, "Desde el 25-sep (modo recolección)"))
+
+
+def _bool(v) -> bool:
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return False
+    return bool(v)
+
+
+def _record(rows: list) -> dict | None:
+    """Ganados, perdidos y unidades de filas con result_key y profit."""
+    played = [x for x in rows if x["result_key"] in PLAYED]
+    if not played:
+        return None
+    priced = [x["profit"] for x in played if x["profit"] is not None]
+    profit = round(sum(priced), 2)
+    return {"n": len(played),
+            "won": sum(1 for x in played if x["result_key"] in ("win", "half_win")),
+            "lost": sum(1 for x in played if x["result_key"] in ("loss", "half_loss")),
+            "profit": profit, "priced": len(priced),
+            "roi": round(profit / len(priced), 3) if priced else None}
+
+
+def picks_board(df: pd.DataFrame) -> dict:
+    """Los picks del programa guardados (program_picks) y cómo terminaron:
+    todos, los que tenían ventaja según el programa y los que pagaban el
+    mínimo en PlayDoit."""
+    from dashboard.display import result_label
+    rows = []
+    for r in df.itertuples(index=False):
+        res = str(r.result) if isinstance(r.result, str) and r.result else "pending"
+        po = _num(r.playdoit_odds)
+        rows.append({
+            "match_date": _iso(r.match_date),
+            "match": r.display if isinstance(r.display, str) and r.display else match_name(r.match),
+            "league": league_name(r.league) if isinstance(r.league, str) and r.league else "",
+            "label": r.label, "model": _num(r.model_prob), "market": _num(r.market_prob),
+            "lean": _bool(r.lean), "value": _bool(r.value),
+            "playdoit_us": fmt_american(to_american(po)) if po else "",
+            "min_us": fmt_american(int(r.min_us)) if _num(r.min_us) is not None else "",
+            "result_key": res, "result": result_label(res), "profit": _num(r.profit),
+        })
+    return {"rows": rows, "all": _record(rows),
+            "lean": _record([x for x in rows if x["lean"]]),
+            "value": _record([x for x in rows if x["value"]])}
+
+
+def real_periods(df: pd.DataFrame) -> list:
+    """Apuestas con dinero real por etapa del sistema. df: bets_history con
+    match_date, result, stake y profit (las 'stale' son canceladas)."""
+    out = []
+    dates = pd.to_datetime(df["match_date"], utc=True) if not df.empty else pd.Series(dtype="datetime64[ns, UTC]")
+    start = None
+    for end, label in REAL_PERIODS:
+        mask = pd.Series(True, index=df.index)
+        if start is not None:
+            mask &= dates >= start
+        if end is not None:
+            mask &= dates < end
+        part = df[mask]
+        played = part[part["result"].isin(PLAYED)] if not part.empty else part
+        out.append({"label": label,
+                    "n": int(len(played)),
+                    "won": int(played["result"].isin(["win", "half_win"]).sum()) if len(played) else 0,
+                    "lost": int(played["result"].isin(["loss", "half_loss"]).sum()) if len(played) else 0,
+                    "staked": round(float(pd.to_numeric(played["stake"], errors="coerce").sum()), 2) if len(played) else 0.0,
+                    "profit": round(float(pd.to_numeric(played["profit"], errors="coerce").sum()), 2) if len(played) else 0.0,
+                    "cancelled": int((part["result"] == "stale").sum()) if not part.empty else 0})
+        start = end
+    return out
+
+
+def proposal_weeks(df: pd.DataFrame) -> list:
+    """Lo que el modelo propuso, por semana, a 1u y al mejor momio (sin los
+    mercados con momio inventado). df: model_proposals sin repetir partido y
+    mercado, con match_date, market, odds, result."""
+    if df.empty:
+        return []
+    d = df[df["result"].isin(PLAYED) & ~df["market"].isin(FAKE_ODDS_MARKETS)].copy()
+    if d.empty:
+        return []
+    when = pd.to_datetime(d["match_date"], utc=True)
+    d["week"] = when.dt.tz_convert(None).dt.to_period("W-SUN").dt.start_time
+    d["old"] = when < MODEL_FIXED                          # la semana del arreglo sale en dos filas
+    d["p1"] = [profit_1u(o, r) for o, r in zip(d["odds"], d["result"])]
+    out = []
+    for (week, old), g in d.groupby(["week", "old"]):
+        out.append({"week": week.strftime("%Y-%m-%d"), "old_model": bool(old), "n": int(len(g)),
+                    "won": int(g["result"].isin(["win", "half_win"]).sum()),
+                    "lost": int(g["result"].isin(["loss", "half_loss"]).sum()),
+                    "profit_1u": round(float(pd.Series(g["p1"]).dropna().sum()), 2)})
+    return out
+
+
+__all__ = ["predictions", "history", "proposals", "likely_score", "reading", "profit_1u",
+           "picks_board", "real_periods", "proposal_weeks"]

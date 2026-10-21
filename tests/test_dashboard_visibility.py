@@ -155,7 +155,7 @@ def test_new_endpoints_answer_with_synthetic_data(monkeypatch):
     pr = c.get("/api/proposals").get_json()
     assert pr["ok"] and pr["summary"][0]["profit_1u"] == -1.0
     html = c.get("/").get_data(as_text=True)
-    for el in ("predbody", "histbody", "histkpis", "propsum", "propbody"):
+    for el in ("todaylist", "nextlist", "histbody", "histkpis", "propsum", "propbody"):   # v1.9.0: pestañas
         assert f'id="{el}"' in html
 
 

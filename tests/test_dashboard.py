@@ -89,7 +89,8 @@ def test_page_and_static_assets_are_served_locally(client):
     page = client.get("/")
     assert page.status_code == 200
     html = page.get_data(as_text=True)
-    assert '<script src="/ui_es5.js">' in html and '<script src="/chartjs.js">' in html
+    assert '<script src="/ui_es5.js?v=' in html and '<script src="/chartjs.js">' in html
+    assert "__V__" not in html                      # la versión va en el enlace: sin JS viejo en caché
     for path in ("/ui_es5.js", "/chartjs.js"):
         r = client.get(path)
         assert r.status_code == 200, path          # 302 = Chart.js no está en el repo
