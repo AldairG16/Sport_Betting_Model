@@ -227,6 +227,18 @@ function loadScorers(){
   }, function(){ body.innerHTML = '<tr><td colspan="7" style="color:var(--muted)">Sin goleadores aún</td></tr>'; });
 }
 
+// ── Pick del programa (v1.7.2): lo que jugaría, con o sin valor ──
+var _picks = {};
+function pickHtml(pk){
+  if (!pk || !pk.label) return '—';
+  var head = '<b>' + esc(pk.label) + '</b> · programa ' + Math.round(pk.model * 100) + '% vs mercado ' + Math.round(pk.market * 100) + '%';
+  var tail = pk.min_us ? ' · PlayDoit ' + esc(pk.min_us) + ' o mejor' : '';
+  var tag = pk.value ? ' <span class="pill win">con valor</span>' :
+            pk.lean ? ' <span class="pill pending" title="El programa ve más que el mercado, pero el mejor momio todavía no paga el mínimo">sin valor aún</span>' :
+            ' <span class="pill cancelled" style="text-decoration:none" title="No ve nada mejor que el mercado: es lo más probable, no una ventaja">lo más probable</span>';
+  return head + tail + tag;
+}
+
 // ── Lo que dice el programa (v1.7.0) ──
 function p3(arr){
   if (!arr) return '—';
@@ -266,10 +278,13 @@ function loadPredictions(){
               '</td><td title="' + esc(extra.join(' · ')) + '">' + lam + '</td><td>' + likely + '</td><td>' +
               p3(_sidesArr(m.sides, 'model')) + '</td><td>' + p3(_sidesArr(m.sides, 'pin')) + '</td><td>' +
               (m.old_model ? '<span style="color:var(--muted)" title="Analizado antes de la corrección del modelo (21-oct); se actualiza en la siguiente corrida">modelo anterior</span>' : esc(m.reading)) +
+              '</td><td>' + (m.old_model ? '<span style="color:var(--muted)">modelo anterior</span>' : pickHtml(m.pick)) +
               '</td><td>' + mins.join(' / ') + '</td><td>' + state + '</td></tr>';
+      _picks[m.match] = m.old_model ? null : m.pick;
     }
-    body.innerHTML = html || '<tr><td colspan="10" style="color:var(--muted)">Sin partidos en los próximos 3 días</td></tr>';
-  }, function(msg){ body.innerHTML = '<tr><td colspan="10" style="color:var(--muted)">' + esc(msg) + '</td></tr>'; });
+    body.innerHTML = html || '<tr><td colspan="11" style="color:var(--muted)">Sin partidos en los próximos 3 días</td></tr>';
+    loadLineups();
+  }, function(msg){ body.innerHTML = '<tr><td colspan="11" style="color:var(--muted)">' + esc(msg) + '</td></tr>'; });
 }
 
 function _luTeam(t){
@@ -292,10 +307,11 @@ function loadLineups(){
       var color = m.level === 'alert' || m.level === 'weak' ? '#fbbf24' : m.level === 'pending' ? 'var(--muted)' : 'var(--text)';
       html += '<tr><td>' + mxdate(m.match_date) + '</td><td>' + esc(m.match) + '<div style="color:var(--muted);font-size:.72rem">' +
               esc(m.league) + '</div></td><td>' + _luTeam(m.home) + '</td><td>' + _luTeam(m.away) +
-              '</td><td style="color:' + color + '">' + esc(m.text) + '</td></tr>';
+              '</td><td style="color:' + color + '">' + esc(m.text) + '</td><td>' +
+              (m.match in _picks ? (_picks[m.match] ? pickHtml(_picks[m.match]) : '<span style="color:var(--muted)">modelo anterior</span>') : '—') + '</td></tr>';
     }
-    body.innerHTML = html || '<tr><td colspan="5" style="color:var(--muted)">Sin partidos hoy</td></tr>';
-  }, function(msg){ body.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">' + esc(msg) + '</td></tr>'; });
+    body.innerHTML = html || '<tr><td colspan="6" style="color:var(--muted)">Sin partidos hoy</td></tr>';
+  }, function(msg){ body.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">' + esc(msg) + '</td></tr>'; });
 }
 
 var SIDE_ES = { home: 'Local', draw: 'Empate', away: 'Visitante' };

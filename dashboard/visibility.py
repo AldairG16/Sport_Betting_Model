@@ -97,6 +97,62 @@ def _fresh_pinnacle(u) -> list | None:
     return [x / sum(inv) for x in inv]
 
 
+PICK_MIN_GAP = 0.03      # el programa tiene que ver 3+ pts más que el mercado para "preferir" algo
+
+
+def _devig2(a, b) -> float | None:
+    """Probabilidad sin margen del primer lado de un mercado de dos."""
+    a, b = _num(a), _num(b)
+    if not a or not b or a <= 1 or b <= 1:
+        return None
+    return (1 / a) / (1 / a + 1 / b)
+
+
+def program_pick(model: list, pin: list, p_over25, p_btts, u) -> dict:
+    """
+    Lo que jugaría el programa en el partido (v1.7.2, 21-oct-26: el dueño
+    quería ver una apuesta aunque no tenga valor). Entre 1X2, más/menos 2.5 y
+    ambos anotan, el mercado donde el programa ve más que el mercado sin
+    margen (Pinnacle en el 1X2; el promedio de las casas en goles y ambos
+    anotan). Con menos de 3 pts de diferencia no prefiere nada y se muestra
+    lo más probable del 1X2. "value" = el mejor momio de Europa ya paga el
+    mínimo; en PlayDoit hay que revisarlo.
+    """
+    cands = []
+    for (name, _, _, odds_col), m, p in zip(SIDES, model, pin):
+        if m is not None and p is not None:
+            cands.append((f"Gana {'el ' + SIDE_LABEL[name] if name != 'draw' else ''}".replace("Gana empate", "Empate").strip()
+                          if name != "draw" else "Empate", m, p, getattr(u, odds_col, None) if u is not None else None))
+    p_over = _num(p_over25)
+    if p_over is not None and u is not None:
+        mk = _devig2(getattr(u, "consensus_over25_odds", None), getattr(u, "consensus_under25_odds", None)) \
+            or _devig2(getattr(u, "over25_odds", None), getattr(u, "under25_odds", None))
+        if mk is not None:
+            cands.append(("Más de 2.5 goles", p_over, mk, getattr(u, "over25_odds", None)))
+            cands.append(("Menos de 2.5 goles", 1 - p_over, 1 - mk, getattr(u, "under25_odds", None)))
+    pb = _num(p_btts)
+    if pb is not None and u is not None:
+        mk = _devig2(getattr(u, "btts_yes_odds", None), getattr(u, "btts_no_odds", None))
+        if mk is not None:
+            cands.append(("Ambos anotan", pb, mk, getattr(u, "btts_yes_odds", None)))
+            cands.append(("No anotan ambos", 1 - pb, 1 - mk, getattr(u, "btts_no_odds", None)))
+    if not cands:
+        return {"label": "", "text": ""}
+    label, m, mk, best = max(cands, key=lambda c: c[1] - c[2])
+    if m - mk < PICK_MIN_GAP:
+        # nada mejor que el mercado: lo más probable del 1X2
+        label, m, mk, best = max(cands[:3], key=lambda c: c[1])
+        lean = False
+    else:
+        lean = True
+    min_us = min_american(m, pin_prob=mk)
+    best_us = to_american(_num(best)) if _num(best) else None
+    value = bool(min_us is not None and best_us is not None and best_us >= min_us)
+    return {"label": label, "model": round(m, 3), "market": round(mk, 3), "lean": lean,
+            "min_us": fmt_american(min_us) if min_us is not None else "",
+            "best_us": fmt_american(best_us) if best_us is not None else "", "value": value}
+
+
 def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
                 normalize=None) -> list:
     """
@@ -139,6 +195,7 @@ def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
             "p_over25": _num(getattr(r, "p_over25", None)),
             "p_btts": _num(getattr(r, "p_btts", None)),
             "reading": reading(model, pin),
+            "pick": program_pick(model, pin, getattr(r, "p_over25", None), getattr(r, "p_btts", None), u),
             # sin goles esperados guardados = corrida anterior a la corrección
             # del modelo (21-oct-26): su lectura no vale
             "old_model": not (lam_h and lam_a),
