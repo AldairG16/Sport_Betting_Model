@@ -1359,13 +1359,14 @@ def _stage_model_probabilities(row, T, L, ctx, stats):
     return M, Q
 
 
-def _stage_side_bias(row, T, M, ctx, records):
+def _stage_side_bias(row, T, M, ctx, records, L=None):
     """Etapa 3b — registra el 1X2 CRUDO del modelo contra Pinnacle (de ahí
     aprende side_bias) y descuenta el sesgo por lado ya aprendido del 1X2 y
     de sus derivados, antes del ancla (src/models/side_bias.py)."""
     from src.models.side_bias import debias, record
     rec = record(f"{T.home} vs {T.away}", T.date, _row_league_of(row),
-                 M.model_probs, pinnacle_probs(row))
+                 M.model_probs, pinnacle_probs(row),
+                 lambdas=(L.lambda_home, L.lambda_away) if L is not None else None)
     if rec:
         records.append(rec)
     M.model_probs, M.side_bias_shift = debias(M.model_probs, getattr(ctx, "side_bias", None))
@@ -2946,7 +2947,7 @@ def run_prediction_pipeline(dry_run: bool = False):
             return
         L = _stage_lambdas(row, T, ctx, stats)
         M, Q = _stage_model_probabilities(row, T, L, ctx, stats)
-        _stage_side_bias(row, T, M, ctx, model_sharp_records)
+        _stage_side_bias(row, T, M, ctx, model_sharp_records, L)
         market_probs, market_probs_raw = _stage_market_probabilities(row, Q, M.p_ah_home)
         probabilities, model_deviation, signed_deviation = _stage_blend(
             M.model_probs, market_probs, market_probs_raw)

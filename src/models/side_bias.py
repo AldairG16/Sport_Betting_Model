@@ -50,6 +50,11 @@ TABLE_SQL = """
         UNIQUE (match, match_date)
     )
 """
+# Para el dashboard (21-oct-26): goles esperados y probabilidades del modelo
+# de goles y ambos anotan, para ver qué dice el programa de cada partido.
+EXTRA_COLUMNS = ("lam_home", "lam_away", "p_over25", "p_btts")
+ALTER_SQL = "; ".join(f"ALTER TABLE model_vs_sharp ADD COLUMN IF NOT EXISTS {c} NUMERIC"
+                      for c in EXTRA_COLUMNS)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -102,17 +107,30 @@ def debias(model_probs: dict, bias: dict | None) -> tuple[dict, dict]:
     return out, {"home": dh, "draw": dd, "away": da}
 
 
-def record(match: str, match_date, league, model_probs: dict, pin: dict) -> dict | None:
-    """Fila de model_vs_sharp con el 1X2 CRUDO del modelo y el de Pinnacle."""
+def _num(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def record(match: str, match_date, league, model_probs: dict, pin: dict,
+           lambdas: tuple | None = None) -> dict | None:
+    """Fila de model_vs_sharp con el 1X2 CRUDO del modelo y el de Pinnacle,
+    y (para el dashboard) goles esperados, más de 2.5 y ambos anotan."""
     if not all(k in model_probs for k in ("home_win", "draw", "away_win")):
         return None
     if not all(k in (pin or {}) for k in SIDES):
         return None
+    lh, la = lambdas if lambdas else (None, None)
     return {"match": match, "match_date": match_date, "league": league,
             "p_home": float(model_probs["home_win"]), "p_draw": float(model_probs["draw"]),
             "p_away": float(model_probs["away_win"]),
             "pin_home": float(pin["home"]), "pin_draw": float(pin["draw"]),
-            "pin_away": float(pin["away"])}
+            "pin_away": float(pin["away"]),
+            "lam_home": _num(lh), "lam_away": _num(la),
+            "p_over25": _num(model_probs.get("over25")), "p_btts": _num(model_probs.get("btts"))}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -163,16 +181,21 @@ def persist(records: list) -> int:
     from config.database import engine
     with engine.begin() as conn:
         conn.execute(text(TABLE_SQL))
+        conn.execute(text(ALTER_SQL))
         for r in rows:
+            r = {**{c: None for c in EXTRA_COLUMNS}, **r}
             conn.execute(text("""
                 INSERT INTO model_vs_sharp
-                    (match, match_date, league, p_home, p_draw, p_away, pin_home, pin_draw, pin_away)
+                    (match, match_date, league, p_home, p_draw, p_away, pin_home, pin_draw, pin_away,
+                     lam_home, lam_away, p_over25, p_btts)
                 VALUES (:match, :match_date, :league, :p_home, :p_draw, :p_away,
-                        :pin_home, :pin_draw, :pin_away)
+                        :pin_home, :pin_draw, :pin_away, :lam_home, :lam_away, :p_over25, :p_btts)
                 ON CONFLICT (match, match_date) DO UPDATE SET
                     p_home = EXCLUDED.p_home, p_draw = EXCLUDED.p_draw, p_away = EXCLUDED.p_away,
                     pin_home = EXCLUDED.pin_home, pin_draw = EXCLUDED.pin_draw,
-                    pin_away = EXCLUDED.pin_away, created_at = NOW()
+                    pin_away = EXCLUDED.pin_away, lam_home = EXCLUDED.lam_home,
+                    lam_away = EXCLUDED.lam_away, p_over25 = EXCLUDED.p_over25,
+                    p_btts = EXCLUDED.p_btts, created_at = NOW()
             """), r)
     return len(rows)
 

@@ -1150,6 +1150,27 @@ cuando el programa vuelve (antes: "HTTP 0" en cada sección). Si el 5050 lo usa 
 programa: `DASHBOARD_PORT=` en el `.env` junto al `.exe`. `release.yml` prueba el
 relanzamiento: cierra el servidor a la fuerza y exige que vuelva.
 
+**Lo que el programa analiza aunque no apueste (v1.7.0, 21-oct-2026).** En modo recolección
+casi no hay apuestas reales y el dashboard se veía vacío. Tres secciones nuevas arriba
+(`dashboard/visibility.py`, funciones puras; rutas en `dashboard/app.py`):
+
+- **Lo que dice el programa (próximos 3 días)** — `/api/predictions`:
+  - por partido: goles esperados, marcador más probable, 1X2 del programa contra Pinnacle
+    (la última recarga del closing), lectura y "PlayDoit mínimo" de cada resultado;
+  - sale de `model_vs_sharp`, que desde v1.7.0 también guarda `lam_home`, `lam_away`,
+    `p_over25` y `p_btts`. Una fila sin goles esperados es de antes de la corrección del
+    modelo y dice "modelo anterior";
+  - el mismo partido con un alias viejo se une con `normalize_team`.
+- **¿Acertó el programa? (14 días)** — `/api/predictions/history`: resultado real contra
+  el favorito del programa y el de Pinnacle, y la probabilidad que cada uno le dio a lo
+  que pasó, "desde la corrección" y en total.
+- **Lo que el modelo propuso** — `/api/proposals`: cada propuesta de `model_proposals`
+  con su decisión, su resultado y lo que habría dado a 1u, más un resumen por decisión.
+  Los mercados desactivados (momio de prueba) no cuentan.
+
+El banner de actualización sale solo si la versión publicada es MÁS NUEVA (`_newer`).
+Antes bastaba con que fuera distinta.
+
 **Arranque y reinicio en la PC del dueño:** `installer\dist\BettingDashboard.exe`,
 lanzado por el acceso directo de la carpeta Inicio de Windows (`Betting Dashboard.lnk`,
 carpeta de trabajo `installer\dist`, donde vive el `.env`). Desde una sesión de agente
