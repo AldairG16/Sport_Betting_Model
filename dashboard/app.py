@@ -458,7 +458,8 @@ def api_predictions():
     up = _q("""
         SELECT DISTINCT ON (home_team_norm, away_team_norm)
                home_team_norm, away_team_norm, home_team, away_team, home_odds, draw_odds, away_odds,
-               pin_home_odds, pin_draw_odds, pin_away_odds
+               pin_home_odds, pin_draw_odds, pin_away_odds, over25_odds, under25_odds,
+               consensus_over25_odds, consensus_under25_odds, btts_yes_odds, btts_no_odds
         FROM upcoming_matches
         WHERE match_date BETWEEN NOW() AND NOW() + INTERVAL '3 days'
         ORDER BY home_team_norm, away_team_norm, updated_at DESC NULLS LAST
@@ -473,7 +474,9 @@ def api_predictions():
     if up.empty:
         up = pd.DataFrame(columns=["home_team_norm", "away_team_norm", "home_team", "away_team",
                                    "home_odds", "draw_odds", "away_odds",
-                                   "pin_home_odds", "pin_draw_odds", "pin_away_odds"])
+                                   "pin_home_odds", "pin_draw_odds", "pin_away_odds", "over25_odds",
+                                   "under25_odds", "consensus_over25_odds", "consensus_under25_odds",
+                                   "btts_yes_odds", "btts_no_odds"])
     return jsonify({"ok": True, "matches": _vis.predictions(mvs, up, pending, normalize_team)})
 
 
@@ -714,13 +717,13 @@ PAGE = """<!DOCTYPE html>
   <span style="color:var(--muted)">El modelo se corrigió el 21-oct (antes estaba roto en las 5 grandes ligas y la Champions); lo marcado "desde la corrección" es lo que cuenta.</span>
 </div>
 <div class="section"><h2>📋 Alineaciones de hoy — veredicto</h2>
-  <div class="tablewrap" style="max-height:520px"><table><thead><tr><th>Hora</th><th>Partido</th><th>Local</th><th>Visitante</th><th>Veredicto</th></tr></thead>
-  <tbody id="lubody"><tr><td colspan="5" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
+  <div class="tablewrap" style="max-height:520px"><table><thead><tr><th>Hora</th><th>Partido</th><th>Local</th><th>Visitante</th><th>Veredicto</th><th title="Lo que jugaría el programa y el momio mínimo en PlayDoit">Pick del programa</th></tr></thead>
+  <tbody id="lubody"><tr><td colspan="6" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
   <div style="color:var(--muted);font-size:.75rem;margin-top:6px">Faltan = titulares habituales (70%+ de sus últimos 15 partidos) que no salen; "(banca)" si están en la banca y pueden entrar. Medido en 40,000 partidos: el momio de cierre ya cuenta las alineaciones; solo hay jugada si PlayDoit tarda en ajustar (alerta de 4+ titulares fuera con su momio mínimo).</div>
 </div>
 <div class="section"><h2>🔮 Lo que dice el programa — próximos 3 días</h2>
-  <div class="tablewrap" style="max-height:520px"><table><thead><tr><th>Hora</th><th>Partido</th><th>Liga</th><th title="Goles esperados local - visitante">Goles esp.</th><th>Marcador más probable</th><th title="Local / Empate / Visitante">Programa</th><th title="Pinnacle sin margen: el precio más preciso del mercado">Pinnacle</th><th>Lectura</th><th title="Apuesta en PlayDoit solo si paga esto o mejor (local / empate / visitante)">PlayDoit mínimo</th><th>Estado</th></tr></thead>
-  <tbody id="predbody"><tr><td colspan="10" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
+  <div class="tablewrap" style="max-height:520px"><table><thead><tr><th>Hora</th><th>Partido</th><th>Liga</th><th title="Goles esperados local - visitante">Goles esp.</th><th>Marcador más probable</th><th title="Local / Empate / Visitante">Programa</th><th title="Pinnacle sin margen: el precio más preciso del mercado">Pinnacle</th><th>Lectura</th><th title="Lo que jugaría el programa: dónde ve más que el mercado; si no ve nada, lo más probable">Pick del programa</th><th title="Apuesta en PlayDoit solo si paga esto o mejor (local / empate / visitante)">PlayDoit mínimo</th><th>Estado</th></tr></thead>
+  <tbody id="predbody"><tr><td colspan="11" style="color:var(--muted)">Cargando…</td></tr></tbody></table></div>
   <div style="color:var(--muted);font-size:.75rem;margin-top:6px">Programa y Pinnacle en % (local / empate / visitante). "PlayDoit mínimo" usa la probabilidad más baja entre el programa y Pinnacle, menos 2 puntos: si PlayDoit paga eso o más, hay valor. __HOW_TO_READ__</div>
 </div>
 <div class="section"><h2>🎯 ¿Acertó el programa? — últimos 14 días</h2>
