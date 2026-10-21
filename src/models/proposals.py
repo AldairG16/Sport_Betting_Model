@@ -30,6 +30,11 @@ APOSTADA = "apostada"
 LIGA_BLOQUEADA = "liga bloqueada"
 PARTIDO_RARO = "partido poco fiable"
 MERCADO_DESACTIVADO = "mercado desactivado"
+# Mercados que tuvieron momio inventado hasta el 21-oct-26 (constante, no de
+# una casa): cuando otra regla los frenaba antes (liga bloqueada) quedaban
+# guardados con OTRA decisión y su "si se hubieran jugado" contaba igual.
+FAKE_ODDS_MARKETS = ("over_1.5", "under_1.5", "over_3.5", "under_3.5",
+                     "shots_over_5.5", "shots_under_5.5")
 MERCADO_BLOQUEADO = "mercado bloqueado"
 HANDICAP_BLOQUEADO = "hándicap bloqueado"
 SIN_PINNACLE = "sin precio de Pinnacle"
@@ -221,8 +226,8 @@ def weekly_lines(days: int = 7) -> list:
         df = pd.read_sql(text("""
             SELECT decision, result, profit FROM model_proposals
             WHERE match_date >= NOW() - make_interval(days => :d) AND match_date < NOW()
-              AND decision <> :disabled
-        """), engine, params={"d": days, "disabled": MERCADO_DESACTIVADO})
+              AND decision <> :disabled AND NOT (market = ANY(:fake))
+        """), engine, params={"d": days, "disabled": MERCADO_DESACTIVADO, "fake": list(FAKE_ODDS_MARKETS)})
     except Exception as e:
         log.error(f"❌ Resumen de propuestas: {type(e).__name__}: {str(e)[:160]}")
         return []

@@ -231,6 +231,10 @@ acierto, conteo de bets) filtra con `RESOLVED_SQL`: una `stale` tiene stake y pr
 y, contada, diluye el ROI. Para «¿por qué no habló el analista?»: mira
 `analyst_heartbeat` (que el cron disparó) y su `error_msg` (fallos por bet).
 
+Una auditoría revisa **lo que sale**, no solo que corra: el evening ya lo hace solo cada
+día (`src/utils/output_checks.py`, ver §5 "Auditoría de salidas"). A mano:
+`run_output_checks(days=7)` revisa una semana.
+
 ---
 
 ## 4. Watchdog
@@ -553,6 +557,52 @@ La demostración con los partidos del 21-oct destapó dos errores silenciosos.
 y el sesgo por lado (`side_bias`) solo leen partidos desde `MODEL_SINCE` (2026-10-22). Con las
 semanas del modelo roto, el sistema había aprendido que el modelo valía 1-7%. El resto del
 aprendizaje sigue desde `LEARNING_SINCE`: no depende de la opinión del modelo.
+
+**Auditoría de salidas (21-oct-2026): revisar lo que sale, no solo que corra.** Las
+auditorías anteriores miraban flujos en verde y excepciones; los errores graves corrían
+"bien" con números equivocados. Esta volvió a liquidar todo con un cálculo propio (1,142
+apuestas reales, 5,576 sombra y 228 propuestas: coinciden al 100%) y revisó los números
+del modelo partido por partido.
+
+- **Hándicap y empate anula, del mismo reparto que el 1X2.** El 1X2 sale del ensemble y
+  el hándicap y el empate anula salían de la Poisson: en 14 de 88 partidos el empate anula
+  no cuadraba con el 1X2 por más de 5 pts. Ahora `consistent_score_matrix` escala cada
+  región de la Poisson (gana local, empate, gana visitante) al 1X2 final, y el hándicap y
+  el empate anula se calculan de esa matriz (`prob_ah_from_matrix`). Hándicap −0.5 = gana
+  local, exacto.
+- **Sin Dixon-Coles confiable, el partido no se evalúa** (`MIN_DC_WEIGHT` = 0.5). Con 25%
+  o nada de Dixon-Coles manda la forma cruda: 6 partidos a más de 20 pts de Pinnacle
+  (K-League, Beveren, Suecia). Se saltan ~1 de cada 5 (`Sin Dixon-Coles` en el resumen
+  del pipeline). Si se salta más del 40% del día es ERROR: el ajuste del weekly quedó
+  incompleto. Si falla el conteo de historia no se salta nada: el peso saldría de la
+  ventana de la forma (25% siempre) y se perdería el día entero.
+- **La forma se topa antes de mezclar.** Un ascendido que goleaba en segunda llegaba con
+  5-6 goles esperados y, aun con 75% de Dixon-Coles, chocaba con el tope de 3.5.
+- **Sin momios inventados.** Más/menos 1.5 y 3.5 goles y tiros tenían precios fijos
+  (1.35, 3.20, 2.20, 1.65, 1.80). Estaban desactivados, pero si otra regla los frenaba
+  antes (liga bloqueada) quedaban en propuestas y sombra. Ya no se cotizan, y los
+  resúmenes descartan las filas viejas por nombre de mercado
+  (`proposals.FAKE_ODDS_MARKETS`).
+- **El historial del dashboard usa nombres canónicos.** `model_vs_sharp` guarda el nombre
+  del día del análisis; si después se aprendía un alias, el partido no encontraba su
+  resultado.
+- **Tarjetas:** se liquidan con amarillas solamente. Con la roja contando cambian 3
+  apuestas reales y 12 sombra. Pendiente: cómo las cuenta PlayDoit.
+
+**Chequeo diario de salidas** (`src/utils/output_checks.py`, paso "Chequeo de salidas" del
+evening, antes del resumen de Telegram). Cada problema es un ERROR y llega en "errores
+tolerados":
+
+- liquidación de los últimos 3 días contra el cálculo independiente (`settle_independent`);
+- partidos analizados que ya se jugaron y no tienen marcador (más del 15%);
+- pendientes atorados más allá de su ventana (reales 8 días, sombra y propuestas 11);
+- xG real de más de 4 por partido;
+- claves del weekly sin actualizar en 9 días o más.
+
+Al final de cada corrida del pipeline, `pipeline_invariants` revisa los goles esperados en
+el tope (más del 5% de los partidos), los partidos a más de 20 pts de Pinnacle (más del
+10%) y la distancia típica a Pinnacle (más de 9 pts). Con el xG mal escalado, los tres
+habrían avisado el 28-sep.
 
 **Goleadores (papel, `scripts/goalscorer_picks.py`).** Hasta el 20-oct-2026 todos los picks
 salían en 70% y ninguno se liquidaba. La probabilidad dividía entre la tasa del propio
@@ -1272,7 +1322,9 @@ ni APIs (dependencias sustituidas por datos fijos). Los cambios de lógica se pr
 `tests/test_pipeline_end_to_end.py` congela la salida completa en
 `tests/golden/pipeline_baseline.json`; si un cambio intencional la altera, se regenera
 con `UPDATE_GOLDEN=1 python -m pytest tests/test_pipeline_end_to_end.py` y el diff va
-en el commit.
+en el commit. El escenario extendido (`extended_kwargs`) apaga el salto por falta de
+Dixon-Coles (`MIN_DC_WEIGHT` = 0): sus equipos sintéticos no tienen ajuste a propósito, y
+`tests/test_output_checks.py` vuelve a encenderlo para probarlo.
 
 Ningún test busca texto en el código fuente (el 23-sep-2026 se convirtieron los que
 quedaban). Uno de ellos exigía que `setdefault` y `player_club_goals` aparecieran en

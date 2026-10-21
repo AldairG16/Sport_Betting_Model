@@ -30,6 +30,10 @@ SIDES = (("home", "p_home", "pin_home", "home_odds"),
 SIDE_LABEL = {"home": "local", "draw": "empate", "away": "visitante"}
 # El laboratorio usa momios inventados en estos mercados: no cuentan.
 FAKE_ODDS_DECISION = "mercado desactivado"
+# ...y estos tuvieron momio inventado hasta el 21-oct-26 aunque la decisión
+# guardada fuera otra (liga bloqueada): por nombre de mercado.
+FAKE_ODDS_MARKETS = frozenset({"over_1.5", "under_1.5", "over_3.5", "under_3.5",
+                               "shots_over_5.5", "shots_under_5.5"})
 
 
 def _num(v):
@@ -229,11 +233,14 @@ def _outcome(hg, ag) -> int:
     return 0 if hg > ag else (1 if hg == ag else 2)
 
 
-def history(mvs: pd.DataFrame, results: pd.DataFrame) -> dict:
+def history(mvs: pd.DataFrame, results: pd.DataFrame, normalize=None) -> dict:
     """
     ¿Acertó el programa? mvs: model_vs_sharp de partidos ya jugados.
     results: matches con (h, a, d, home_goals, away_goals), nombres en
     minúsculas. Un partido cuenta si su resultado está a ±1 día.
+    normalize: nombre canónico de un equipo (21-oct-26). model_vs_sharp
+    guarda el nombre del día en que se analizó; si después se aprendió un
+    alias, matches ya usa el nuevo y el partido no aparecía.
     """
     res = {}
     for r in results.itertuples(index=False):
@@ -244,7 +251,7 @@ def history(mvs: pd.DataFrame, results: pd.DataFrame) -> dict:
     for r in mvs.itertuples(index=False):
         md = pd.Timestamp(r.match_date)
         md_utc = md.tz_convert("UTC") if md.tzinfo else md.tz_localize("UTC")
-        score = res.get((str(r.match).lower(), md_utc.date()))
+        score = res.get((_canon_match(r.match, normalize), md_utc.date()))
         model = [_num(getattr(r, c)) for _, c, _, _ in SIDES]
         pin = [_num(getattr(r, c)) for _, _, c, _ in SIDES]
         if score is None or None in model or None in pin:
@@ -274,6 +281,14 @@ def history(mvs: pd.DataFrame, results: pd.DataFrame) -> dict:
             "fixed": summary([x for x in rows if x["fixed"]])}
 
 
+def _canon_match(match, normalize=None) -> str:
+    m = str(match)
+    if normalize and " vs " in m:
+        h, a = m.split(" vs ", 1)
+        m = f"{normalize(h)} vs {normalize(a)}"
+    return m.lower()
+
+
 def profit_1u(odds, result) -> float | None:
     """Ganancia a 1 unidad con la liquidación de siempre."""
     o = _num(odds)
@@ -292,17 +307,18 @@ def proposals(df: pd.DataFrame) -> dict:
         p1 = profit_1u(r.odds, r.result)
         min_us = min_american(_num(r.probability), pin_prob=_num(r.pin_prob)) if _num(r.probability) else None
         decision = str(r.decision or "")
+        fake = decision == FAKE_ODDS_DECISION or str(r.market) in FAKE_ODDS_MARKETS
         rows.append({
             "match_date": _iso(r.match_date), "match": match_name(r.match),
             "league": league_name(r.league) if r.league else "",
             "market": market_name(r.market), "probability": _num(r.probability),
             "pin_prob": _num(r.pin_prob), "odds_us": fmt_american(to_american(r.odds)),
             "min_us": fmt_american(min_us) if min_us is not None else "",
-            "decision": decision, "fake_odds": decision == FAKE_ODDS_DECISION,
+            "decision": decision, "fake_odds": fake,
             "result_key": str(r.result or "pending"), "result": result_label(r.result or "pending"),
             "profit_1u": None if p1 is None else round(p1, 2),
         })
-        if p1 is not None and decision != FAKE_ODDS_DECISION:
+        if p1 is not None and not fake:
             g = groups.setdefault(decision, {"decision": decision, "n": 0, "won": 0, "profit_1u": 0.0})
             g["n"] += 1
             g["won"] += int(str(r.result) in ("win", "half_win"))

@@ -126,7 +126,8 @@ from src.features.table_lies import get_luck
 from src.features.soccerdata_feed import get_real_xg
 from src.features.fixture_congestion import get_fixture_congestion
 from src.features.motivation_factor import get_motivation_factor, is_unreliable_match
-from src.models.asian_handicap_model import prob_ah, get_dnb_probs
+from src.models.asian_handicap_model import (prob_ah, get_dnb_probs, consistent_score_matrix,
+                                             prob_ah_from_matrix)
 from src.features.weather_impact import get_weather_multiplier
 from src.models.monte_carlo_simulator import simulate_match, mc_confidence_vs_analytical
 from src.models.bankroll_manager import get_current_bankroll, ensure_bankroll_schema
@@ -205,11 +206,6 @@ MIDWEEK_DAYS            = frozenset({0, 1, 2})  # Lun/Mar/Mié
 
 CORNERS_DEFAULT_ODDS = 1.80
 CARDS_DEFAULT_ODDS   = 1.80
-SHOTS_DEFAULT_ODDS   = 1.80
-OVER15_ODDS  = 1.35
-UNDER15_ODDS = 3.20
-OVER35_ODDS  = 2.20
-UNDER35_ODDS = 1.65
 
 # Edge mínimo por mercado (backtest 120d, 585 bets — conservador, no el óptimo absoluto)
 # ah_home_fav subido 0.15→0.20 (15-jun-2026): 6 bets en 90d con 0 wins (-100% ROI)
@@ -613,6 +609,7 @@ def _credible_xg(xg: dict | None) -> dict | None:
 # 27 ligas. La forma son goles crudos de los últimos 8 partidos, sin
 # ajustar por la fuerza del rival ni de la liga; Dixon-Coles sí.
 DC_WEIGHT_BY_HISTORY = ((30, 0.75), (15, 0.55), (0, 0.25))
+MIN_DC_WEIGHT = 0.5      # por debajo, el partido no se evalúa (ver _stage_lambdas)
 
 
 def dc_weight_for(history: int) -> float:
@@ -975,6 +972,12 @@ def _stage_lambdas(row, T, ctx, stats):
     # Si algún equipo no está en los parámetros MLE → 100% forma actual.
 
     _mle_w = 0.0   # peso DC-MLE efectivo usado (para el decision log)
+    _w_from_form = False   # peso sacado de la ventana de la forma (sin conteo)
+    # Tope a la forma ANTES de mezclar (21-oct-26): goles crudos contra
+    # rivales débiles (un ascendido que goleaba en segunda) daban λ de 5-6 y,
+    # aun con 75% de Dixon-Coles, el final chocaba con el tope de 3.5.
+    lambda_home = min(lambda_home, LAMBDA_CAP)
+    lambda_away = min(lambda_away, LAMBDA_CAP)
     if mle_fresh:
         # Detectar venue neutral por liga — fundamental para Mundial,
         # Euro, Copa América y otros torneos en sede única.
@@ -991,6 +994,7 @@ def _stage_lambdas(row, T, ctx, stats):
                 _min_hist = min(counts.get(home.lower(), 0), counts.get(away.lower(), 0))
             else:   # sin conteo (base caída o arnés de pruebas): lo que diga la forma
                 _min_hist = min(int(home_form.get("matches", 0)), int(away_form.get("matches", 0)))
+                _w_from_form = True
             _mle_w = dc_weight_for(_min_hist)
             lambda_home = lambda_home * (1 - _mle_w) + mle_lh * _mle_w
             lambda_away = lambda_away * (1 - _mle_w) + mle_la * _mle_w
@@ -1006,9 +1010,19 @@ def _stage_lambdas(row, T, ctx, stats):
     lambda_home = min(lambda_home, LAMBDA_CAP)
     lambda_away = min(lambda_away, LAMBDA_CAP)
 
+    # Sin Dixon-Coles confiable no hay opinión del modelo (21-oct-26): con
+    # 25% o nada de Dixon-Coles manda la forma cruda (sin rival ni liga) y el
+    # modelo quedaba a más de 20 pts de Pinnacle (K-League, Beveren, Suecia).
+    # Prueba fuera de muestra: la forma sola es la peor mezcla (log-loss 1.137
+    # contra 0.996 con 75% de Dixon-Coles). Si los parámetros están viejos
+    # (el weekly falló) se sigue como antes: lo avisa el arranque del pipeline.
+    # Tampoco se salta si el peso salió de la ventana de la forma (8 partidos
+    # como máximo → 25% siempre): sin el conteo real se saltaría el día entero.
+    dc_ok = (not mle_fresh) or _w_from_form or _mle_w >= MIN_DC_WEIGHT
+
     return SimpleNamespace(
         lambda_home=lambda_home, lambda_away=lambda_away, h2h=h2h,
-        weather_mult=weather_mult, mle_w=_mle_w,
+        weather_mult=weather_mult, mle_w=_mle_w, dc_ok=dc_ok,
         corners_prediction=corners_prediction,
         corners_confidence_delta=corners_confidence_delta,
         shots_prediction=shots_prediction,
@@ -1341,6 +1355,14 @@ def _stage_model_probabilities(row, T, L, ctx, stats):
     model_probs["dc_x2"] = clamp_prob(draw + away_win)
     model_probs["dc_12"] = clamp_prob(home_win + away_win)
 
+    # Hándicap y empate anula del MISMO reparto que el 1X2 final (21-oct-26):
+    # salían de la Poisson de los goles esperados y el 1X2 del ensemble; en
+    # 14 de 88 partidos "empate anula" no cuadraba con el 1X2 por más de 5 pts.
+    _cm = consistent_score_matrix(lambda_home, lambda_away, (home_win, draw, away_win), rho=DC_RHO_SCORE)
+    if _p_ah_home is not None:
+        _p_ah_home, _p_ah_away = prob_ah_from_matrix(_cm, _ah_line)
+    _dnb = {"dnb_home": home_win / (home_win + away_win), "dnb_away": away_win / (home_win + away_win)}
+
     # Agregar AH y DNB (clave con línea embebida para resolución automática)
     if _p_ah_home is not None:
         _ah_key_home = f"ah_home_{_ah_line:+.2f}"   # ej: "ah_home_-1.5"
@@ -1626,16 +1648,10 @@ def _stage_quote_table(row, Q, p_ah_home, shots_prediction):
         if _cards_under_api:
             odds[f"cards_under_{_cdl}"] = _cards_under_api
 
-    # Over 1.5 / 3.5 odds de referencia fijas
-    odds["over_1.5"]  = OVER15_ODDS
-    odds["under_1.5"] = UNDER15_ODDS
-    odds["over_3.5"]  = OVER35_ODDS
-    odds["under_3.5"] = UNDER35_ODDS
-
-    # Total shots odds fijas
-    if shots_prediction:
-        odds["shots_over_5.5"]  = SHOTS_DEFAULT_ODDS
-        odds["shots_under_5.5"] = SHOTS_DEFAULT_ODDS
+    # Más/menos de 1.5 y 3.5 goles y tiros: SIN cuota (21-oct-26). Tenían
+    # precios fijos inventados (1.35, 3.20, 2.20, 1.65, 1.80); estaban en
+    # _DISABLED_MARKETS, pero cuando otra regla los frenaba antes (liga
+    # bloqueada) quedaban en propuestas y sombra con edge falso.
 
     # Double Chance: preferir API, fallback a derivadas de 1x2
     if _dc_1x_odds:
@@ -2946,6 +2962,10 @@ def run_prediction_pipeline(dry_run: bool = False):
         if T is None:
             return
         L = _stage_lambdas(row, T, ctx, stats)
+        if not getattr(L, "dc_ok", True):
+            stats['no_dc'] += 1
+            print(f"  Sin Dixon-Coles confiable: {T.home} vs {T.away} (peso {L.mle_w:.0%}) — no se evalúa")
+            return
         M, Q = _stage_model_probabilities(row, T, L, ctx, stats)
         _stage_side_bias(row, T, M, ctx, model_sharp_records, L)
         market_probs, market_probs_raw = _stage_market_probabilities(row, Q, M.p_ah_home)
@@ -3002,9 +3022,17 @@ def run_prediction_pipeline(dry_run: bool = False):
     # DEBUG
     # =========================
 
+    # Saltar algunos es lo esperado (ascendidos, segundas, ligas sin fit: ~1
+    # de cada 5); casi todos es que el weekly dejó parámetros incompletos.
+    if stats['no_dc'] >= 5 and stats['no_dc'] > 0.4 * total_matches:
+        log.error(f"❌ {stats['no_dc']} de {total_matches} partidos sin Dixon-Coles confiable "
+                  f"y no evaluados — revisar el ajuste DC-MLE del weekly")
+
     print("\n📊 DEBUG SUMMARY")
     print("Partidos con error: ", len(failed_matches))
     print("Sin odds:           ", stats['skipped_no_odds'])
+    print("Historia corta:     ", stats['thin_history'])
+    print("Sin Dixon-Coles:    ", stats['no_dc'])
     print("Fallback usados:    ", stats['fallback_used'])
     print("xG proxy usado:     ", stats['xg_used'])
     print("H2H usado:          ", stats['h2h_used'])
@@ -3088,6 +3116,11 @@ def run_prediction_pipeline(dry_run: bool = False):
             # ERROR, no WARNING: sin estas filas el sesgo por lado no aprende
             # nunca, y un fallo silencioso ya costó semanas (§5, "OK silencioso")
             log.error(f"❌ model_vs_sharp no registrado: {type(e).__name__}: {e}")
+        # Lo que sale del modelo tiene sentido (21-oct-26): el xG mal escalado
+        # tuvo 3 semanas los goles esperados en el tope sin que nada fallara.
+        from src.utils.output_checks import pipeline_invariants
+        for problem in pipeline_invariants(model_sharp_records):
+            log.error(f"❌ {problem}")
     if stats['sharp_no_value'] or stats['sharp_no_ref']:
         print(f"🔒 Filtro Pinnacle: {stats['sharp_no_value']} sin valor frente a Pinnacle · "
               f"{stats['sharp_no_ref']} sin referencia (solo en sombra hasta tener evidencia)")

@@ -232,6 +232,10 @@ def extended_kwargs() -> dict:
                                        "sharp_signal": "home_win", "movement_strength": "moderate",
                                        "has_movement": True}},
         "overrides": {
+            # Sus equipos sintéticos no tienen Dixon-Coles a propósito: desde el
+            # 21-oct-26 eso salta el partido (tests/test_output_checks.py lo
+            # prueba) y el escenario dejaría de recorrer sus caminos.
+            "MIN_DC_WEIGHT": 0.0,
             "compute_elo": lambda: {**ELO, **ELO_EXT},
             "get_fixture_congestion": congestion,
             "get_weather_multiplier": lambda team: 0.90 if team == "nu" else 1.0,
