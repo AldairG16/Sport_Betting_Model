@@ -227,7 +227,7 @@ def test_without_saved_picks_the_page_explains_when_they_arrive(monkeypatch):
     import dashboard.app as dash
     monkeypatch.setattr(dash, "_q", lambda sql, params=None: pd.DataFrame())
     p = dash.app.test_client().get("/api/picks").get_json()
-    assert p["ok"] is False and "primeros resultados" in p["msg"]
+    assert p["ok"] is False and "después de que termina su partido" in p["msg"]
 
 
 def test_daily_check_skips_the_picks_table_until_it_exists(monkeypatch):

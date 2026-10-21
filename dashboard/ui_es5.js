@@ -338,7 +338,7 @@ function card(lbl, val, note, cls){
 function renderHowWeGo(){
   var h = '', p = _sum.picks;
   if (p === undefined) h += card('🎯 Picks del programa', '…', 'Cargando');
-  else if (!p) h += card('🎯 Picks del programa', 'Empezamos hoy', 'Se guardan desde el 21-oct. Los primeros resultados llegan esta noche, después de las 9 pm.');
+  else if (!p) h += card('🎯 Picks del programa', 'Todavía sin resultados', 'Se guardan desde el 21-oct. Cada pick se califica unas horas después de que termina su partido (en la corrida de la noche o en la de las 6:30 am).');
   else h += card('🎯 Picks del programa', p.won + ' ✅ · ' + p.lost + ' ❌',
                  (p.priced ? money(p.profit) + ' a 1u por pick, al momio de PlayDoit aprox.' : 'Sin momio de PlayDoit para calcular unidades') +
                  ' Detalle en <b>Cómo nos ha ido</b>.', p.priced ? (p.profit >= 0 ? 'pos' : 'neg') : '');
@@ -386,7 +386,7 @@ function loadPicks(){
   }, function(msg){
     _sum.picks = null;
     renderHowWeGo();
-    k.innerHTML = card('Picks del programa', 'Empezamos hoy', esc(msg));
+    k.innerHTML = card('Picks del programa', 'Todavía sin resultados', esc(msg));
     body.innerHTML = emptyRow(6, msg);
   });
 }
