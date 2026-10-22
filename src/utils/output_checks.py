@@ -116,7 +116,7 @@ def _ah(margin, line, side):
 def settle_independent(market: str, r: dict) -> str | None:
     """Resultado de un mercado con una implementación propia (sin
     resolve_market). None si falta el dato o el mercado no está cubierto.
-    Las tarjetas cuentan solo amarillas, como la liquidación del sistema."""
+    Tarjetas: amarilla = 1 y roja = 1, como la liquidación (21-oct-26)."""
     hg, ag = int(r["home_goals"]), int(r["away_goals"])
     simple = {"home_win": hg > ag, "draw": hg == ag, "away_win": hg < ag,
               "btts": hg > 0 and ag > 0, "btts_no": not (hg > 0 and ag > 0),
@@ -145,7 +145,10 @@ def settle_independent(market: str, r: dict) -> str | None:
         g = re.fullmatch(prop + r"_(over|under)_(\d+(?:\.\d+)?)", market)
         if g:
             a, b = _num(r.get(cols[0])), _num(r.get(cols[1]))
-            return None if a is None or b is None else _ou(a + b, float(g.group(2)), g.group(1))
+            if a is None or b is None:
+                return None
+            reds = (_num(r.get("home_red")) or 0) + (_num(r.get("away_red")) or 0) if prop == "cards" else 0
+            return _ou(a + b + reds, float(g.group(2)), g.group(1))
     return None
 
 
@@ -228,7 +231,8 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
 
     matches = q("""
         SELECT LOWER(home_team) AS h, LOWER(away_team) AS a, date::date AS d, home_goals, away_goals,
-               home_goals_ht, away_goals_ht, home_corners, away_corners, home_yellow, away_yellow
+               home_goals_ht, away_goals_ht, home_corners, away_corners, home_yellow, away_yellow,
+               home_red, away_red
         FROM matches WHERE home_goals IS NOT NULL AND date >= CURRENT_DATE - make_interval(days => :d)
     """, d=days + 3).to_dict("records")
 

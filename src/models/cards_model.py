@@ -1,7 +1,7 @@
 """
 Cards Model
 ===========
-Modelo Poisson para predecir tarjetas amarillas totales por partido.
+Modelo Poisson para predecir tarjetas totales por partido (amarilla = 1, roja = 1, como PlayDoit; 21-oct-26).
 
 Misma lógica que corners_model.py:
   lambda_home = home_attack × away_defense × CARDS_BASELINE

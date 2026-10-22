@@ -162,6 +162,7 @@ def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
             # del modelo (21-oct-26): su lectura no vale
             "old_model": not (lam_h and lam_a),
             "real_bet": key in pending_matches,
+            "key": key,                    # nombres canónicos: /api/match (v1.10.0)
         })
     return out
 
@@ -245,6 +246,8 @@ def proposals(df: pd.DataFrame) -> dict:
         min_us = min_american(_num(r.probability), pin_prob=_num(r.pin_prob)) if _num(r.probability) else None
         decision = str(r.decision or "")
         fake = decision == FAKE_ODDS_DECISION or str(r.market) in FAKE_ODDS_MARKETS
+        # sin resultado llega None o NaN según la columna: "pending", no "nan"
+        res = r.result if isinstance(r.result, str) and r.result else "pending"
         rows.append({
             "match_date": _iso(r.match_date), "match": match_name(r.match),
             "league": league_name(r.league) if r.league else "",
@@ -252,8 +255,9 @@ def proposals(df: pd.DataFrame) -> dict:
             "pin_prob": _num(r.pin_prob), "odds_us": fmt_american(to_american(r.odds)),
             "min_us": fmt_american(min_us) if min_us is not None else "",
             "decision": decision, "fake_odds": fake,
-            "result_key": str(r.result or "pending"), "result": result_label(r.result or "pending"),
+            "result_key": res, "result": result_label(res),
             "profit_1u": None if p1 is None else round(p1, 2),
+            "winner": who_was_right(r.probability, r.pin_prob, res),
         })
         if p1 is not None and not fake:
             g = groups.setdefault(decision, {"decision": decision, "n": 0, "won": 0, "profit_1u": 0.0})
@@ -263,7 +267,7 @@ def proposals(df: pd.DataFrame) -> dict:
     summary = sorted(groups.values(), key=lambda g: -g["n"])
     for g in summary:
         g["roi"] = round(g["profit_1u"] / g["n"], 3) if g["n"] else None
-    return {"rows": rows, "summary": summary}
+    return {"rows": rows, "summary": summary, "right": _right_counts(rows)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -276,6 +280,28 @@ COLLECTION_MODE = pd.Timestamp("2026-09-25", tz="UTC")     # solo dinero real si
 REAL_PERIODS = ((pd.Timestamp("2026-09-14", tz="UTC"), "Hasta el 13-sep"),
                 (COLLECTION_MODE, "14 al 24-sep"),
                 (None, "Desde el 25-sep (modo recolección)"))
+
+
+def who_was_right(p_model, p_market, result) -> str | None:
+    """¿Quién tuvo razón: el programa o el mercado? (v1.10.0, 21-oct-26: "si
+    es un ambos anotan quiero ver quién ganó de los 2"). El que le dio más
+    probabilidad a lo que pasó. None sin resultado, con nula o sin las dos
+    probabilidades."""
+    m, k = _num(p_model), _num(p_market)
+    if m is None or k is None or abs(m - k) < 1e-9:
+        return None
+    if result in ("win", "half_win"):
+        happened = True
+    elif result in ("loss", "half_loss"):
+        happened = False
+    else:
+        return None
+    return "programa" if (m > k) == happened else "mercado"
+
+
+def _right_counts(rows: list) -> dict:
+    return {"programa": sum(1 for x in rows if x.get("winner") == "programa"),
+            "mercado": sum(1 for x in rows if x.get("winner") == "mercado")}
 
 
 def _bool(v) -> bool:
@@ -316,8 +342,10 @@ def picks_board(df: pd.DataFrame) -> dict:
             "playdoit_us": fmt_american(to_american(po)) if po else "",
             "min_us": fmt_american(int(r.min_us)) if _num(r.min_us) is not None else "",
             "result_key": res, "result": result_label(res), "profit": _num(r.profit),
+            "winner": who_was_right(r.model_prob, r.market_prob, res),
+            "key": str(r.match).lower(),
         })
-    return {"rows": rows, "all": _record(rows),
+    return {"rows": rows, "all": _record(rows), "right": _right_counts(rows),
             "lean": _record([x for x in rows if x["lean"]]),
             "value": _record([x for x in rows if x["value"]])}
 
@@ -370,4 +398,4 @@ def proposal_weeks(df: pd.DataFrame) -> list:
 
 
 __all__ = ["predictions", "history", "proposals", "likely_score", "reading", "profit_1u",
-           "picks_board", "real_periods", "proposal_weeks"]
+           "picks_board", "real_periods", "proposal_weeks", "who_was_right"]

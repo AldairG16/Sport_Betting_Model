@@ -47,13 +47,14 @@ def get_team_cards(team: str) -> dict | None:
     query = text("""
         SELECT
             date,
+            -- amarilla = 1 y roja = 1, como liquida PlayDoit (21-oct-26)
             CASE WHEN LOWER(home_team) = :team
-                 THEN home_yellow
-                 ELSE away_yellow
+                 THEN home_yellow + COALESCE(home_red, 0)
+                 ELSE away_yellow + COALESCE(away_red, 0)
             END AS cards_for,
             CASE WHEN LOWER(home_team) = :team
-                 THEN away_yellow
-                 ELSE home_yellow
+                 THEN away_yellow + COALESCE(away_red, 0)
+                 ELSE home_yellow + COALESCE(home_red, 0)
             END AS cards_against
         FROM matches
         WHERE (LOWER(home_team) = :team OR LOWER(away_team) = :team)

@@ -586,8 +586,14 @@ del modelo partido por partido.
 - **El historial del dashboard usa nombres canónicos.** `model_vs_sharp` guarda el nombre
   del día del análisis; si después se aprendía un alias, el partido no encontraba su
   resultado.
-- **Tarjetas:** se liquidan con amarillas solamente. Con la roja contando cambian 3
-  apuestas reales y 12 sombra. Pendiente: cómo las cuenta PlayDoit.
+- **Tarjetas: amarilla = 1 y roja = 1, como PlayDoit** (el dueño, 21-oct-2026). Hasta
+  entonces se liquidaban solo con amarillas.
+  - `save_bets.card_total` liquida así. Una roja sin dato cuenta 0: falta en 1 de cada
+    ~7,600 partidos, y el resolver con Claude también la llena.
+  - Los dos modelos (`cards_stats`, `props_fair`: columnas `home_cards` y `away_cards`) y el
+    chequeo independiente cuentan igual.
+  - Se re-liquidaron 3 apuestas reales (−0.57u, con `fix_stat_settlements.py` y nota en
+    `bankroll_history`) y 12 de sombra.
 
 **Chequeo diario de salidas** (`src/utils/output_checks.py`, paso "Chequeo de salidas" del
 evening, antes del resumen de Telegram). Cada problema es un ERROR y llega en "errores
@@ -1277,6 +1283,27 @@ de responder "cómo nos fue con los picks".
   promedio de las casas por `playdoit_ratio`). "Ambos anotan" no tiene promedio de casas:
   cuenta en ganados y perdidos pero no en unidades.
 - **Chequeo:** el chequeo diario de salidas también re-liquida esta tabla.
+
+**Quién tuvo razón y el partido abierto (v1.10.0, 21-oct-2026).** El dueño pidió ver, en cada
+apuesta, "quién ganó de los 2", y poder abrir el partido para ver sus últimos 5 partidos.
+
+- **¿Quién tuvo razón?** (`visibility.who_was_right`): el programa o el mercado, el que le
+  dio más probabilidad a lo que pasó. Si el pick ganó y el programa le daba más que el
+  mercado, tuvo razón el programa; si perdió, el mercado.
+  - En los picks se compara contra el mercado del pick: Pinnacle en el 1X2 y el promedio de
+    las casas en goles y ambos anotan.
+  - En las propuestas se compara contra Pinnacle (`pin_prob`).
+  - Sin resultado, con devolución o sin la probabilidad del mercado: "—".
+  - Cada pick se abre con la explicación y las estadísticas de antes de ese partido.
+- **El partido abierto** (`/api/match`, `dashboard/match_detail.py`, ~1.6 s):
+  - por equipo, sus últimos 5 partidos con marcador (G/E/P), córners a favor y en contra,
+    tarjetas del partido (roja = 1) y el once que usó (`lineups`), más los promedios;
+  - la alineación del partido: la confirmada si ya salió (±3 h del inicio); si no, la
+    probable (los 11 con más titularidades en sus últimos 10 partidos con alineación);
+  - los últimos 5 entre ellos.
+  - Un 0-0 en córners es un hueco de la fuente (Liga MX 2025) y se muestra "—". Liga MX,
+    MLS, Brasil y Argentina no tienen córners ni tarjetas en `matches`.
+- Los partidos abiertos siguen abiertos después del auto-refresco.
 
 **Revisor de PlayDoit por captura (21-oct-2026).** PlayDoit no está en ninguna API y su
 página bloquea a los programas automáticos (no se raspa). El dueño manda una captura de

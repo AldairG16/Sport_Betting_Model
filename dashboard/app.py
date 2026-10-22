@@ -594,6 +594,42 @@ def api_picks():
     return jsonify({"ok": True, "days": d, **_vis.picks_board(df)})
 
 
+@app.route("/api/match")
+def api_match():
+    """Partido abierto (v1.10.0): los últimos 5 de cada equipo con marcador,
+    goles, córners, tarjetas y su once; la alineación del partido y los
+    últimos 5 entre ellos. ?home=&away= con los nombres canónicos y
+    ?date= la hora del partido (cuenta lo anterior a ella)."""
+    from dashboard import match_detail as _md
+    home = (request.args.get("home") or "").strip().lower()
+    away = (request.args.get("away") or "").strip().lower()
+    try:
+        when = pd.Timestamp(request.args.get("date") or pd.Timestamp.now(tz="UTC"))
+        when = when.tz_convert("UTC") if when.tzinfo else when.tz_localize("UTC")
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "msg": "fecha inválida"})
+    if not home or not away:
+        return jsonify({"ok": False, "msg": "falta el partido"})
+    p = {"h": home, "a": away, "d": when.to_pydatetime()}
+    matches = _q("""
+        SELECT date, league, LOWER(home_team) AS h, LOWER(away_team) AS a, home_goals, away_goals,
+               home_corners, away_corners, home_yellow, away_yellow, home_red, away_red
+        FROM matches
+        WHERE (LOWER(home_team) IN (:h, :a) OR LOWER(away_team) IN (:h, :a))
+          AND home_goals IS NOT NULL AND date < :d AND date >= CAST(:d AS date) - 1100
+        ORDER BY date DESC LIMIT 150
+    """, p)
+    lineups = _q("""
+        SELECT team, kickoff, formation, starters, names FROM lineups
+        WHERE team IN (:h, :a) AND kickoff BETWEEN CAST(:d AS timestamptz) - INTERVAL '400 days'
+                                               AND CAST(:d AS timestamptz) + INTERVAL '1 day'
+        ORDER BY kickoff DESC LIMIT 60
+    """, p)
+    if matches.empty and lineups.empty:
+        return _no_data("Sin partidos anteriores de estos equipos en la base")
+    return jsonify({"ok": True, **_md.match_detail(matches, lineups, home, away, when)})
+
+
 @app.route("/api/scoreboard")
 def api_scoreboard():
     """Dinero real por etapa y lo que el modelo propuso por semana."""
@@ -794,11 +830,21 @@ PAGE = """<!DOCTYPE html>
   .chartbox h3 { font-size:.9rem; margin-bottom:8px; color:var(--muted); font-weight:600; }
   .chartbox canvas { width:100%!important; height:250px!important; }
   #err { color:var(--red); font-size:.85rem; margin:12px 0; display:none; }
+  /* estadísticas del partido (v1.10.0) */
+  .stats { color:var(--text); }
+  .statsgrid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:12px; }
+  .tname { font-weight:700; font-size:.95rem; margin-bottom:4px; }
+  table.mini { font-size:.8rem; margin-top:6px; background:var(--card2); }
+  table.mini td, table.mini th { padding:5px 8px; }
+  a.xi { color:var(--blue); cursor:pointer; white-space:nowrap; }
+  .who.p { color:var(--green); font-weight:600; } .who.m { color:var(--blue); font-weight:600; }
+  tr.clickable { cursor:pointer; }
   @media (max-width:860px) {
     body { padding:12px; }
     .grid2 { grid-template-columns:1fr; }
     .mrow { grid-template-columns:46px minmax(0,1fr); gap:8px 12px; }
     .mpick, .mprice, .mverdict { grid-column:2; text-align:left; }
+    .statsgrid { grid-template-columns:1fr; }
     .mmore { padding-left:16px; }
     .tab { padding:8px 10px; font-size:.88rem; }
   }
@@ -824,7 +870,7 @@ PAGE = """<!DOCTYPE html>
   <div id="todaylist" class="muted">Cargando…</div>
   <div class="help" id="howtoread">
     <b>¿Cómo leo esto?</b><br>
-    • <b>El programa jugaría</b>: la apuesta de ese partido donde el programa ve más probabilidad que las casas. Toca un partido para ver el detalle.<br>
+    • <b>El programa jugaría</b>: la apuesta de ese partido donde el programa ve más probabilidad que las casas. Toca un partido para ver el detalle, sus últimos 5 partidos (resultados, goles, córners, tarjetas y el once) y la alineación.<br>
     • <b>Necesitas en PlayDoit</b>: el momio mínimo para que la apuesta tenga ventaja. Si PlayDoit paga eso o más, vale la pena.<br>
     • <b>PlayDoit paga aprox.</b>: lo que suele pagar PlayDoit (el promedio de las casas). Si le mandas una captura al bot de Telegram, te confirma el momio real.<br>
     • <b>Momios</b>: -150 = apuestas 150 para ganar 100; +150 = apuestas 100 para ganar 150. __HOW_TO_READ__<br>
@@ -845,8 +891,9 @@ PAGE = """<!DOCTYPE html>
   <h2 style="margin-top:4px">🎯 Picks del programa</h2>
   <div class="muted small" style="margin-bottom:10px">Lo que el programa jugaría en cada partido (el mismo pick de la pestaña Hoy), a 1 unidad y al momio aproximado de PlayDoit. Se guardan desde el 21-oct.</div>
   <div class="cards" id="pickkpis"></div>
-  <div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Partido</th><th>El programa jugó</th><th>Momio PlayDoit aprox.</th><th>Resultado</th><th>Ganancia</th></tr></thead>
-  <tbody id="picklist"><tr><td colspan="6" class="muted">Cargando…</td></tr></tbody></table></div>
+  <div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Partido</th><th>El programa jugó</th><th title="Probabilidad que le daba cada uno a ese pick">Programa vs mercado</th><th>Momio PlayDoit aprox.</th><th>Resultado</th><th title="El que le dio más probabilidad a lo que pasó">¿Quién tuvo razón?</th><th>Ganancia</th></tr></thead>
+  <tbody id="picklist"><tr><td colspan="8" class="muted">Cargando…</td></tr></tbody></table></div>
+  <div class="muted small" style="margin-top:6px">Toca un pick para ver por qué y las estadísticas de los equipos antes de ese partido.</div>
 
   <h2>🎯 ¿Acierta al favorito?</h2>
   <div class="muted small" style="margin-bottom:10px">Cuántas veces ganó el resultado que el programa veía más probable, comparado con Pinnacle.</div>
@@ -863,8 +910,8 @@ PAGE = """<!DOCTYPE html>
   <div class="fold"><div class="foldhead">▸ Ver cada propuesta (últimos 14 días)</div><div class="foldbody">
     <div class="tablewrap" style="max-height:220px;margin-bottom:10px"><table><thead><tr><th>Por qué no se apostó</th><th>Propuestas</th><th>Ganadas</th><th>Resultado a 1u</th><th>Rendimiento</th></tr></thead>
     <tbody id="propsum"><tr><td colspan="5" class="muted">Cargando…</td></tr></tbody></table></div>
-    <div class="tablewrap" style="max-height:420px"><table><thead><tr><th>Fecha</th><th>Partido</th><th>Apuesta</th><th>Prob.</th><th>Mejor momio</th><th>Mínimo PlayDoit</th><th>Decisión</th><th>Resultado</th><th>A 1u</th></tr></thead>
-    <tbody id="propbody"><tr><td colspan="9" class="muted">Cargando…</td></tr></tbody></table></div>
+    <div class="tablewrap" style="max-height:420px"><table><thead><tr><th>Fecha</th><th>Partido</th><th>Apuesta</th><th>Prob.</th><th>Mejor momio</th><th>Mínimo PlayDoit</th><th>Decisión</th><th>Resultado</th><th title="Programa contra Pinnacle: el que le dio más probabilidad a lo que pasó">¿Quién tuvo razón?</th><th>A 1u</th></tr></thead>
+    <tbody id="propbody"><tr><td colspan="10" class="muted">Cargando…</td></tr></tbody></table></div>
   </div></div>
 </div>
 
