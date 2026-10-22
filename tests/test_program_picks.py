@@ -217,9 +217,9 @@ def test_dashboard_endpoints_and_tabs(monkeypatch):
     assert sb["ok"] and sb["real"][0]["profit"] == 0.8 and sb["weeks"][0]["old_model"] is True
     assert sb["last_real_bet"].startswith("2026-09-01")
     html = c.get("/").get_data(as_text=True)
-    for tab in ("hoy", "proximos", "resultados", "dinero", "sistema"):
+    for tab in ("proximos", "anteriores", "equipos", "graficas"):                     # v2.0
         assert f'data-tab="{tab}"' in html and f'id="tab-{tab}"' in html
-    for el in ("verdict", "howwego", "todaylist", "nextlist", "pickkpis", "picklist", "weekbody", "realbody"):
+    for el in ("uplist", "daybar", "pkpis", "pastbody", "teamlist", "cbank", "cacc", "cpicks", "cprops"):
         assert f'id="{el}"' in html
 
 

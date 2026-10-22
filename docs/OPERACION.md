@@ -1242,32 +1242,41 @@ equipo (`load_profiles`: titulares habituales, 70%+ de sus últimos 15 partidos)
 El banner de actualización sale solo si la versión publicada es MÁS NUEVA (`_newer`).
 Antes bastaba con que fuera distinta.
 
-**Pestañas en lenguaje simple (v1.9.0, 21-oct-2026).** El dueño: "ahorita el dashboard es
-un desastre, necesito que sea amigable". Era una sola página con 80 partidos y columnas de
-tres números. Ahora tiene cinco pestañas (la última vista se recuerda; también `#resultados`
-en la dirección):
+**Dashboard v2.0 (22-oct-2026): partidos, equipos y gráficas.** El dueño: "necesito un mejor
+dashboard, que sea entendible, sin tanto texto innecesario… quiero ver solo los partidos,
+equipos, gráficas y los partidos anteriores desde septiembre y los próximos". Reemplaza las
+pestañas de v1.9-1.10 (Hoy, Dinero real, Sistema). Poco texto: barras, iconos y tooltips.
 
-- **Hoy:**
-  - el veredicto ("Hoy no apuestes", "Hay N que valen la pena" o "Tienes N apuestas
-    reales"), con aviso si hay alerta de alineaciones;
-  - tres tarjetas de cómo vamos: picks, bankroll y acierto del favorito;
-  - los partidos de hoy en una línea cada uno: qué jugaría el programa, el mínimo en
-    PlayDoit, lo que paga aprox. y ✅ / 🟡 / ❌. Tocando el partido sale el detalle
-    (probabilidades contra Pinnacle, goles, mínimos por resultado, alineaciones);
-  - una guía "¿Cómo leo esto?".
-- **Próximos días:** igual, agrupado por día, con un filtro de "solo los que valen la pena".
-- **Cómo nos ha ido:**
-  - picks del programa (`/api/picks`);
-  - acierto del favorito contra Pinnacle;
-  - lo que el modelo propuso por semana (`/api/scoreboard`), marcando las semanas del
-    modelo con error.
-- **Dinero real:** indicadores, apuestas por etapa (hasta el 13-sep, 14 al 24-sep, modo
-  recolección), bankroll, ganancia por día y la tabla de apuestas. Las gráficas avanzadas
-  quedan plegadas.
-- **Sistema:** alineaciones, goleadores, diagnóstico IA y corridas de GitHub.
+- **Próximos** (`/api/predictions`): filtros por día, por liga y "✅ Con valor". Cada partido es
+  una fila con:
+  - la barra local / empate / visitante del programa y, abajo, la de Pinnacle;
+  - el pick con su mínimo en PlayDoit y lo que paga aprox.;
+  - ✅ / 🟡 / ❌, y ⚠️ si hay alerta de alineaciones.
+  - Tocándolo se abre `/api/match`: racha G/E/P, últimos 5 (marcador, córners, tarjetas; el
+    once en el tooltip), la alineación y los partidos entre ellos.
+- **Anteriores** (`/api/board/past`, `dashboard/board.py`): cada partido jugado desde
+  `board.SINCE` (1-sep) en las ligas que analiza el programa (las de `model_vs_sharp` y
+  `upcoming_matches`).
+  - Por fila: marcador, córners, tarjetas, ¿acertó el favorito del programa (🤖) y el de
+    Pinnacle (🏦)?, el pick y su resultado, y las apuestas reales.
+  - El día es el de México con la hora del partido: un 19:00 de México en `matches` ya cae
+    en la fecha UTC del día siguiente.
+  - Arriba van los totales. Las consultas tardan ~5 s, con caché de 5 min (`_PAST_CACHE`).
+- **Equipos** (`/api/board/teams`, `/api/board/team`): récord desde septiembre, promedios,
+  gráficas de goles y córners por partido, próximos y la tabla de partidos.
+- **Gráficas** (`/api/board/charts`):
+  - bankroll (`bankroll_history`);
+  - acierto semanal del favorito, programa contra Pinnacle;
+  - picks del programa acumulados;
+  - propuestas por semana (las del modelo con error, más tenues).
 
-El JS se pide como `/ui_es5.js?v=<versión>`: tras actualizar el `.exe`, el navegador no
-reusa el JS viejo de su caché (página nueva con código viejo dejaba secciones vacías).
+**La página se recarga sola al cambiar la versión.** El 21-oct el dueño "no veía nada": su
+pestaña se abrió antes de actualizar y solo refrescaba datos.
+- `/` se sirve con `Cache-Control: no-store` y la versión en `window.APP_V`.
+- Cada minuto, `ui_es5.js` compara la versión con `/api/health`; si cambió, recarga.
+- El JS se pide como `/ui_es5.js?v=<versión>`, así que no queda uno viejo en caché.
+- Una pestaña de antes de v2.0 solo se recarga si nota la caída del programa: tiene que
+  pedir datos mientras está apagado (auto-refresco de 5 min).
 
 **Picks del programa guardados (`src/models/program_picks.py`, tabla `program_picks`).**
 Hasta v1.8.0 el pick de cada partido se calculaba al vuelo y no quedaba en ningún lado:

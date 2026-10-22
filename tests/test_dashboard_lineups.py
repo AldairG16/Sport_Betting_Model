@@ -101,4 +101,3 @@ def test_lineups_endpoint_answers_with_synthetic_data(monkeypatch):
     d = c.get("/api/lineups").get_json()
     assert d["ok"] and d["matches"][0]["match"] == "Bayern Munich vs Arsenal"
     assert d["matches"][0]["level"] in ("normal", "rotation")
-    assert 'id="lubody"' in c.get("/").get_data(as_text=True)
