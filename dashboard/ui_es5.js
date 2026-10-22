@@ -255,8 +255,9 @@ function pastRow(r, i){
   var pickTxt = '<span class="muted">·</span>';
   if (pk) {
     var played = pk.result === 'win' || pk.result === 'loss' || pk.result === 'half_win' || pk.result === 'half_loss';
-    pickTxt = '<span title="' + esc(pk.label + ' · programa ' + p100(pk.model) + ' vs mercado ' + p100(pk.market) +
-              (pk.winner ? ' · tuvo razón el ' + pk.winner : '')) + '">' +
+    pickTxt = '<span' + (pk.old_model ? ' style="opacity:.6"' : '') + ' title="' + esc(pk.label + ' · programa ' + p100(pk.model) + ' vs mercado ' + p100(pk.market) +
+              (pk.winner ? ' · tuvo razón el ' + pk.winner : '') + (pk.old_model ? ' · modelo con error (antes del 22 oct)' : '') +
+              (pk.rebuilt ? ' · reconstruido con la predicción guardada antes del partido' : '')) + '">' + (pk.rebuilt ? '↺ ' : '') +
               (played ? ok(pk.result === 'win' || pk.result === 'half_win') : '⏳') + ' ' + esc(pk.label) +
               (pk.profit !== null && played ? ' <span class="' + (pk.profit >= 0 ? 'pos' : 'neg') + '">' + money(pk.profit) + '</span>' : '') + '</span>';
   }
@@ -311,7 +312,10 @@ function loadPast(){
     el('pkpis').innerHTML = kpi(s.matches, 'Partidos desde ' + shortDate(d.since)) +
       kpi(p100(s.model_hit), '🤖 Programa acertó el favorito (' + s.analyzed + ')') +
       kpi(p100(s.pin_hit), '🏦 Pinnacle acertó el favorito') +
-      kpi(s.picks ? s.picks_won + ' / ' + s.picks : '—', '🎯 Picks ganados' + (s.picks ? ' · ' + money(s.picks_profit) : ''), s.picks_profit >= 0 ? 'pos' : 'neg') +
+      kpi(s.picks_fixed.n ? s.picks_fixed.won + ' / ' + s.picks_fixed.n : '—', '🎯 Picks · modelo corregido (desde 22 oct)' +
+          (s.picks_fixed.priced ? ' · ' + money(s.picks_fixed.profit) : ''), s.picks_fixed.profit >= 0 ? 'pos' : 'neg') +
+      kpi(s.picks_old.n ? s.picks_old.won + ' / ' + s.picks_old.n : '—', '↺ Picks · modelo con error (antes del 22 oct)' +
+          (s.picks_old.priced ? ' · ' + money(s.picks_old.profit) : ''), s.picks_old.profit >= 0 ? 'pos' : 'neg') +
       kpi(s.bets ? money(s.bets_profit) : '—', '💰 Apuestas reales (' + s.bets + ')', s.bets_profit >= 0 ? 'pos' : 'neg');
     var lg = {}, list = [];
     for (var i = 0; i < _past.length; i++) if (!lg[_past[i].league]) { lg[_past[i].league] = 1; list.push(_past[i].league); }
@@ -416,8 +420,10 @@ function loadCharts(){
     chart('cacc', { type: 'line', data: { labels: wl, datasets: [
       { label: '🤖 Programa', data: wm, borderColor: '#60a5fa', fill: false }, { label: '🏦 Pinnacle', data: wp, borderColor: '#94a3b8', fill: false }] },
       options: { legend: legend, scales: { xAxes: axes.xAxes, yAxes: [{ ticks: { fontColor: '#94a3b8', callback: function(v){ return v + '%'; } } }] } } });
-    chart('cpicks', { type: 'line', data: { labels: d.picks.dates, datasets: [{ data: d.picks.values, borderColor: '#22c55e', fill: true, backgroundColor: 'rgba(34,197,94,.08)' }] },
-      options: { legend: nolegend, scales: axes } });
+    chart('cpicks', { type: 'line', data: { labels: d.picks.dates, datasets: [
+      { label: '↺ Modelo con error', data: d.picks.old, borderColor: '#94a3b8', pointRadius: 0, fill: false, spanGaps: false },
+      { label: 'Modelo corregido', data: d.picks.fixed, borderColor: '#22c55e', fill: false, spanGaps: false }] },
+      options: { legend: legend, scales: axes } });
     var pl = [], pv = [], pc = [];
     for (var j = 0; j < d.proposals.length; j++) {
       var w = d.proposals[j];

@@ -672,7 +672,7 @@ def _load_past_rows() -> list:
         return []
     mvs = _q("""SELECT match, match_date, p_home, p_draw, p_away, pin_home, pin_draw, pin_away
                 FROM model_vs_sharp WHERE match_date >= CAST(:s AS date) - 2""", p)
-    picks = _q("""SELECT match, match_date, label, model_prob, market_prob, result, profit
+    picks = _q("""SELECT match, match_date, label, model_prob, market_prob, result, profit, source
                   FROM program_picks WHERE match_date >= CAST(:s AS date) - 2""", p)
     bets = _q("""SELECT match, match_date, market, result, profit FROM bets_history
                  WHERE match_date >= CAST(:s AS date) - 2""", p)
@@ -1001,7 +1001,7 @@ PAGE = """<!DOCTYPE html>
     <div class="cb"><h3>Acierto del favorito por semana</h3><canvas id="cacc"></canvas></div>
   </div>
   <div class="grid2">
-    <div class="cb"><h3>Picks del programa (unidades acumuladas)</h3><canvas id="cpicks"></canvas></div>
+    <div class="cb"><h3>Picks del programa (unidades acumuladas, 1u c/u)</h3><canvas id="cpicks"></canvas></div>
     <div class="cb"><h3>Propuestas del modelo por semana (unidades)</h3><canvas id="cprops"></canvas></div>
   </div>
 </div>

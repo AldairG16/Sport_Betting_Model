@@ -22,6 +22,9 @@ from dashboard.display import league_name, market_name, team_name
 from dashboard.visibility import who_was_right
 
 SINCE = "2026-09-01"
+# Desde aquí el modelo corregido (PR #44): los picks de antes (reconstruidos,
+# 22-oct-26) son del modelo con el error del xG y se muestran aparte
+MODEL_FIXED = pd.Timestamp("2026-10-22", tz="UTC")
 SIDES = ("home", "draw", "away")
 PLAYED = ("win", "loss", "push", "half_win", "half_loss")
 
@@ -112,9 +115,12 @@ def past_matches(matches: pd.DataFrame, mvs: pd.DataFrame, picks: pd.DataFrame, 
         pick = None
         for p in _near(pk, key, r["date"]):
             res_p = _str(p.get("result")) or "pending"
+            when = pd.Timestamp(p["match_date"])
+            when = when.tz_convert("UTC") if when.tzinfo else when.tz_localize("UTC")
             pick = {"label": p.get("label"), "result": res_p, "profit": _num(p.get("profit")),
                     "model": _num(p.get("model_prob")), "market": _num(p.get("market_prob")),
-                    "winner": who_was_right(p.get("model_prob"), p.get("market_prob"), res_p)}
+                    "winner": who_was_right(p.get("model_prob"), p.get("market_prob"), res_p),
+                    "rebuilt": _str(p.get("source")) == "reconstruido", "old_model": bool(when < MODEL_FIXED)}
         bets_out = [{"market": market_name(b["market"]), "result": _str(b.get("result")) or "pending",
                      "profit": _num(b.get("profit"))}
                     for b in _near(bt, key, r["date"]) if _str(b.get("result")) != "stale"]
@@ -151,11 +157,16 @@ def summary(rows: list) -> dict:
     fav = [r["fav"] for r in rows if r.get("fav") and r["fav"].get("pin_hit") is not None]
     picks = [r["pick"] for r in rows if r.get("pick") and r["pick"]["result"] in PLAYED]
     bets = [b for r in rows for b in r["bets"] if b["result"] in PLAYED]
+
+    def rec(ps):
+        return {"n": len(ps), "won": sum(1 for p in ps if p["result"] in ("win", "half_win")),
+                "profit": round(sum(p["profit"] for p in ps if p["profit"] is not None), 2),
+                "priced": sum(1 for p in ps if p["profit"] is not None)}
     return {"matches": len(rows), "analyzed": len(fav),
             "model_hit": round(sum(f["model_hit"] for f in fav) / len(fav), 3) if fav else None,
             "pin_hit": round(sum(f["pin_hit"] for f in fav) / len(fav), 3) if fav else None,
-            "picks": len(picks), "picks_won": sum(1 for p in picks if p["result"] in ("win", "half_win")),
-            "picks_profit": round(sum(p["profit"] for p in picks if p["profit"] is not None), 2),
+            "picks_fixed": rec([p for p in picks if not p.get("old_model")]),
+            "picks_old": rec([p for p in picks if p.get("old_model")]),
             "bets": len(bets), "bets_profit": round(sum(b["profit"] or 0 for b in bets), 2)}
 
 
@@ -226,14 +237,29 @@ def bankroll_series(hist: pd.DataFrame) -> dict:
 
 
 def picks_series(picks: pd.DataFrame) -> dict:
-    """Unidades acumuladas de los picks del programa, por día."""
+    """Unidades acumuladas de los picks del programa por día: una línea para
+    el modelo con error (antes del 22-oct) y otra para el corregido."""
+    empty = {"dates": [], "old": [], "fixed": []}
     if picks.empty:
-        return {"dates": [], "values": []}
+        return empty
     p = picks[picks["result"].isin(PLAYED)].copy()
     p["profit"] = pd.to_numeric(p["profit"], errors="coerce")
     p = p.dropna(subset=["profit"])
     if p.empty:
-        return {"dates": [], "values": []}
-    p["d"] = pd.to_datetime(p["match_date"], utc=True).dt.strftime("%Y-%m-%d")
-    daily = p.groupby("d")["profit"].sum().cumsum()
-    return {"dates": list(daily.index), "values": [round(float(v), 2) for v in daily.values]}
+        return empty
+    when = pd.to_datetime(p["match_date"], utc=True)
+    p["d"] = when.dt.strftime("%Y-%m-%d")
+    p["old"] = when < MODEL_FIXED
+    dates = sorted(p["d"].unique())
+    out = {"dates": dates}
+    for name, mask in (("old", p["old"]), ("fixed", ~p["old"])):
+        daily = p[mask].groupby("d")["profit"].sum()
+        if daily.empty:
+            out[name] = [None] * len(dates)
+            continue
+        cum, total, first = [], 0.0, daily.index.min()
+        for d in dates:
+            total += float(daily.get(d, 0.0))
+            cum.append(round(total, 2) if d >= first and (name == "fixed" or d <= daily.index.max()) else None)
+        out[name] = cum
+    return out

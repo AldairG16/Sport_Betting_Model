@@ -247,3 +247,36 @@ def test_daily_check_skips_the_picks_table_until_it_exists(monkeypatch):
         return pd.DataFrame(columns=["id", "match", "match_date", "market", "result", "h", "a", "d"])
     monkeypatch.setattr(pd, "read_sql", fake_read_sql)
     assert oc.run_output_checks(engine=object(), normalize=lambda t: t) == []
+
+
+# ─── picks reconstruidos (22-oct-26) ─────────────────────────────────────────
+
+def test_past_picks_use_only_the_last_odds_before_kickoff():
+    mvs = pd.DataFrame([{**_mvs(), "p_over25": None, "p_btts": None}])
+    snap = {**UP, "match": "Atlas vs América", "kickoff": KICK, "pin_home_odds": 3.6, "pin_draw_odds": 3.9,
+            "pin_away_odds": 2.0}
+    snaps = pd.DataFrame([
+        {**snap, "captured_at": KICK - pd.Timedelta(hours=5), "consensus_away_odds": 2.05},
+        {**snap, "captured_at": KICK - pd.Timedelta(hours=1), "consensus_away_odds": 2.10},       # la última antes
+        {**snap, "captured_at": KICK + pd.Timedelta(minutes=30), "consensus_away_odds": 9.0},     # en vivo: no
+    ])
+    (r,) = PP.build_past_picks(mvs, snaps, normalize=lambda t: {"américa": "club america"}.get(t.lower(), t.lower()))
+    assert r["source"] == "reconstruido" and r["display"] == "Atlas vs América"
+    assert r["market"] in ("home_win", "draw", "away_win")                  # sin goles guardados: solo 1X2
+    if r["market"] == "away_win":
+        assert r["playdoit_odds"] == pytest.approx(2.10)
+    # sin foto de momios igual hay pick (contra el Pinnacle guardado), sin precio
+    (r2,) = PP.build_past_picks(mvs, snaps.iloc[:0])
+    assert r2["display"] is None and r2["playdoit_odds"] is None
+
+
+def test_backfill_never_overwrites_a_saved_pick(monkeypatch):
+    eng = FakeEngine()
+    reads = {"model_vs_sharp": pd.DataFrame([{**_mvs(), "p_over25": None, "p_btts": None}]),
+             "odds_history": pd.DataFrame(columns=["match", "kickoff", "captured_at"])}
+    monkeypatch.setattr(PP.pd, "read_sql", lambda sql, con=None, params=None, **k: next(
+        df for key, df in reads.items() if key in str(sql)))
+    monkeypatch.setattr(PP, "resolve_picks", lambda engine=None: {})
+    assert PP.backfill_picks(engine=eng) == 1
+    (sql, params), = eng.statements("INSERT INTO program_picks")
+    assert "ON CONFLICT (match, match_date) DO NOTHING" in sql and params["source0"] == "reconstruido"
