@@ -25,8 +25,9 @@ mercado) perdió: 155 de 452, −38.85u. Mientras más se separaba, más perdía
     analizó el partido (MOVED_AGAINST): el Bayern–Arsenal del 21-oct, Pinnacle
     pasó del 46% al 40% por la rotación y el programa, que no usa
     alineaciones, siguió en 50%;
-  - no es un partido entre ligas distintas (Champions, Europa League…): el
-    programa todavía no ajusta por la fuerza de cada liga y sobrevalora a
+  - si es un partido entre ligas distintas (Champions, Europa League…), el
+    programa lo analizó con la fuerza de cada liga (model_vs_sharp trae
+    league_factor; src/features/clubelo.py): sin ese ajuste sobrevalora a
     quien golea en una liga débil (Viking 2.3 goles por partido en Noruega
     contra 1.6 del Aston Villa en la Premier).
 De lo que pasa, el de mayor diferencia. Sin ninguno: "sin pick", con el
@@ -210,10 +211,11 @@ def candidates(model: list, lam: tuple, p_over25, p_btts, u, props: dict | None 
     return out
 
 
-def choose(cands: list, then: dict | None = None, league=None) -> tuple:
+def choose(cands: list, then: dict | None = None, league=None, adjusted: bool = False) -> tuple:
     """(pick o None, motivo). then: {mercado: probabilidad del mercado cuando
-    el programa analizó el partido}, para la regla del movimiento en contra."""
-    if cross_league(league):
+    el programa analizó el partido}, para la regla del movimiento en contra.
+    adjusted: el partido entre ligas se analizó con la fuerza de cada liga."""
+    if cross_league(league) and not adjusted:
         return None, CROSS
     fav = max((c["model"] for c in cands if c["family"] == "Ganador"), default=None)
     leaning = [c for c in cands if (c["model"] >= fav - 1e-9 if c["family"] == "Ganador" else c["model"] >= 0.5)]
@@ -277,7 +279,7 @@ def decide(r: dict, u, then_snap=None, props=None, ratio=None) -> tuple:
     if None in model:
         return None, NO_EDGE
     cs = candidates(model, (r.get("lam_home"), r.get("lam_away")), r.get("p_over25"), r.get("p_btts"), u, props, ratio)
-    return choose(cs, _market_then(r, then_snap, ratio), r.get("league"))
+    return choose(cs, _market_then(r, then_snap, ratio), r.get("league"), _num(r.get("league_factor")) is not None)
 
 
 def _snap_index(snaps: pd.DataFrame, normalize=None) -> dict:

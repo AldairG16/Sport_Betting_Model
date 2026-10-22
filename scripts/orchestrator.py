@@ -560,6 +560,7 @@ def run_morning(logger: Logger, force_fetch: bool = False):
         log.error(f"⚠️  odds_history falló: {e}")
     run_step(logger, "Precios Kalshi (referencia)", step_kalshi)
 
+    run_step(logger, "ClubElo (fuerza de liga)", step_clubelo)
     predict_ok = run_step(logger, "Predictions", step_predict)
     run_step(logger, "Picks del programa", step_program_picks)
     # run_step(logger, "MLB Predictions",   step_mlb_predict)  # desactivado — sin creditos MLB
@@ -685,6 +686,13 @@ def run_full(logger: Logger, force_fetch: bool = False):
 def step_backtest():
     from src.models.backtest_engine import run_backtest
     run_backtest()
+
+
+def step_clubelo():
+    """El Elo de ClubElo de los clubes de Europa, una vez por semana: con él
+    el programa compara equipos de ligas distintas (src/features/clubelo.py)."""
+    from src.features.clubelo import refresh_if_stale
+    refresh_if_stale()
 
 
 def step_program_picks():
