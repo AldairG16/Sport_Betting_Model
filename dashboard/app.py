@@ -630,6 +630,113 @@ def api_match():
     return jsonify({"ok": True, **_md.match_detail(matches, lineups, home, away, when)})
 
 
+# ─────────────────────────────────────────────────────────────
+# DASHBOARD v2.0 (22-oct-26): partidos, equipos y gráficas
+# ─────────────────────────────────────────────────────────────
+_COVERED = "(SELECT league FROM model_vs_sharp UNION SELECT league FROM upcoming_matches)"
+
+
+def _since() -> str:
+    from dashboard.board import SINCE
+    return SINCE
+
+
+_PAST_CACHE = {"at": 0.0, "rows": None}
+PAST_TTL_S = 300          # ~5 s de consultas; "Anteriores" y "Gráficas" las comparten
+
+
+def _past_rows() -> list:
+    """Partidos jugados desde SINCE en las ligas que analiza el programa,
+    con lo que dijo el programa, su pick y las apuestas reales (caché de 5 min)."""
+    import time
+    if _PAST_CACHE["rows"] is not None and time.time() - _PAST_CACHE["at"] < PAST_TTL_S:
+        return _PAST_CACHE["rows"]
+    rows = _load_past_rows()
+    if rows:
+        _PAST_CACHE.update(at=time.time(), rows=rows)
+    return rows
+
+
+def _load_past_rows() -> list:
+    from dashboard import board as _b
+    from src.utils.team_normalizer import normalize_team
+    p = {"s": _since()}
+    matches = _q(f"""
+        SELECT date, league, LOWER(home_team) AS h, LOWER(away_team) AS a, home_goals, away_goals,
+               home_corners, away_corners, home_yellow, away_yellow, home_red, away_red
+        FROM matches
+        WHERE date >= CAST(:s AS date) AND home_goals IS NOT NULL AND league IN {_COVERED}
+        ORDER BY date DESC
+    """, p)
+    if matches.empty:
+        return []
+    mvs = _q("""SELECT match, match_date, p_home, p_draw, p_away, pin_home, pin_draw, pin_away
+                FROM model_vs_sharp WHERE match_date >= CAST(:s AS date) - 2""", p)
+    picks = _q("""SELECT match, match_date, label, model_prob, market_prob, result, profit
+                  FROM program_picks WHERE match_date >= CAST(:s AS date) - 2""", p)
+    bets = _q("""SELECT match, match_date, market, result, profit FROM bets_history
+                 WHERE match_date >= CAST(:s AS date) - 2""", p)
+    return _b.past_matches(matches, mvs, picks, bets, normalize_team)
+
+
+@app.route("/api/board/past")
+def api_board_past():
+    from dashboard import board as _b
+    rows = _past_rows()
+    if not rows:
+        return _no_data("Sin partidos jugados desde septiembre")
+    return jsonify({"ok": True, "since": _since(), "rows": rows, "summary": _b.summary(rows),
+                    "weekly": _b.weekly_accuracy(rows)})
+
+
+@app.route("/api/board/teams")
+def api_board_teams():
+    from dashboard import board as _b
+    m = _q(f"""
+        SELECT league, LOWER(home_team) AS h, LOWER(away_team) AS a FROM matches
+        WHERE date >= CAST(:s AS date) AND home_goals IS NOT NULL AND league IN {_COVERED}
+    """, {"s": _since()})
+    if m.empty:
+        return _no_data("Sin equipos con partidos desde septiembre")
+    return jsonify({"ok": True, "teams": _b.team_list(m)})
+
+
+@app.route("/api/board/team")
+def api_board_team():
+    from dashboard import board as _b
+    t = (request.args.get("name") or "").strip().lower()
+    if not t:
+        return jsonify({"ok": False, "msg": "falta el equipo"})
+    p = {"s": _since(), "t": t, "t1": f"{t} vs %", "t2": f"% vs {t}"}
+    m = _q("""
+        SELECT date, league, LOWER(home_team) AS h, LOWER(away_team) AS a, home_goals, away_goals,
+               home_corners, away_corners, home_yellow, away_yellow, home_red, away_red
+        FROM matches
+        WHERE date >= CAST(:s AS date) AND home_goals IS NOT NULL
+          AND (LOWER(home_team) = :t OR LOWER(away_team) = :t)
+    """, p)
+    up = _q("""
+        SELECT match, match_date, league, p_home, p_draw, p_away FROM model_vs_sharp
+        WHERE match_date >= NOW() AND (match LIKE :t1 OR match LIKE :t2)
+    """, p)
+    if m.empty and up.empty:
+        return _no_data("Sin partidos de este equipo desde septiembre")
+    return jsonify({"ok": True, **_b.team_view(t, m, up)})
+
+
+@app.route("/api/board/charts")
+def api_board_charts():
+    from dashboard import board as _b
+    hist = _q("SELECT date, balance FROM bankroll_history ORDER BY date, id")
+    picks = _q("SELECT match_date, result, profit FROM program_picks")
+    props = _q("""
+        SELECT DISTINCT ON (match, market) match_date, market, odds, result
+        FROM model_proposals ORDER BY match, market, evaluated_at DESC
+    """)
+    return jsonify({"ok": True, "bankroll": _b.bankroll_series(hist), "picks": _b.picks_series(picks),
+                    "accuracy": _b.weekly_accuracy(_past_rows()), "proposals": _vis.proposal_weeks(props)})
+
+
 @app.route("/api/scoreboard")
 def api_scoreboard():
     """Dinero real por etapa y lo que el modelo propuso por semana."""
@@ -760,221 +867,143 @@ def api_narrative_generate():
 
 PAGE = """<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8">
-<title>Mi programa de apuestas</title>
+<title>Apuestas</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script>window.APP_V = "__V__";</script>
 <script src="/chartjs.js"></script>
 <style>
-  :root { --bg:#0f1420; --card:#1a2233; --card2:#202a40; --line:#2a3550; --text:#e2e8f0; --muted:#94a3b8;
-          --green:#22c55e; --red:#ef4444; --yellow:#fbbf24; --blue:#60a5fa; }
+  :root { --bg:#0f1420; --card:#1a2233; --card2:#222c42; --line:#2a3550; --text:#e2e8f0; --muted:#94a3b8;
+          --green:#22c55e; --red:#ef4444; --yellow:#fbbf24; --blue:#60a5fa; --home:#3b82f6; --draw:#64748b; --away:#f97316; }
   * { box-sizing:border-box; margin:0; padding:0; font-family:'Segoe UI',system-ui,sans-serif; }
-  body { background:var(--bg); color:var(--text); padding:18px; max-width:1200px; margin:0 auto; font-size:15px; }
-  h1 { font-size:1.35rem; }
-  h2 { font-size:1.1rem; margin:22px 0 10px; }
-  .sub { color:var(--muted); font-size:.85rem; margin:4px 0 14px; }
-  .muted { color:var(--muted); }
-  .small { font-size:.8rem; }
+  body { background:var(--bg); color:var(--text); padding:16px; max-width:1250px; margin:0 auto; font-size:14px; }
+  .muted { color:var(--muted); } .small { font-size:.78rem; }
   .pos { color:var(--green); } .neg { color:var(--red); }
-  /* pestañas */
-  .tabs { display:flex; gap:6px; flex-wrap:wrap; border-bottom:1px solid var(--line); margin-bottom:16px; }
-  .tab { background:none; border:none; color:var(--muted); padding:10px 14px; font-size:.95rem; cursor:pointer;
-         border-bottom:3px solid transparent; border-radius:0; }
-  .tab:hover { color:var(--text); background:none; }
+  header { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+  header h1 { font-size:1.25rem; margin-right:auto; }
+  .chip { background:var(--card); border-radius:99px; padding:5px 12px; font-size:.82rem; white-space:nowrap; }
+  .chip b { font-weight:700; }
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:14px; overflow-x:auto; }
+  .tab { background:none; border:none; color:var(--muted); padding:10px 16px; font-size:.95rem; cursor:pointer;
+         border-bottom:3px solid transparent; }
+  .tab:hover { color:var(--text); }
   .tab.on { color:var(--text); border-bottom-color:var(--blue); font-weight:600; }
   .pane { display:none; } .pane.on { display:block; }
-  /* tarjetas */
-  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin-bottom:8px; }
-  .card { background:var(--card); border-radius:12px; padding:14px 16px; }
-  .card .lbl { color:var(--muted); font-size:.8rem; }
-  .card .val { font-size:1.45rem; font-weight:700; margin-top:4px; }
-  .card .note { color:var(--muted); font-size:.8rem; margin-top:4px; line-height:1.35; }
-  .verdict { border-radius:14px; padding:18px 20px; margin-bottom:16px; line-height:1.5; }
-  .verdict .big { font-size:1.4rem; font-weight:700; margin-bottom:4px; }
-  .verdict.no { background:#1b2232; border:1px solid var(--line); }
-  .verdict.yes { background:#12301d; border:1px solid #22c55e66; }
-  /* partidos */
-  .day { color:var(--muted); font-weight:600; font-size:.85rem; text-transform:uppercase; letter-spacing:.5px; margin:18px 0 8px; }
-  .match { background:var(--card); border-radius:12px; margin-bottom:8px; }
-  .mrow { display:grid; grid-template-columns:52px minmax(0,1.4fr) minmax(0,1.3fr) minmax(0,1fr) 150px;
-          align-items:center; gap:12px 16px; padding:12px 16px; cursor:pointer; }
-  .mrow:hover { background:var(--card2); border-radius:12px; }
-  .mtime { font-weight:600; }
-  .mverdict { text-align:right; }
-  .mmore { display:none; padding:4px 16px 14px 84px; color:var(--muted); font-size:.85rem; line-height:1.6; }
-  .match.open .mmore { display:block; }
-  .lbl2 { color:var(--muted); font-size:.75rem; }
-  .pill { display:inline-block; padding:4px 10px; border-radius:99px; font-size:.8rem; font-weight:600; }
-  .pill.yes { background:#14351f; color:var(--green); }
-  .pill.maybe { background:#3a2f12; color:var(--yellow); }
-  .pill.no { background:#2a2f3a; color:#a5b0c2; }
-  .pill.win { background:#14351f; color:var(--green); } .pill.loss { background:#3a1a1a; color:var(--red); }
-  .pill.pending { background:#2a2a14; color:#eab308; } .pill.push { background:#1e2a3a; color:#93c5fd; }
-  .pill.cancelled { background:#2a2f3a; color:#9aa4b8; text-decoration:line-through; }
-  /* tablas */
-  table { width:100%; border-collapse:collapse; font-size:.86rem; background:var(--card); border-radius:12px; overflow:hidden; }
-  th { text-align:left; padding:9px 12px; color:var(--muted); font-weight:600; border-bottom:1px solid var(--line); }
-  td { padding:8px 12px; border-bottom:1px solid #232d45; }
-  tr:hover td { background:var(--card2); }
-  .tablewrap { max-height:520px; overflow-y:auto; border-radius:12px; }
-  .tablewrap thead th { position:sticky; top:0; background:var(--card); z-index:1; }
-  .help { background:var(--card); border-radius:12px; padding:14px 16px; font-size:.88rem; line-height:1.6; margin-top:14px; }
-  .fold { margin-top:12px; }
-  .fold > .foldhead { cursor:pointer; color:var(--blue); font-size:.9rem; padding:6px 0; }
-  .fold > .foldbody { display:none; margin-top:8px; }
-  .fold.open > .foldbody { display:block; }
-  .controls { display:flex; gap:10px; margin:12px 0; flex-wrap:wrap; align-items:center; }
-  select { background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 10px; }
-  button { background:#14351f; color:var(--green); border:1px solid #22c55e44; border-radius:8px; padding:8px 14px; cursor:pointer; font-size:.85rem; }
-  button:hover { background:#1a4527; }
-  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:14px 0; }
-  .chartbox { background:var(--card); border-radius:12px; padding:14px; height:300px; position:relative; overflow:hidden; }
-  .chartbox h3 { font-size:.9rem; margin-bottom:8px; color:var(--muted); font-weight:600; }
-  .chartbox canvas { width:100%!important; height:250px!important; }
-  #err { color:var(--red); font-size:.85rem; margin:12px 0; display:none; }
-  /* estadísticas del partido (v1.10.0) */
-  .stats { color:var(--text); }
-  .statsgrid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:12px; }
-  .tname { font-weight:700; font-size:.95rem; margin-bottom:4px; }
-  table.mini { font-size:.8rem; margin-top:6px; background:var(--card2); }
-  table.mini td, table.mini th { padding:5px 8px; }
-  a.xi { color:var(--blue); cursor:pointer; white-space:nowrap; }
-  .who.p { color:var(--green); font-weight:600; } .who.m { color:var(--blue); font-weight:600; }
-  tr.clickable { cursor:pointer; }
-  @media (max-width:860px) {
-    body { padding:12px; }
-    .grid2 { grid-template-columns:1fr; }
-    .mrow { grid-template-columns:46px minmax(0,1fr); gap:8px 12px; }
-    .mpick, .mprice, .mverdict { grid-column:2; text-align:left; }
-    .statsgrid { grid-template-columns:1fr; }
-    .mmore { padding-left:16px; }
-    .tab { padding:8px 10px; font-size:.88rem; }
+  .bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+  .pill { background:var(--card); border:1px solid var(--line); color:var(--muted); border-radius:99px; padding:5px 12px;
+          font-size:.82rem; cursor:pointer; }
+  .pill.on { background:var(--blue); border-color:var(--blue); color:#fff; }
+  select, input[type=text] { background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 10px; font-size:.85rem; }
+  .day { color:var(--muted); font-weight:600; font-size:.78rem; text-transform:uppercase; letter-spacing:.6px; margin:16px 0 6px; }
+  /* partido próximo */
+  .m { background:var(--card); border-radius:10px; margin-bottom:6px; }
+  .mr { display:grid; grid-template-columns:58px minmax(0,1fr) 230px minmax(0,1fr) 190px 34px; gap:10px; align-items:center;
+        padding:10px 14px; cursor:pointer; }
+  .mr:hover { background:var(--card2); border-radius:10px; }
+  .t { font-weight:600; } .t.h { text-align:right; }
+  .time { font-weight:600; } .time .small { font-weight:400; display:block; }
+  .pb { display:flex; height:22px; border-radius:6px; overflow:hidden; font-size:.72rem; font-weight:600; color:#fff; }
+  .pb div { display:flex; align-items:center; justify-content:center; min-width:0; overflow:hidden; }
+  .pb .h { background:var(--home); } .pb .d { background:var(--draw); } .pb .a { background:var(--away); }
+  .pb.thin { height:8px; margin-top:3px; opacity:.75; font-size:0; }
+  .pk { font-size:.8rem; line-height:1.3; }
+  .pk b { font-size:.85rem; }
+  .ic { font-size:1.15rem; text-align:center; }
+  .det { display:none; padding:4px 14px 14px; }
+  .m.open .det { display:block; }
+  /* detalle */
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .tp { background:var(--card2); border-radius:10px; padding:10px 12px; }
+  .tp h3 { font-size:.95rem; margin-bottom:6px; }
+  .form { display:flex; gap:4px; margin-bottom:6px; }
+  .f { width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:.7rem; font-weight:700; color:#fff; }
+  .f.G { background:var(--green); } .f.E { background:var(--draw); } .f.P { background:var(--red); }
+  table { width:100%; border-collapse:collapse; font-size:.8rem; }
+  th { text-align:left; color:var(--muted); font-weight:600; padding:5px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  td { padding:5px 6px; border-bottom:1px solid #26304a; }
+  .xi { color:var(--muted); font-size:.75rem; margin-top:6px; line-height:1.4; }
+  .h2h { margin-top:10px; font-size:.8rem; }
+  /* anteriores */
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin-bottom:12px; }
+  .k { background:var(--card); border-radius:10px; padding:10px 14px; }
+  .k .v { font-size:1.5rem; font-weight:700; } .k .l { color:var(--muted); font-size:.75rem; }
+  .tbl { background:var(--card); border-radius:10px; overflow:hidden; }
+  .tbl table { font-size:.84rem; }
+  .tbl tr.dh td { background:#151c2b; color:var(--muted); font-weight:600; font-size:.72rem; text-transform:uppercase; letter-spacing:.5px; }
+  .tbl tr.r { cursor:pointer; } .tbl tr.r:hover td { background:var(--card2); }
+  .sc { font-weight:700; text-align:center; white-space:nowrap; }
+  .more { display:block; margin:10px auto; background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 18px; cursor:pointer; }
+  /* equipos */
+  .teams { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px; max-height:180px; overflow-y:auto; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:12px 0; }
+  .cb { background:var(--card); border-radius:10px; padding:10px 12px; height:260px; position:relative; }
+  .cb h3 { font-size:.85rem; color:var(--muted); margin-bottom:6px; font-weight:600; }
+  .cb canvas { width:100%!important; height:215px!important; }
+  #err { color:var(--red); font-size:.85rem; margin:8px 0; display:none; }
+  @media (max-width:900px) {
+    body { padding:10px; }
+    .mr { grid-template-columns:48px minmax(0,1fr) minmax(0,1fr); }
+    .mr .pbw { grid-column:1 / -1; order:5; }
+    .mr .pk { grid-column:1 / 3; order:6; } .mr .ic { order:7; }
+    .two, .grid2 { grid-template-columns:1fr; }
+    .hide-sm { display:none; }
   }
 </style></head><body>
-<h1>⚽ Mi programa de apuestas <span id="ver" class="muted" style="font-size:.7rem;font-weight:400"></span></h1>
-<div class="sub" id="sub">Conectando…</div>
-<div id="upd" style="display:none;background:#14351f;border:1px solid #22c55e44;color:var(--green);border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:.85rem"></div>
+<header>
+  <h1>⚽ Apuestas <span id="ver" class="muted small"></span></h1>
+  <span class="chip" id="chipbank">Bankroll …</span>
+  <span class="chip" id="chiptoday">Hoy …</span>
+</header>
 <div id="err"></div>
-
 <div class="tabs" id="tabs">
-  <button class="tab" data-tab="hoy">🏠 Hoy</button>
-  <button class="tab" data-tab="proximos">📅 Próximos días</button>
-  <button class="tab" data-tab="resultados">📊 Cómo nos ha ido</button>
-  <button class="tab" data-tab="dinero">💰 Dinero real</button>
-  <button class="tab" data-tab="sistema">⚙️ Sistema</button>
+  <button class="tab" data-tab="proximos">Próximos</button>
+  <button class="tab" data-tab="anteriores">Anteriores</button>
+  <button class="tab" data-tab="equipos">Equipos</button>
+  <button class="tab" data-tab="graficas">Gráficas</button>
 </div>
 
-<!-- HOY -->
-<div class="pane" id="tab-hoy">
-  <div id="verdict" class="verdict no"><div class="big">Cargando…</div></div>
-  <div class="cards" id="howwego"></div>
-  <h2>Partidos de hoy</h2>
-  <div id="todaylist" class="muted">Cargando…</div>
-  <div class="help" id="howtoread">
-    <b>¿Cómo leo esto?</b><br>
-    • <b>El programa jugaría</b>: la apuesta de ese partido donde el programa ve más probabilidad que las casas. Toca un partido para ver el detalle, sus últimos 5 partidos (resultados, goles, córners, tarjetas y el once) y la alineación.<br>
-    • <b>Necesitas en PlayDoit</b>: el momio mínimo para que la apuesta tenga ventaja. Si PlayDoit paga eso o más, vale la pena.<br>
-    • <b>PlayDoit paga aprox.</b>: lo que suele pagar PlayDoit (el promedio de las casas). Si le mandas una captura al bot de Telegram, te confirma el momio real.<br>
-    • <b>Momios</b>: -150 = apuestas 150 para ganar 100; +150 = apuestas 100 para ganar 150. __HOW_TO_READ__<br>
-    • El sistema solo arriesga dinero real cuando el momio le gana a Pinnacle (la casa más precisa) por 2 puntos. Por eso casi siempre dice "No conviene": es lo esperado.
-  </div>
-</div>
-
-<!-- PRÓXIMOS -->
 <div class="pane" id="tab-proximos">
-  <div class="controls">
-    <label class="small"><input type="checkbox" id="onlyvalue"> Mostrar solo los que valen la pena</label>
+  <div class="bar" id="daybar"></div>
+  <div class="bar">
+    <select id="uleague"><option value="">Todas las ligas</option></select>
+    <span class="pill" id="uvalue" title="Solo los que pagan el mínimo">✅ Con valor</span>
+    <span class="small muted" style="margin-left:auto"><span style="color:var(--home)">■</span> local <span style="color:var(--draw)">■</span> empate <span style="color:var(--away)">■</span> visitante · programa (arriba) y Pinnacle (abajo)</span>
   </div>
-  <div id="nextlist" class="muted">Cargando…</div>
+  <div id="uplist" class="muted">Cargando…</div>
 </div>
 
-<!-- CÓMO NOS HA IDO -->
-<div class="pane" id="tab-resultados">
-  <h2 style="margin-top:4px">🎯 Picks del programa</h2>
-  <div class="muted small" style="margin-bottom:10px">Lo que el programa jugaría en cada partido (el mismo pick de la pestaña Hoy), a 1 unidad y al momio aproximado de PlayDoit. Se guardan desde el 21-oct.</div>
-  <div class="cards" id="pickkpis"></div>
-  <div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Partido</th><th>El programa jugó</th><th title="Probabilidad que le daba cada uno a ese pick">Programa vs mercado</th><th>Momio PlayDoit aprox.</th><th>Resultado</th><th title="El que le dio más probabilidad a lo que pasó">¿Quién tuvo razón?</th><th>Ganancia</th></tr></thead>
-  <tbody id="picklist"><tr><td colspan="8" class="muted">Cargando…</td></tr></tbody></table></div>
-  <div class="muted small" style="margin-top:6px">Toca un pick para ver por qué y las estadísticas de los equipos antes de ese partido.</div>
-
-  <h2>🎯 ¿Acierta al favorito?</h2>
-  <div class="muted small" style="margin-bottom:10px">Cuántas veces ganó el resultado que el programa veía más probable, comparado con Pinnacle.</div>
-  <div class="cards" id="histkpis"></div>
-  <div class="fold"><div class="foldhead">▸ Ver partido por partido</div><div class="foldbody">
-    <div class="tablewrap" style="max-height:420px"><table><thead><tr><th>Fecha</th><th>Partido</th><th>Resultado</th><th>Programa (L / E / V)</th><th>Pinnacle (L / E / V)</th><th>¿Programa?</th><th>¿Pinnacle?</th></tr></thead>
-    <tbody id="histbody"><tr><td colspan="7" class="muted">Cargando…</td></tr></tbody></table></div>
-  </div></div>
-
-  <h2>🧪 Lo que el modelo propuso, por semana</h2>
-  <div class="muted small" style="margin-bottom:10px">Todas las apuestas que el modelo evaluó, como si se hubiera jugado 1 unidad a cada una al mejor momio de Europa. <b>Del 28-sep al 21-oct el modelo tenía un error</b> (ya corregido): esas semanas no dicen nada del modelo actual.</div>
-  <div class="tablewrap" style="max-height:300px"><table><thead><tr><th>Semana</th><th>Modelo</th><th>Propuestas</th><th>Ganadas</th><th>Perdidas</th><th>Resultado a 1u</th></tr></thead>
-  <tbody id="weekbody"><tr><td colspan="6" class="muted">Cargando…</td></tr></tbody></table></div>
-  <div class="fold"><div class="foldhead">▸ Ver cada propuesta (últimos 14 días)</div><div class="foldbody">
-    <div class="tablewrap" style="max-height:220px;margin-bottom:10px"><table><thead><tr><th>Por qué no se apostó</th><th>Propuestas</th><th>Ganadas</th><th>Resultado a 1u</th><th>Rendimiento</th></tr></thead>
-    <tbody id="propsum"><tr><td colspan="5" class="muted">Cargando…</td></tr></tbody></table></div>
-    <div class="tablewrap" style="max-height:420px"><table><thead><tr><th>Fecha</th><th>Partido</th><th>Apuesta</th><th>Prob.</th><th>Mejor momio</th><th>Mínimo PlayDoit</th><th>Decisión</th><th>Resultado</th><th title="Programa contra Pinnacle: el que le dio más probabilidad a lo que pasó">¿Quién tuvo razón?</th><th>A 1u</th></tr></thead>
-    <tbody id="propbody"><tr><td colspan="10" class="muted">Cargando…</td></tr></tbody></table></div>
-  </div></div>
+<div class="pane" id="tab-anteriores">
+  <div class="kpis" id="pkpis"></div>
+  <div class="bar">
+    <select id="pleague"><option value="">Todas las ligas</option></select>
+    <input type="text" id="pteam" placeholder="Buscar equipo">
+    <span class="pill" id="ponly" title="Solo los partidos que analizó el programa">🤖 Analizados</span>
+  </div>
+  <div class="tbl"><table><thead><tr><th class="hide-sm">Liga</th><th style="text-align:right">Local</th><th></th><th>Visitante</th>
+    <th title="Córners local - visitante">Córners</th><th title="Tarjetas del partido (roja = 1)" class="hide-sm">Tarjetas</th>
+    <th title="¿Acertó el favorito del programa?">🤖</th><th title="¿Acertó el favorito de Pinnacle?">🏦</th>
+    <th title="Pick del programa">Pick</th><th title="Apuestas reales" class="hide-sm">Apuesta</th></tr></thead>
+    <tbody id="pastbody"><tr><td colspan="10" class="muted">Cargando…</td></tr></tbody></table></div>
+  <button class="more" id="pmore" style="display:none">Ver más</button>
 </div>
 
-<!-- DINERO REAL -->
-<div class="pane" id="tab-dinero">
-  <div class="cards" id="kpis"></div>
-  <h2>Por etapa</h2>
-  <div class="tablewrap" style="max-height:none"><table><thead><tr><th>Etapa</th><th>Apuestas</th><th>Ganadas</th><th>Perdidas</th><th>Apostado</th><th>Ganancia</th><th>Canceladas</th></tr></thead>
-  <tbody id="realbody"><tr><td colspan="7" class="muted">Cargando…</td></tr></tbody></table></div>
+<div class="pane" id="tab-equipos">
+  <div class="bar">
+    <select id="tleague"><option value="">Todas las ligas</option></select>
+    <input type="text" id="tsearch" placeholder="Buscar equipo">
+  </div>
+  <div class="teams" id="teamlist"></div>
+  <div id="teamview"></div>
+</div>
+
+<div class="pane" id="tab-graficas">
   <div class="grid2">
-    <div class="chartbox"><h3>Bankroll</h3><canvas id="bankchart"></canvas></div>
-    <div class="chartbox"><h3>Ganancia por día</h3><canvas id="daily"></canvas></div>
+    <div class="cb"><h3>Bankroll</h3><canvas id="cbank"></canvas></div>
+    <div class="cb"><h3>Acierto del favorito por semana</h3><canvas id="cacc"></canvas></div>
   </div>
-  <div class="fold"><div class="foldhead">▸ Gráficas avanzadas</div><div class="foldbody">
-    <div class="grid2">
-      <div class="chartbox"><h3>Ganancia acumulada</h3><canvas id="equity"></canvas></div>
-      <div class="chartbox"><h3>CLV por apuesta (verde = ganada)</h3><canvas id="clvchart"></canvas></div>
-    </div>
-    <div class="grid2">
-      <div class="chartbox"><h3>Rendimiento % por mercado (180 días)</h3><canvas id="bymarket"></canvas></div>
-      <div class="chartbox"><h3>Rendimiento % por liga (180 días)</h3><canvas id="byleague"></canvas></div>
-    </div>
-  </div></div>
-  <h2>Apuestas</h2>
-  <div class="controls">
-    <select id="fstatus"><option value="all">Pendientes y resueltas</option><option value="pending">Solo pendientes</option><option value="resolved">Solo resueltas</option><option value="cancelled">Canceladas (no apostadas)</option><option value="stale">Sin fuente (stale)</option></select>
-    <select id="fmarket"><option value="">Todos los mercados</option></select>
-    <select id="fleague"><option value="">Todas las ligas</option></select>
-    <button onclick="exportCSV()">⬇️ CSV</button>
+  <div class="grid2">
+    <div class="cb"><h3>Picks del programa (unidades acumuladas)</h3><canvas id="cpicks"></canvas></div>
+    <div class="cb"><h3>Propuestas del modelo por semana (unidades)</h3><canvas id="cprops"></canvas></div>
   </div>
-  <div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Partido</th><th>Liga</th><th>Apuesta</th><th>Prob.</th><th title="La más alta entre casas europeas: solo referencia">Mejor momio</th><th title="En PlayDoit apuesta solo si paga esto o mejor">Mínimo PlayDoit</th><th>Stake</th><th>Resultado</th><th>Ganancia</th><th>CLV</th></tr></thead>
-  <tbody id="betsbody"><tr><td colspan="11" class="muted">Cargando…</td></tr></tbody></table></div>
-</div>
-
-<!-- SISTEMA -->
-<div class="pane" id="tab-sistema">
-  <h2 style="margin-top:4px">📋 Alineaciones de hoy</h2>
-  <div class="tablewrap"><table><thead><tr><th>Hora</th><th>Partido</th><th>Local</th><th>Visitante</th><th>Lectura</th></tr></thead>
-  <tbody id="lubody"><tr><td colspan="5" class="muted">Cargando…</td></tr></tbody></table></div>
-  <div class="muted small" style="margin-top:6px">Faltan = titulares habituales (70%+ de sus últimos 15 partidos) que no salen; "(banca)" si están en la banca y pueden entrar. Medido en 40,000 partidos: el momio de cierre ya cuenta las alineaciones.</div>
-  <h2>⚽ Goleadores (en papel)</h2>
-  <div class="tablewrap" style="max-height:300px"><table><thead><tr><th>Fecha</th><th>Partido</th><th>Jugador</th><th>Equipo</th><th>Prob. de anotar</th><th>Momio justo</th><th>Resultado</th></tr></thead>
-  <tbody id="scorersbody"><tr><td colspan="7" class="muted">Cargando…</td></tr></tbody></table></div>
-  <div id="narrsec" style="display:none">
-    <h2>🧠 Diagnóstico IA de la semana</h2>
-    <div class="card" id="narrtext" style="font-size:.9rem;white-space:pre-wrap;line-height:1.5"></div>
-    <div style="display:flex;justify-content:space-between;margin-top:6px">
-      <span id="narreng" class="muted small"></span>
-      <button id="genbtn" onclick="genNarrative()" style="font-size:.75rem;padding:4px 10px">🧠 Generar diagnóstico ahora</button>
-    </div>
-  </div>
-  <h2>🎮 Corridas del sistema (GitHub Actions)</h2>
-  <div class="controls">
-    <button onclick="dispatch('morning')">☀️ Morning</button>
-    <button onclick="dispatch('evening')">🌙 Evening</button>
-    <button onclick="dispatch('closing')">🎯 Closing</button>
-    <button onclick="dispatch('weekly')">📅 Weekly</button>
-    <button onclick="loadGh()" style="background:#2a3550;color:var(--text)">🔄 Refrescar</button>
-    <select id="frefresh" title="Auto-refresco de datos"><option value="0">Auto-refresco: apagado</option><option value="5" selected>Auto-refresco: 5 min</option><option value="15">15 min</option><option value="30">30 min</option></select>
-  </div>
-  <div id="ghmsg" class="muted small" style="margin-bottom:10px">Cargando…</div>
-  <div class="tablewrap" style="max-height:260px"><table><thead><tr><th>Corrida</th><th>Estado</th><th>Resultado</th><th>Cuándo (UTC)</th><th>Link</th></tr></thead>
-  <tbody id="ghbody"><tr><td colspan="5" class="muted">Cargando…</td></tr></tbody></table></div>
 </div>
 <script src="/ui_es5.js?v=__V__"></script></body></html>""".replace("__HOW_TO_READ__", HOW_TO_READ)
 
@@ -982,8 +1011,12 @@ PAGE = """<!DOCTYPE html>
 @app.route("/")
 def index():
     # ?v=versión: tras actualizar el .exe el navegador no reusa el JS viejo
-    # guardado en caché (página nueva con código viejo = secciones vacías)
-    return PAGE.replace("__V__", _app_version())
+    # guardado en caché (página nueva con código viejo = secciones vacías).
+    # no-store + la recarga sola al cambiar la versión (ui_es5.js): el 21-oct
+    # el dueño siguió viendo la página vieja en una pestaña abierta antes.
+    resp = app.make_response(PAGE.replace("__V__", _app_version()))
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 if __name__ == "__main__":

@@ -1,112 +1,77 @@
 // ============================================================
 // Dashboard JS — ES5 universal (compatible con cualquier navegador)
-// v1.9.0 (21-oct-26): pestañas y lenguaje simple. El dueño: "ahorita el
-// dashboard es un desastre, necesito que sea amigable". La página era una
-// sola columna con 80 partidos y columnas de tres números; ahora "Hoy"
-// responde ¿apuesto algo?, ¿cómo vamos? y qué jugaría el programa.
+// v2.0.0 (22-oct-26): partidos, equipos y gráficas. El dueño: "necesito un
+// mejor dashboard, que sea entendible, sin tanto texto innecesario… quiero
+// ver solo los partidos, equipos, gráficas y los partidos anteriores desde
+// septiembre y los próximos". Poco texto: barras, iconos y tooltips.
 // ============================================================
 
-// ── Almacenamiento seguro + errores visibles ──
 function _storeGet(key, dflt){ try { return localStorage.getItem(key) || dflt; } catch(e){ return dflt; } }
 function _storeSet(key, val){ try { localStorage.setItem(key, val); } catch(e){} }
 window.onerror = function(msg, src, line){
-  var el = document.getElementById('err');
-  el.style.display = 'block';
-  el.textContent = '⚠️ Error interno: ' + msg + ' (línea ' + line + ')';
+  var e = document.getElementById('err');
+  e.style.display = 'block';
+  e.textContent = '⚠️ Error interno: ' + msg + ' (línea ' + line + ')';
 };
 
 // ── Helpers ──
-function money(v){ return (v >= 0 ? '+' : '') + Number(v).toFixed(2) + 'u'; }
-function pct(v){ return v === null || v === undefined ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%'; }
-function p100(v){ return v === null || v === undefined ? '—' : Math.round(v * 100) + '%'; }
-function esc(s){ return String(s === null || s === undefined ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function el(id){ return document.getElementById(id); }
-
-// Fechas UTC → hora de México (UTC-6 fijo desde 2022, cálculo manual ES5)
-var MX_MESES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
-var MX_MESES_L = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-var MX_DIAS = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+function esc(s){ return String(s === null || s === undefined ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function money(v){ return (v >= 0 ? '+' : '') + Number(v).toFixed(2) + 'u'; }
+function p100(v){ return v === null || v === undefined ? '—' : Math.round(v * 100) + '%'; }
 function p2(n){ return (n < 10 ? '0' : '') + n; }
-function _mx(s){
-  var t = s === undefined ? new Date() : new Date(s);
-  if (isNaN(t.getTime())) return null;
-  return new Date(t.getTime() - 6 * 3600000);
+var MESES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+var DIAS = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+// UTC → hora de México (UTC-6 fijo desde 2022)
+function mx(s){ var t = new Date(s); return isNaN(t.getTime()) ? null : new Date(t.getTime() - 6 * 3600000); }
+function mxtime(s){ var d = mx(s); return d ? p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes()) : ''; }
+function mxday(s){ var d = mx(s === undefined ? new Date().getTime() : s); return d ? d.getUTCFullYear() + '-' + p2(d.getUTCMonth() + 1) + '-' + p2(d.getUTCDate()) : ''; }
+// "2026-10-22" → "Jueves 22 oct"; hoy y mañana con nombre
+function dayLabel(ymd){
+  if (ymd === mxday()) return 'Hoy';
+  if (ymd === mxday(new Date().getTime() + 86400000)) return 'Mañana';
+  var p = ymd.split('-'), d = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2], 12));
+  return DIAS[d.getUTCDay()] + ' ' + (+p[2]) + ' ' + MESES[+p[1] - 1];
 }
-function mxdate(s){
-  var mx = _mx(s);
-  if (!mx) return String(s).slice(0, 16);
-  return p2(mx.getUTCDate()) + ' ' + MX_MESES[mx.getUTCMonth()] + ', ' + p2(mx.getUTCHours()) + ':' + p2(mx.getUTCMinutes());
-}
-function mxtime(s){ var mx = _mx(s); return mx ? p2(mx.getUTCHours()) + ':' + p2(mx.getUTCMinutes()) : ''; }
-function mxday(s){ var mx = _mx(s); return mx ? mx.getUTCFullYear() + '-' + p2(mx.getUTCMonth() + 1) + '-' + p2(mx.getUTCDate()) : ''; }
-function mxdaylabel(s){
-  var mx = _mx(s);
-  if (!mx) return '';
-  var name = mxday(s) === mxday(new Date().getTime() + 86400000) ? 'Mañana' : MX_DIAS[mx.getUTCDay()];
-  return name.charAt(0).toUpperCase() + name.slice(1) + ' ' + mx.getUTCDate() + ' de ' + MX_MESES_L[mx.getUTCMonth()];
-}
+function shortDate(ymd){ var p = String(ymd).slice(0, 10).split('-'); return (+p[2]) + ' ' + MESES[+p[1] - 1]; }
+function err(msg){ var e = el('err'); e.style.display = 'block'; e.textContent = '⚠️ ' + msg; }
 
-// "2026-10-12" (lunes) → "12 – 18 oct"
-function weekLabel(iso){
-  var t = new Date(String(iso).slice(0, 10) + 'T12:00:00Z');
-  if (isNaN(t.getTime())) return esc(iso);
-  var e = new Date(t.getTime() + 6 * 86400000);
-  return t.getUTCDate() + (t.getUTCMonth() === e.getUTCMonth() ? '' : ' ' + MX_MESES[t.getUTCMonth()]) +
-         ' – ' + e.getUTCDate() + ' ' + MX_MESES[e.getUTCMonth()];
-}
-
-function err(msg){
-  var e = el('err');
-  e.style.display = 'block';
-  e.textContent = '⚠️ ' + msg;
-}
-
-// ── Sin conexión con el programa (v1.6.0) ──
-// status 0 = el navegador no llegó al programa: cerrado o reiniciándose. El
-// supervisor lo vuelve a abrir solo; la página conserva lo último que
-// mostró, avisa arriba y se recarga sola en cuanto el programa responde.
-var OFFLINE_MSG = 'El programa del dashboard no responde';
-var _offlineSince = null, _offlineTimer = null;
-function _offlineBanner(){
+// ── Programa caído / versión nueva ──
+// El 21-oct el dueño siguió viendo la página vieja en una pestaña abierta
+// antes de actualizar: si el programa cambia de versión, la página se recarga.
+var _offTimer = null;
+function serverDown(){
   var b = el('offline');
   if (!b) {
     b = document.createElement('div');
     b.id = 'offline';
-    b.style.cssText = 'position:sticky;top:0;z-index:10;background:#3a2a14;color:#fbbf24;' +
-                      'padding:10px 14px;border-radius:8px;margin:10px 0;font-size:.9rem';
+    b.style.cssText = 'position:sticky;top:0;z-index:10;background:#3a2a14;color:#fbbf24;padding:8px 12px;border-radius:8px;margin:8px 0;font-size:.85rem';
     document.body.insertBefore(b, document.body.firstChild);
   }
-  return b;
+  b.textContent = '⏳ El programa se está reiniciando. La página vuelve sola.';
+  if (!_offTimer) _offTimer = setInterval(checkServer, 5000);
 }
-function serverDown(){
-  var now = new Date().getTime();
-  if (_offlineSince === null) _offlineSince = now;
-  var mins = Math.floor((now - _offlineSince) / 60000);
-  _offlineBanner().textContent = mins < 2
-    ? '⏳ ' + OFFLINE_MSG + ': se está reiniciando solo. Esta página se actualiza sola cuando vuelva.'
-    : '⚠️ ' + OFFLINE_MSG + ' desde hace ' + mins + ' min. Ábrelo de nuevo (BettingDashboard.exe) ' +
-      'o reinicia la PC: arranca solo con Windows. Esta página se actualiza sola cuando vuelva.';
-  if (!_offlineTimer) _offlineTimer = setInterval(_probeServer, 5000);
-}
-function _probeServer(){
+function checkServer(){
   var x = new XMLHttpRequest();
   x.open('GET', '/api/health?t=' + new Date().getTime(), true);
   x.onreadystatechange = function(){
     if (x.readyState !== 4) return;
-    if (x.status === 200) { clearInterval(_offlineTimer); location.reload(); }
-    else serverDown();
+    if (x.status === 0) { serverDown(); return; }
+    var d = null;
+    try { d = JSON.parse(x.responseText); } catch(e) {}
+    if (_offTimer || (d && window.APP_V && d.version && d.version !== window.APP_V)) location.reload();
   };
   x.send();
 }
+setInterval(checkServer, 60000);
 
-// XHR GET + JSON (compatibilidad universal; fetch no existe en navegadores viejos)
 function getJSON(url, ok, fail){
   try {
     var x = new XMLHttpRequest();
     x.open('GET', url, true);
     x.onreadystatechange = function(){
       if (x.readyState !== 4) return;
-      if (x.status === 0) { serverDown(); return; }       // programa caído: aviso arriba
+      if (x.status === 0) { serverDown(); return; }
       if (x.status !== 200) { if (fail) fail('HTTP ' + x.status); return; }
       var d;
       try { d = JSON.parse(x.responseText); } catch(e2) { if (fail) fail('JSON inválido'); return; }
@@ -117,748 +82,369 @@ function getJSON(url, ok, fail){
   } catch(e) { if (fail) fail(e.message); }
 }
 
-function emptyRow(cols, msg){ return '<tr><td colspan="' + cols + '" class="muted">' + esc(msg) + '</td></tr>'; }
-function resultPill(key, label){
-  var k = String(key || 'pending').toLowerCase();
-  var cls = k === 'win' || k === 'half_win' ? 'win' : k === 'loss' || k === 'half_loss' ? 'loss' :
-            k === 'pending' ? 'pending' : k === 'cancelled' ? 'cancelled' : 'push';
-  var icon = cls === 'win' ? '✅ ' : cls === 'loss' ? '❌ ' : '';
-  return '<span class="pill ' + cls + '">' + icon + esc(label) + '</span>';
-}
-
 // ── Pestañas ──
-var TABS = ['hoy', 'proximos', 'resultados', 'dinero', 'sistema'];
-var _chartsDrawn = {};
+var TABS = ['proximos', 'anteriores', 'equipos', 'graficas'], _loaded = {};
 function showTab(name){
-  if (TABS.indexOf(name) < 0) name = 'hoy';
-  var btns = el('tabs').getElementsByTagName('button');
-  for (var i = 0; i < btns.length; i++) btns[i].className = 'tab' + (btns[i].getAttribute('data-tab') === name ? ' on' : '');
+  if (TABS.indexOf(name) < 0) name = 'proximos';
+  var b = el('tabs').getElementsByTagName('button');
+  for (var i = 0; i < b.length; i++) b[i].className = 'tab' + (b[i].getAttribute('data-tab') === name ? ' on' : '');
   for (var j = 0; j < TABS.length; j++) el('tab-' + TABS[j]).className = 'pane' + (TABS[j] === name ? ' on' : '');
-  _storeSet('tab', name);
-  // Chart.js no dibuja en un contenedor oculto: las gráficas se dibujan
-  // la primera vez que se ve su pestaña
-  if (name === 'dinero') drawCharts(['bankchart', 'daily']);
+  _storeSet('tab2', name);
+  if (_loaded[name]) return;
+  _loaded[name] = true;
+  if (name === 'anteriores') loadPast();
+  else if (name === 'equipos') loadTeams();
+  else if (name === 'graficas') loadCharts();
 }
 (function(){
-  var btns = el('tabs').getElementsByTagName('button');
-  for (var i = 0; i < btns.length; i++) {
-    btns[i].onclick = function(){ showTab(this.getAttribute('data-tab')); };
-  }
+  var b = el('tabs').getElementsByTagName('button');
+  for (var i = 0; i < b.length; i++) b[i].onclick = function(){ showTab(this.getAttribute('data-tab')); };
 })();
 
-// Secciones plegables (▸ Ver …)
-(function(){
-  var heads = document.querySelectorAll ? document.querySelectorAll('.foldhead') : [];
-  for (var i = 0; i < heads.length; i++) {
-    heads[i].onclick = function(){
-      var f = this.parentNode, open = f.className.indexOf('open') < 0;
-      f.className = open ? 'fold open' : 'fold';
-      this.textContent = (open ? '▾ ' : '▸ ') + this.textContent.replace(/^[▸▾] /, '');
-      if (open && f.innerHTML.indexOf('id="equity"') >= 0) drawCharts(['equity', 'clvchart', 'bymarket', 'byleague']);
-    };
+// ── Barra de probabilidades (local / empate / visitante) ──
+function probBar(p, thin, title){
+  if (!p || p[0] === null || p[0] === undefined) return '';
+  var lab = function(v){ return thin || v < 0.12 ? '' : Math.round(v * 100); };
+  return '<div class="pb' + (thin ? ' thin' : '') + '" title="' + esc(title || '') + '">' +
+         '<div class="h" style="width:' + (p[0] * 100) + '%">' + lab(p[0]) + '</div>' +
+         '<div class="d" style="width:' + (p[1] * 100) + '%">' + lab(p[1]) + '</div>' +
+         '<div class="a" style="width:' + (p[2] * 100) + '%">' + lab(p[2]) + '</div></div>';
+}
+function _sides(m, key){ var a = []; for (var i = 0; i < m.sides.length; i++) a.push(m.sides[i][key]); return a; }
+
+// ── Detalle de un partido: últimos 5, alineación y entre ellos ──
+var _detCache = {};
+function formBadges(ms){
+  var h = '<div class="form">';
+  for (var i = 0; i < ms.length; i++) {
+    var m = ms[i];
+    h += '<span class="f ' + m.result + '" title="' + esc(shortDate(m.date) + ' · ' + (m.venue === 'L' ? 'vs ' : 'en ') + m.opponent + ' · ' + m.score) + '">' + m.result + '</span>';
   }
-})();
-
-// ── Partidos: Hoy y Próximos días ──
-var _matches = [], _lineups = {};
-var SIDE_ES = { home: 'Local', draw: 'Empate', away: 'Visitante' };
-
-function matchState(m){
-  if (m.real_bet) return ['yes', '✅ Apuesta real', 'Tienes una apuesta real en este partido'];
-  if (m.old_model || !m.pick || !m.pick.label) return ['no', 'Sin análisis nuevo', 'Se actualiza en la siguiente corrida del programa'];
-  if (m.pick.pd_value) return ['yes', '✅ Vale la pena', 'PlayDoit suele pagar el mínimo o más. Confírmalo con una captura al bot'];
-  if (m.pick.value) return ['maybe', '🟡 Revisa PlayDoit', 'El mejor momio de Europa sí paga el mínimo; PlayDoit normalmente no. Manda una captura al bot para confirmarlo'];
-  return ['no', '❌ No conviene', 'PlayDoit no paga lo suficiente para tener ventaja'];
+  return h + '</div>';
 }
-
-function teams(m){
-  var parts = String(m.match).split(' vs ');
-  return { home: parts[0] || 'Local', away: parts[1] || 'Visitante' };
-}
-
-function matchHtml(m, i){
-  var st = matchState(m), pk = m.pick || {}, t = teams(m);
-  var pick = '<span class="muted">—</span>', price = '';
-  if (!m.old_model && pk.label) {
-    pick = '<div class="lbl2">' + (pk.lean ? 'El programa jugaría' : 'Lo más probable') + '</div><b>' + esc(pk.label) +
-           '</b> <span class="muted">(' + p100(pk.model) + ')</span>';
-    price = '<div class="lbl2">Necesitas en PlayDoit</div><b>' + esc(pk.min_us || '—') + ' o mejor</b>' +
-            (pk.pd_est_us ? '<div class="lbl2" title="' + (pk.pd_learned ? 'Estimado con lo que PlayDoit pagó en tus capturas' :
-               'Estimado con el promedio de las casas: PlayDoit suele pagar parecido') + '">paga aprox. ' + esc(pk.pd_est_us) + '</div>' : '');
-  }
-  var lu = _lineups[m.match];
-  var more = [];
-  if (m.old_model) more.push('Analizado con el modelo anterior a la corrección; se actualiza en la siguiente corrida.');
-  else {
-    var mod = [], pin = [];
-    for (var j = 0; j < m.sides.length; j++) {
-      var name = m.sides[j].side === 'home' ? t.home : m.sides[j].side === 'away' ? t.away : 'Empate';
-      mod.push(esc(name) + ' ' + p100(m.sides[j].model));
-      pin.push(p100(m.sides[j].pin));
-    }
-    more.push('<b>Probabilidades del programa:</b> ' + mod.join(' · ') + ' &nbsp;<span title="Pinnacle sin margen: el precio más preciso del mercado">(Pinnacle: ' + pin.join(' · ') + ')</span>');
-    if (pk.label && pk.market !== undefined)
-      more.push('<b>Por qué ' + esc(pk.label).toLowerCase() + ':</b> el programa le da ' + p100(pk.model) + ' y el mercado ' + p100(pk.market) +
-                (pk.lean ? '.' : ' (no ve nada mejor que el mercado: es solo lo más probable).'));
-    var g = [];
-    if (m.lam) g.push('goles esperados ' + m.lam[0].toFixed(1) + ' – ' + m.lam[1].toFixed(1));
-    if (m.likely) g.push('marcador más probable ' + m.likely.score + ' (' + p100(m.likely.prob) + ')');
-    if (m.p_over25 !== null && m.p_over25 !== undefined) g.push('más de 2.5 goles ' + p100(m.p_over25));
-    if (m.p_btts !== null && m.p_btts !== undefined) g.push('ambos anotan ' + p100(m.p_btts));
-    if (g.length) more.push('<b>Goles:</b> ' + g.join(' · '));
-    var mins = [];
-    for (var k = 0; k < m.sides.length; k++) mins.push(SIDE_ES[m.sides[k].side] + ' ' + (m.sides[k].min_us || '—'));
-    more.push('<b>Mínimo en PlayDoit por resultado:</b> ' + mins.join(' · '));
-  }
-  if (lu) more.push('<b>Alineaciones:</b> ' + esc(lu.text));
-  var sk = statsKey(m.key, m.match_date), open = !!_open[sk];
-  return '<div class="match' + (open ? ' open' : '') + '" id="m' + i + '"><div class="mrow" onclick="toggleMatch(' + i + ')">' +
-         '<div class="mtime">' + mxtime(m.match_date) + '</div>' +
-         '<div class="mname"><b>' + esc(m.match) + '</b><div class="lbl2">' + esc(m.league) + '</div></div>' +
-         '<div class="mpick">' + pick + '</div><div class="mprice">' + price + '</div>' +
-         '<div class="mverdict"><span class="pill ' + st[0] + '" title="' + esc(st[2]) + '">' + st[1] + '</span></div>' +
-         '</div><div class="mmore">' + more.join('<br>') +
-         (m.key ? '<div class="stats" id="st' + i + '">' + (_statsCache[sk] || '') + '</div>' : '') + '</div></div>';
-}
-function toggleMatch(i){
-  var box = el('m' + i), m = _matches[i];
-  if (!box) return;
-  var open = box.className.indexOf('open') < 0, sk = statsKey(m.key, m.match_date);
-  box.className = open ? 'match open' : 'match';
-  if (open) _open[sk] = true; else delete _open[sk];
-  if (open && m.key) loadStats('st' + i, m.key, m.match_date);
-}
-
-// ── Estadísticas del partido (v1.10.0): últimos 5 de cada equipo con
-// resultado, goles, córners, tarjetas y su once; alineación del partido;
-// últimos 5 entre ellos. Se piden al abrir el partido y se guardan. ──
-var _open = {}, _statsCache = {};
-function statsKey(key, date){ return String(key) + '|' + String(date); }
-function shortDate(iso){
-  var p = String(iso).slice(0, 10).split('-');
-  return p.length === 3 ? parseInt(p[2], 10) + ' ' + MX_MESES[parseInt(p[1], 10) - 1] + ' ' + p[0].slice(2) : esc(iso);
-}
-function toggleXi(a){
-  var row = a.parentNode.parentNode.nextSibling;
-  if (!row) return;
-  var show = row.style.display === 'none';
-  row.style.display = show ? '' : 'none';
-  a.textContent = show ? 'once ▾' : 'once ▸';
-}
-function teamBlock(t){
-  var s = t.summary, h = '<div class="tblock"><div class="tname">' + esc(t.team) + '</div>';
-  if (!s) return h + '<div class="muted small">Sin partidos anteriores en la base.</div></div>';
-  h += '<div class="small">Últimos ' + s.n + ': <b>' + s.w + ' G · ' + s.d + ' E · ' + s.l + ' P</b> · goles ' + s.goals_for +
-       ' a favor y ' + s.goals_against + ' en contra' +
-       (s.corners_for !== null ? ' · córners ' + s.corners_for + ' a favor y ' + s.corners_against + ' en contra' : ' · <span class="muted">sin datos de córners</span>') +
-       (s.cards !== null ? ' · ' + s.cards + ' tarjetas por partido' : '') + '</div>';
-  h += '<table class="mini"><thead><tr><th>Fecha</th><th>Rival</th><th>Resultado</th><th title="A favor - en contra">Córners</th><th title="Del partido, roja = 1">Tarjetas</th><th></th></tr></thead><tbody>';
+function teamPanel(t){
+  var h = '<div class="tp"><h3>' + esc(t.team) + '</h3>';
+  if (!t.summary) return h + '<div class="muted small">Sin partidos anteriores</div></div>';
+  var s = t.summary;
+  h += formBadges(t.matches) + '<div class="small muted">Goles ' + s.goals_for + ' - ' + s.goals_against +
+       (s.corners_for !== null ? ' · Córners ' + s.corners_for + ' - ' + s.corners_against : '') +
+       (s.cards !== null ? ' · Tarjetas ' + s.cards : '') + '</div>';
+  h += '<table><thead><tr><th>Fecha</th><th>Rival</th><th>Res.</th><th>Córn.</th><th>Tarj.</th></tr></thead><tbody>';
   for (var i = 0; i < t.matches.length; i++) {
-    var m = t.matches[i], rc = m.result === 'G' ? 'pos' : m.result === 'P' ? 'neg' : '';
-    h += '<tr><td>' + shortDate(m.date) + '</td><td>' + (m.venue === 'L' ? 'vs ' : 'en ') + esc(m.opponent) +
-         '<div class="lbl2">' + (m.venue === 'L' ? 'de local' : 'de visitante') + (m.league ? ' · ' + esc(m.league) : '') + '</div></td><td class="' + rc + '"><b>' +
-         m.result + '</b> ' + m.score + '</td><td>' + (m.corners ? m.corners[0] + ' - ' + m.corners[1] : '—') + '</td><td>' +
-         (m.cards === null ? '—' : m.cards) + '</td><td>' + (m.xi ? '<a class="xi" onclick="toggleXi(this)">once ▸</a>' : '') + '</td></tr>';
-    if (m.xi) h += '<tr style="display:none"><td colspan="6" class="small">' + esc(m.xi.formation) + ': ' + esc(m.xi.players.join(', ')) + '</td></tr>';
+    var m = t.matches[i], cls = m.result === 'G' ? 'pos' : m.result === 'P' ? 'neg' : '';
+    h += '<tr title="' + esc(m.xi ? m.xi.formation + ': ' + m.xi.players.join(', ') : '') + '"><td>' + shortDate(m.date) + '</td><td>' +
+         (m.venue === 'L' ? 'vs ' : '@ ') + esc(m.opponent) + '</td><td class="' + cls + '"><b>' + m.score + '</b></td><td>' +
+         (m.corners ? m.corners[0] + '-' + m.corners[1] : '—') + '</td><td>' + (m.cards === null ? '—' : m.cards) + '</td></tr>';
   }
   h += '</tbody></table>';
   var lu = t.lineup;
-  h += '<div class="small" style="margin-top:8px"><b>' + (lu ? (lu.confirmed ? '✅ Alineación confirmada' : 'Alineación probable') : 'Alineación') + '</b>' +
-       (lu ? ' (' + esc(lu.formation) + ')' + (lu.confirmed ? '' : ' <span class="muted">— los que más han sido titulares en sus últimos ' + lu.from +
-             ' partidos; la confirmada sale ~1 h antes</span>') + ': ' + esc(lu.players.join(', ')) :
-             ': <span class="muted">sin datos de alineaciones para este equipo</span>') + '</div>';
+  if (lu) h += '<div class="xi">' + (lu.confirmed ? '✅ ' : '👥 ') + '<b>' + esc(lu.formation) + '</b> ' + esc(lu.players.join(', ').replace(/ \(\d+ de \d+\)/g, '')) + '</div>';
   return h + '</div>';
 }
-function statsHtml(d){
-  var h = '<div class="statsgrid">' + teamBlock(d.home) + teamBlock(d.away) + '</div>';
-  h += '<div class="tname" style="margin-top:12px">Entre ellos</div>';
-  if (!d.h2h.length) return h + '<div class="muted small">Sin partidos entre ellos en la base.</div>';
-  h += '<table class="mini"><thead><tr><th>Fecha</th><th>Partido</th><th>Marcador</th><th>Córners</th></tr></thead><tbody>';
-  for (var i = 0; i < d.h2h.length; i++) {
-    var x = d.h2h[i];
-    h += '<tr><td>' + shortDate(x.date) + '</td><td>' + esc(x.match) + '</td><td><b>' + x.score + '</b></td><td>' +
-         (x.corners ? x.corners[0] + ' - ' + x.corners[1] : '—') + '</td></tr>';
+function detailHtml(d){
+  var h = '<div class="two">' + teamPanel(d.home) + teamPanel(d.away) + '</div>';
+  if (d.h2h && d.h2h.length) {
+    var x = [];
+    for (var i = 0; i < d.h2h.length; i++) x.push('<span title="' + esc(d.h2h[i].match) + '">' + shortDate(d.h2h[i].date) + ' <b>' + d.h2h[i].score + '</b></span>');
+    h += '<div class="h2h"><span class="muted">Entre ellos:</span> ' + x.join(' · ') + '</div>';
   }
-  return h + '</tbody></table>';
+  return h;
 }
-function loadStats(id, key, date){
-  var box = el(id), sk = statsKey(key, date);
+function openDetail(id, key, date){
+  var box = el(id), ck = key + '|' + date;
   if (!box) return;
-  if (_statsCache[sk]) { box.innerHTML = _statsCache[sk]; return; }
-  if (box.getAttribute('data-loading')) return;
-  box.setAttribute('data-loading', '1');
-  box.innerHTML = '<div class="muted small">Cargando estadísticas…</div>';
-  var parts = String(key).split(' vs ');
-  getJSON('/api/match?home=' + encodeURIComponent(parts[0]) + '&away=' + encodeURIComponent(parts[1] || '') +
-          '&date=' + encodeURIComponent(date), function(d){
-    _statsCache[sk] = statsHtml(d);
-    var b = el(id);
-    if (b) { b.innerHTML = _statsCache[sk]; b.removeAttribute('data-loading'); }
-  }, function(msg){ box.innerHTML = '<div class="muted small">' + esc(msg) + '</div>'; box.removeAttribute('data-loading'); });
+  var row = box.parentNode;
+  row.className = row.className.indexOf('open') >= 0 ? row.className.replace(' open', '') : row.className + ' open';
+  if (row.className.indexOf('open') < 0) return;
+  if (_detCache[ck]) { box.innerHTML = _detCache[ck]; return; }
+  box.innerHTML = '<div class="muted small">Cargando…</div>';
+  var p = String(key).split(' vs ');
+  getJSON('/api/match?home=' + encodeURIComponent(p[0]) + '&away=' + encodeURIComponent(p[1] || '') + '&date=' + encodeURIComponent(date),
+    function(d){ _detCache[ck] = detailHtml(d); var b = el(id); if (b) b.innerHTML = _detCache[ck]; },
+    function(msg){ box.innerHTML = '<div class="muted small">' + esc(msg) + '</div>'; });
 }
 
-// ── ¿Quién tuvo razón? (v1.10.0): el programa o el mercado, el que le dio
-// más probabilidad a lo que pasó ──
-function whoHtml(w){
-  return w === 'programa' ? '<span class="who p">🤖 Programa</span>' :
-         w === 'mercado' ? '<span class="who m">🏦 Mercado</span>' : '<span class="muted">—</span>';
+// ── Próximos ──
+var _up = [], _upDay = '', _upValue = false, _alerts = {};
+function upState(m){
+  if (m.real_bet) return ['✅', 'Apuesta real'];
+  if (m.old_model || !m.pick || !m.pick.label) return ['·', 'Sin análisis'];
+  if (m.pick.pd_value) return ['✅', 'Vale la pena: PlayDoit suele pagar el mínimo'];
+  if (m.pick.value) return ['🟡', 'Solo el mejor momio de Europa paga el mínimo'];
+  return ['❌', 'No conviene'];
 }
-function whyText(r){
-  if (!r.winner) return r.result_key === 'pending' ? 'Todavía no se juega (o no tiene resultado).' :
-    'Sin comparación: devolución o falta la probabilidad del mercado.';
-  var happened = r.result_key === 'win' || r.result_key === 'half_win';
-  return (happened ? '✅ Pasó' : '❌ No pasó') + ': ' + esc(r.label) + '. El programa le daba <b>' + p100(r.model) +
-         '</b> y el mercado <b>' + p100(r.market) + '</b>. Tuvo razón <b>el ' + r.winner + '</b>: ' +
-         (happened ? 'le dio más probabilidad a lo que pasó.' : 'le dio menos probabilidad a algo que no pasó.');
+function upRow(m, i){
+  var pk = m.pick || {}, st = upState(m), t = String(m.match).split(' vs ');
+  var model = _sides(m, 'model'), pin = _sides(m, 'pin');
+  var tip = 'Programa: ' + p100(model[0]) + ' / ' + p100(model[1]) + ' / ' + p100(model[2]) +
+            '  ·  Pinnacle: ' + p100(pin[0]) + ' / ' + p100(pin[1]) + ' / ' + p100(pin[2]);
+  var pick = pk.label ? '<b>' + esc(pk.label) + '</b> ' + p100(pk.model) + '<br><span class="muted">mín. ' + esc(pk.min_us || '—') +
+             (pk.pd_est_us ? ' · paga ~' + esc(pk.pd_est_us) : '') + '</span>' : '<span class="muted">—</span>';
+  var al = _alerts[m.match] ? ' <span title="' + esc(_alerts[m.match]) + '">⚠️</span>' : '';
+  return '<div class="m" id="u' + i + '"><div class="mr" onclick="openUp(' + i + ')">' +
+         '<div class="time">' + mxtime(m.match_date) + '<span class="small muted">' + esc(m.league) + '</span></div>' +
+         '<div class="t h">' + esc(t[0]) + '</div>' +
+         '<div class="pbw">' + probBar(model, false, tip) + probBar(pin, true, tip) + '</div>' +
+         '<div class="t">' + esc(t[1] || '') + al + '</div>' +
+         '<div class="pk" title="Lo que jugaría el programa · mínimo en PlayDoit · lo que paga aprox.">' + pick + '</div>' +
+         '<div class="ic" title="' + esc(st[1]) + '">' + st[0] + '</div></div>' +
+         '<div class="det" id="ud' + i + '"></div></div>';
 }
-
-function renderToday(){
-  var today = mxday(), list = [], html = '';
-  for (var i = 0; i < _matches.length; i++) if (mxday(_matches[i].match_date) === today) list.push(i);
-  for (var j = 0; j < list.length; j++) html += matchHtml(_matches[list[j]], list[j]);
-  el('todaylist').innerHTML = html || '<div class="card muted">Hoy ya no quedan partidos por jugar. Mira la pestaña <b>Próximos días</b>.</div>';
-  renderVerdict(list);
-}
-
-function renderVerdict(list){
-  var real = [], good = [], maybe = [];
-  for (var i = 0; i < list.length; i++) {
-    var m = _matches[list[i]], st = matchState(m)[1];
-    if (m.real_bet) real.push(m);
-    else if (st.indexOf('Vale la pena') >= 0) good.push(m);
-    else if (st.indexOf('Revisa') >= 0) maybe.push(m);
-  }
-  var v = el('verdict'), items = function(arr){
-    var s = '';
-    for (var k = 0; k < arr.length; k++) {
-      var pk = arr[k].pick || {};
-      s += '<br>• <b>' + esc(arr[k].match) + '</b> (' + mxtime(arr[k].match_date) + '): ' + esc(pk.label || '') +
-           (pk.min_us ? ' — en PlayDoit a ' + esc(pk.min_us) + ' o mejor' : '');
-    }
-    return s;
-  };
-  var alerts = 0;
-  for (var a = 0; a < list.length; a++) {
-    var lu = _lineups[_matches[list[a]].match];
-    if (lu && lu.level === 'alert') alerts++;
-  }
-  var alertNote = alerts ? '<br><span style="color:var(--yellow)">⚠️ Alerta de alineaciones en ' + alerts + ' partido' +
-    (alerts > 1 ? 's' : '') + ': toca el partido para ver el detalle y el momio mínimo.</span>' : '';
-  if (real.length) {
-    v.className = 'verdict yes';
-    v.innerHTML = '<div class="big">✅ Sí: tienes ' + real.length + ' apuesta' + (real.length > 1 ? 's' : '') + ' real' + (real.length > 1 ? 'es' : '') + ' hoy</div>' + items(real).slice(4) + alertNote;
-  } else if (good.length) {
-    v.className = 'verdict yes';
-    v.innerHTML = '<div class="big">✅ Hay ' + good.length + ' partido' + (good.length > 1 ? 's' : '') + ' que vale' + (good.length > 1 ? 'n' : '') + ' la pena</div>' +
-                  'Solo si PlayDoit paga el mínimo o más (mándale una captura al bot para confirmarlo):' + items(good) + alertNote;
-  } else if (!list.length) {
-    v.className = 'verdict no';
-    v.innerHTML = '<div class="big">Hoy ya no quedan partidos</div><span class="muted">Los siguientes están en la pestaña Próximos días.</span>';
-  } else {
-    v.className = 'verdict no';
-    v.innerHTML = '<div class="big">Hoy no apuestes</div>' +
-      'Revisamos ' + list.length + ' partido' + (list.length > 1 ? 's' : '') + ' de hoy y en ninguno PlayDoit paga lo suficiente para tener ventaja' +
-      (maybe.length ? ' (en ' + maybe.length + ' solo el mejor momio de Europa llega al mínimo)' : '') + '. ' +
-      '<span class="muted">Es lo normal: el sistema solo arriesga dinero cuando le gana a Pinnacle por 2 puntos.</span>' + alertNote;
-  }
-}
-
-function renderNext(){
-  var today = mxday(), only = el('onlyvalue') && el('onlyvalue').checked, html = '', lastDay = '', n = 0;
-  for (var i = 0; i < _matches.length; i++) {
-    var m = _matches[i], d = mxday(m.match_date);
-    if (d === today) continue;
-    if (only && matchState(m)[0] === 'no') continue;
-    if (d !== lastDay) { html += '<div class="day">' + mxdaylabel(m.match_date) + '</div>'; lastDay = d; }
-    html += matchHtml(m, i);
+function openUp(i){ var m = _up[i]; if (m && m.key) openDetail('ud' + i, m.key, m.match_date); }
+function renderUp(){
+  var lg = el('uleague').value, html = '', last = '', n = 0;
+  for (var i = 0; i < _up.length; i++) {
+    var m = _up[i], d = mxday(m.match_date);
+    if (_upDay && d !== _upDay) continue;
+    if (lg && m.league !== lg) continue;
+    if (_upValue && upState(m)[0] === '❌') continue;
+    if (d !== last) { html += '<div class="day">' + dayLabel(d) + '</div>'; last = d; }
+    html += upRow(m, i);
     n++;
   }
-  el('nextlist').innerHTML = n ? html : '<div class="card muted">' + (only ? 'Ningún partido de los próximos días vale la pena por ahora.' : 'Sin partidos analizados en los próximos días.') + '</div>';
+  el('uplist').innerHTML = n ? html : '<div class="muted">Sin partidos.</div>';
 }
-
-function loadPredictions(){
+function renderDayBar(){
+  var days = [], seen = {};
+  for (var i = 0; i < _up.length; i++) { var d = mxday(_up[i].match_date); if (!seen[d]) { seen[d] = 1; days.push(d); } }
+  var h = '<span class="pill' + (_upDay ? '' : ' on') + '" onclick="setDay(\'\')">Todos</span>';
+  for (var j = 0; j < days.length; j++) h += '<span class="pill' + (_upDay === days[j] ? ' on' : '') + '" onclick="setDay(\'' + days[j] + '\')">' + dayLabel(days[j]) + '</span>';
+  el('daybar').innerHTML = h;
+}
+function setDay(d){ _upDay = d; renderDayBar(); renderUp(); }
+function fillSelect(id, values){
+  var sel = el(id), cur = sel.value;
+  while (sel.options.length > 1) sel.remove(1);
+  for (var i = 0; i < values.length; i++) sel.add(new Option(values[i], values[i]));
+  sel.value = cur;
+}
+function loadUpcoming(){
   getJSON('/api/predictions', function(d){
-    _matches = d.matches || [];
-    renderToday();
-    renderNext();
-    loadLineups();
-  }, function(msg){
-    el('todaylist').innerHTML = '<div class="card muted">' + esc(msg) + '</div>';
-    el('nextlist').innerHTML = '<div class="card muted">' + esc(msg) + '</div>';
-    el('verdict').innerHTML = '<div class="big">Sin datos del programa</div><span class="muted">' + esc(msg) + '</span>';
-  });
+    _up = d.matches || [];
+    var lg = {}, list = [];
+    for (var i = 0; i < _up.length; i++) if (_up[i].league && !lg[_up[i].league]) { lg[_up[i].league] = 1; list.push(_up[i].league); }
+    fillSelect('uleague', list.sort());
+    renderDayBar();
+    renderUp();
+    // hoy: ¿hay algo que apostar?
+    var today = mxday(), n = 0, good = 0;
+    for (var j = 0; j < _up.length; j++) if (mxday(_up[j].match_date) === today) { n++; if (upState(_up[j])[0] === '✅') good++; }
+    el('chiptoday').innerHTML = n ? (good ? '✅ Hoy: <b>' + good + '</b> con valor' : '❌ Hoy: nada que apostar') : 'Hoy: sin partidos';
+    el('chiptoday').title = n + ' partidos hoy';
+    getJSON('/api/lineups', function(l){
+      _alerts = {};
+      for (var k = 0; k < l.matches.length; k++) if (l.matches[k].level === 'alert') _alerts[l.matches[k].match] = l.matches[k].text;
+      renderUp();
+    }, function(){});
+  }, function(msg){ el('uplist').innerHTML = '<div class="muted">' + esc(msg) + '</div>'; });
 }
+el('uleague').onchange = renderUp;
+el('uvalue').onclick = function(){ _upValue = !_upValue; this.className = 'pill' + (_upValue ? ' on' : ''); renderUp(); };
 
-// ── Alineaciones (Sistema, y una línea en cada partido de hoy) ──
-function _luTeam(t){
-  if (!t || !t.published) return '<span class="muted">sin publicar</span>';
-  var out = esc(t.formation || '');
-  if (t.known === false) return out + ' <span class="muted">(sin historial)</span>';
-  var miss = t.missing || [];
-  if (!miss.length) return out + ' · once habitual';
-  var names = [];
-  for (var i = 0; i < miss.length; i++) names.push(esc(miss[i].name) + (miss[i].bench ? ' <span class="muted">(banca)</span>' : ''));
-  return out + ' · faltan ' + miss.length + ': ' + names.join(', ');
-}
-function loadLineups(){
-  var body = el('lubody');
-  getJSON('/api/lineups', function(d){
-    var html = '';
-    _lineups = {};
-    for (var i = 0; i < d.matches.length; i++) {
-      var m = d.matches[i];
-      _lineups[m.match] = m;
-      var color = m.level === 'alert' || m.level === 'weak' ? 'var(--yellow)' : m.level === 'pending' ? 'var(--muted)' : 'var(--text)';
-      html += '<tr><td>' + mxdate(m.match_date) + '</td><td>' + esc(m.match) + '<div class="lbl2">' + esc(m.league) +
-              '</div></td><td>' + _luTeam(m.home) + '</td><td>' + _luTeam(m.away) +
-              '</td><td style="color:' + color + '">' + esc(m.text) + '</td></tr>';
-    }
-    body.innerHTML = html || emptyRow(5, 'Sin partidos hoy');
-    if (_matches.length) renderToday();
-  }, function(msg){ body.innerHTML = emptyRow(5, msg); });
-}
-
-// ── ¿Cómo vamos? (tarjetas de Hoy) ──
-var _sum = { picks: undefined, real: undefined, fav: undefined, bank: undefined, right: null };
-function card(lbl, val, note, cls){
-  return '<div class="card"><div class="lbl">' + lbl + '</div><div class="val ' + (cls || '') + '">' + val +
-         '</div><div class="note">' + note + '</div></div>';
-}
-function renderHowWeGo(){
-  var h = '', p = _sum.picks;
-  if (p === undefined) h += card('🎯 Picks del programa', '…', 'Cargando');
-  else if (!p) h += card('🎯 Picks del programa', 'Todavía sin resultados', 'Se guardan desde el 21-oct. Cada pick se califica unas horas después de que termina su partido (en la corrida de la noche o en la de las 6:30 am).');
-  else h += card('🎯 Picks del programa', p.won + ' ✅ · ' + p.lost + ' ❌',
-                 (p.priced ? money(p.profit) + ' a 1u por pick, al momio de PlayDoit aprox.' : 'Sin momio de PlayDoit para calcular unidades') +
-                 (_sum.right ? ' Tuvo razón el programa en ' + _sum.right.programa + ' y el mercado en ' + _sum.right.mercado + '.' : '') +
-                 ' Detalle en <b>Cómo nos ha ido</b>.', p.priced ? (p.profit >= 0 ? 'pos' : 'neg') : '');
-  var bankTxt = _sum.bank === undefined || _sum.bank === null ? '—' : _sum.bank.toFixed(1) + 'u';
-  var realNote = 'Cargando';
-  if (_sum.real) {
-    var last = _sum.real.last;
-    realNote = _sum.real.pending ? _sum.real.pending + ' apuesta(s) pendiente(s).' :
-      'Sin apuestas reales desde ' + (last ? mxdate(last).slice(0, 6) : 'el 25-sep') + ': en modo recolección solo se apuesta si el momio le gana a Pinnacle, y no ha pasado.';
+// ── Anteriores (desde septiembre) ──
+var _past = [], _pastShown = 150, _pastOnly = false;
+function ok(v){ return v === true ? '✅' : v === false ? '❌' : '<span class="muted">·</span>'; }
+function pastRow(r, i){
+  var f = r.fav, pk = r.pick, bets = '';
+  for (var b = 0; b < r.bets.length; b++) {
+    var x = r.bets[b], won = x.result === 'win' || x.result === 'half_win';
+    bets += '<span title="' + esc(x.market) + '" class="' + (x.profit >= 0 ? 'pos' : 'neg') + '">' + (won ? '✅' : x.result === 'push' ? '↔' : '❌') +
+            (x.profit !== null ? ' ' + money(x.profit) : '') + '</span> ';
   }
-  h += card('💰 Dinero real (bankroll)', bankTxt, realNote);
-  var f = _sum.fav;
-  if (f === undefined) h += card('🎯 ¿Acierta al favorito?', '…', 'Cargando');
-  else if (!f) h += card('🎯 ¿Acierta al favorito?', '—', 'Sin partidos con resultado todavía.');
-  else h += card('🎯 ¿Acierta al favorito?', 'Programa ' + p100(f.s.model_hit) + ' · Pinnacle ' + p100(f.s.pin_hit),
-                 f.fixed ? 'Desde la corrección del modelo (' + f.s.n + ' partidos).' :
-                 'Últimos 14 días, casi todo con el modelo anterior (' + f.s.n + ' partidos). El corregido se mide desde el 22-oct.');
-  el('howwego').innerHTML = h;
+  var side = { home: 'Local', draw: 'Empate', away: 'Visitante' };
+  var pickTxt = '<span class="muted">·</span>';
+  if (pk) {
+    var played = pk.result === 'win' || pk.result === 'loss' || pk.result === 'half_win' || pk.result === 'half_loss';
+    pickTxt = '<span title="' + esc(pk.label + ' · programa ' + p100(pk.model) + ' vs mercado ' + p100(pk.market) +
+              (pk.winner ? ' · tuvo razón el ' + pk.winner : '')) + '">' +
+              (played ? ok(pk.result === 'win' || pk.result === 'half_win') : '⏳') + ' ' + esc(pk.label) +
+              (pk.profit !== null && played ? ' <span class="' + (pk.profit >= 0 ? 'pos' : 'neg') + '">' + money(pk.profit) + '</span>' : '') + '</span>';
+  }
+  return '<tr class="r" onclick="openPast(' + i + ')"><td class="hide-sm muted small">' + esc(r.league) + '</td><td style="text-align:right">' + esc(r.home) +
+         '</td><td class="sc">' + r.score[0] + ' - ' + r.score[1] + '</td><td>' + esc(r.away) + '</td><td>' +
+         (r.corners ? r.corners[0] + '-' + r.corners[1] : '<span class="muted">—</span>') + '</td><td class="hide-sm">' +
+         (r.cards === null ? '<span class="muted">—</span>' : r.cards) + '</td>' +
+         '<td title="' + esc(f ? 'Programa: ' + side[f.model] + ' ' + p100(f.model_p) : '') + '">' + ok(f ? f.model_hit : null) + '</td>' +
+         '<td title="' + esc(f && f.pin ? 'Pinnacle: ' + side[f.pin] + ' ' + p100(f.pin_p) : '') + '">' + ok(f ? f.pin_hit : null) + '</td>' +
+         '<td class="small">' + pickTxt + '</td><td class="hide-sm small">' + (bets || '<span class="muted">·</span>') + '</td></tr>' +
+         '<tr id="pr' + i + '" style="display:none"><td colspan="10"><div id="pd' + i + '"></div></td></tr>';
 }
-
-// ── Cómo nos ha ido ──
-function loadPicks(){
-  var body = el('picklist'), k = el('pickkpis');
-  getJSON('/api/picks?days=30', function(d){
-    _sum.picks = d.all;
-    _sum.right = d.right;
-    _pickRows = d.rows;
-    renderHowWeGo();
-    function kcard(title, s, note){
-      if (!s) return card(title, '—', note + ' Sin resultados todavía.');
-      return card(title, s.won + ' ✅ · ' + s.lost + ' ❌',
-                  (s.priced ? money(s.profit) + ' a 1u' + (s.roi !== null ? ' (' + pct(s.roi) + ')' : '') : 'sin momio para unidades') + '. ' + note,
-                  s.priced ? (s.profit >= 0 ? 'pos' : 'neg') : '');
-    }
-    k.innerHTML = kcard('Todos los picks', d.all, 'Uno por partido.') +
-                  kcard('Con ventaja según el programa', d.lean, 'Donde veía 3+ puntos más que el mercado.') +
-                  kcard('Los que pagaban el mínimo en PlayDoit', d.value, 'Los que habrías apostado.') +
-                  card('¿Quién tuvo razón?', '🤖 ' + d.right.programa + ' · 🏦 ' + d.right.mercado,
-                       'Programa contra mercado: el que le dio más probabilidad a lo que pasó.');
-    var html = '';
-    for (var i = 0; i < d.rows.length; i++) {
-      var r = d.rows[i];
-      html += '<tr class="clickable" onclick="togglePick(' + i + ')"><td>' + mxdate(r.match_date) + '</td><td>' + esc(r.match) +
-              '<div class="lbl2">' + esc(r.league) + '</div></td><td>' +
-              esc(r.label) + (r.lean ? '' : ' <span class="muted small">(lo más probable)</span>') + '</td><td>' +
-              p100(r.model) + ' vs ' + p100(r.market) + '</td><td>' + esc(r.playdoit_us || '—') +
-              '</td><td>' + resultPill(r.result_key, r.result) + '</td><td>' + whoHtml(r.winner) + '</td><td>' +
-              (r.profit === null ? '' : '<span class="' + (r.profit >= 0 ? 'pos' : 'neg') + '">' + money(r.profit) + '</span>') + '</td></tr>' +
-              '<tr id="pd' + i + '" style="display:none"><td colspan="8"><div class="small">' + whyText(r) +
-              '</div><div class="stats" id="pds' + i + '"></div></td></tr>';
-    }
-    body.innerHTML = html || emptyRow(8, 'Sin picks con resultado todavía');
-  }, function(msg){
-    _sum.picks = null;
-    renderHowWeGo();
-    k.innerHTML = card('Picks del programa', 'Todavía sin resultados', esc(msg));
-    body.innerHTML = emptyRow(8, msg);
-  });
+function filteredPast(){
+  var lg = el('pleague').value, q = el('pteam').value.toLowerCase(), out = [];
+  for (var i = 0; i < _past.length; i++) {
+    var r = _past[i];
+    if (lg && r.league !== lg) continue;
+    if (q && (r.home + ' ' + r.away).toLowerCase().indexOf(q) < 0) continue;
+    if (_pastOnly && !r.fav && !r.pick && !r.bets.length) continue;
+    out.push(i);
+  }
+  return out;
 }
-var _pickRows = [];
-function togglePick(i){
-  var row = el('pd' + i), r = _pickRows[i];
-  if (!row || !r) return;
+function renderPast(){
+  var idx = filteredPast(), html = '', last = '';
+  for (var k = 0; k < idx.length && k < _pastShown; k++) {
+    var r = _past[idx[k]];
+    if (r.date !== last) { html += '<tr class="dh"><td colspan="10">' + dayLabel(r.date) + '</td></tr>'; last = r.date; }
+    html += pastRow(r, idx[k]);
+  }
+  el('pastbody').innerHTML = html || '<tr><td colspan="10" class="muted">Sin partidos.</td></tr>';
+  el('pmore').style.display = idx.length > _pastShown ? 'block' : 'none';
+}
+function openPast(i){
+  var row = el('pr' + i), r = _past[i];
   var show = row.style.display === 'none';
   row.style.display = show ? '' : 'none';
-  if (show && r.key) loadStats('pds' + i, r.key, r.match_date);
+  if (!show) return;
+  var box = el('pd' + i), ck = r.key + '|' + r.date;
+  if (_detCache[ck]) { box.innerHTML = _detCache[ck]; return; }
+  box.innerHTML = '<div class="muted small">Cargando…</div>';
+  var p = r.key.split(' vs ');
+  getJSON('/api/match?home=' + encodeURIComponent(p[0]) + '&away=' + encodeURIComponent(p[1]) + '&date=' + encodeURIComponent(r.date + 'T00:00:00Z'),
+    function(d){ _detCache[ck] = detailHtml(d); box.innerHTML = _detCache[ck]; },
+    function(msg){ box.innerHTML = '<div class="muted small">' + esc(msg) + '</div>'; });
+}
+function kpi(v, l, cls){ return '<div class="k"><div class="v ' + (cls || '') + '">' + v + '</div><div class="l">' + l + '</div></div>'; }
+function loadPast(){
+  getJSON('/api/board/past', function(d){
+    _past = d.rows;
+    var s = d.summary;
+    el('pkpis').innerHTML = kpi(s.matches, 'Partidos desde ' + shortDate(d.since)) +
+      kpi(p100(s.model_hit), '🤖 Programa acertó el favorito (' + s.analyzed + ')') +
+      kpi(p100(s.pin_hit), '🏦 Pinnacle acertó el favorito') +
+      kpi(s.picks ? s.picks_won + ' / ' + s.picks : '—', '🎯 Picks ganados' + (s.picks ? ' · ' + money(s.picks_profit) : ''), s.picks_profit >= 0 ? 'pos' : 'neg') +
+      kpi(s.bets ? money(s.bets_profit) : '—', '💰 Apuestas reales (' + s.bets + ')', s.bets_profit >= 0 ? 'pos' : 'neg');
+    var lg = {}, list = [];
+    for (var i = 0; i < _past.length; i++) if (!lg[_past[i].league]) { lg[_past[i].league] = 1; list.push(_past[i].league); }
+    fillSelect('pleague', list.sort());
+    renderPast();
+  }, function(msg){ el('pastbody').innerHTML = '<tr><td colspan="10" class="muted">' + esc(msg) + '</td></tr>'; });
+}
+el('pleague').onchange = function(){ _pastShown = 150; renderPast(); };
+el('pteam').onkeyup = function(){ _pastShown = 150; renderPast(); };
+el('ponly').onclick = function(){ _pastOnly = !_pastOnly; this.className = 'pill' + (_pastOnly ? ' on' : ''); _pastShown = 150; renderPast(); };
+el('pmore').onclick = function(){ _pastShown += 150; renderPast(); };
+
+// ── Equipos ──
+var _teams = [], _charts = {};
+function chart(id, cfg){
+  if (_charts[id]) _charts[id].destroy();
+  _charts[id] = new Chart(el(id).getContext('2d'), cfg);
+}
+function renderTeams(){
+  var lg = el('tleague').value, q = el('tsearch').value.toLowerCase(), h = '';
+  for (var i = 0; i < _teams.length; i++) {
+    var t = _teams[i];
+    if (lg && t.league !== lg) continue;
+    if (q && t.name.toLowerCase().indexOf(q) < 0) continue;
+    h += '<span class="pill" onclick="loadTeam(_teams[' + i + '].key)">' + esc(t.name) + '</span>';
+  }
+  el('teamlist').innerHTML = h || '<span class="muted">Sin equipos.</span>';
+}
+function loadTeams(){
+  getJSON('/api/board/teams', function(d){
+    _teams = d.teams;
+    var lg = {}, list = [];
+    for (var i = 0; i < _teams.length; i++) if (!lg[_teams[i].league]) { lg[_teams[i].league] = 1; list.push(_teams[i].league); }
+    fillSelect('tleague', list.sort());
+    renderTeams();
+    var last = _storeGet('team', '');
+    if (last) loadTeam(last);
+  }, function(msg){ el('teamlist').innerHTML = '<span class="muted">' + esc(msg) + '</span>'; });
+}
+el('tleague').onchange = renderTeams;
+el('tsearch').onkeyup = renderTeams;
+function loadTeam(key){
+  _storeSet('team', key);
+  el('teamview').innerHTML = '<div class="muted">Cargando…</div>';
+  getJSON('/api/board/team?name=' + encodeURIComponent(key), function(d){
+    var r = d.record, a = d.avg || {}, h = '<div class="bar" style="margin-top:4px"><span style="font-size:1.2rem;font-weight:700;margin-right:8px">' + esc(d.team) + '</span>' +
+      '<span class="chip"><b class="pos">' + r.w + '</b> G · <b>' + r.d + '</b> E · <b class="neg">' + r.l + '</b> P</span>' +
+      (a.gf !== null && a.gf !== undefined ? '<span class="chip" title="Goles a favor - en contra por partido">⚽ ' + a.gf + ' - ' + a.ga + '</span>' : '') +
+      (a.cf ? '<span class="chip" title="Córners a favor - en contra por partido">⛳ ' + a.cf + ' - ' + a.ca + '</span>' : '') +
+      (a.cards ? '<span class="chip" title="Tarjetas por partido (roja = 1)">🟨 ' + a.cards + '</span>' : '') + '</div>';
+    h += '<div class="grid2"><div class="cb"><h3>Goles por partido</h3><canvas id="tgoals"></canvas></div>' +
+         '<div class="cb"><h3>Córners por partido</h3><canvas id="tcorners"></canvas></div></div>';
+    if (d.upcoming.length) {
+      h += '<div class="day">Próximos</div>';
+      for (var u = 0; u < d.upcoming.length; u++) {
+        var x = d.upcoming[u];
+        h += '<div class="m"><div class="mr" style="cursor:default"><div class="time">' + mxtime(x.date) + '<span class="small muted">' + shortDate(mxday(x.date)) +
+             '</span></div><div class="t h">' + esc(x.home) + '</div><div class="pbw">' + probBar(x.probs) + '</div><div class="t">' + esc(x.away) +
+             '</div><div class="pk muted small">' + esc(x.league) + '</div><div></div></div></div>';
+      }
+    }
+    h += '<div class="day">Desde septiembre</div><div class="tbl"><table><thead><tr><th>Fecha</th><th>Rival</th><th></th><th>Res.</th><th>Córners</th><th>Tarjetas</th><th class="hide-sm">Liga</th></tr></thead><tbody>';
+    for (var i = d.matches.length - 1; i >= 0; i--) {
+      var m = d.matches[i], cls = m.result === 'G' ? 'pos' : m.result === 'P' ? 'neg' : '';
+      h += '<tr><td>' + shortDate(m.date) + '</td><td>' + esc(m.opponent) + '</td><td class="muted">' + (m.venue === 'L' ? 'Local' : 'Visita') +
+           '</td><td class="' + cls + '"><b>' + m.result + ' ' + m.gf + '-' + m.ga + '</b></td><td>' + (m.cf === null ? '—' : m.cf + '-' + m.ca) +
+           '</td><td>' + (m.cards === null ? '—' : m.cards) + '</td><td class="hide-sm muted small">' + esc(m.league) + '</td></tr>';
+    }
+    h += '</tbody></table></div>';
+    el('teamview').innerHTML = h;
+    var labels = [], gf = [], ga = [], cf = [], ca = [];
+    for (var j = 0; j < d.matches.length; j++) {
+      var mm = d.matches[j];
+      labels.push(shortDate(mm.date) + ' ' + mm.opponent);
+      gf.push(mm.gf); ga.push(mm.ga); cf.push(mm.cf); ca.push(mm.ca);
+    }
+    var xa = [{ ticks: { display: false }, gridLines: { display: false } }];
+    chart('tgoals', { type: 'bar', data: { labels: labels, datasets: [
+      { label: 'A favor', data: gf, backgroundColor: '#22c55e' }, { label: 'En contra', data: ga, backgroundColor: '#ef4444' }] },
+      options: { legend: { labels: { fontColor: '#94a3b8', boxWidth: 12 } }, scales: { xAxes: xa, yAxes: [{ ticks: { beginAtZero: true, stepSize: 1, fontColor: '#94a3b8' } }] } } });
+    chart('tcorners', { type: 'line', data: { labels: labels, datasets: [
+      { label: 'A favor', data: cf, borderColor: '#60a5fa', fill: false, spanGaps: true },
+      { label: 'En contra', data: ca, borderColor: '#f97316', fill: false, spanGaps: true }] },
+      options: { legend: { labels: { fontColor: '#94a3b8', boxWidth: 12 } }, scales: { xAxes: xa, yAxes: [{ ticks: { beginAtZero: true, fontColor: '#94a3b8' } }] } } });
+  }, function(msg){ el('teamview').innerHTML = '<div class="muted">' + esc(msg) + '</div>'; });
 }
 
-function loadScoreboard(){
-  getJSON('/api/scoreboard', function(d){
-    var html = '', pending = 0;
-    for (var i = 0; i < d.real.length; i++) {
-      var r = d.real[i];
-      html += '<tr><td>' + esc(r.label) + '</td><td>' + r.n + '</td><td>' + r.won + '</td><td>' + r.lost + '</td><td>' + r.staked.toFixed(2) +
-              'u</td><td class="' + (r.profit >= 0 ? 'pos' : 'neg') + '">' + (r.n ? money(r.profit) : '—') + '</td><td>' + r.cancelled + '</td></tr>';
+// ── Gráficas ──
+function loadCharts(){
+  getJSON('/api/board/charts', function(d){
+    var axes = { xAxes: [{ ticks: { maxTicksLimit: 8, fontColor: '#94a3b8' } }], yAxes: [{ ticks: { fontColor: '#94a3b8' } }] };
+    var nolegend = { display: false }, legend = { labels: { fontColor: '#94a3b8', boxWidth: 12 } };
+    var bl = [];
+    for (var b = 0; b < d.bankroll.dates.length; b++) bl.push(shortDate(d.bankroll.dates[b]));
+    var pkl = [];
+    for (var c = 0; c < d.picks.dates.length; c++) pkl.push(shortDate(d.picks.dates[c]));
+    d.picks.dates = pkl;
+    chart('cbank', { type: 'line', data: { labels: bl, datasets: [{ data: d.bankroll.values, borderColor: '#eab308', pointRadius: 0, borderWidth: 2, fill: false }] },
+      options: { legend: nolegend, scales: axes } });
+    var wl = [], wm = [], wp = [];
+    for (var i = 0; i < d.accuracy.length; i++) { wl.push(shortDate(d.accuracy[i].week)); wm.push(Math.round(d.accuracy[i].model * 100)); wp.push(Math.round(d.accuracy[i].pin * 100)); }
+    chart('cacc', { type: 'line', data: { labels: wl, datasets: [
+      { label: '🤖 Programa', data: wm, borderColor: '#60a5fa', fill: false }, { label: '🏦 Pinnacle', data: wp, borderColor: '#94a3b8', fill: false }] },
+      options: { legend: legend, scales: { xAxes: axes.xAxes, yAxes: [{ ticks: { fontColor: '#94a3b8', callback: function(v){ return v + '%'; } } }] } } });
+    chart('cpicks', { type: 'line', data: { labels: d.picks.dates, datasets: [{ data: d.picks.values, borderColor: '#22c55e', fill: true, backgroundColor: 'rgba(34,197,94,.08)' }] },
+      options: { legend: nolegend, scales: axes } });
+    var pl = [], pv = [], pc = [];
+    for (var j = 0; j < d.proposals.length; j++) {
+      var w = d.proposals[j];
+      pl.push(shortDate(w.week) + (w.old_model ? ' *' : ''));
+      pv.push(w.profit_1u);
+      pc.push(w.old_model ? (w.profit_1u >= 0 ? 'rgba(34,197,94,.35)' : 'rgba(239,68,68,.35)') : (w.profit_1u >= 0 ? '#22c55e' : '#ef4444'));
     }
-    el('realbody').innerHTML = html || emptyRow(7, 'Sin apuestas reales');
-    _sum.real = { last: d.last_real_bet, pending: _sum.real ? _sum.real.pending : 0 };
-    renderHowWeGo();
-    var wh = '';
-    for (var j = d.weeks.length - 1; j >= 0; j--) {
-      var w = d.weeks[j];
-      wh += '<tr><td>' + weekLabel(w.week) + '</td><td>' + (w.old_model ? '<span class="muted">con error</span>' : '<b>corregido</b>') +
-            '</td><td>' + w.n + '</td><td>' + w.won + '</td><td>' + w.lost + '</td><td class="' + (w.profit_1u >= 0 ? 'pos' : 'neg') + '">' +
-            money(w.profit_1u) + '</td></tr>';
-    }
-    el('weekbody').innerHTML = wh || emptyRow(6, 'Sin propuestas resueltas todavía');
-  }, function(msg){ el('realbody').innerHTML = emptyRow(7, msg); el('weekbody').innerHTML = emptyRow(6, msg); });
+    chart('cprops', { type: 'bar', data: { labels: pl, datasets: [{ data: pv, backgroundColor: pc }] },
+      options: { legend: nolegend, scales: axes, tooltips: { callbacks: { footer: function(it){ return d.proposals[it[0].index].old_model ? 'Modelo con error (antes del 22-oct)' : ''; } } } } });
+  }, function(msg){ err('Gráficas: ' + msg); });
 }
 
-function loadHistory(){
-  var body = el('histbody'), k = el('histkpis');
-  getJSON('/api/predictions/history?days=14', function(d){
-    _sum.fav = d.fixed ? { s: d.fixed, fixed: true } : (d.all ? { s: d.all, fixed: false } : null);
-    renderHowWeGo();
-    function cards(sm, title){
-      if (!sm) return '';
-      return card(title + ' · acertó el favorito', 'Programa ' + p100(sm.model_hit) + ' · Pinnacle ' + p100(sm.pin_hit), sm.n + ' partidos.') +
-             card(title + ' · probabilidad que le dio a lo que pasó', 'Programa ' + p100(sm.model_p_actual) + ' · Pinnacle ' + p100(sm.pin_p_actual),
-                  'Más alto es mejor.');
-    }
-    k.innerHTML = (d.fixed ? cards(d.fixed, 'Desde la corrección') : card('Desde la corrección', '—', 'El modelo corregido se mide desde el 22-oct.')) +
-                  cards(d.all, 'Últimos 14 días');
-    var html = '';
-    for (var i = 0; i < d.rows.length; i++) {
-      var r = d.rows[i];
-      html += '<tr><td>' + mxdate(r.match_date) + (r.fixed ? '' : ' <span class="muted" title="Antes de la corrección del modelo">·</span>') +
-              '</td><td>' + esc(r.match) + '<div class="lbl2">' + esc(r.league) + '</div></td><td>' + r.score + ' (' + SIDE_ES[r.outcome] +
-              ')</td><td>' + _p3(r.model) + '</td><td>' + _p3(r.pin) + '</td><td>' + (r.model_hit ? '✅' : '❌') +
-              '</td><td>' + (r.pin_hit ? '✅' : '❌') + '</td></tr>';
-    }
-    body.innerHTML = html || emptyRow(7, 'Sin partidos con resultado todavía');
-  }, function(msg){ _sum.fav = null; renderHowWeGo(); body.innerHTML = emptyRow(7, msg); k.innerHTML = ''; });
-}
-function _p3(arr){
-  if (!arr) return '—';
-  var out = [];
-  for (var i = 0; i < arr.length; i++) out.push(arr[i] === null || arr[i] === undefined ? '—' : Math.round(arr[i] * 100));
-  return out.join(' / ');
-}
-
-function loadProposals(){
-  var body = el('propbody'), sum = el('propsum');
-  getJSON('/api/proposals?days=14', function(d){
-    var sh = '';
-    for (var i = 0; i < d.summary.length; i++) {
-      var g = d.summary[i];
-      sh += '<tr><td>' + esc(g.decision) + '</td><td>' + g.n + '</td><td>' + g.won + '</td><td class="' +
-            (g.profit_1u >= 0 ? 'pos' : 'neg') + '">' + money(g.profit_1u) + '</td><td>' + pct(g.roi) + '</td></tr>';
-    }
-    sum.innerHTML = sh || emptyRow(5, 'Todavía sin propuestas resueltas');
-    var html = '';
-    for (var j = 0; j < d.rows.length; j++) {
-      var r = d.rows[j];
-      var dec = esc(r.decision) + (r.fake_odds ? ' <span class="muted" title="Momio de prueba, no real">(momio de prueba)</span>' : '');
-      html += '<tr><td>' + mxdate(r.match_date) + '</td><td>' + esc(r.match) + '</td><td>' + esc(r.market) + '</td><td>' +
-              (r.probability === null ? '—' : p100(r.probability)) + '</td><td>' + (r.odds_us || '—') +
-              '</td><td>' + (r.min_us || '—') + '</td><td>' + dec + '</td><td>' + resultPill(r.result_key, r.result) +
-              '</td><td>' + whoHtml(r.winner) + '</td><td>' + (r.profit_1u === null ? '' : money(r.profit_1u)) + '</td></tr>';
-    }
-    body.innerHTML = html || emptyRow(10, 'Sin propuestas');
-  }, function(msg){ body.innerHTML = emptyRow(10, msg); sum.innerHTML = ''; });
-}
-
-// ── Dinero real ──
-function loadKpis(){
+// ── Encabezado ──
+function loadHeader(){
+  getJSON('/api/version', function(d){ el('ver').textContent = 'v' + d.current; }, function(){});
   getJSON('/api/kpis', function(d){
-    _sum.bank = d.bankroll;
-    _sum.real = { last: _sum.real ? _sum.real.last : null, pending: d.pending };
-    renderHowWeGo();
-    el('kpis').innerHTML =
-      card('Bankroll', d.bankroll === null ? '—' : d.bankroll.toFixed(1) + 'u', 'Empezó en 100u.') +
-      card('Ganancia (' + (d.window || '90d') + ')', money(d.profit), 'Suma de lo ganado y perdido.', d.profit >= 0 ? 'pos' : 'neg') +
-      card('Rendimiento', pct(d.roi), 'Ganancia ÷ lo apostado.', d.roi >= 0 ? 'pos' : 'neg') +
-      card('Acierto', d.win_rate === null ? '—' : (d.win_rate * 100).toFixed(1) + '%', d.resolved + ' apuestas resueltas.') +
-      card('Pendientes', d.pending, 'Apuestas reales esperando resultado.') +
-      card('CLV medio', d.clv_avg === null ? '—' : (d.clv_avg >= 0 ? '+' : '') + (d.clv_avg * 100).toFixed(2) + '%',
-           'Cuánto mejor fue tu momio que el de cierre (' + d.clv_n + ' apuestas). Positivo = buena señal.', d.clv_avg >= 0 ? 'pos' : 'neg');
-    el('sub').textContent = 'Actualizado: ' + new Date().toLocaleString('es-MX') + ' · solo lectura';
-  }, function(m){ err('Indicadores: ' + m); });
-}
-
-// Gráficas: se dibujan la primera vez que se ven (Chart.js v2 no dibuja
-// en un contenedor oculto)
-function cctx(id){ return el(id).getContext('2d'); }
-var _equityData = null;
-function _withEquity(fn){
-  if (_equityData) { fn(_equityData); return; }
-  getJSON('/api/equity', function(d){ _equityData = d; fn(d); }, function(m){ err('Curva: ' + m); });
-}
-function drawCharts(ids){
-  for (var i = 0; i < ids.length; i++) {
-    var id = ids[i];
-    if (_chartsDrawn[id]) continue;
-    _chartsDrawn[id] = true;
-    if (id === 'bankchart') _withEquity(function(d){
-      var bank = [];
-      for (var k = 0; k < d.cumulative.length; k++) bank.push(100 + d.cumulative[k]);
-      new Chart(cctx('bankchart'), { type: 'line',
-        data: { labels: d.dates, datasets: [{ data: bank, borderWidth: 2, pointRadius: 0, borderColor: '#eab308' }] },
-        options: { legend: { display: false }, scales: { xAxes: [{ ticks: { maxTicksLimit: 6 } }] } } });
-    });
-    else if (id === 'daily') _withEquity(function(d){
-      var colors = [];
-      for (var k = 0; k < d.daily.length; k++) colors.push(d.daily[k] >= 0 ? '#22c55e' : '#ef4444');
-      new Chart(cctx('daily'), { type: 'bar',
-        data: { labels: d.daily_dates, datasets: [{ data: d.daily, backgroundColor: colors }] },
-        options: { legend: { display: false }, scales: { xAxes: [{ ticks: { maxTicksLimit: 10 } }] } } });
-    });
-    else if (id === 'equity') _withEquity(function(d){
-      new Chart(cctx('equity'), { type: 'line',
-        data: { labels: d.dates, datasets: [{ data: d.cumulative, borderWidth: 2, pointRadius: 0, borderColor: '#3b82f6', fill: true, backgroundColor: 'rgba(59,130,246,.08)' }] },
-        options: { legend: { display: false }, scales: { xAxes: [{ ticks: { maxTicksLimit: 8 } }] } } });
-    });
-    else if (id === 'clvchart') loadClv();
-    else if (id === 'bymarket') loadBy('market', 'bymarket');
-    else if (id === 'byleague') loadBy('league', 'byleague');
-  }
-}
-
-function loadBy(dim, id){
-  getJSON('/api/by/' + dim, function(d){
-    var colors = [];
-    for (var i = 0; i < d.roi.length; i++) colors.push(d.roi[i] >= 0 ? '#22c55e' : '#ef4444');
-    new Chart(cctx(id), { type: 'horizontalBar',
-      data: { labels: d.labels, datasets: [{ label: 'Rendimiento %', data: d.roi, backgroundColor: colors }] },
-      options: { legend: { display: false },
-        tooltips: { callbacks: { afterLabel: function(c){ return 'n=' + d.n[c.index] + ' · acierto ' + d.wr[c.index] + '%'; } } },
-        scales: { xAxes: [{ ticks: { callback: function(v){ return v + '%'; } } }] } } });
-  }, function(m){ err(dim + ': ' + m); });
-}
-
-// Filtros de mercado y liga de la tabla de apuestas
-function loadFilters(){
-  var dims = [['market', 'fmarket'], ['league', 'fleague']];
-  for (var k = 0; k < dims.length; k++) {
-    (function(dim, sid){
-      getJSON('/api/by/' + dim, function(d){
-        // valor = clave cruda ("under_3.5"), texto = nombre visible: la API
-        // filtra por la clave (con el nombre, la tabla quedaba vacía)
-        var keys = d.keys || d.labels, sel = el(sid);
-        for (var j = 0; j < d.labels.length; j++) sel.add(new Option(d.labels[j], keys[j]));
-      }, function(){});
-    })(dims[k][0], dims[k][1]);
-  }
-}
-
-function loadClv(){
-  getJSON('/api/clv', function(d){
-    var ptsG = [], ptsR = [];
-    for (var i = 0; i < d.x.length; i++) {
-      if (d.wins[i]) ptsG.push({ x: d.x[i], y: d.clv[i] }); else ptsR.push({ x: d.x[i], y: d.clv[i] });
-    }
-    new Chart(cctx('clvchart'), { type: 'scatter', data: { datasets: [
-      { label: 'ganada', data: ptsG, backgroundColor: '#22c55e' },
-      { label: 'perdida', data: ptsR, backgroundColor: '#ef4444' }
-    ] }, options: { legend: { display: false }, scales: { yAxes: [{ ticks: { callback: function(v){ return (v * 100).toFixed(1) + '%'; } } }] } } });
-  }, function(){ /* sin datos de CLV aún */ });
-}
-
-// ── Tabla de apuestas ──
-var _betsRaw = [];
-function loadBets(){
-  var q = 'status=' + encodeURIComponent(el('fstatus').value) +
-          '&market=' + encodeURIComponent(el('fmarket').value) +
-          '&league=' + encodeURIComponent(el('fleague').value) +
-          '&limit=150';
-  var body = el('betsbody');
-  getJSON('/api/bets?' + q, function(d){
-    _betsRaw = d.bets;
-    var html = '';
-    for (var i = 0; i < d.bets.length; i++) {
-      var b = d.bets[i];
-      var rk = String(b.result_key || b.result || 'pending').toLowerCase();
-      var off = rk === 'cancelled';   // cancelada antes del partido: no se apuesta
-      var prof = (rk === 'pending' || off) ? '' : money(b.profit || 0);
-      var clv = b.clv === '' ? '—' : (Number(b.clv) * 100).toFixed(1) + '%';
-      // Formato americano, como PlayDoit (+128 / -140). La mejor cuota
-      // europea es solo referencia; lo que decide es el mínimo de PlayDoit.
-      var minUs = off ? '<span title="Cancelada antes del partido: ya no tiene valor">no apostar</span>' :
-                  b.min_us ? '<span title="' + (b.min_hint || '') + '">' + b.min_us + ' o mejor</span>' : '—';
-      html += '<tr><td>' + mxdate(b.match_date) + '</td><td>' + b.match + '</td><td>' +
-              (b.league || '') + '</td><td>' + b.market + '</td><td>' +
-              (b.probability * 100).toFixed(0) + '%</td><td title="decimal ' + b.odds + '">' +
-              (b.odds_us || '—') + '</td><td>' + minUs + '</td><td>' +
-              b.stake + 'u</td><td>' + resultPill(rk, b.result) + '</td><td>' + prof + '</td><td>' + clv + '</td></tr>';
-    }
-    body.innerHTML = html || emptyRow(11, 'Sin apuestas');
-  }, function(m){ body.innerHTML = emptyRow(11, m); });
-}
-
-// ── Goleadores ──
-function loadScorers(){
-  var body = el('scorersbody');
-  getJSON('/api/scorers', function(d){
-    var html = '';
-    for (var i = 0; i < d.picks.length; i++) {
-      var p = d.picks[i];
-      html += '<tr><td>' + mxdate(p.match_date) + '</td><td>' + p.match + '</td><td>' + p.player +
-              '</td><td>' + p.team + '</td><td>' + (p.probability * 100).toFixed(0) + '%</td><td>' +
-              (p.fair_us || '—') + '</td><td>' + resultPill(p.result_key || p.result, p.result) + '</td></tr>';
-    }
-    body.innerHTML = html || emptyRow(7, 'Sin goleadores aún');
-  }, function(){ body.innerHTML = emptyRow(7, 'Sin goleadores aún'); });
-}
-
-// ── Panel de control GitHub ──
-function loadGh(){
-  var msg = el('ghmsg'), body = el('ghbody');
-  getJSON('/api/gh/status', function(d){
-    if (!d.configured) {
-      msg.innerHTML = '⚠️ ' + d.msg + ' — créalo en github.com/settings/tokens (fine-grained, permiso <b>Actions: Read and write</b> del repo) y agrégalo a tu .env como GH_TOKEN=xxx';
-      body.innerHTML = '';
-      return;
-    }
-    if (!d.ok) { msg.textContent = '⚠️ ' + d.msg; return; }
-    msg.textContent = 'Últimas corridas del sistema:';
-    var html = '';
-    for (var i = 0; i < d.runs.length; i++) {
-      var r = d.runs[i];
-      var icon = r.status !== 'completed' ? '🔄' : (r.conclusion === 'success' ? '✅' : '❌');
-      html += '<tr><td>' + r.name + '</td><td>' + icon + ' ' + r.status + '</td><td>' +
-              (r.conclusion || '—') + '</td><td>' + r.created + '</td><td><a href="' + r.url +
-              '" target="_blank" style="color:var(--blue)">ver</a></td></tr>';
-    }
-    body.innerHTML = html;
-  }, function(m){ msg.textContent = '⚠️ ' + m; });
-}
-
-function dispatch(wf){
-  var msg = el('ghmsg');
-  msg.textContent = 'Disparando ' + wf + '…';
-  try {
-    var x = new XMLHttpRequest();
-    x.open('POST', '/api/gh/dispatch/' + wf, true);
-    x.setRequestHeader('Content-Type', 'application/json');
-    x.onreadystatechange = function(){
-      if (x.readyState !== 4) return;
-      var d = null;
-      try { d = JSON.parse(x.responseText); } catch(e2) {}
-      if (d && d.ok) { msg.textContent = '✅ ' + d.msg + ' — aparece abajo en segundos'; loadGh(); }
-      else if (x.status === 0) { msg.textContent = '⚠️ ' + OFFLINE_MSG; serverDown(); }
-      else { msg.textContent = '⚠️ ' + ((d && d.msg) || ('HTTP ' + x.status)); }
-    };
-    x.send();
-  } catch(e) { msg.textContent = '⚠️ ' + e.message; }
-}
-
-// ── Diagnóstico IA ──
-function loadNarrative(){
-  var sec = el('narrsec');
-  getJSON('/api/narrative', function(d){
-    sec.style.display = 'block';
-    el('narrtext').textContent = d.narrative;
-    el('narreng').textContent = 'Generado por ' + d.engine + ' · ' + d.created;
-  }, function(){ sec.style.display = 'none'; });
-}
-
-function genNarrative(){
-  var b = el('genbtn');
-  b.textContent = '⏳ Generando (~1 min)…';
-  b.disabled = true;
-  var x = new XMLHttpRequest();
-  x.open('POST', '/api/narrative/generate', true);
-  x.onreadystatechange = function(){
-    if (x.readyState !== 4) return;
-    b.textContent = '🧠 Generar diagnóstico ahora';
-    b.disabled = false;
-    if (x.status === 200) loadNarrative();
-  };
-  x.send();
-}
-
-// ── Export CSV ──
-function exportCSV(){
-  if (!_betsRaw.length) { alert('Sin apuestas que exportar'); return; }
-  var cols = [];
-  for (var k in _betsRaw[0]) cols.push(k);
-  var lines = [cols.join(',')];
-  for (var i = 0; i < _betsRaw.length; i++) {
-    var vals = [];
-    for (var j = 0; j < cols.length; j++) {
-      var v = String(_betsRaw[i][cols[j]] === null || _betsRaw[i][cols[j]] === undefined ? '' : _betsRaw[i][cols[j]]);
-      vals.push(v.indexOf(',') >= 0 ? '"' + v + '"' : v);
-    }
-    lines.push(vals.join(','));
-  }
-  var blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
-  var a = document.createElement('a');
-  if (window.navigator && window.navigator.msSaveOrOpenBlob) {
-    window.navigator.msSaveOrOpenBlob(blob, 'apuestas.csv');
-  } else {
-    a.href = URL.createObjectURL(blob);
-    a.download = 'apuestas.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }
-}
-
-// ── Versión + banner de actualización ──
-function loadVersion(){
-  getJSON('/api/version', function(d){
-    el('ver').textContent = 'v' + d.current;
-    if (d.update_available) {
-      var u = el('upd');
-      u.style.display = 'block';
-      u.innerHTML = '🔄 Nueva versión disponible: <b>v' + d.latest + '</b> (tienes v' + d.current + ') — <a href="' + d.release_url + '" target="_blank" style="color:var(--green)">descargar</a>';
-    }
+    el('chipbank').innerHTML = '💰 Bankroll <b>' + (d.bankroll === null ? '—' : d.bankroll.toFixed(1) + 'u') + '</b>';
   }, function(){});
 }
 
-// ── Auto-refresco (datos; las gráficas se redibujan con F5) ──
-var _refreshTimer = null;
-function loadData(){
-  loadKpis(); loadPredictions(); loadPicks(); loadScoreboard(); loadHistory(); loadProposals();
-  loadBets(); loadScorers(); loadGh();
-}
-function setRefresh(mins){
-  if (_refreshTimer) clearInterval(_refreshTimer);
-  if (mins > 0) _refreshTimer = setInterval(loadData, mins * 60000);
-}
-
-// ── ARRANQUE ──
-// Layout de gráficas (r14-fix): Chart.js v2 necesita contenedor con altura
-// fija y position:relative, o el canvas se desborda sobre lo de abajo.
+// ── Arranque ──
 if (window.Chart && Chart.defaults && Chart.defaults.global) {
   Chart.defaults.global.maintainAspectRatio = false;
   Chart.defaults.global.responsive = true;
+  Chart.defaults.global.elements.line.tension = 0;      // rectas: la curva inventa valores entre puntos
 }
-// Filtros: hasta el 24-sep-26 no tenían evento de cambio.
-function _onChange(id, fn){ var x = el(id); if (x) x.onchange = fn; }
-_onChange('fstatus', loadBets);
-_onChange('fmarket', loadBets);
-_onChange('fleague', loadBets);
-_onChange('onlyvalue', renderNext);
-_onChange('frefresh', function(){
-  var mins = parseInt(el('frefresh').value, 10) || 0;
-  _storeSet('refreshMins', String(mins));
-  setRefresh(mins);
-});
-(function(){
-  var sel = el('frefresh');
-  if (sel) sel.value = _storeGet('refreshMins', '5');
-})();
-
-renderHowWeGo();
-showTab((location.hash || '').replace('#', '') || _storeGet('tab', 'hoy'));
-loadVersion();
-loadData();
-loadFilters();
-loadNarrative();
-setRefresh(parseInt(_storeGet('refreshMins', '5'), 10) || 0);   // auto-refresco (5 min por defecto)
+loadHeader();
+loadUpcoming();
+showTab((location.hash || '').replace('#', '') || _storeGet('tab2', 'proximos'));
+setInterval(function(){ loadHeader(); loadUpcoming(); }, 5 * 60000);   // datos cada 5 min

@@ -98,7 +98,7 @@ def test_cancelled_bets_leave_the_main_list_after_kickoff(monkeypatch):
     assert f"({CANCELLED_SQL} AND match_date > NOW())" in seen[-1]
     client.get("/api/bets?status=cancelled")
     assert f"AND {CANCELLED_SQL}" in " ".join(seen[-1].split())
-    assert 'value="cancelled"' in client.get("/").get_data(as_text=True)
+    # v2.0 quitó la tabla de apuestas de la página; el filtro sigue en la API
 
 
 # ============================================================

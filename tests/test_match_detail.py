@@ -183,9 +183,3 @@ def test_match_endpoint_and_predictions_carry_the_key(monkeypatch):
                          "pin_away": 0.21, "lam_home": 2.4, "lam_away": 1.0, "p_over25": 0.63, "p_btts": 0.58}])
     (m,) = V.predictions(mvs, pd.DataFrame(columns=["home_team_norm", "away_team_norm"]), set())
     assert m["key"] == "chelsea vs tottenham"
-
-
-def test_the_page_explains_how_to_open_a_match():
-    import dashboard.app as dash
-    html = dash.app.test_client().get("/").get_data(as_text=True)
-    assert "últimos 5 partidos" in html and "¿Quién tuvo razón?" in html
