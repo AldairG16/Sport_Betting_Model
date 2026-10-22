@@ -33,8 +33,10 @@ MVS = pd.DataFrame([
 ])
 PICKS = pd.DataFrame([
     {"match": "atlas vs club america", "match_date": pd.Timestamp("2026-10-22 01:00", tz="UTC"), "label": "Más de 2.5 goles",
+     "market": "over25", "family": "Goles", "reason": None,
      "model_prob": 0.67, "market_prob": 0.58, "result": "win", "profit": 0.59, "source": None},
     {"match": "real madrid vs sevilla", "match_date": pd.Timestamp("2026-10-18 19:00", tz="UTC"), "label": "Gana el visitante",
+     "market": "away_win", "family": "Ganador", "reason": None,
      "model_prob": 0.34, "market_prob": 0.08, "result": "loss", "profit": None, "source": "reconstruido"},
 ])
 BETS = pd.DataFrame([
@@ -74,6 +76,7 @@ def test_summary_and_weekly_accuracy():
     assert s["picks_fixed"] == {"n": 1, "won": 1, "profit": 0.59, "priced": 1}
     assert s["picks_old"] == {"n": 1, "won": 0, "profit": 0, "priced": 0}
     assert (s["bets"], s["bets_profit"]) == (1, 0.4)
+    assert s["families"]["Goles"] == {"n": 1, "won": 1, "profit": 0.59, "priced": 1}     # tendencias por tipo
     weeks = B.weekly_accuracy(rows)
     assert [(w["week"], w["n"]) for w in weeks] == [("2026-10-12", 1), ("2026-10-19", 1)]
 

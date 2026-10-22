@@ -479,15 +479,17 @@ def api_predictions():
                                    "under25_odds", "consensus_over25_odds", "consensus_under25_odds",
                                    "btts_yes_odds", "btts_no_odds", "consensus_home_odds",
                                    "consensus_draw_odds", "consensus_away_odds"])
-    # cuánto paga PlayDoit frente al promedio, de las capturas del dueño
-    from src.models.playdoit_prices import playdoit_ratio
-    pd_rows = _q("""
-        SELECT decimal, consensus_decimal, boosted FROM playdoit_prices
-        WHERE captured_at >= NOW() - INTERVAL '60 days'
+    # el pick guardado de cada partido (v2.1): el que se ve es el que se mide
+    picks = _q("""
+        SELECT match, label, family, market, model_prob, market_prob, playdoit_odds, reason
+        FROM program_picks WHERE match_date BETWEEN NOW() - INTERVAL '3 hours' AND NOW() + INTERVAL '3 days'
     """)
-    ratio = playdoit_ratio(pd_rows.to_dict("records")) if not pd_rows.empty else None
-    return jsonify({"ok": True, "playdoit_ratio": ratio,
-                    "matches": _vis.predictions(mvs, up, pending, normalize_team, ratio)})
+    saved = {}
+    for p in (picks.to_dict("records") if not picks.empty else []):
+        if " vs " in str(p["match"]):
+            h, a = str(p["match"]).split(" vs ", 1)
+            saved[f"{normalize_team(h)} vs {normalize_team(a)}".lower()] = p
+    return jsonify({"ok": True, "matches": _vis.predictions(mvs, up, pending, normalize_team, saved)})
 
 
 @app.route("/api/lineups")
@@ -672,7 +674,8 @@ def _load_past_rows() -> list:
         return []
     mvs = _q("""SELECT match, match_date, p_home, p_draw, p_away, pin_home, pin_draw, pin_away
                 FROM model_vs_sharp WHERE match_date >= CAST(:s AS date) - 2""", p)
-    picks = _q("""SELECT match, match_date, label, model_prob, market_prob, result, profit, source
+    picks = _q("""SELECT match, match_date, label, family, market, reason, model_prob, market_prob, result,
+                         profit, source
                   FROM program_picks WHERE match_date >= CAST(:s AS date) - 2""", p)
     bets = _q("""SELECT match, match_date, market, result, profit FROM bets_history
                  WHERE match_date >= CAST(:s AS date) - 2""", p)
@@ -733,8 +736,10 @@ def api_board_charts():
         SELECT DISTINCT ON (match, market) match_date, market, odds, result
         FROM model_proposals ORDER BY match, market, evaluated_at DESC
     """)
+    rows = _past_rows()
     return jsonify({"ok": True, "bankroll": _b.bankroll_series(hist), "picks": _b.picks_series(picks),
-                    "accuracy": _b.weekly_accuracy(_past_rows()), "proposals": _vis.proposal_weeks(props)})
+                    "accuracy": _b.weekly_accuracy(rows), "proposals": _vis.proposal_weeks(props),
+                    "families": _b.summary(rows)["families"]})
 
 
 @app.route("/api/scoreboard")
@@ -965,7 +970,7 @@ PAGE = """<!DOCTYPE html>
   <div class="bar" id="daybar"></div>
   <div class="bar">
     <select id="uleague"><option value="">Todas las ligas</option></select>
-    <span class="pill" id="uvalue" title="Solo los que pagan el mínimo">✅ Con valor</span>
+    <select id="ufam"><option value="">Todas las apuestas</option><option>Ganador</option><option>Goles</option><option>Ambos anotan</option><option>Córners</option><option>Tarjetas</option></select>
     <span class="small muted" style="margin-left:auto"><span style="color:var(--home)">■</span> local <span style="color:var(--draw)">■</span> empate <span style="color:var(--away)">■</span> visitante · programa (arriba) y Pinnacle (abajo)</span>
   </div>
   <div id="uplist" class="muted">Cargando…</div>
@@ -1003,6 +1008,9 @@ PAGE = """<!DOCTYPE html>
   <div class="grid2">
     <div class="cb"><h3>Picks del programa (unidades acumuladas, 1u c/u)</h3><canvas id="cpicks"></canvas></div>
     <div class="cb"><h3>Propuestas del modelo por semana (unidades)</h3><canvas id="cprops"></canvas></div>
+  </div>
+  <div class="grid2">
+    <div class="cb"><h3>Picks por tipo de apuesta (modelo corregido, unidades)</h3><canvas id="cfam"></canvas></div>
   </div>
 </div>
 <script src="/ui_es5.js?v=__V__"></script></body></html>""".replace("__HOW_TO_READ__", HOW_TO_READ)
