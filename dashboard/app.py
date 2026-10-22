@@ -731,7 +731,7 @@ def api_board_team():
 def api_board_charts():
     from dashboard import board as _b
     hist = _q("SELECT date, balance FROM bankroll_history ORDER BY date, id")
-    picks = _q("SELECT match_date, result, profit FROM program_picks")
+    picks = _q("SELECT match_date, result, profit, reason FROM program_picks")
     props = _q("""
         SELECT DISTINCT ON (match, market) match_date, market, odds, result
         FROM model_proposals ORDER BY match, market, evaluated_at DESC

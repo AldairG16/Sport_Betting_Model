@@ -30,8 +30,17 @@ mercado) perdió: 155 de 452, −38.85u. Mientras más se separaba, más perdía
     league_factor; src/features/clubelo.py): sin ese ajuste sobrevalora a
     quien golea en una liga débil (Viking 2.3 goles por partido en Noruega
     contra 1.6 del Aston Villa en la Premier).
-De lo que pasa, el de mayor diferencia. Sin ninguno: "sin pick", con el
-motivo. Tiros al arco no tiene precio en ninguna fuente: no es pick.
+De lo que pasa, el de mayor diferencia. Tiros al arco no tiene precio en
+ninguna fuente: no es pick.
+
+22-oct-26, pick en todos los partidos. El dueño: "quiero que todos tengan
+picks no importa si se perdió o ganó, quiero saber para dónde tiende tu
+aprendizaje". La regla ya no esconde el pick: lo marca. Si ninguna apuesta
+pasa la regla, el pick es, de lo que el programa cree, donde más se separa
+del mercado, guardado con el motivo por el que no la pasa (reason; NULL = la
+pasa). Sin momios guardados, el 1X2 contra el Pinnacle de model_vs_sharp:
+cuenta acierto, no unidades. Solo un partido que el programa no analizó se
+queda sin pick.
 """
 
 import math
@@ -75,7 +84,9 @@ PICKS_DDL = """
 """
 # source: 'reconstruido' = hecho después con lo guardado antes del partido
 # (backfill_picks); NULL = guardado en su momento. family: Ganador, Goles,
-# Ambos anotan, Córners, Tarjetas. Sin pick: market NULL y reason.
+# Ambos anotan, Córners, Tarjetas. reason: por qué el pick no pasa la regla
+# (NULL = la pasa). Sin pick (el programa no se inclina por nada con
+# precio): market NULL y reason.
 PICKS_ALTERS = ("ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS source TEXT",
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS family TEXT",
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS reason TEXT",
@@ -211,35 +222,42 @@ def candidates(model: list, lam: tuple, p_over25, p_btts, u, props: dict | None 
     return out
 
 
+def _why(c: dict, then: dict | None, unadjusted_cross: bool) -> str | None:
+    """Por qué el candidato no pasa la regla; None si la pasa."""
+    if unadjusted_cross:
+        return CROSS
+    gap = c["model"] - c["market_prob"]
+    if gap < MIN_GAP:
+        return NO_EDGE
+    if gap > MAX_GAP:
+        return TOO_FAR
+    before = (then or {}).get(c["market"])
+    if before is not None and before - c["market_prob"] >= MOVED_AGAINST:
+        return MOVED
+    if c["playdoit_odds"] is None or not (MIN_ODDS <= c["playdoit_odds"] <= MAX_ODDS):
+        return NO_PRICE
+    return None
+
+
 def choose(cands: list, then: dict | None = None, league=None, adjusted: bool = False) -> tuple:
-    """(pick o None, motivo). then: {mercado: probabilidad del mercado cuando
-    el programa analizó el partido}, para la regla del movimiento en contra.
-    adjusted: el partido entre ligas se analizó con la fuerza de cada liga."""
-    if cross_league(league) and not adjusted:
-        return None, CROSS
+    """(pick, motivo). then: {mercado: probabilidad del mercado cuando el
+    programa analizó el partido}, para la regla del movimiento en contra.
+    adjusted: el partido entre ligas se analizó con la fuerza de cada liga.
+    De lo que pasa la regla, el de mayor diferencia (motivo None). Si nada
+    la pasa, igual hay pick: de lo que el programa cree, donde más se separa
+    del mercado, con el motivo por el que no pasa. Sin nada que el programa
+    crea con precio: (None, NO_PRICE)."""
     fav = max((c["model"] for c in cands if c["family"] == "Ganador"), default=None)
     leaning = [c for c in cands if (c["model"] >= fav - 1e-9 if c["family"] == "Ganador" else c["model"] >= 0.5)]
-    reason = NO_EDGE
-    ok = []
-    for c in leaning:
-        gap = c["model"] - c["market_prob"]
-        if gap < MIN_GAP:
-            continue
-        if gap > MAX_GAP:
-            reason = TOO_FAR if reason == NO_EDGE else reason
-            continue
-        before = (then or {}).get(c["market"])
-        if before is not None and before - c["market_prob"] >= MOVED_AGAINST:
-            reason = MOVED
-            continue
-        if c["playdoit_odds"] is None or not (MIN_ODDS <= c["playdoit_odds"] <= MAX_ODDS):
-            reason = NO_PRICE if reason == NO_EDGE else reason
-            continue
-        ok.append(c)
-    if not ok:
-        return None, reason
-    best = max(ok, key=lambda c: c["model"] - c["market_prob"])
-    return best, None
+    if not leaning:
+        return None, NO_PRICE
+    unadjusted = cross_league(league) and not adjusted
+    why = [(c, _why(c, then, unadjusted)) for c in leaning]
+    ok = [c for c, w in why if w is None]
+    gap = (lambda c: c["model"] - c["market_prob"])
+    if ok:
+        return max(ok, key=gap), None
+    return max(why, key=lambda cw: gap(cw[0]))
 
 
 def _row(r: dict, kick, display, pick_: dict | None, reason: str | None, source=None) -> dict:
@@ -250,7 +268,7 @@ def _row(r: dict, kick, display, pick_: dict | None, reason: str | None, source=
                                              "min_us", "best_odds", "playdoit_odds", "value")}, "reason": reason}
     min_us = min_american(pick_["model"], pin_prob=pick_["market_prob"])
     est_us = to_american(pick_["playdoit_odds"]) if pick_["playdoit_odds"] else None
-    return {**base, "market": pick_["market"], "label": pick_["label"], "family": pick_["family"], "reason": None,
+    return {**base, "market": pick_["market"], "label": pick_["label"], "family": pick_["family"], "reason": reason,
             "model_prob": round(pick_["model"], 3), "market_prob": round(pick_["market_prob"], 3), "lean": True,
             "min_us": min_us, "best_odds": pick_["best_odds"], "playdoit_odds": pick_["playdoit_odds"],
             "value": bool(min_us is not None and est_us is not None and est_us >= min_us)}
@@ -279,6 +297,11 @@ def decide(r: dict, u, then_snap=None, props=None, ratio=None) -> tuple:
     if None in model:
         return None, NO_EDGE
     cs = candidates(model, (r.get("lam_home"), r.get("lam_away")), r.get("p_over25"), r.get("p_btts"), u, props, ratio)
+    pin = [_num(r.get(c)) for _, _, c, *_ in SIDES]
+    if not any(c["family"] == "Ganador" for c in cs) and None not in pin:
+        # sin momios del 1X2: el Pinnacle de cuando se analizó, sin precio
+        cs += [_cand(market, label, "Ganador", p, mk, None, None)
+               for (_, _, _, _, _, market, label), p, mk in zip(SIDES, model, pin)]
     return choose(cs, _market_then(r, then_snap, ratio), r.get("league"), _num(r.get("league_factor")) is not None)
 
 
@@ -484,9 +507,10 @@ def build_past_picks(mvs: pd.DataFrame, snaps: pd.DataFrame, normalize=None) -> 
     return rows
 
 
-def backfill_picks(since: str = "2026-09-01", engine=None) -> int:
+def backfill_picks(since: str = "2026-09-01", engine=None, overwrite: bool = False) -> int:
     """Rehace con la regla de hoy los picks de los partidos ya jugados y los
-    liquida. Pisa los anteriores (la regla vieja) solo de partidos ya jugados."""
+    liquida. Solo toca partidos ya jugados: los que no tienen pick o, con
+    overwrite, todos (para pisar los de una regla vieja)."""
     if engine is None:
         from config.database import engine
     from src.utils.team_normalizer import normalize_team
@@ -501,7 +525,8 @@ def backfill_picks(since: str = "2026-09-01", engine=None) -> int:
         return 0
     with engine.begin() as conn:
         _ensure(conn)
-        _upsert(conn, rows, "program_picks.match_date < NOW() - INTERVAL '3 hours'")
+        _upsert(conn, rows, "program_picks.match_date < NOW() - INTERVAL '3 hours'"
+                + ("" if overwrite else " AND program_picks.market IS NULL"))
     print(f"🎯 Picks reconstruidos: {sum(1 for r in rows if r['market'])} de {len(rows)} partidos desde {since}")
     resolve_picks(engine=engine)
     return len(rows)

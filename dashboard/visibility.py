@@ -96,16 +96,18 @@ def _fresh_pinnacle(u) -> list | None:
 
 def saved_pick(p) -> dict:
     """El pick guardado del partido (program_picks), como lo muestra la
-    página (v2.1, 22-oct-26: el que se mide es el mismo que se ve). Sin
-    pick: label vacío y el motivo."""
+    página (v2.1, 22-oct-26: el que se mide es el mismo que se ve). rule: el
+    pick pasa la regla (v2.2: todos los partidos tienen pick; reason dice
+    por qué no la pasa). Sin pick: label vacío y el motivo."""
     if p is None:
         return {"label": "", "reason": ""}
+    reason = p.get("reason") if isinstance(p.get("reason"), str) else ""
     if not (isinstance(p.get("market"), str) and p.get("market")):
-        return {"label": "", "reason": p.get("reason") or ""}
+        return {"label": "", "reason": reason}
     po = _num(p.get("playdoit_odds"))
     return {"label": p.get("label"), "family": p.get("family"), "market": p.get("market"),
             "model": _num(p.get("model_prob")), "market_prob": _num(p.get("market_prob")),
-            "playdoit_us": fmt_american(to_american(po)) if po else ""}
+            "playdoit_us": fmt_american(to_american(po)) if po else "", "rule": not reason, "reason": reason}
 
 
 def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,

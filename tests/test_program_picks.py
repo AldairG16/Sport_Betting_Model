@@ -55,31 +55,49 @@ def test_the_pick_can_be_a_goals_market_not_only_the_winner():
     assert pk["playdoit_odds"] == pytest.approx(1.72)
 
 
-def test_a_huge_gap_with_the_market_is_not_a_pick():
+def test_a_huge_gap_with_the_market_is_still_the_pick_but_outside_the_rule():
+    # v2.2 (22-oct-26): "quiero que todos tengan picks"; la regla marca, no esconde
     pk, why = PP.choose(PP.candidates(MODEL_EVEN, (1.6, 1.4), 0.75, None, _u()))
-    assert pk is None and why == PP.TOO_FAR                      # 21 pts: probablemente se equivoca
+    assert pk["market"] == "over25" and why == PP.TOO_FAR        # 21 pts: probablemente se equivoca
 
 
 def test_only_what_the_program_believes_will_happen():
     # el visitante: 5 pts más que Pinnacle, pero el favorito del programa es el local
     cs = PP.candidates([0.40, 0.27, 0.33], (1.5, 1.4), None, None, _u())
     pk, why = PP.choose(cs)
-    assert pk is None and why == PP.NO_EDGE
+    assert pk["market"] == "home_win" and why == PP.NO_EDGE       # su favorito, sin ventaja
     # más de 2.5 con 46%: 5 pts sobre el mercado (~41%), pero no lo cree
     u = _u(consensus_over25_odds=2.30, consensus_under25_odds=1.62)
     pk, why = PP.choose(PP.candidates(MODEL_EVEN, (1.6, 1.4), 0.46, None, u))
-    assert pk is None and why == PP.NO_EDGE
+    assert pk["market"] == "home_win" and why == PP.NO_EDGE
 
 
 def test_a_market_that_moved_against_after_the_analysis_cancels_the_pick():
     cs = PP.candidates(MODEL_EVEN, (1.6, 1.4), 0.60, None, _u())
     pk, why = PP.choose(cs, then={"over25": 0.59})               # estaba en 59% y bajó a ~54%
-    assert pk is None and why == PP.MOVED
+    assert pk["market"] == "over25" and why == PP.MOVED
 
 
 def test_matches_between_leagues_wait_for_the_league_strength():
     pk, why = PP.choose(PP.candidates(MODEL_EVEN, (1.6, 1.4), 0.60, None, _u()), league="soccer_uefa_champs_league")
-    assert pk is None and why == PP.CROSS
+    assert pk["market"] == "over25" and why == PP.CROSS
+
+
+def test_the_pick_that_passes_the_rule_wins_over_a_bigger_gap_that_does_not():
+    u = _u(btts_yes_odds=2.60, btts_no_odds=1.50)                # ambos anotan: mercado ~37%
+    cs = PP.candidates(MODEL_EVEN, (1.6, 1.4), 0.60, 0.55, u)     # 18 pts en ambos anotan, 6 en más de 2.5
+    pk, why = PP.choose(cs)
+    assert pk["market"] == "over25" and why is None
+
+
+def test_a_match_without_saved_odds_still_has_its_winner_pick():
+    # antes del 12-oct odds_history no tiene Pinnacle ni promedio: el 1X2
+    # contra el Pinnacle de model_vs_sharp, sin precio (cuenta acierto, no unidades)
+    pk, why = PP.decide(_mvs(), None)
+    assert (pk["market"], pk["playdoit_odds"], pk["market_prob"]) == ("away_win", None, 0.49)
+    assert why == PP.NO_EDGE
+    row = PP._row(_mvs(), KICK, None, pk, why)
+    assert row["market"] == "away_win" and row["reason"] == PP.NO_EDGE
 
 
 def test_corners_and_cards_enter_when_they_have_a_price():
@@ -101,7 +119,10 @@ def test_the_dashboard_shows_the_saved_pick_or_why_there_is_none():
     shown = V.saved_pick({"market": "btts", "label": "Ambos anotan", "family": "Ambos anotan",
                           "model_prob": 0.62, "market_prob": 0.56, "playdoit_odds": 1.70})
     assert (shown["label"], shown["family"], shown["playdoit_us"]) == ("Ambos anotan", "Ambos anotan", "-143")
-    assert V.saved_pick({"market": None, "reason": PP.TOO_FAR}) == {"label": "", "reason": PP.TOO_FAR}
+    assert shown["rule"] is True and shown["reason"] == ""
+    out = V.saved_pick({"market": "over25", "label": "Más de 2.5 goles", "reason": PP.TOO_FAR, "playdoit_odds": None})
+    assert out["label"] == "Más de 2.5 goles" and out["rule"] is False and out["reason"] == PP.TOO_FAR
+    assert V.saved_pick({"market": None, "reason": PP.NO_PRICE}) == {"label": "", "reason": PP.NO_PRICE}
 
 
 # ─── guardar ─────────────────────────────────────────────────────────────────
@@ -114,10 +135,10 @@ def test_build_picks_uses_the_latest_analysis_and_canonical_names():
     (r,) = rows
     assert r["match"] == "atlas vs club america" and r["display"] == "Atlas vs América"
     assert (r["market"], r["family"], r["model_prob"]) == ("over25", "Goles", 0.6)
-    # sin pick también se guarda, con el motivo: el registro es de todos los partidos
+    # fuera de la regla también es pick, con el motivo: todos los partidos tienen uno
     (r2,) = PP.build_picks(pd.DataFrame([_mvs(model=tuple(MODEL_EVEN), over=0.80, btts=None)]),
                            pd.DataFrame([{**UP, **PIN_EVEN}]))
-    assert r2["market"] is None and r2["reason"] == PP.TOO_FAR
+    assert r2["market"] == "over25" and r2["reason"] == PP.TOO_FAR
 
 
 def _reads(extra=None):
@@ -321,7 +342,7 @@ def test_past_picks_use_only_the_odds_before_kickoff_and_at_the_analysis():
     # el más de 2.5 bajó de ~59% (al analizar) a ~53% antes del partido: se movió en contra
     moved = snaps.assign(consensus_over25_odds=[1.62, 1.80, 9.0], consensus_under25_odds=[2.30, 2.00, 9.0])
     (r2,) = PP.build_past_picks(mvs, moved, normalize=norm)
-    assert r2["market"] is None and r2["reason"] == PP.MOVED
+    assert r2["market"] == "over25" and r2["reason"] == PP.MOVED
 
 
 def test_backfill_redoes_only_matches_already_played(monkeypatch):
@@ -334,3 +355,9 @@ def test_backfill_redoes_only_matches_already_played(monkeypatch):
     assert PP.backfill_picks(engine=eng) == 1
     (sql, params), = eng.statements("INSERT INTO program_picks")
     assert "WHERE program_picks.match_date < NOW() - INTERVAL '3 hours'" in sql and params["source0"] == "reconstruido"
+    # solo llena los que no tienen pick: los que ya lo tienen no cambian con la regla de hoy
+    assert sql.endswith("AND program_picks.market IS NULL")
+    eng = FakeEngine()
+    PP.backfill_picks(engine=eng, overwrite=True)
+    (sql, _), = eng.statements("INSERT INTO program_picks")
+    assert "market IS NULL" not in sql

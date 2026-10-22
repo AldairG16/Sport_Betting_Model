@@ -123,7 +123,8 @@ def past_matches(matches: pd.DataFrame, mvs: pd.DataFrame, picks: pd.DataFrame, 
                         "rebuilt": _str(p.get("source")) == "reconstruido", "old_model": bool(when < MODEL_FIXED)}
                 continue
             pick = {"label": p.get("label"), "family": _str(p.get("family")) or "Ganador", "result": res_p,
-                    "profit": _num(p.get("profit")),
+                    "profit": _num(p.get("profit")), "rule": not _str(p.get("reason")),
+                    "reason": _str(p.get("reason")) or "",
                     "model": _num(p.get("model_prob")), "market": _num(p.get("market_prob")),
                     "winner": who_was_right(p.get("model_prob"), p.get("market_prob"), res_p),
                     "rebuilt": _str(p.get("source")) == "reconstruido", "old_model": bool(when < MODEL_FIXED)}
@@ -172,6 +173,8 @@ def summary(rows: list) -> dict:
             "model_hit": round(sum(f["model_hit"] for f in fav) / len(fav), 3) if fav else None,
             "pin_hit": round(sum(f["pin_hit"] for f in fav) / len(fav), 3) if fav else None,
             "picks_fixed": rec([p for p in picks if not p.get("old_model")]),
+            # los que pasan la regla (v2.2: todos los partidos tienen pick)
+            "picks_rule": rec([p for p in picks if not p.get("old_model") and p.get("rule")]),
             "picks_old": rec([p for p in picks if p.get("old_model")]),
             # tendencias por tipo de apuesta, solo el modelo corregido (v2.1)
             "families": {f: rec([p for p in picks if not p.get("old_model") and p.get("family") == f])
@@ -247,8 +250,9 @@ def bankroll_series(hist: pd.DataFrame) -> dict:
 
 def picks_series(picks: pd.DataFrame) -> dict:
     """Unidades acumuladas de los picks del programa por día: una línea para
-    el modelo con error (antes del 22-oct) y otra para el corregido."""
-    empty = {"dates": [], "old": [], "fixed": []}
+    el modelo con error (antes del 22-oct), otra para el corregido y otra
+    para los del corregido que pasan la regla (reason vacío)."""
+    empty = {"dates": [], "old": [], "fixed": [], "rule": []}
     if picks.empty:
         return empty
     p = picks[picks["result"].isin(PLAYED)].copy()
@@ -259,9 +263,11 @@ def picks_series(picks: pd.DataFrame) -> dict:
     when = pd.to_datetime(p["match_date"], utc=True)
     p["d"] = when.dt.strftime("%Y-%m-%d")
     p["old"] = when < MODEL_FIXED
+    rule = (p["reason"].isna() | (p["reason"].astype(str).str.strip() == "")) if "reason" in p.columns \
+        else pd.Series(True, index=p.index)
     dates = sorted(p["d"].unique())
     out = {"dates": dates}
-    for name, mask in (("old", p["old"]), ("fixed", ~p["old"])):
+    for name, mask in (("old", p["old"]), ("fixed", ~p["old"]), ("rule", ~p["old"] & rule)):
         daily = p[mask].groupby("d")["profit"].sum()
         if daily.empty:
             out[name] = [None] * len(dates)
@@ -269,6 +275,6 @@ def picks_series(picks: pd.DataFrame) -> dict:
         cum, total, first = [], 0.0, daily.index.min()
         for d in dates:
             total += float(daily.get(d, 0.0))
-            cum.append(round(total, 2) if d >= first and (name == "fixed" or d <= daily.index.max()) else None)
+            cum.append(round(total, 2) if d >= first and (name != "old" or d <= daily.index.max()) else None)
         out[name] = cum
     return out
