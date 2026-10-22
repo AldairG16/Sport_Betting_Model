@@ -1292,6 +1292,17 @@ de responder "cómo nos fue con los picks".
   promedio de las casas por `playdoit_ratio`). "Ambos anotan" no tiene promedio de casas:
   cuenta en ganados y perdidos pero no en unidades.
 - **Chequeo:** el chequeo diario de salidas también re-liquida esta tabla.
+- **Picks reconstruidos** (`backfill_picks`, columna `source = 'reconstruido'`, 22-oct-2026).
+  El dueño preguntó por qué los partidos anteriores no tenían pick.
+  - Con lo que había ANTES de cada partido se reconstruye el mismo pick: la predicción de
+    `model_vs_sharp` y la última foto de `odds_history` previa al inicio.
+  - Hasta el 21-oct solo hay 1X2: `model_vs_sharp` no guardaba goles ni ambos anotan.
+  - Hay precio de PlayDoit solo desde el 12-oct, cuando `odds_history` empezó a guardar el
+    promedio de las casas.
+  - Nunca pisa un pick guardado en su momento.
+  - Se corrió una vez: 456 picks desde el 26-sep, 155 de 452 ganados, −38.85u en los 210 con
+    precio. Es el modelo con el error del xG.
+  - El dashboard los marca con ↺ y separa sus totales de los del modelo corregido.
 
 **Quién tuvo razón y el partido abierto (v1.10.0, 21-oct-2026).** El dueño pidió ver, en cada
 apuesta, "quién ganó de los 2", y poder abrir el partido para ver sus últimos 5 partidos.

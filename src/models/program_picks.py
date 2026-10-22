@@ -47,6 +47,9 @@ PICKS_DDL = """
         UNIQUE (match, match_date)
     )
 """
+# 'reconstruido': hecho después con la predicción guardada antes del partido
+# (backfill_picks); NULL = guardado en su momento por snapshot_picks
+PICKS_ALTER = "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS source TEXT"
 _COLS = ("match", "match_date", "league", "display", "market", "label", "model_prob", "market_prob",
          "lean", "min_us", "best_odds", "playdoit_odds", "value")
 
@@ -204,6 +207,7 @@ def snapshot_picks(hours: int = SNAPSHOT_HOURS, engine=None) -> int:
             return 0
         with engine.begin() as conn:
             conn.execute(text(PICKS_DDL))
+            conn.execute(text(PICKS_ALTER))
             values, params = [], {}
             for k, r in enumerate(rows):
                 values.append("(" + ", ".join(f":{c}{k}" for c in _COLS) + ")")
@@ -236,6 +240,7 @@ def resolve_picks(engine=None) -> dict:
     from src.models.save_bets import SHADOW_STALE_DAYS, _preload_matches, plan_shadow_resolutions
     with engine.begin() as conn:
         conn.execute(text(PICKS_DDL))
+        conn.execute(text(PICKS_ALTER))
     pending = pd.read_sql(text("""
         SELECT id, match, match_date, market, playdoit_odds FROM program_picks
         WHERE result IS NULL AND match_date < NOW() - INTERVAL '3 hours'
@@ -262,3 +267,92 @@ def resolve_picks(engine=None) -> dict:
     print(f"🎯 Picks del programa liquidados: {len(plan)}/{len(pending)}"
           + (f", {stale} sin datos → stale" if stale else ""))
     return {"pending": int(len(pending)), "resolved": len(plan), "stale": int(stale or 0)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Picks reconstruidos (22-oct-26)
+# ─────────────────────────────────────────────────────────────────────────────
+# El dueño: "por qué ninguno de los partidos anteriores tiene un pick, se
+# supone que los estábamos guardando". Se guardan desde el 21-oct; antes se
+# calculaban al vuelo. Con lo que había ANTES de cada partido (la predicción
+# de model_vs_sharp y la última foto de momios de odds_history previa al
+# inicio) se reconstruye el mismo pick, sin mirar el resultado.
+# model_vs_sharp guarda goles y ambos anotan solo desde el 21-oct: antes, el
+# pick sale del 1X2. El promedio de las casas está en odds_history desde el
+# 12-oct: antes no hay momio de PlayDoit y el pick cuenta en ganados y
+# perdidos, no en unidades.
+
+def build_past_picks(mvs: pd.DataFrame, snaps: pd.DataFrame, normalize=None) -> list:
+    """Función pura: un pick por partido de model_vs_sharp, con la foto de
+    momios más reciente ANTERIOR al inicio (snaps: odds_history, con
+    `match` visible, `kickoff` y `captured_at`)."""
+    from types import SimpleNamespace
+    idx = {}
+    for r in (snaps.to_dict("records") if not snaps.empty else []):
+        if pd.Timestamp(r["captured_at"]) >= pd.Timestamp(r["kickoff"]):
+            continue                                   # momio en vivo: no cuenta
+        h, _, a = str(r["match"]).partition(" vs ")
+        idx.setdefault(match_key(h, a, normalize), []).append(r)
+    rows = []
+    for r in (mvs.to_dict("records") if not mvs.empty else []):
+        kick = pd.Timestamp(r["match_date"])
+        h, _, a = str(r["match"]).partition(" vs ")
+        cands = [x for x in idx.get(match_key(h, a, normalize), [])
+                 if abs((pd.Timestamp(x["kickoff"]) - kick).total_seconds()) <= 3 * 3600
+                 and pd.Timestamp(x["captured_at"]) < kick]
+        snap = max(cands, key=lambda x: pd.Timestamp(x["captured_at"])) if cands else None
+        u = SimpleNamespace(**snap) if snap else None
+        model = [_num(r.get(c)) for _, c, *_ in SIDES]
+        pin = fair_1x2(u) or [_num(r.get(c)) for _, _, c, *_ in SIDES]
+        pk = pick(model, pin, r.get("p_over25"), r.get("p_btts"), u)
+        if not pk:
+            continue
+        rows.append({"match": str(r["match"]).lower(), "match_date": kick.to_pydatetime(), "league": r.get("league"),
+                     "display": snap["match"] if snap else None, "market": pk["market"], "label": pk["label"],
+                     "model_prob": pk["model"], "market_prob": pk["market_prob"], "lean": pk["lean"],
+                     "min_us": pk["min_us"], "best_odds": pk["best_odds"], "playdoit_odds": pk["playdoit_odds"],
+                     "value": pk["playdoit_value"], "source": "reconstruido"})
+    return rows
+
+
+def backfill_picks(since: str = "2026-09-01", engine=None) -> int:
+    """Guarda los picks reconstruidos de los partidos ya jugados que no
+    tienen uno guardado (nunca pisa uno guardado en su momento) y los
+    liquida. Se puede correr de nuevo: lo ya guardado no se toca."""
+    if engine is None:
+        from config.database import engine
+    from src.utils.team_normalizer import normalize_team
+    mvs = pd.read_sql(text("""
+        SELECT * FROM model_vs_sharp
+        WHERE match_date >= CAST(:s AS date) AND match_date < NOW() - INTERVAL '3 hours'
+    """), engine, params={"s": since})
+    snaps = pd.read_sql(text("""
+        SELECT DISTINCT ON (match_key) match, kickoff, captured_at, home_odds, draw_odds, away_odds,
+               over25_odds, under25_odds, btts_yes_odds, btts_no_odds, pin_home_odds, pin_draw_odds,
+               pin_away_odds, consensus_home_odds, consensus_draw_odds, consensus_away_odds,
+               consensus_over25_odds, consensus_under25_odds
+        FROM odds_history
+        WHERE kickoff >= CAST(:s AS date) - 1 AND captured_at < kickoff
+        ORDER BY match_key, captured_at DESC
+    """), engine, params={"s": since})
+    rows = build_past_picks(mvs, snaps, normalize_team)
+    if not rows:
+        return 0
+    cols = _COLS + ("source",)
+    with engine.begin() as conn:
+        conn.execute(text(PICKS_DDL))
+        conn.execute(text(PICKS_ALTER))
+        for i in range(0, len(rows), 200):
+            part = rows[i:i + 200]
+            values, params = [], {}
+            for k, r in enumerate(part):
+                values.append("(" + ", ".join(f":{c}{k}" for c in cols) + ")")
+                params.update({f"{c}{k}": r[c] for c in cols})
+            conn.execute(text(f"""
+                INSERT INTO program_picks ({", ".join(cols)}) VALUES {", ".join(values)}
+                ON CONFLICT (match, match_date) DO NOTHING
+            """), params)
+    print(f"🎯 Picks reconstruidos: {len(rows)} partidos desde {since}")
+    resolve_picks(engine=engine)
+    return len(rows)
+
