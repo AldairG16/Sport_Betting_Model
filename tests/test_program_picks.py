@@ -37,52 +37,107 @@ UP = {"home_team_norm": "atlas", "away_team_norm": "club america", "home_team": 
       "consensus_home_odds": 3.80, "consensus_draw_odds": 3.70, "consensus_away_odds": 2.10}
 
 
-# ─── la regla ────────────────────────────────────────────────────────────────
+# ─── la regla (22-oct-26): una apuesta real entre todos los mercados ─────────
 
-def test_pick_carries_the_market_to_settle_and_the_playdoit_price():
-    pk = PP.pick([0.30, 0.22, 0.48], [0.27, 0.24, 0.49], 0.67, 0.55, SimpleNamespace(**UP))
-    # el mercado da ~53% a más de 2.5: el programa ve 14 pts más
-    assert (pk["market"], pk["label"], pk["lean"]) == ("over25", "Más de 2.5 goles", True)
-    assert pk["playdoit_odds"] == pytest.approx(1.72)              # el promedio de las casas
-    assert pk["value"] is False and pk["playdoit_value"] is False   # -125 no paga el mínimo
-    ratio = PP.pick([0.30, 0.22, 0.48], [0.27, 0.24, 0.49], 0.67, 0.55, SimpleNamespace(**UP), ratio=1.10)
-    assert ratio["playdoit_odds"] == pytest.approx(1.892)          # lo aprendido de las capturas
+PIN_EVEN = {"pin_home_odds": 2.25, "pin_draw_odds": 3.70, "pin_away_odds": 3.40}   # ≈ 43 / 26 / 28
+MODEL_EVEN = [0.44, 0.27, 0.29]                                                  # sin ventaja en el 1X2
 
 
-def test_the_dashboard_shows_the_same_pick_that_is_saved():
-    u = SimpleNamespace(**UP)
-    saved = PP.pick([0.30, 0.22, 0.48], [0.27, 0.24, 0.49], 0.67, 0.55, u)
-    shown = V.program_pick([0.30, 0.22, 0.48], [0.27, 0.24, 0.49], 0.67, 0.55, u)
-    assert (shown["label"], shown["market_key"], shown["model"]) == (saved["label"], saved["market"], saved["model"])
+def _u(**kw):
+    return SimpleNamespace(**{**UP, **PIN_EVEN, **kw})
+
+
+def test_the_pick_can_be_a_goals_market_not_only_the_winner():
+    cs = PP.candidates(MODEL_EVEN, (1.6, 1.4), 0.60, None, _u())
+    pk, why = PP.choose(cs)
+    # más de 2.5: el programa 60%, el promedio de las casas ~54% (6 pts)
+    assert (pk["market"], pk["family"]) == ("over25", "Goles") and why is None
+    assert pk["playdoit_odds"] == pytest.approx(1.72)
+
+
+def test_a_huge_gap_with_the_market_is_not_a_pick():
+    pk, why = PP.choose(PP.candidates(MODEL_EVEN, (1.6, 1.4), 0.75, None, _u()))
+    assert pk is None and why == PP.TOO_FAR                      # 21 pts: probablemente se equivoca
+
+
+def test_only_what_the_program_believes_will_happen():
+    # el visitante: 5 pts más que Pinnacle, pero el favorito del programa es el local
+    cs = PP.candidates([0.40, 0.27, 0.33], (1.5, 1.4), None, None, _u())
+    pk, why = PP.choose(cs)
+    assert pk is None and why == PP.NO_EDGE
+    # más de 2.5 con 46%: 5 pts sobre el mercado (~41%), pero no lo cree
+    u = _u(consensus_over25_odds=2.30, consensus_under25_odds=1.62)
+    pk, why = PP.choose(PP.candidates(MODEL_EVEN, (1.6, 1.4), 0.46, None, u))
+    assert pk is None and why == PP.NO_EDGE
+
+
+def test_a_market_that_moved_against_after_the_analysis_cancels_the_pick():
+    cs = PP.candidates(MODEL_EVEN, (1.6, 1.4), 0.60, None, _u())
+    pk, why = PP.choose(cs, then={"over25": 0.59})               # estaba en 59% y bajó a ~54%
+    assert pk is None and why == PP.MOVED
+
+
+def test_matches_between_leagues_wait_for_the_league_strength():
+    pk, why = PP.choose(PP.candidates(MODEL_EVEN, (1.6, 1.4), 0.60, None, _u()), league="soccer_uefa_champs_league")
+    assert pk is None and why == PP.CROSS
+
+
+def test_corners_and_cards_enter_when_they_have_a_price():
+    u = _u(corners_line=9.5, corners_over_odds=1.85, corners_under_odds=1.95)
+    cs = PP.candidates(MODEL_EVEN, (1.6, 1.4), None, None, u, props={"corners": lambda line: 0.57})
+    pk, _ = PP.choose(cs)
+    assert (pk["market"], pk["family"]) == ("corners_over_9.5", "Córners")
+    assert pk["playdoit_odds"] == pytest.approx(1.85 * PP.TWO_WAY_AVG_RATIO)
+
+
+def test_other_goal_lines_follow_the_programs_own_numbers():
+    u = _u(pin_total_line=3.5, pin_total_over_odds=2.40, pin_total_under_odds=1.62)
+    cs = {c["market"]: c for c in PP.candidates(MODEL_EVEN, (1.7, 1.5), 0.62, None, u)}
+    assert cs["over_3.5"]["model"] < cs["over25"]["model"]          # coherente con su más de 2.5
+    assert cs["over_3.5"]["model"] + cs["under_3.5"]["model"] == pytest.approx(1.0)
+
+
+def test_the_dashboard_shows_the_saved_pick_or_why_there_is_none():
+    shown = V.saved_pick({"market": "btts", "label": "Ambos anotan", "family": "Ambos anotan",
+                          "model_prob": 0.62, "market_prob": 0.56, "playdoit_odds": 1.70})
+    assert (shown["label"], shown["family"], shown["playdoit_us"]) == ("Ambos anotan", "Ambos anotan", "-143")
+    assert V.saved_pick({"market": None, "reason": PP.TOO_FAR}) == {"label": "", "reason": PP.TOO_FAR}
 
 
 # ─── guardar ─────────────────────────────────────────────────────────────────
 
 def test_build_picks_uses_the_latest_analysis_and_canonical_names():
     mvs = pd.DataFrame([_mvs(model=(0.60, 0.20, 0.20), created="2030-01-04 06:00"),   # corrida vieja
-                        _mvs(created="2030-01-05 06:00")])
-    up = pd.DataFrame([{**UP, "away_team_norm": "america"}])                         # alias de hoy
+                        _mvs(model=tuple(MODEL_EVEN), over=0.60, btts=None, created="2030-01-05 06:00")])
+    up = pd.DataFrame([{**UP, **PIN_EVEN, "away_team_norm": "america"}])               # alias de hoy
     rows = PP.build_picks(mvs, up, normalize=lambda t: {"america": "club america"}.get(t, t))
     (r,) = rows
     assert r["match"] == "atlas vs club america" and r["display"] == "Atlas vs América"
-    assert r["market"] == "over25" and r["model_prob"] == 0.67
-    assert r["playdoit_odds"] == pytest.approx(1.72) and r["min_us"] < 0
+    assert (r["market"], r["family"], r["model_prob"]) == ("over25", "Goles", 0.6)
+    # sin pick también se guarda, con el motivo: el registro es de todos los partidos
+    (r2,) = PP.build_picks(pd.DataFrame([_mvs(model=tuple(MODEL_EVEN), over=0.80, btts=None)]),
+                           pd.DataFrame([{**UP, **PIN_EVEN}]))
+    assert r2["market"] is None and r2["reason"] == PP.TOO_FAR
+
+
+def _reads(extra=None):
+    props_cols = ["date", "league", "home", "away", "home_corners", "away_corners", "home_cards", "away_cards"]
+    return {"model_vs_sharp": pd.DataFrame([_mvs(model=tuple(MODEL_EVEN), over=0.60, btts=None)]),
+            "upcoming_matches": pd.DataFrame([{**UP, **PIN_EVEN}]), "playdoit_prices": pd.DataFrame(),
+            "odds_history": pd.DataFrame(columns=["match", "kickoff", "captured_at"]),
+            "FROM matches": pd.DataFrame(columns=props_cols), **(extra or {})}
 
 
 def test_snapshot_upserts_only_matches_that_have_not_started(monkeypatch):
     eng = FakeEngine()
-    reads = {"model_vs_sharp": pd.DataFrame([_mvs()]), "upcoming_matches": pd.DataFrame([UP]),
-             "playdoit_prices": pd.DataFrame()}
-
-    def fake_read_sql(sql, con=None, params=None, **kw):
-        s = str(sql)
-        return next(df for k, df in reads.items() if k in s)
-    monkeypatch.setattr(PP.pd, "read_sql", fake_read_sql)
+    reads = _reads()
+    monkeypatch.setattr(PP.pd, "read_sql", lambda sql, con=None, params=None, **kw: next(
+        df for k, df in reads.items() if k in str(sql)))
     assert PP.snapshot_picks(engine=eng) == 1
     (sql, params), = eng.statements("INSERT INTO program_picks")
     assert "ON CONFLICT (match, match_date) DO UPDATE" in sql
     assert "WHERE program_picks.result IS NULL AND program_picks.match_date > NOW()" in sql
-    assert params["market0"] == "over25" and params["display0"] == "Atlas vs América"
+    assert params["market0"] == "over25" and params["family0"] == "Goles" and params["display0"] == "Atlas vs América"
 
 
 def test_a_failed_snapshot_is_an_error_that_reaches_telegram(monkeypatch):
@@ -251,32 +306,31 @@ def test_daily_check_skips_the_picks_table_until_it_exists(monkeypatch):
 
 # ─── picks reconstruidos (22-oct-26) ─────────────────────────────────────────
 
-def test_past_picks_use_only_the_last_odds_before_kickoff():
-    mvs = pd.DataFrame([{**_mvs(), "p_over25": None, "p_btts": None}])
-    snap = {**UP, "match": "Atlas vs América", "kickoff": KICK, "pin_home_odds": 3.6, "pin_draw_odds": 3.9,
-            "pin_away_odds": 2.0}
+def test_past_picks_use_only_the_odds_before_kickoff_and_at_the_analysis():
+    mvs = pd.DataFrame([_mvs(model=tuple(MODEL_EVEN), over=0.60, btts=None, created="2030-01-05 06:00")])
+    snap = {**UP, **PIN_EVEN, "match": "Atlas vs América", "kickoff": KICK}
     snaps = pd.DataFrame([
-        {**snap, "captured_at": KICK - pd.Timedelta(hours=5), "consensus_away_odds": 2.05},
-        {**snap, "captured_at": KICK - pd.Timedelta(hours=1), "consensus_away_odds": 2.10},       # la última antes
-        {**snap, "captured_at": KICK + pd.Timedelta(minutes=30), "consensus_away_odds": 9.0},     # en vivo: no
+        {**snap, "captured_at": KICK - pd.Timedelta(hours=14)},                                 # al analizar
+        {**snap, "captured_at": KICK - pd.Timedelta(hours=1), "consensus_over25_odds": 1.75},  # la última antes
+        {**snap, "captured_at": KICK + pd.Timedelta(minutes=30), "consensus_over25_odds": 9.0},  # en vivo: no
     ])
-    (r,) = PP.build_past_picks(mvs, snaps, normalize=lambda t: {"américa": "club america"}.get(t.lower(), t.lower()))
+    norm = lambda t: {"américa": "club america"}.get(t.lower(), t.lower())
+    (r,) = PP.build_past_picks(mvs, snaps, normalize=norm)
     assert r["source"] == "reconstruido" and r["display"] == "Atlas vs América"
-    assert r["market"] in ("home_win", "draw", "away_win")                  # sin goles guardados: solo 1X2
-    if r["market"] == "away_win":
-        assert r["playdoit_odds"] == pytest.approx(2.10)
-    # sin foto de momios igual hay pick (contra el Pinnacle guardado), sin precio
-    (r2,) = PP.build_past_picks(mvs, snaps.iloc[:0])
-    assert r2["display"] is None and r2["playdoit_odds"] is None
+    assert r["market"] == "over25" and r["playdoit_odds"] == pytest.approx(1.75)
+    # el más de 2.5 bajó de ~59% (al analizar) a ~53% antes del partido: se movió en contra
+    moved = snaps.assign(consensus_over25_odds=[1.62, 1.80, 9.0], consensus_under25_odds=[2.30, 2.00, 9.0])
+    (r2,) = PP.build_past_picks(mvs, moved, normalize=norm)
+    assert r2["market"] is None and r2["reason"] == PP.MOVED
 
 
-def test_backfill_never_overwrites_a_saved_pick(monkeypatch):
+def test_backfill_redoes_only_matches_already_played(monkeypatch):
     eng = FakeEngine()
-    reads = {"model_vs_sharp": pd.DataFrame([{**_mvs(), "p_over25": None, "p_btts": None}]),
+    reads = {"model_vs_sharp": pd.DataFrame([_mvs()]),
              "odds_history": pd.DataFrame(columns=["match", "kickoff", "captured_at"])}
     monkeypatch.setattr(PP.pd, "read_sql", lambda sql, con=None, params=None, **k: next(
         df for key, df in reads.items() if key in str(sql)))
     monkeypatch.setattr(PP, "resolve_picks", lambda engine=None: {})
     assert PP.backfill_picks(engine=eng) == 1
     (sql, params), = eng.statements("INSERT INTO program_picks")
-    assert "ON CONFLICT (match, match_date) DO NOTHING" in sql and params["source0"] == "reconstruido"
+    assert "WHERE program_picks.match_date < NOW() - INTERVAL '3 hours'" in sql and params["source0"] == "reconstruido"

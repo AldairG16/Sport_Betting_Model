@@ -165,29 +165,27 @@ function openDetail(id, key, date){
 }
 
 // ── Próximos ──
-var _up = [], _upDay = '', _upValue = false, _alerts = {};
-function upState(m){
-  if (m.real_bet) return ['✅', 'Apuesta real'];
-  if (m.old_model || !m.pick || !m.pick.label) return ['·', 'Sin análisis'];
-  if (m.pick.pd_value) return ['✅', 'Vale la pena: PlayDoit suele pagar el mínimo'];
-  if (m.pick.value) return ['🟡', 'Solo el mejor momio de Europa paga el mínimo'];
-  return ['❌', 'No conviene'];
-}
+var _up = [], _upDay = '', _upFam = '', _alerts = {};
+// v2.1: el pick es la apuesta que se registra y se mide (la misma que se ve)
+var FAM_ICON = { 'Ganador': '🏆', 'Goles': '⚽', 'Ambos anotan': '🔁', 'Córners': '⛳', 'Tarjetas': '🟨' };
+function famIcon(f){ return FAM_ICON[f] || '🎯'; }
 function upRow(m, i){
-  var pk = m.pick || {}, st = upState(m), t = String(m.match).split(' vs ');
+  var pk = m.pick || {}, t = String(m.match).split(' vs ');
   var model = _sides(m, 'model'), pin = _sides(m, 'pin');
   var tip = 'Programa: ' + p100(model[0]) + ' / ' + p100(model[1]) + ' / ' + p100(model[2]) +
             '  ·  Pinnacle: ' + p100(pin[0]) + ' / ' + p100(pin[1]) + ' / ' + p100(pin[2]);
-  var pick = pk.label ? '<b>' + esc(pk.label) + '</b> ' + p100(pk.model) + '<br><span class="muted">mín. ' + esc(pk.min_us || '—') +
-             (pk.pd_est_us ? ' · paga ~' + esc(pk.pd_est_us) : '') + '</span>' : '<span class="muted">—</span>';
+  var pick = pk.label ? famIcon(pk.family) + ' <b>' + esc(pk.label) + '</b>' +
+             (pk.playdoit_us ? ' <span class="muted">' + esc(pk.playdoit_us) + '</span>' : '') :
+             '<span class="muted" title="' + esc(pk.reason || 'Sin análisis') + '">Sin pick</span>';
+  var tipPick = pk.label ? 'Programa ' + p100(pk.model) + ' · mercado ' + p100(pk.market_prob) + ' · momio PlayDoit aprox.' : (pk.reason || '');
   var al = _alerts[m.match] ? ' <span title="' + esc(_alerts[m.match]) + '">⚠️</span>' : '';
   return '<div class="m" id="u' + i + '"><div class="mr" onclick="openUp(' + i + ')">' +
          '<div class="time">' + mxtime(m.match_date) + '<span class="small muted">' + esc(m.league) + '</span></div>' +
          '<div class="t h">' + esc(t[0]) + '</div>' +
          '<div class="pbw">' + probBar(model, false, tip) + probBar(pin, true, tip) + '</div>' +
          '<div class="t">' + esc(t[1] || '') + al + '</div>' +
-         '<div class="pk" title="Lo que jugaría el programa · mínimo en PlayDoit · lo que paga aprox.">' + pick + '</div>' +
-         '<div class="ic" title="' + esc(st[1]) + '">' + st[0] + '</div></div>' +
+         '<div class="pk" title="' + esc(tipPick) + '">' + pick + '</div>' +
+         '<div class="ic">' + (m.real_bet ? '<span title="Apuesta real">💰</span>' : '') + '</div></div>' +
          '<div class="det" id="ud' + i + '"></div></div>';
 }
 function openUp(i){ var m = _up[i]; if (m && m.key) openDetail('ud' + i, m.key, m.match_date); }
@@ -197,7 +195,7 @@ function renderUp(){
     var m = _up[i], d = mxday(m.match_date);
     if (_upDay && d !== _upDay) continue;
     if (lg && m.league !== lg) continue;
-    if (_upValue && upState(m)[0] === '❌') continue;
+    if (_upFam && (!m.pick || m.pick.family !== _upFam)) continue;
     if (d !== last) { html += '<div class="day">' + dayLabel(d) + '</div>'; last = d; }
     html += upRow(m, i);
     n++;
@@ -226,11 +224,10 @@ function loadUpcoming(){
     fillSelect('uleague', list.sort());
     renderDayBar();
     renderUp();
-    // hoy: ¿hay algo que apostar?
+    // hoy: cuántos picks
     var today = mxday(), n = 0, good = 0;
-    for (var j = 0; j < _up.length; j++) if (mxday(_up[j].match_date) === today) { n++; if (upState(_up[j])[0] === '✅') good++; }
-    el('chiptoday').innerHTML = n ? (good ? '✅ Hoy: <b>' + good + '</b> con valor' : '❌ Hoy: nada que apostar') : 'Hoy: sin partidos';
-    el('chiptoday').title = n + ' partidos hoy';
+    for (var j = 0; j < _up.length; j++) if (mxday(_up[j].match_date) === today) { n++; if (_up[j].pick && _up[j].pick.label) good++; }
+    el('chiptoday').innerHTML = n ? '🎯 Hoy: <b>' + good + '</b> picks en ' + n + ' partidos' : 'Hoy: sin partidos';
     getJSON('/api/lineups', function(l){
       _alerts = {};
       for (var k = 0; k < l.matches.length; k++) if (l.matches[k].level === 'alert') _alerts[l.matches[k].match] = l.matches[k].text;
@@ -239,7 +236,7 @@ function loadUpcoming(){
   }, function(msg){ el('uplist').innerHTML = '<div class="muted">' + esc(msg) + '</div>'; });
 }
 el('uleague').onchange = renderUp;
-el('uvalue').onclick = function(){ _upValue = !_upValue; this.className = 'pill' + (_upValue ? ' on' : ''); renderUp(); };
+el('ufam').onchange = function(){ _upFam = this.value; renderUp(); };
 
 // ── Anteriores (desde septiembre) ──
 var _past = [], _pastShown = 150, _pastOnly = false;
@@ -253,12 +250,13 @@ function pastRow(r, i){
   }
   var side = { home: 'Local', draw: 'Empate', away: 'Visitante' };
   var pickTxt = '<span class="muted">·</span>';
-  if (pk) {
+  if (pk && pk.none) pickTxt = '<span class="muted" title="' + esc('Sin pick: ' + pk.reason) + '">—</span>';
+  else if (pk) {
     var played = pk.result === 'win' || pk.result === 'loss' || pk.result === 'half_win' || pk.result === 'half_loss';
     pickTxt = '<span' + (pk.old_model ? ' style="opacity:.6"' : '') + ' title="' + esc(pk.label + ' · programa ' + p100(pk.model) + ' vs mercado ' + p100(pk.market) +
               (pk.winner ? ' · tuvo razón el ' + pk.winner : '') + (pk.old_model ? ' · modelo con error (antes del 22 oct)' : '') +
               (pk.rebuilt ? ' · reconstruido con la predicción guardada antes del partido' : '')) + '">' + (pk.rebuilt ? '↺ ' : '') +
-              (played ? ok(pk.result === 'win' || pk.result === 'half_win') : '⏳') + ' ' + esc(pk.label) +
+              (played ? ok(pk.result === 'win' || pk.result === 'half_win') : '⏳') + ' ' + famIcon(pk.family) + ' ' + esc(pk.label) +
               (pk.profit !== null && played ? ' <span class="' + (pk.profit >= 0 ? 'pos' : 'neg') + '">' + money(pk.profit) + '</span>' : '') + '</span>';
   }
   return '<tr class="r" onclick="openPast(' + i + ')"><td class="hide-sm muted small">' + esc(r.league) + '</td><td style="text-align:right">' + esc(r.home) +
@@ -420,6 +418,16 @@ function loadCharts(){
     chart('cacc', { type: 'line', data: { labels: wl, datasets: [
       { label: '🤖 Programa', data: wm, borderColor: '#60a5fa', fill: false }, { label: '🏦 Pinnacle', data: wp, borderColor: '#94a3b8', fill: false }] },
       options: { legend: legend, scales: { xAxes: axes.xAxes, yAxes: [{ ticks: { fontColor: '#94a3b8', callback: function(v){ return v + '%'; } } }] } } });
+    var fl = [], fw = [], fu = [], fc = [];
+    for (var f in d.families) {
+      var x = d.families[f];
+      fl.push(famIcon(f) + ' ' + f + ' (' + x.won + '/' + x.n + ')');
+      fu.push(x.profit); fc.push(x.profit >= 0 ? '#22c55e' : '#ef4444');
+      fw.push(x.n ? Math.round(x.won / x.n * 100) : 0);
+    }
+    chart('cfam', { type: 'horizontalBar', data: { labels: fl, datasets: [{ label: 'Unidades', data: fu, backgroundColor: fc }] },
+      options: { legend: nolegend, scales: { xAxes: [{ ticks: { fontColor: '#94a3b8' } }], yAxes: [{ ticks: { fontColor: '#94a3b8' } }] },
+                 tooltips: { callbacks: { afterLabel: function(c){ return 'Acierto ' + fw[c.index] + '%'; } } } } });
     chart('cpicks', { type: 'line', data: { labels: d.picks.dates, datasets: [
       { label: '↺ Modelo con error', data: d.picks.old, borderColor: '#94a3b8', pointRadius: 0, fill: false, spanGaps: false },
       { label: 'Modelo corregido', data: d.picks.fixed, borderColor: '#22c55e', fill: false, spanGaps: false }] },

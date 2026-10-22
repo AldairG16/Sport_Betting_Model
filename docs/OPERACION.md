@@ -1292,17 +1292,47 @@ de responder "cómo nos fue con los picks".
   promedio de las casas por `playdoit_ratio`). "Ambos anotan" no tiene promedio de casas:
   cuenta en ganados y perdidos pero no en unidades.
 - **Chequeo:** el chequeo diario de salidas también re-liquida esta tabla.
-- **Picks reconstruidos** (`backfill_picks`, columna `source = 'reconstruido'`, 22-oct-2026).
-  El dueño preguntó por qué los partidos anteriores no tenían pick.
-  - Con lo que había ANTES de cada partido se reconstruye el mismo pick: la predicción de
-    `model_vs_sharp` y la última foto de `odds_history` previa al inicio.
-  - Hasta el 21-oct solo hay 1X2: `model_vs_sharp` no guardaba goles ni ambos anotan.
-  - Hay precio de PlayDoit solo desde el 12-oct, cuando `odds_history` empezó a guardar el
+- **Picks reconstruidos** (`backfill_picks`, `source = 'reconstruido'`, 22-oct-2026). Con lo
+  que había ANTES de cada partido (la predicción de `model_vs_sharp` y las fotos de
+  `odds_history`) se aplica la regla de hoy a los partidos ya jugados, sin mirar el resultado.
+  - Solo pisa partidos ya jugados.
+  - Hasta el 21-oct `model_vs_sharp` solo guardaba el 1X2.
+  - Hay precio de PlayDoit desde el 12-oct, cuando `odds_history` empezó a guardar el
     promedio de las casas.
-  - Nunca pisa un pick guardado en su momento.
-  - Se corrió una vez: 456 picks desde el 26-sep, 155 de 452 ganados, −38.85u en los 210 con
-    precio. Es el modelo con el error del xG.
-  - El dashboard los marca con ↺ y separa sus totales de los del modelo corregido.
+
+**La regla del pick (v2.1, 22-oct-2026): una apuesta real entre todos los mercados.**
+
+- **Por qué cambió:** el dueño, sobre los partidos de Champions: "no siempre es gana local o
+  gana visitante… ambos anotan o 2.5 goles o 3.5, también están los córners o tarjetas", y que
+  el pick sea "lo más real para ver las tendencias". La regla vieja (el resultado del 1X2 donde
+  más se separaba del mercado) perdió: 155 de 452, −38.85u. Mientras más se separaba, peor:
+  - 3-5 pts: 49% contra 44% que esperaba el mercado;
+  - más de 20 pts: 25% contra 28%.
+- **Candidatos** (`program_picks.candidates`), cada uno con precio real:
+  - ganador: Pinnacle sin margen; PlayDoit = promedio de las casas;
+  - más/menos 2.5: promedio de las casas;
+  - más/menos 1.5 o 3.5, cuando esa es la línea principal de Pinnacle. Sale de la matriz de
+    marcadores del programa: sus goles esperados, escalados a su mismo más de 2.5 y
+    repartidos en su mismo 1X2 (`goals_matrix`);
+  - ambos anotan;
+  - córners y tarjetas en la línea de la API, con `props_fair`.
+  - Donde solo hay mejor momio, PlayDoit se estima × `TWO_WAY_AVG_RATIO` (0.96: el promedio
+    de las casas sobre el mejor momio en más/menos 2.5, medido el 22-oct).
+- **Elección** (`choose`): entre los que cumplen todo, el de mayor diferencia.
+  - El programa lo cree: su favorito del 1X2, o 50% o más en un mercado de dos.
+  - Diferencia con el mercado de 3 a 8 pts (`MIN_GAP`, `MAX_GAP`).
+  - Momio de PlayDoit entre 1.40 y 3.80.
+  - El mercado no se movió 3 pts o más en contra desde que el programa analizó el partido
+    (`MOVED_AGAINST`; foto de `odds_history` de antes de `created_at`). En el Bayern–Arsenal
+    del 21-oct, Pinnacle pasó de 46% a 40% por la rotación; el programa no usa alineaciones.
+  - No es un partido entre ligas distintas (`CROSS_LEAGUE`: Champions, Europa League…). El
+    programa todavía no ajusta por la fuerza de la liga: Viking mete 2.3 por partido en Noruega
+    y Aston Villa 1.6 en la Premier.
+  - Sin ninguno: "sin pick", guardado con su motivo (`reason`, `market` NULL).
+- **Tiros al arco** no tiene precio en ninguna fuente: no es pick.
+- **El dashboard muestra el pick guardado** (`visibility.saved_pick`), no lo recalcula: lo que
+  se ve es lo que se mide. En Gráficas hay unidades y acierto por tipo de apuesta, solo del
+  modelo corregido.
 
 **Quién tuvo razón y el partido abierto (v1.10.0, 21-oct-2026).** El dueño pidió ver, en cada
 apuesta, "quién ganó de los 2", y poder abrir el partido para ver sus últimos 5 partidos.

@@ -20,7 +20,7 @@ import math
 import pandas as pd
 
 from dashboard.display import league_name, match_name
-from src.models.program_picks import fair_1x2, pick
+from src.models.program_picks import fair_1x2
 from src.utils.min_odds import fmt_american, min_american, to_american
 
 # Desde aquí el modelo corregido (PR #44: xG de Understat y peso de Dixon-Coles)
@@ -94,34 +94,28 @@ def _fresh_pinnacle(u) -> list | None:
     return fair_1x2(u)
 
 
-def program_pick(model: list, pin: list, p_over25, p_btts, u, ratio=None) -> dict:
-    """
-    Lo que jugaría el programa en el partido (v1.7.2, 21-oct-26: el dueño
-    quería ver una apuesta aunque no tenga valor), con el texto para la
-    página. La regla vive en src/models/program_picks.pick: la misma con la
-    que se guarda cada pick para medir cómo terminó. "value" = el mejor
-    momio de Europa ya paga el mínimo; "pd_value" = el estimado de PlayDoit.
-    """
-    pk = pick(model, pin, p_over25, p_btts, u, ratio)
-    if not pk:
-        return {"label": "", "text": ""}
-    min_us, best = pk["min_us"], pk["best_odds"]
-    best_us = to_american(best) if best else None
-    est_us = to_american(pk["playdoit_odds"]) if pk["playdoit_odds"] else None
-    return {"label": pk["label"], "market_key": pk["market"], "model": pk["model"], "market": pk["market_prob"],
-            "lean": pk["lean"], "min_us": fmt_american(min_us) if min_us is not None else "",
-            "best_us": fmt_american(best_us) if best_us is not None else "", "value": pk["value"],
-            "pd_est_us": fmt_american(est_us) if est_us is not None else "",
-            "pd_value": pk["playdoit_value"], "pd_learned": bool(_num(ratio))}
+def saved_pick(p) -> dict:
+    """El pick guardado del partido (program_picks), como lo muestra la
+    página (v2.1, 22-oct-26: el que se mide es el mismo que se ve). Sin
+    pick: label vacío y el motivo."""
+    if p is None:
+        return {"label": "", "reason": ""}
+    if not (isinstance(p.get("market"), str) and p.get("market")):
+        return {"label": "", "reason": p.get("reason") or ""}
+    po = _num(p.get("playdoit_odds"))
+    return {"label": p.get("label"), "family": p.get("family"), "market": p.get("market"),
+            "model": _num(p.get("model_prob")), "market_prob": _num(p.get("market_prob")),
+            "playdoit_us": fmt_american(to_american(po)) if po else ""}
 
 
 def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
-                normalize=None, ratio=None) -> list:
+                normalize=None, saved: dict | None = None) -> list:
     """
     mvs: filas de model_vs_sharp de los próximos días. upcoming: la última
     fila de upcoming_matches por partido (nombres, mejores momios y
     Pinnacle). pending_matches: claves "local vs visitante" (normalizadas)
     con apuesta real pendiente. normalize: normalize_team (para unir alias).
+    saved: {clave del partido: fila de program_picks}.
     """
     up = {}
     for r in upcoming.itertuples(index=False):
@@ -157,7 +151,7 @@ def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
             "p_over25": _num(getattr(r, "p_over25", None)),
             "p_btts": _num(getattr(r, "p_btts", None)),
             "reading": reading(model, pin),
-            "pick": program_pick(model, pin, getattr(r, "p_over25", None), getattr(r, "p_btts", None), u, ratio),
+            "pick": saved_pick((saved or {}).get(key)),
             # sin goles esperados guardados = corrida anterior a la corrección
             # del modelo (21-oct-26): su lectura no vale
             "old_model": not (lam_h and lam_a),

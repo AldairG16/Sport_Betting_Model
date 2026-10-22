@@ -22,6 +22,7 @@ from dashboard.display import league_name, market_name, team_name
 from dashboard.visibility import who_was_right
 
 SINCE = "2026-09-01"
+FAMILIES = ("Ganador", "Goles", "Ambos anotan", "Córners", "Tarjetas")
 # Desde aquí el modelo corregido (PR #44): los picks de antes (reconstruidos,
 # 22-oct-26) son del modelo con el error del xG y se muestran aparte
 MODEL_FIXED = pd.Timestamp("2026-10-22", tz="UTC")
@@ -117,7 +118,12 @@ def past_matches(matches: pd.DataFrame, mvs: pd.DataFrame, picks: pd.DataFrame, 
             res_p = _str(p.get("result")) or "pending"
             when = pd.Timestamp(p["match_date"])
             when = when.tz_convert("UTC") if when.tzinfo else when.tz_localize("UTC")
-            pick = {"label": p.get("label"), "result": res_p, "profit": _num(p.get("profit")),
+            if not _str(p.get("market")):              # sin pick: el motivo (v2.1)
+                pick = {"none": True, "reason": _str(p.get("reason")) or "", "result": "none",
+                        "rebuilt": _str(p.get("source")) == "reconstruido", "old_model": bool(when < MODEL_FIXED)}
+                continue
+            pick = {"label": p.get("label"), "family": _str(p.get("family")) or "Ganador", "result": res_p,
+                    "profit": _num(p.get("profit")),
                     "model": _num(p.get("model_prob")), "market": _num(p.get("market_prob")),
                     "winner": who_was_right(p.get("model_prob"), p.get("market_prob"), res_p),
                     "rebuilt": _str(p.get("source")) == "reconstruido", "old_model": bool(when < MODEL_FIXED)}
@@ -167,6 +173,9 @@ def summary(rows: list) -> dict:
             "pin_hit": round(sum(f["pin_hit"] for f in fav) / len(fav), 3) if fav else None,
             "picks_fixed": rec([p for p in picks if not p.get("old_model")]),
             "picks_old": rec([p for p in picks if p.get("old_model")]),
+            # tendencias por tipo de apuesta, solo el modelo corregido (v2.1)
+            "families": {f: rec([p for p in picks if not p.get("old_model") and p.get("family") == f])
+                         for f in FAMILIES},
             "bets": len(bets), "bets_profit": round(sum(b["profit"] or 0 for b in bets), 2)}
 
 
