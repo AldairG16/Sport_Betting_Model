@@ -36,7 +36,7 @@ PICKS = pd.DataFrame([
      "market": "over25", "family": "Goles", "reason": None,
      "model_prob": 0.67, "market_prob": 0.58, "result": "win", "profit": 0.59, "source": None},
     {"match": "real madrid vs sevilla", "match_date": pd.Timestamp("2026-10-18 19:00", tz="UTC"), "label": "Gana el visitante",
-     "market": "away_win", "family": "Ganador", "reason": None,
+     "market": "away_win", "family": "Ganador", "reason": "El programa se separa demasiado del mercado",
      "model_prob": 0.34, "market_prob": 0.08, "result": "loss", "profit": None, "source": "reconstruido"},
 ])
 BETS = pd.DataFrame([
@@ -58,11 +58,12 @@ def test_past_matches_join_the_program_the_pick_and_the_real_bets():
     assert atlas["score"] == [2, 5] and atlas["corners"] is None and atlas["cards"] is None
     assert atlas["fav"]["model"] == "away" and atlas["fav"]["model_hit"] is True and atlas["fav"]["pin_hit"] is True
     assert atlas["pick"]["result"] == "win" and atlas["pick"]["winner"] == "programa"
-    assert atlas["pick"]["rebuilt"] is False and atlas["pick"]["old_model"] is False
+    assert atlas["pick"]["rebuilt"] is False and atlas["pick"]["old_model"] is False and atlas["pick"]["rule"] is True
     rm = next(r for r in rows if r["key"] == "real madrid vs sevilla")
     assert rm["fav"]["model_hit"] is True and rm["cards"] == 5            # 2 + 2 amarillas + 1 roja
     assert [b["result"] for b in rm["bets"]] == ["win"]                  # la cancelada no
     assert rm["pick"]["rebuilt"] is True and rm["pick"]["old_model"] is True and rm["pick"]["winner"] == "mercado"
+    assert rm["pick"]["rule"] is False and rm["pick"]["reason"].startswith("El programa se separa")
     sev = next(r for r in rows if r["key"] == "sevilla vs real madrid")
     assert sev["corners"] is None and sev["fav"] is None                 # 0-0 en córners = sin dato
     assert [r["date"] for r in rows] == sorted((r["date"] for r in rows), reverse=True)
@@ -74,6 +75,7 @@ def test_summary_and_weekly_accuracy():
     assert (s["matches"], s["analyzed"], s["model_hit"], s["pin_hit"]) == (4, 2, 1.0, 1.0)
     # el pick del 22-oct es del modelo corregido; el reconstruido del 18-oct, del modelo con error
     assert s["picks_fixed"] == {"n": 1, "won": 1, "profit": 0.59, "priced": 1}
+    assert s["picks_rule"] == {"n": 1, "won": 1, "profit": 0.59, "priced": 1}
     assert s["picks_old"] == {"n": 1, "won": 0, "profit": 0, "priced": 0}
     assert (s["bets"], s["bets_profit"]) == (1, 0.4)
     assert s["families"]["Goles"] == {"n": 1, "won": 1, "profit": 0.59, "priced": 1}     # tendencias por tipo
@@ -101,11 +103,12 @@ def test_chart_series():
     hist = pd.DataFrame([{"date": "2026-10-20 10:00", "balance": 64.0}, {"date": "2026-10-20 12:00", "balance": 63.9},
                          {"date": "2026-10-21 23:00", "balance": 63.39}])
     assert B.bankroll_series(hist) == {"dates": ["2026-10-20", "2026-10-21"], "values": [63.9, 63.39]}
-    picks = pd.DataFrame([{"match_date": "2026-10-20T01:00:00Z", "result": "loss", "profit": -1.0},   # modelo con error
-                          {"match_date": "2026-10-22T01:00:00Z", "result": "win", "profit": 0.59},
-                          {"match_date": "2026-10-22T03:00:00Z", "result": "loss", "profit": -1.0},
-                          {"match_date": "2026-10-23T01:00:00Z", "result": None, "profit": None}])
-    assert B.picks_series(picks) == {"dates": ["2026-10-20", "2026-10-22"], "old": [-1.0, None], "fixed": [None, -0.41]}
+    picks = pd.DataFrame([{"match_date": "2026-10-20T01:00:00Z", "result": "loss", "profit": -1.0, "reason": None},  # modelo con error
+                          {"match_date": "2026-10-22T01:00:00Z", "result": "win", "profit": 0.59, "reason": None},
+                          {"match_date": "2026-10-22T03:00:00Z", "result": "loss", "profit": -1.0, "reason": "Sin ventaja"},
+                          {"match_date": "2026-10-23T01:00:00Z", "result": None, "profit": None, "reason": None}])
+    assert B.picks_series(picks) == {"dates": ["2026-10-20", "2026-10-22"], "old": [-1.0, None], "fixed": [None, -0.41],
+                                     "rule": [None, 0.59]}           # 🎯 solo los que pasan la regla
 
 
 @pytest.fixture

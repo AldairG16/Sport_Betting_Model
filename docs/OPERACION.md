@@ -1328,7 +1328,8 @@ de responder "cómo nos fue con los picks".
 - **Picks reconstruidos** (`backfill_picks`, `source = 'reconstruido'`, 22-oct-2026). Con lo
   que había ANTES de cada partido (la predicción de `model_vs_sharp` y las fotos de
   `odds_history`) se aplica la regla de hoy a los partidos ya jugados, sin mirar el resultado.
-  - Solo pisa partidos ya jugados.
+  - Solo toca partidos ya jugados, y solo los que no tienen pick (con `overwrite=True`, todos:
+    para pisar los de una regla vieja).
   - Hasta el 21-oct `model_vs_sharp` solo guardaba el 1X2.
   - Hay precio de PlayDoit desde el 12-oct, cuando `odds_history` empezó a guardar el
     promedio de las casas.
@@ -1362,12 +1363,22 @@ de responder "cómo nos fue con los picks".
     análisis tiene que traer el ajuste por fuerza de liga (`model_vs_sharp.league_factor` no
     NULL; §7, "Fuerza de liga"). Sin él el programa sobrevalora a quien golea en una liga débil:
     Viking mete 2.3 por partido en Noruega y Aston Villa 1.6 en la Premier. Las copas de
-    América (Libertadores, Sudamericana, Concacaf) siguen sin pick: ClubElo es solo Europa.
-  - Sin ninguno: "sin pick", guardado con su motivo (`reason`, `market` NULL).
+    América (Libertadores, Sudamericana, Concacaf) nunca pasan la regla: ClubElo es solo Europa.
+- **Pick en todos los partidos (v2.2, 22-oct-2026).** El dueño: "quiero que todos tengan picks
+  no importa si se perdió o ganó, quiero saber para dónde tiende tu aprendizaje". La regla de
+  arriba ya no esconde el pick, lo marca:
+  - lo que pasa la regla es el pick 🎯 (`reason` NULL);
+  - si nada la pasa, el pick es, de lo que el programa cree, donde más se separa del mercado,
+    guardado con el motivo por el que no pasa (`reason`);
+  - sin momios del 1X2 (antes del 12-oct `odds_history` no tiene Pinnacle ni promedio), el 1X2
+    contra el Pinnacle de `model_vs_sharp`, sin precio: cuenta acierto, no unidades;
+  - solo un partido que el programa no analizó (sin fila en `model_vs_sharp`) se queda sin pick.
+  - Al 22-oct: 461 partidos jugados con pick (antes 24); 24 pasan la regla; 246 sin precio.
 - **Tiros al arco** no tiene precio en ninguna fuente: no es pick.
 - **El dashboard muestra el pick guardado** (`visibility.saved_pick`), no lo recalcula: lo que
-  se ve es lo que se mide. En Gráficas hay unidades y acierto por tipo de apuesta, solo del
-  modelo corregido.
+  se ve es lo que se mide. 🎯 marca los que pasan la regla; el motivo de los demás va en el
+  tooltip. En Anteriores, los totales de todos los picks y de los 🎯; en Gráficas, unidades y
+  acierto por tipo de apuesta (solo del modelo corregido) y la línea de unidades de los 🎯.
 
 **Quién tuvo razón y el partido abierto (v1.10.0, 21-oct-2026).** El dueño pidió ver, en cada
 apuesta, "quién ganó de los 2", y poder abrir el partido para ver sus últimos 5 partidos.

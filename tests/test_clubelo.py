@@ -196,8 +196,8 @@ def test_a_cup_match_only_has_a_pick_when_it_was_analysed_by_league():
                         league="soccer_uefa_champs_league", adjusted=True)
     assert pk["market"] == "over25" and why is None
     row = {**_mvs(model=MODEL_EVEN, over=0.60), "league": "soccer_uefa_champs_league"}
-    assert PP.decide(row, _u()) == (None, PP.CROSS)                            # sin factor de liga
-    assert PP.decide({**row, "league_factor": float("nan")}, _u()) == (None, PP.CROSS)
+    assert PP.decide(row, _u())[1] == PP.CROSS                                 # sin factor: fuera de la regla
+    assert PP.decide({**row, "league_factor": float("nan")}, _u())[1] == PP.CROSS
     pk, why = PP.decide({**row, "league_factor": 1.12}, _u())
     assert pk["market"] == "over25" and why is None
 
