@@ -636,6 +636,23 @@ def load_team_history_counts(years: int = 3) -> dict:
     return {r.team: int(r.n) for r in df.itertuples()}
 
 
+def _safe_clubelo(df) -> dict:
+    """{equipo: fuerza de su liga según ClubElo} de los equipos de partidos
+    entre ligas distintas (Champions, Europa League; 22-oct-26). Vacío sin
+    esos partidos o sin la foto semanal de ClubElo: el partido sigue sin
+    ajuste (y sin pick)."""
+    from src.features import clubelo as CE
+    try:
+        cross = [r for _, r in df.iterrows() if CE.cross_league(_row_league_of(r))]
+        if not cross:
+            return {}
+        teams = {normalize_team(r[c]) for r in cross for c in ("home_team", "away_team")}
+        return CE.team_strengths(teams, CE.load_latest())
+    except Exception as e:
+        log.warning(f"⚠️  ClubElo ilegible ({type(e).__name__}) — partidos entre ligas sin ajuste")
+        return {}
+
+
 def _safe_history_counts() -> dict | None:
     try:
         return load_team_history_counts()
@@ -1010,6 +1027,23 @@ def _stage_lambdas(row, T, ctx, stats):
     lambda_home = min(lambda_home, LAMBDA_CAP)
     lambda_away = min(lambda_away, LAMBDA_CAP)
 
+    # Partido entre ligas distintas (22-oct-26): la fuerza de cada equipo es
+    # la de SU liga (un gol en Noruega vale lo mismo que en la Premier). Los
+    # goles esperados se reparten por la diferencia de fuerza de las dos
+    # ligas según ClubElo, amortiguada (GAMMA, provisional); el total casi no
+    # cambia. Medido en 5 partidos de copas: Dixon-Coles a 5.2 pts de
+    # Pinnacle sin ajuste, a 1.6 con él (src/features/clubelo.py).
+    league_gap = None
+    _cel = getattr(ctx, "clubelo", None) or {}
+    if _cel and home in _cel and away in _cel:
+        from src.features.clubelo import cross_league, league_factor
+        if cross_league(_row_league_of(row)):
+            _f = league_factor(_cel[home], _cel[away])
+            lambda_home = min(lambda_home * _f, LAMBDA_CAP)
+            lambda_away = min(lambda_away / _f, LAMBDA_CAP)
+            league_gap = (_cel[home], _cel[away], _f)
+            stats['clubelo'] += 1
+
     # Sin Dixon-Coles confiable no hay opinión del modelo (21-oct-26): con
     # 25% o nada de Dixon-Coles manda la forma cruda (sin rival ni liga) y el
     # modelo quedaba a más de 20 pts de Pinnacle (K-League, Beveren, Suecia).
@@ -1022,7 +1056,7 @@ def _stage_lambdas(row, T, ctx, stats):
 
     return SimpleNamespace(
         lambda_home=lambda_home, lambda_away=lambda_away, h2h=h2h,
-        weather_mult=weather_mult, mle_w=_mle_w, dc_ok=dc_ok,
+        weather_mult=weather_mult, mle_w=_mle_w, dc_ok=dc_ok, league_gap=league_gap,
         corners_prediction=corners_prediction,
         corners_confidence_delta=corners_confidence_delta,
         shots_prediction=shots_prediction,
@@ -1140,14 +1174,24 @@ def _stage_model_probabilities(row, T, L, ctx, stats):
     # Combina Dixon-Coles + ELO puro + Form puro con pesos adaptativos.
     # agreement alto → más confianza en el modelo.
 
+    # Entre ligas distintas (22-oct-26): el Elo propio y la forma solo
+    # comparan dentro de cada liga. Llevan la misma diferencia de ligas que
+    # los goles esperados: la forma con el mismo reparto (λ local × f,
+    # λ visita / f) y el Elo con GAMMA de la diferencia de fuerza.
+    _lg = getattr(L, "league_gap", None)
+    _s = (_lg[2] ** 0.5) if _lg else 1.0
+    _elo_shift = 0.0
+    if _lg:
+        from src.features.clubelo import GAMMA
+        _elo_shift = GAMMA * (_lg[0] - _lg[1])
     ensemble = ensemble_predict(
         dc_probs        = (dc_home, dc_draw, dc_away),
-        elo_home        = elo.get(home, 1500),
+        elo_home        = elo.get(home, 1500) + _elo_shift,
         elo_away        = elo.get(away, 1500),
-        home_attack     = home_attack,
-        home_defense    = home_defense,
-        away_attack     = away_attack,
-        away_defense    = away_defense,
+        home_attack     = home_attack * _s,
+        home_defense    = home_defense / _s,
+        away_attack     = away_attack / _s,
+        away_defense    = away_defense * _s,
         home_advantage  = HOME_ADVANTAGE,
         tempo           = TEMPO,
         rho             = DC_RHO_SCORE,
@@ -1388,7 +1432,8 @@ def _stage_side_bias(row, T, M, ctx, records, L=None):
     from src.models.side_bias import debias, record
     rec = record(f"{T.home} vs {T.away}", T.date, _row_league_of(row),
                  M.model_probs, pinnacle_probs(row),
-                 lambdas=(L.lambda_home, L.lambda_away) if L is not None else None)
+                 lambdas=(L.lambda_home, L.lambda_away) if L is not None else None,
+                 league_factor=L.league_gap[2] if L is not None and getattr(L, "league_gap", None) else None)
     if rec:
         records.append(rec)
     M.model_probs, M.side_bias_shift = debias(M.model_probs, getattr(ctx, "side_bias", None))
@@ -2947,6 +2992,7 @@ def run_prediction_pipeline(dry_run: bool = False):
         timing_blocked=timing_blocked,
         current_bankroll=current_bankroll,
         hist_counts=_safe_history_counts(),
+        clubelo=_safe_clubelo(df),
     )
 
     # =========================
@@ -3033,6 +3079,7 @@ def run_prediction_pipeline(dry_run: bool = False):
     print("Sin odds:           ", stats['skipped_no_odds'])
     print("Historia corta:     ", stats['thin_history'])
     print("Sin Dixon-Coles:    ", stats['no_dc'])
+    print("Entre ligas (Elo):  ", stats['clubelo'])
     print("Fallback usados:    ", stats['fallback_used'])
     print("xG proxy usado:     ", stats['xg_used'])
     print("H2H usado:          ", stats['h2h_used'])

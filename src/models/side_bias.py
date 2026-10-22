@@ -52,7 +52,10 @@ TABLE_SQL = """
 """
 # Para el dashboard (21-oct-26): goles esperados y probabilidades del modelo
 # de goles y ambos anotan, para ver qué dice el programa de cada partido.
-EXTRA_COLUMNS = ("lam_home", "lam_away", "p_over25", "p_btts")
+# league_factor (22-oct-26): el reparto de goles por la diferencia de ligas
+# (src/features/clubelo.py) en partidos entre ligas; NULL = sin ajuste. Con
+# él se recalibra GAMMA y los picks saben qué partido se analizó ajustado.
+EXTRA_COLUMNS = ("lam_home", "lam_away", "p_over25", "p_btts", "league_factor")
 ALTER_SQL = "; ".join(f"ALTER TABLE model_vs_sharp ADD COLUMN IF NOT EXISTS {c} NUMERIC"
                       for c in EXTRA_COLUMNS)
 
@@ -116,9 +119,10 @@ def _num(v):
 
 
 def record(match: str, match_date, league, model_probs: dict, pin: dict,
-           lambdas: tuple | None = None) -> dict | None:
+           lambdas: tuple | None = None, league_factor=None) -> dict | None:
     """Fila de model_vs_sharp con el 1X2 CRUDO del modelo y el de Pinnacle,
-    y (para el dashboard) goles esperados, más de 2.5 y ambos anotan."""
+    (para el dashboard) goles esperados, más de 2.5 y ambos anotan, y el
+    factor de liga si el partido se ajustó con ClubElo."""
     if not all(k in model_probs for k in ("home_win", "draw", "away_win")):
         return None
     if not all(k in (pin or {}) for k in SIDES):
@@ -130,7 +134,8 @@ def record(match: str, match_date, league, model_probs: dict, pin: dict,
             "pin_home": float(pin["home"]), "pin_draw": float(pin["draw"]),
             "pin_away": float(pin["away"]),
             "lam_home": _num(lh), "lam_away": _num(la),
-            "p_over25": _num(model_probs.get("over25")), "p_btts": _num(model_probs.get("btts"))}
+            "p_over25": _num(model_probs.get("over25")), "p_btts": _num(model_probs.get("btts")),
+            "league_factor": _num(league_factor)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -187,15 +192,17 @@ def persist(records: list) -> int:
             conn.execute(text("""
                 INSERT INTO model_vs_sharp
                     (match, match_date, league, p_home, p_draw, p_away, pin_home, pin_draw, pin_away,
-                     lam_home, lam_away, p_over25, p_btts)
+                     lam_home, lam_away, p_over25, p_btts, league_factor)
                 VALUES (:match, :match_date, :league, :p_home, :p_draw, :p_away,
-                        :pin_home, :pin_draw, :pin_away, :lam_home, :lam_away, :p_over25, :p_btts)
+                        :pin_home, :pin_draw, :pin_away, :lam_home, :lam_away, :p_over25, :p_btts,
+                        :league_factor)
                 ON CONFLICT (match, match_date) DO UPDATE SET
                     p_home = EXCLUDED.p_home, p_draw = EXCLUDED.p_draw, p_away = EXCLUDED.p_away,
                     pin_home = EXCLUDED.pin_home, pin_draw = EXCLUDED.pin_draw,
                     pin_away = EXCLUDED.pin_away, lam_home = EXCLUDED.lam_home,
                     lam_away = EXCLUDED.lam_away, p_over25 = EXCLUDED.p_over25,
-                    p_btts = EXCLUDED.p_btts, created_at = NOW()
+                    p_btts = EXCLUDED.p_btts, league_factor = EXCLUDED.league_factor,
+                    created_at = NOW()
             """), r)
     return len(rows)
 

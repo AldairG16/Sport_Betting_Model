@@ -7,7 +7,7 @@ Todo lo que hace falta saber para trabajar en este repo sin romper producción.
 
 ## 1. Servicios externos
 
-El modelo no funciona solo: depende de seis servicios de terceros. Si uno se cae,
+El modelo no funciona solo: depende de siete servicios de terceros. Si uno se cae,
 el pipeline **sigue saliendo verde en Actions** y deja de producir en silencio —
 ver §2.
 
@@ -19,6 +19,7 @@ ver §2.
 | **Telegram** | Único canal de salida: picks, resumen diario, alertas del watchdog. | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`; el analista usa `*_PREKICKOFF` y cae al bot principal si no están. | Gratis. |
 | **football-data.co.uk** | Respaldo de resultados y **única** fuente de córners y tarjetas. Publica con 24-36 h de retraso. Si un archivo no existe, **manda otro parecido** sin avisar (§5). | Ninguna, son CSV públicos. | Gratis. |
 | **OpenWeatherMap** | Clima del partido (`src/features/weather_impact.py`). | `WEATHER_API_KEY` | Gratis, 1000 llamadas/día. |
+| **ClubElo** | Fuerza de cada liga para los partidos entre ligas (§7, "Fuerza de liga"). Su API (`api.clubelo.com`) responde 502; se leen las páginas públicas `clubelo.com/<PAÍS>`, una vez por semana, con pausa de 2 s. | Ninguna. | Gratis. |
 
 `RAPIDAPI_KEY` solo la usa `test_api.py`, que no forma parte del pipeline.
 
@@ -1113,6 +1114,38 @@ modelo y de lo que se deriva de él (doble oportunidad, empate anulado, hándica
 del ancla; el `decision_log.model.side_bias` guarda el cambio aplicado. Telegram solo
 cuando la corrección se mueve.
 
+### Fuerza de liga (`src/features/clubelo.py`, 22-oct-2026)
+
+El programa mide a cada equipo dentro de su liga. En Champions, Europa League y Conference
+eso no alcanza: el 21-oct le dio a Viking 20% contra el Aston Villa (Pinnacle 10%) porque
+mete 2.3 por partido en Noruega.
+
+- **Datos.** `refresh_if_stale()` corre en el morning (paso "ClubElo (fuerza de liga)",
+  antes de Predictions) y, si la última foto tiene más de 6 días, lee las páginas públicas
+  de ClubElo de 53 países (tabla `club_elo`, una foto por fecha). Un país que falla se salta;
+  ninguno → ERROR a Telegram. Una foto de más de 10 días no se usa (`MAX_AGE_DAYS`).
+  - La API de datos de ClubElo responde 502 desde el 22-oct-26 y la de partidos dice
+    "Fixtures API deactivated": por eso las páginas. No tienen verificación de bots.
+- **Fuerza de la liga** = Elo promedio de sus 5 mejores clubes (`league_strengths`; con menos
+  de 3 clubes en ClubElo la liga no tiene fuerza). Foto del 22-oct: Inglaterra 1965, España
+  1912, Alemania 1891, Italia 1860, Francia 1830 … Noruega 1642, Ucrania 1583.
+- **Ajuste** (`league_factor`, solo partidos entre ligas, `prediction_pipeline._stage_lambdas`):
+  el reparto f que cuadra un partido promedio con la diferencia de fuerza de las dos ligas
+  (sin ventaja local: la de cada equipo ya está en sus goles), elevado a `GAMMA` = 0.2.
+  Goles esperados λ local × f, λ visita / f; la forma del ensemble con el mismo reparto y su
+  Elo con 0.2 de la diferencia de fuerza. Misma liga: f = 1.
+- **Por qué la liga y amortiguado.** En los 5 partidos de copas con goles esperados del
+  programa y Pinnacle, distancia del Dixon-Coles a Pinnacle: 5.2 pts sin ajuste; 5.6 con el
+  Elo de cada club; 12.3 con la diferencia de ligas completa (se pasa); 1.6 con el 20%
+  (media 5.7 → 2.9). En 24 partidos el Elo de ClubElo solo quedó a 6.3 pts de Pinnacle y el
+  programa a 13.3.
+- **Provisional.** Cinco partidos es poco. `model_vs_sharp.league_factor` guarda el factor de
+  cada partido ajustado (NULL = sin ajuste): con más partidos de copas se recalibra `GAMMA`
+  contra Pinnacle.
+- **Nombres.** `match_team` empareja por palabras (sin "fc", "fk"…) y solo con un candidato
+  único; lo que no alcanza va en `SLUG_ALIAS` ("inter milan" también tiene "milan"; "bod/glimt"
+  perdió la ø). Equipo sin club o liga sin fuerza: el partido va sin ajuste y sin pick.
+
 ### Calibración por mercado
 
 `apply_calibration(prob, market, league)` de `src/models/calibration_monitor.py` es el
@@ -1325,9 +1358,11 @@ de responder "cómo nos fue con los picks".
   - El mercado no se movió 3 pts o más en contra desde que el programa analizó el partido
     (`MOVED_AGAINST`; foto de `odds_history` de antes de `created_at`). En el Bayern–Arsenal
     del 21-oct, Pinnacle pasó de 46% a 40% por la rotación; el programa no usa alineaciones.
-  - No es un partido entre ligas distintas (`CROSS_LEAGUE`: Champions, Europa League…). El
-    programa todavía no ajusta por la fuerza de la liga: Viking mete 2.3 por partido en Noruega
-    y Aston Villa 1.6 en la Premier.
+  - Si es un partido entre ligas distintas (`CROSS_LEAGUE`: Champions, Europa League…), el
+    análisis tiene que traer el ajuste por fuerza de liga (`model_vs_sharp.league_factor` no
+    NULL; §7, "Fuerza de liga"). Sin él el programa sobrevalora a quien golea en una liga débil:
+    Viking mete 2.3 por partido en Noruega y Aston Villa 1.6 en la Premier. Las copas de
+    América (Libertadores, Sudamericana, Concacaf) siguen sin pick: ClubElo es solo Europa.
   - Sin ninguno: "sin pick", guardado con su motivo (`reason`, `market` NULL).
 - **Tiros al arco** no tiene precio en ninguna fuente: no es pick.
 - **El dashboard muestra el pick guardado** (`visibility.saved_pick`), no lo recalcula: lo que
