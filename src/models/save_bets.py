@@ -353,6 +353,15 @@ def _has(v) -> bool:
     return v is not None and not pd.isna(v)
 
 
+def card_total(mrow) -> float:
+    """Tarjetas del partido como las cuenta PlayDoit: amarilla = 1 y roja = 1
+    (el dueño, 21-oct-26). Hasta entonces contaban solo las amarillas. Una
+    roja sin dato cuenta 0: el dato falta en 1 de cada ~7,600 partidos."""
+    red = lambda c: float(mrow.get(c)) if _has(mrow.get(c)) else 0.0
+    return (float(mrow.get("home_yellow")) + float(mrow.get("away_yellow"))
+            + red("home_red") + red("away_red"))
+
+
 def _over_under(total: float, market: str) -> str:
     """Resultado de un over/under de córners, tarjetas o tiros. Con línea
     ENTERA (cards_under_4.0) y el total justo en la línea, la casa devuelve
@@ -521,7 +530,7 @@ def resolve_market(market: str, _mrow, odds: float, stake: float) -> tuple[str, 
         hy = _mrow.get("home_yellow") if _mrow is not None else None
         ay = _mrow.get("away_yellow") if _mrow is not None else None
         if _has(hy) and _has(ay):      # NaN = sin dato (ver shots)
-            outcome = _over_under(float(hy) + float(ay), market)
+            outcome = _over_under(card_total(_mrow), market)
             if outcome == "push":
                 profit = 0.0
         else:
@@ -629,7 +638,7 @@ _MATCHES_PRELOAD_SQL = """
            date,
            home_goals, away_goals,
            home_corners, away_corners,
-           home_yellow, away_yellow,
+           home_yellow, away_yellow, home_red, away_red,
            home_goals_ht, away_goals_ht,
            home_goals_h2, away_goals_h2,
            home_shots_target, away_shots_target
@@ -912,7 +921,7 @@ def resolve_shadow_outcomes(dry_run: bool = False) -> dict:
                    date,
                    home_goals, away_goals,
                    home_corners, away_corners,
-                   home_yellow, away_yellow,
+                   home_yellow, away_yellow, home_red, away_red,
                    home_goals_ht, away_goals_ht,
                    home_goals_h2, away_goals_h2,
                    home_shots_target, away_shots_target

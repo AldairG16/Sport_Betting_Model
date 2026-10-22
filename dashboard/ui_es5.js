@@ -211,16 +211,105 @@ function matchHtml(m, i){
     more.push('<b>Mínimo en PlayDoit por resultado:</b> ' + mins.join(' · '));
   }
   if (lu) more.push('<b>Alineaciones:</b> ' + esc(lu.text));
-  return '<div class="match" id="m' + i + '"><div class="mrow" onclick="toggleMatch(' + i + ')">' +
+  var sk = statsKey(m.key, m.match_date), open = !!_open[sk];
+  return '<div class="match' + (open ? ' open' : '') + '" id="m' + i + '"><div class="mrow" onclick="toggleMatch(' + i + ')">' +
          '<div class="mtime">' + mxtime(m.match_date) + '</div>' +
          '<div class="mname"><b>' + esc(m.match) + '</b><div class="lbl2">' + esc(m.league) + '</div></div>' +
          '<div class="mpick">' + pick + '</div><div class="mprice">' + price + '</div>' +
          '<div class="mverdict"><span class="pill ' + st[0] + '" title="' + esc(st[2]) + '">' + st[1] + '</span></div>' +
-         '</div><div class="mmore">' + more.join('<br>') + '</div></div>';
+         '</div><div class="mmore">' + more.join('<br>') +
+         (m.key ? '<div class="stats" id="st' + i + '">' + (_statsCache[sk] || '') + '</div>' : '') + '</div></div>';
 }
 function toggleMatch(i){
-  var m = el('m' + i);
-  if (m) m.className = m.className.indexOf('open') >= 0 ? 'match' : 'match open';
+  var box = el('m' + i), m = _matches[i];
+  if (!box) return;
+  var open = box.className.indexOf('open') < 0, sk = statsKey(m.key, m.match_date);
+  box.className = open ? 'match open' : 'match';
+  if (open) _open[sk] = true; else delete _open[sk];
+  if (open && m.key) loadStats('st' + i, m.key, m.match_date);
+}
+
+// ── Estadísticas del partido (v1.10.0): últimos 5 de cada equipo con
+// resultado, goles, córners, tarjetas y su once; alineación del partido;
+// últimos 5 entre ellos. Se piden al abrir el partido y se guardan. ──
+var _open = {}, _statsCache = {};
+function statsKey(key, date){ return String(key) + '|' + String(date); }
+function shortDate(iso){
+  var p = String(iso).slice(0, 10).split('-');
+  return p.length === 3 ? parseInt(p[2], 10) + ' ' + MX_MESES[parseInt(p[1], 10) - 1] + ' ' + p[0].slice(2) : esc(iso);
+}
+function toggleXi(a){
+  var row = a.parentNode.parentNode.nextSibling;
+  if (!row) return;
+  var show = row.style.display === 'none';
+  row.style.display = show ? '' : 'none';
+  a.textContent = show ? 'once ▾' : 'once ▸';
+}
+function teamBlock(t){
+  var s = t.summary, h = '<div class="tblock"><div class="tname">' + esc(t.team) + '</div>';
+  if (!s) return h + '<div class="muted small">Sin partidos anteriores en la base.</div></div>';
+  h += '<div class="small">Últimos ' + s.n + ': <b>' + s.w + ' G · ' + s.d + ' E · ' + s.l + ' P</b> · goles ' + s.goals_for +
+       ' a favor y ' + s.goals_against + ' en contra' +
+       (s.corners_for !== null ? ' · córners ' + s.corners_for + ' a favor y ' + s.corners_against + ' en contra' : ' · <span class="muted">sin datos de córners</span>') +
+       (s.cards !== null ? ' · ' + s.cards + ' tarjetas por partido' : '') + '</div>';
+  h += '<table class="mini"><thead><tr><th>Fecha</th><th>Rival</th><th>Resultado</th><th title="A favor - en contra">Córners</th><th title="Del partido, roja = 1">Tarjetas</th><th></th></tr></thead><tbody>';
+  for (var i = 0; i < t.matches.length; i++) {
+    var m = t.matches[i], rc = m.result === 'G' ? 'pos' : m.result === 'P' ? 'neg' : '';
+    h += '<tr><td>' + shortDate(m.date) + '</td><td>' + (m.venue === 'L' ? 'vs ' : 'en ') + esc(m.opponent) +
+         '<div class="lbl2">' + (m.venue === 'L' ? 'de local' : 'de visitante') + (m.league ? ' · ' + esc(m.league) : '') + '</div></td><td class="' + rc + '"><b>' +
+         m.result + '</b> ' + m.score + '</td><td>' + (m.corners ? m.corners[0] + ' - ' + m.corners[1] : '—') + '</td><td>' +
+         (m.cards === null ? '—' : m.cards) + '</td><td>' + (m.xi ? '<a class="xi" onclick="toggleXi(this)">once ▸</a>' : '') + '</td></tr>';
+    if (m.xi) h += '<tr style="display:none"><td colspan="6" class="small">' + esc(m.xi.formation) + ': ' + esc(m.xi.players.join(', ')) + '</td></tr>';
+  }
+  h += '</tbody></table>';
+  var lu = t.lineup;
+  h += '<div class="small" style="margin-top:8px"><b>' + (lu ? (lu.confirmed ? '✅ Alineación confirmada' : 'Alineación probable') : 'Alineación') + '</b>' +
+       (lu ? ' (' + esc(lu.formation) + ')' + (lu.confirmed ? '' : ' <span class="muted">— los que más han sido titulares en sus últimos ' + lu.from +
+             ' partidos; la confirmada sale ~1 h antes</span>') + ': ' + esc(lu.players.join(', ')) :
+             ': <span class="muted">sin datos de alineaciones para este equipo</span>') + '</div>';
+  return h + '</div>';
+}
+function statsHtml(d){
+  var h = '<div class="statsgrid">' + teamBlock(d.home) + teamBlock(d.away) + '</div>';
+  h += '<div class="tname" style="margin-top:12px">Entre ellos</div>';
+  if (!d.h2h.length) return h + '<div class="muted small">Sin partidos entre ellos en la base.</div>';
+  h += '<table class="mini"><thead><tr><th>Fecha</th><th>Partido</th><th>Marcador</th><th>Córners</th></tr></thead><tbody>';
+  for (var i = 0; i < d.h2h.length; i++) {
+    var x = d.h2h[i];
+    h += '<tr><td>' + shortDate(x.date) + '</td><td>' + esc(x.match) + '</td><td><b>' + x.score + '</b></td><td>' +
+         (x.corners ? x.corners[0] + ' - ' + x.corners[1] : '—') + '</td></tr>';
+  }
+  return h + '</tbody></table>';
+}
+function loadStats(id, key, date){
+  var box = el(id), sk = statsKey(key, date);
+  if (!box) return;
+  if (_statsCache[sk]) { box.innerHTML = _statsCache[sk]; return; }
+  if (box.getAttribute('data-loading')) return;
+  box.setAttribute('data-loading', '1');
+  box.innerHTML = '<div class="muted small">Cargando estadísticas…</div>';
+  var parts = String(key).split(' vs ');
+  getJSON('/api/match?home=' + encodeURIComponent(parts[0]) + '&away=' + encodeURIComponent(parts[1] || '') +
+          '&date=' + encodeURIComponent(date), function(d){
+    _statsCache[sk] = statsHtml(d);
+    var b = el(id);
+    if (b) { b.innerHTML = _statsCache[sk]; b.removeAttribute('data-loading'); }
+  }, function(msg){ box.innerHTML = '<div class="muted small">' + esc(msg) + '</div>'; box.removeAttribute('data-loading'); });
+}
+
+// ── ¿Quién tuvo razón? (v1.10.0): el programa o el mercado, el que le dio
+// más probabilidad a lo que pasó ──
+function whoHtml(w){
+  return w === 'programa' ? '<span class="who p">🤖 Programa</span>' :
+         w === 'mercado' ? '<span class="who m">🏦 Mercado</span>' : '<span class="muted">—</span>';
+}
+function whyText(r){
+  if (!r.winner) return r.result_key === 'pending' ? 'Todavía no se juega (o no tiene resultado).' :
+    'Sin comparación: devolución o falta la probabilidad del mercado.';
+  var happened = r.result_key === 'win' || r.result_key === 'half_win';
+  return (happened ? '✅ Pasó' : '❌ No pasó') + ': ' + esc(r.label) + '. El programa le daba <b>' + p100(r.model) +
+         '</b> y el mercado <b>' + p100(r.market) + '</b>. Tuvo razón <b>el ' + r.winner + '</b>: ' +
+         (happened ? 'le dio más probabilidad a lo que pasó.' : 'le dio menos probabilidad a algo que no pasó.');
 }
 
 function renderToday(){
@@ -330,7 +419,7 @@ function loadLineups(){
 }
 
 // ── ¿Cómo vamos? (tarjetas de Hoy) ──
-var _sum = { picks: undefined, real: undefined, fav: undefined, bank: undefined };
+var _sum = { picks: undefined, real: undefined, fav: undefined, bank: undefined, right: null };
 function card(lbl, val, note, cls){
   return '<div class="card"><div class="lbl">' + lbl + '</div><div class="val ' + (cls || '') + '">' + val +
          '</div><div class="note">' + note + '</div></div>';
@@ -341,6 +430,7 @@ function renderHowWeGo(){
   else if (!p) h += card('🎯 Picks del programa', 'Todavía sin resultados', 'Se guardan desde el 21-oct. Cada pick se califica unas horas después de que termina su partido (en la corrida de la noche o en la de las 6:30 am).');
   else h += card('🎯 Picks del programa', p.won + ' ✅ · ' + p.lost + ' ❌',
                  (p.priced ? money(p.profit) + ' a 1u por pick, al momio de PlayDoit aprox.' : 'Sin momio de PlayDoit para calcular unidades') +
+                 (_sum.right ? ' Tuvo razón el programa en ' + _sum.right.programa + ' y el mercado en ' + _sum.right.mercado + '.' : '') +
                  ' Detalle en <b>Cómo nos ha ido</b>.', p.priced ? (p.profit >= 0 ? 'pos' : 'neg') : '');
   var bankTxt = _sum.bank === undefined || _sum.bank === null ? '—' : _sum.bank.toFixed(1) + 'u';
   var realNote = 'Cargando';
@@ -364,6 +454,8 @@ function loadPicks(){
   var body = el('picklist'), k = el('pickkpis');
   getJSON('/api/picks?days=30', function(d){
     _sum.picks = d.all;
+    _sum.right = d.right;
+    _pickRows = d.rows;
     renderHowWeGo();
     function kcard(title, s, note){
       if (!s) return card(title, '—', note + ' Sin resultados todavía.');
@@ -373,22 +465,36 @@ function loadPicks(){
     }
     k.innerHTML = kcard('Todos los picks', d.all, 'Uno por partido.') +
                   kcard('Con ventaja según el programa', d.lean, 'Donde veía 3+ puntos más que el mercado.') +
-                  kcard('Los que pagaban el mínimo en PlayDoit', d.value, 'Los que habrías apostado.');
+                  kcard('Los que pagaban el mínimo en PlayDoit', d.value, 'Los que habrías apostado.') +
+                  card('¿Quién tuvo razón?', '🤖 ' + d.right.programa + ' · 🏦 ' + d.right.mercado,
+                       'Programa contra mercado: el que le dio más probabilidad a lo que pasó.');
     var html = '';
     for (var i = 0; i < d.rows.length; i++) {
       var r = d.rows[i];
-      html += '<tr><td>' + mxdate(r.match_date) + '</td><td>' + esc(r.match) + '<div class="lbl2">' + esc(r.league) + '</div></td><td>' +
-              esc(r.label) + (r.lean ? '' : ' <span class="muted small">(lo más probable)</span>') + '</td><td>' + esc(r.playdoit_us || '—') +
-              '</td><td>' + resultPill(r.result_key, r.result) + '</td><td>' +
-              (r.profit === null ? '' : '<span class="' + (r.profit >= 0 ? 'pos' : 'neg') + '">' + money(r.profit) + '</span>') + '</td></tr>';
+      html += '<tr class="clickable" onclick="togglePick(' + i + ')"><td>' + mxdate(r.match_date) + '</td><td>' + esc(r.match) +
+              '<div class="lbl2">' + esc(r.league) + '</div></td><td>' +
+              esc(r.label) + (r.lean ? '' : ' <span class="muted small">(lo más probable)</span>') + '</td><td>' +
+              p100(r.model) + ' vs ' + p100(r.market) + '</td><td>' + esc(r.playdoit_us || '—') +
+              '</td><td>' + resultPill(r.result_key, r.result) + '</td><td>' + whoHtml(r.winner) + '</td><td>' +
+              (r.profit === null ? '' : '<span class="' + (r.profit >= 0 ? 'pos' : 'neg') + '">' + money(r.profit) + '</span>') + '</td></tr>' +
+              '<tr id="pd' + i + '" style="display:none"><td colspan="8"><div class="small">' + whyText(r) +
+              '</div><div class="stats" id="pds' + i + '"></div></td></tr>';
     }
-    body.innerHTML = html || emptyRow(6, 'Sin picks con resultado todavía');
+    body.innerHTML = html || emptyRow(8, 'Sin picks con resultado todavía');
   }, function(msg){
     _sum.picks = null;
     renderHowWeGo();
     k.innerHTML = card('Picks del programa', 'Todavía sin resultados', esc(msg));
-    body.innerHTML = emptyRow(6, msg);
+    body.innerHTML = emptyRow(8, msg);
   });
+}
+var _pickRows = [];
+function togglePick(i){
+  var row = el('pd' + i), r = _pickRows[i];
+  if (!row || !r) return;
+  var show = row.style.display === 'none';
+  row.style.display = show ? '' : 'none';
+  if (show && r.key) loadStats('pds' + i, r.key, r.match_date);
 }
 
 function loadScoreboard(){
@@ -461,10 +567,10 @@ function loadProposals(){
       html += '<tr><td>' + mxdate(r.match_date) + '</td><td>' + esc(r.match) + '</td><td>' + esc(r.market) + '</td><td>' +
               (r.probability === null ? '—' : p100(r.probability)) + '</td><td>' + (r.odds_us || '—') +
               '</td><td>' + (r.min_us || '—') + '</td><td>' + dec + '</td><td>' + resultPill(r.result_key, r.result) +
-              '</td><td>' + (r.profit_1u === null ? '' : money(r.profit_1u)) + '</td></tr>';
+              '</td><td>' + whoHtml(r.winner) + '</td><td>' + (r.profit_1u === null ? '' : money(r.profit_1u)) + '</td></tr>';
     }
-    body.innerHTML = html || emptyRow(9, 'Sin propuestas');
-  }, function(msg){ body.innerHTML = emptyRow(9, msg); sum.innerHTML = ''; });
+    body.innerHTML = html || emptyRow(10, 'Sin propuestas');
+  }, function(msg){ body.innerHTML = emptyRow(10, msg); sum.innerHTML = ''; });
 }
 
 // ── Dinero real ──

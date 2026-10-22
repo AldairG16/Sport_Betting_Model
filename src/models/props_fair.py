@@ -43,9 +43,12 @@ MIN_GAP = 0.04          # el partido se aparta 4 pt o más del promedio de su li
 PROPS = {
     "corners": {"cols": ("home_corners", "away_corners"), "alpha": 0.3, "dispersion": 48.0,
                 "lines": (8.5, 9.5, 10.5, 11.5), "name": "córners"},
-    "cards": {"cols": ("home_yellow", "away_yellow"), "alpha": 0.4, "dispersion": None,
-              "lines": (3.5, 4.5, 5.5), "name": "tarjetas amarillas"},
+    "cards": {"cols": ("home_cards", "away_cards"), "alpha": 0.4, "dispersion": None,
+              "lines": (3.5, 4.5, 5.5), "name": "tarjetas"},
 }
+# Columnas calculadas: amarilla = 1 y roja = 1, como liquida PlayDoit (21-oct-26)
+COLUMN_SQL = {"home_cards": "home_yellow + COALESCE(home_red, 0)",
+              "away_cards": "away_yellow + COALESCE(away_red, 0)"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -127,11 +130,13 @@ def load_history(engine=None, days: int = HISTORY_DAYS) -> pd.DataFrame:
     if engine is None:
         from config.database import engine
     cols = sorted({c for cfg in PROPS.values() for c in cfg["cols"]})
+    expr = lambda c: COLUMN_SQL.get(c, c)
     df = pd.read_sql(text(f"""
-        SELECT date, league, LOWER(home_team) AS home, LOWER(away_team) AS away, {", ".join(cols)}
+        SELECT date, league, LOWER(home_team) AS home, LOWER(away_team) AS away,
+               {", ".join(f"{expr(c)} AS {c}" for c in cols)}
         FROM matches
         WHERE date >= CURRENT_DATE - {int(days)}
-          AND ({" OR ".join(f"{c} IS NOT NULL" for c in cols)})
+          AND ({" OR ".join(f"({expr(c)}) IS NOT NULL" for c in cols)})
     """), engine)
     df["date"] = pd.to_datetime(df["date"])
     return df.sort_values("date", ascending=False).reset_index(drop=True)

@@ -49,17 +49,17 @@ def _hist():
     for i in range(40):                                          # liga: 40 partidos de 5+5 córners
         rows.append({"date": pd.Timestamp("2026-08-01") + pd.Timedelta(days=i), "league": "soccer_epl",
                      "home": f"x{i}", "away": f"y{i}", "home_corners": 5, "away_corners": 5,
-                     "home_yellow": 2, "away_yellow": 2})
+                     "home_cards": 2, "away_cards": 2})
     for i in range(6):                                           # alpha saca muchos córners
         rows.append({"date": pd.Timestamp("2026-09-15") + pd.Timedelta(days=i), "league": "soccer_epl",
                      "home": "alpha", "away": f"z{i}", "home_corners": 11, "away_corners": 3,
-                     "home_yellow": 1, "away_yellow": 1})
+                     "home_cards": 1, "away_cards": 1})
     for i in range(6):                                           # beta: equipo normal
         rows.append({"date": pd.Timestamp("2026-09-15") + pd.Timedelta(days=i), "league": "soccer_epl",
                      "home": "beta", "away": f"w{i}", "home_corners": 5, "away_corners": 5,
-                     "home_yellow": 2, "away_yellow": 2})
+                     "home_cards": 2, "away_cards": 2})
     rows.append({"date": pd.Timestamp("2026-10-10"), "league": "soccer_epl", "home": "alpha", "away": "gamma",
-                 "home_corners": 30, "away_corners": 0, "home_yellow": 9, "away_yellow": 9})   # el propio partido
+                 "home_corners": 30, "away_corners": 0, "home_cards": 9, "away_cards": 9})   # el propio partido
     return pd.DataFrame(rows).sort_values("date", ascending=False).reset_index(drop=True)
 
 

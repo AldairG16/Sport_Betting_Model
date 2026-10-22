@@ -55,7 +55,7 @@ def resolve_stale_bets(apply: bool = True, verbose: bool = True) -> dict:
                LOWER(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(away_team,'[.,\\-_]',' ','g'),'\\s+',' ','g'))) AS away_c,
                date, home_goals, away_goals,
                home_corners, away_corners,
-               home_yellow, away_yellow,
+               home_yellow, away_yellow, home_red, away_red,
                home_goals_ht, away_goals_ht,
                home_goals_h2, away_goals_h2,
                home_shots_target, away_shots_target
