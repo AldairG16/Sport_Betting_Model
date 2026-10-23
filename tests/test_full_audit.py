@@ -111,3 +111,60 @@ def test_data_health_flags_each_known_class_of_bad_data():
     msgs = data_health({"mirror": 40, "future": 2, "duplicate": 5}, {**fresh, "club_elo": 15, "espn_matches": None})
     assert len(msgs) == 5
     assert any("día y el mes cruzados" in m for m in msgs) and any("club_elo sin actualizar" in m for m in msgs)
+
+
+# ─── nombres de otras fuentes (parte 2) ──────────────────────────────────────
+
+@pytest.mark.parametrize("raw,canon", [
+    ("Houston Dynamo FC", "houston dynamo"), ("Chicago Fire FC", "chicago fire"),
+    ("Red Bull New York", "ny red bulls"), ("New York Red Bulls", "ny red bulls"), ("NY Red Bulls", "ny red bulls"),
+    ("Talleres (Córdoba)", "talleres cordoba"), ("Estudiantes de La Plata", "estudiantes"),
+    ("Central Córdoba (Santiago del Estero)", "central cordoba"), ("Atlético de San Luis", "atl san luis"),
+    ("AFC Bournemouth", "bournemouth"), ("Brighton & Hove Albion", "brighton"), ("Olympiacos", "olympiakos piraeus"),
+    ("1. FC Heidenheim 1846", "heidenheim"), ("Borussia M.Gladbach", "gladbach"), ("RasenBallsport Leipzig", "leipzig"),
+    ("Racing Santander", "real racing club de santander")])
+def test_names_from_espn_and_understat_reach_our_teams(raw, canon):
+    from src.utils.team_normalizer import normalize_team
+    assert normalize_team(raw) == canon
+
+
+def test_off_canon_lists_only_names_that_are_no_team_of_ours():
+    from scripts.learn_team_aliases import off_canon
+    canon = {"stuttgart", "bayern munchen", "ny red bulls"}
+    assert off_canon(["VfB Stuttgart", "Bayern Munich", "Red Bull New York", "Colo Colo"], canon) == [("Colo Colo", "colo colo")]
+
+
+def test_espn_slugs_point_to_the_right_league():
+    from scripts.backfill_espn_results import ESPN_LEAGUES
+    assert ESPN_LEAGUES["soccer_china_superleague"] == "chn.1"             # chi.1 es Chile
+    assert "soccer_korea_kleague1" not in ESPN_LEAGUES                       # ESPN no la tiene
+
+
+def test_the_all_star_game_is_not_a_lineup_of_ours():
+    from src.features.espn_lineups import parse_scoreboard
+    ev = lambda h, a: {"id": "1", "date": "2026-07-30T00:00Z", "status": {"type": {"completed": True}},
+                       "competitions": [{"competitors": [{"homeAway": "home", "team": {"displayName": h}},
+                                                         {"homeAway": "away", "team": {"displayName": a}}]}]}
+    assert parse_scoreboard({"events": [ev("MLS All-Stars", "Liga MX All Stars"), ev("LA Galaxy", "Austin FC")]}) == [
+        {"event": "1", "kick": pd.Timestamp("2026-07-30T00:00Z").to_pydatetime(), "home": "LA Galaxy",
+         "away": "Austin FC", "completed": True}]
+
+
+def test_a_scorer_who_changed_club_counts_for_the_last_one(monkeypatch):
+    import src.models.scorer_model as SM
+    rows = pd.DataFrame([{"player": "Cole Palmer", "team": "Chelsea,Manchester City", "goals": 6, "matches": 8}])
+    monkeypatch.setattr(SM.pd, "read_sql", lambda *a, **k: rows.copy())
+    out = {}
+    SM._merge_club_scorers(out, {"manchester city": 8})
+    assert out["cole palmer"]["team"] == "manchester city"
+
+
+def test_exchange_prices_count_net_of_their_commission():
+    # The Odds API da el momio de respaldo de Betfair sin la comisión (23-oct-26)
+    from scripts.update_upcoming_matches import net_of_commission
+    bf = {"key": "betfair_ex_eu", "markets": [{"key": "h2h", "outcomes": [{"name": "A", "price": 2.10}]}]}
+    out = net_of_commission(bf)
+    assert out["markets"][0]["outcomes"][0]["price"] == pytest.approx(1 + 1.10 * 0.95)
+    assert bf["markets"][0]["outcomes"][0]["price"] == 2.10                 # el JSON original no se toca
+    book = {"key": "unibet_eu", "markets": [{"key": "h2h", "outcomes": [{"name": "A", "price": 2.10}]}]}
+    assert net_of_commission(book) is book

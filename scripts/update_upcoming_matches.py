@@ -116,6 +116,26 @@ _credits_used_this_run: int = 0            # acumulador local (estimado)
 # ARCHIVO DE CACHE LOCAL
 # ============================================================
 CACHE_FILE = Path(__file__).parent.parent / "data" / "api_cache.json"
+
+# Comisión de las casas de intercambio sobre la ganancia (23-oct-26). The Odds
+# API da su momio de respaldo SIN la comisión, así que el "mejor momio" salía
+# casi siempre de un intercambio con un valor que nadie cobra.
+EXCHANGE_COMMISSION = {"betfair_ex_eu": 0.05, "betfair_ex_uk": 0.05, "betfair_ex_au": 0.05,
+                       "matchbook": 0.02, "smarkets": 0.02}
+
+
+def net_of_commission(bookmaker: dict) -> dict:
+    """La casa con sus momios netos de comisión (1 + ganancia × (1 − c)).
+    Copia: el JSON de la API (y su caché) no se toca."""
+    c = EXCHANGE_COMMISSION.get(bookmaker.get("key"))
+    if not c:
+        return bookmaker
+    markets = []
+    for mk in bookmaker.get("markets", []):
+        outs = [{**o, "price": round(1 + (o["price"] - 1) * (1 - c), 4)} if isinstance(o.get("price"), (int, float))
+                else o for o in mk.get("outcomes", [])]
+        markets.append({**mk, "outcomes": outs})
+    return {**bookmaker, "markets": markets}
 CREDITS_LOG = Path(__file__).parent.parent / "logs" / "api_credits.log"
 
 CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -568,7 +588,7 @@ def parse_match(m: dict, sport: str) -> dict | None:
         all_over25_prices: list = []
         all_under25_prices: list = []
 
-        for bookmaker in m.get("bookmakers", []):
+        for bookmaker in map(net_of_commission, m.get("bookmakers", [])):
             bk_home = bk_draw = bk_away = None
             bk_o25 = bk_u25 = None
 

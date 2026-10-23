@@ -146,7 +146,9 @@ def _merge_club_scorers(out: dict, team_matches: dict) -> None:
         p = str(r["player"]).strip().lower()
         if not p or pd.isna(r["goals"]) or int(r["goals"]) <= 0:
             continue
-        t = normalize_team(str(r["team"]))
+        # Understat junta los dos equipos de quien cambió de club en la
+        # temporada ("Chelsea,Manchester City"): cuenta el último (23-oct-26)
+        t = normalize_team(str(r["team"]).split(",")[-1])
         m_player = max(int(r["matches"]) if pd.notna(r["matches"]) else 1, 1)
         g = int(r["goals"])
         rate = g / m_player

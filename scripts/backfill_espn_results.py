@@ -55,9 +55,11 @@ ESPN_LEAGUES = {
     "soccer_brazil_campeonato":               "bra.1",
     "soccer_argentina_primera_division":      "arg.1",
     "soccer_usa_mls":                         "usa.1",
-    "soccer_china_superleague":               "chi.1",
+    # chn.1 (23-oct-26): era chi.1, la liga de CHILE — los resultados y las
+    # alineaciones de la liga china se buscaban entre partidos chilenos
+    "soccer_china_superleague":               "chn.1",
     "soccer_japan_j_league":                  "jpn.1",
-    "soccer_korea_kleague1":                  "kor.1",
+    # K League 1: ESPN no la tiene (kor.1 responde 400, 23-oct-26)
     "soccer_uefa_champs_league":              "uefa.champions",
     "soccer_uefa_europa_league":              "uefa.europa",
     "soccer_conmebol_copa_libertadores":      "conmebol.libertadores",

@@ -787,6 +787,33 @@ no vio los espejos.
   diario avisa si vuelven los espejos o hay resultados con fecha futura.
 - Verificado contra ESPN: en Brasil, Liga MX y MLS el cargador viejo dejó las fechas bien.
 
+**Las otras fuentes, con nuestros nombres (23-oct-2026, parte 2).**
+- **ESPN mal apuntado.** `ESPN_LEAGUES` mandaba la liga china a `chi.1`, que es CHILE: los
+  resultados y las alineaciones "chinas" eran partidos chilenos. Ahora es `chn.1`. La K
+  League 1 no está en ESPN (`kor.1` responde 400) y se quitó.
+- **Alineaciones partidas.** 24 equipos tenían su historia de alineaciones en dos nombres
+  ("houston dynamo fc", "talleres (cordoba)", "afc bournemouth", "brighton & hove
+  albion"…).
+  - `TEAM_NAME_MAP` trae 26 nombres de ESPN. Se migraron 129 filas de `lineups` y los
+    nombres de `espn_matches`, con respaldo en `lineups_name_backup`.
+  - Se borró el partido de estrellas MLS–Liga MX, y `parse_scoreboard` lo ignora.
+- **La cadena de alias tiene dos pasos.** "red bull new york" debe apuntar a "new york red
+  bulls": el segundo paso de `TEAM_ALIASES` lo deja en "ny red bulls". Apuntarlo directo a
+  "ny red bulls" lo devolvía a "new york red bulls".
+- **Goleadores que cambiaron de club.** Understat escribe "Chelsea,Manchester City"; cuenta
+  el último.
+- **Chequeo semanal `check_source_names`** (paso "Nombres de equipo y repetidos"): ERROR si un
+  nombre de `team_xg_real`, `player_club_goals` o `lineups` (ligas que predecimos) no es
+  ningún equipo de `matches`.
+- **Comisión de los intercambios.** The Odds API da el momio de Betfair, Matchbook y Smarkets
+  sin su comisión, y el "mejor momio" salía de ahí con un valor que nadie cobra.
+  `update_upcoming_matches.net_of_commission` lo descuenta (Betfair 5%, Matchbook y
+  Smarkets 2%) antes del mejor momio y del promedio.
+- **Descargas de football-data**: un fallo de red se reintenta a los 10 y 30 s
+  (`fetch_csv`). El weekly del 19-oct perdió 10 descargas por timeouts.
+- **Selecciones**: "Czech Republic" 2-2 y "Czechia" 1-1 vs Dinamarca el 31-mar-26 eran el mismo
+  partido. Se dejó el 1-1 (90 minutos); el otro está en `matches_swap_backup`.
+
 **"Enrich data" se quitó (23-oct-2026).** Escribía en `upcoming_matches` promedios de tiros y
 córners que nadie lee, en una sola transacción de ~70 s. Chocaba con el closing:
 `DeadlockDetected` en 20 partidos de la mañana del 23-oct, con el paso en "OK".
