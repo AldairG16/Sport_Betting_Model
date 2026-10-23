@@ -211,8 +211,11 @@ def test_the_audit_runs_every_check_and_reports_each_problem(monkeypatch):
     import src.models.side_bias as SB
     monkeypatch.setattr(SB, "read_pairs", lambda: pd.DataFrame())
     monkeypatch.setattr(SB, "load_side_bias", lambda: {"updated_at": pd.Timestamp.now(tz="UTC").isoformat()})
+    import src.features.espn_lineups as EL
+    monkeypatch.setattr(EL, "load_identity_rows", lambda engine: [])
+    monkeypatch.setattr(SA, "_upcoming_history_counts", lambda days: {})
     out = SA.run_system_audit()
-    assert out["Sesgo del modelo"] == []
+    assert out["Sesgo del modelo"] == [] and out["Alineaciones de ESPN"] == [] and out["Dixon-Coles al día"] == []
     assert out["Equipos próximos con historia"] == [] and out["Ligas de ESPN"] == []
     assert out["Salidas y datos de entrada"] == ["Datos: 40 partidos repetidos"]
     assert out["Nombres de Understat y ESPN"] == ["lineups (ESPN): 1"]
@@ -256,3 +259,13 @@ def test_the_settle_odds_reads_pinnacle_from_the_decision_log_like_telegram():
     from src.utils.min_odds import min_odds
     bet = {"odds": 2.10, "probability": 0.55, "decision_log": json.dumps({"market_ctx": {"pin_prob": 0.50}})}
     assert playdoit_settle_odds(bet) == pytest.approx(min(min_odds(0.55, pin_prob=0.50), 2.10))
+
+
+def test_the_audit_flags_teams_with_history_missing_from_dixon_coles():
+    """23-oct-26: el ajuste del 19-oct era anterior a la carga de las segundas
+    divisiones: Schalke, Elversberg, Troyes... se saltaban por "sin Dixon-Coles"."""
+    from scripts.system_audit import dc_problems
+    counts = {"schalke 04": 380, "fc koln": 380, "iraklis fc": 7, "nuevo fc": 0}
+    out = dc_problems(counts, {"fc koln"}, 8)
+    assert len(out) == 1 and "1 equipo(s)" in out[0] and "schalke 04" in out[0]
+    assert dc_problems(counts, {"fc koln", "schalke 04"}, 8) == []          # Iraklis: poca historia, no es error

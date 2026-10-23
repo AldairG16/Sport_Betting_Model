@@ -73,6 +73,6 @@ def test_unusable_answers_keep_the_cost_but_no_verdict(budget):
 def test_message_line_and_json_extraction():
     assert LR.review_line(None) == "" and LR.review_line({"verdict": None}) == ""
     line = LR.review_line({"verdict": "DESCARTA", "reason": "rotación por la final del domingo"})
-    assert "sugiere no apostar" in line and "final del domingo" in line
+    assert "no apuestes al rival" in line and "final del domingo" in line
     assert LR.extract_json('texto {"a": "x}y", "b": {"c": 1}} más') == {"a": "x}y", "b": {"c": 1}}
     assert LR.extract_json("{roto") is None and LR.extract_json("") is None

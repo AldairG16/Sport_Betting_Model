@@ -22,6 +22,13 @@ cada vez; la próxima clase que aparezca se agrega aquí.
      y por región, en el 1X2, más de 2.5 y ambos anotan, y que el weekly lo
      siga aprendiendo (23-oct-26: el local en las 5 grandes y los goles en
      América llevaban semanas sesgados sin que nada avisara).
+  8. Alineaciones de ESPN con su partido y su equipo (23-oct-26: la de
+     Gimnasia Mendoza se guardó también como la de Gimnasia LP y llegaron
+     avisos de 8 y 9 titulares fuera que no existían).
+  9. Dixon-Coles al día con la historia: un equipo de los próximos partidos
+     con la historia que pide el ajuste (MIN_MATCHES en 3 años) que no está
+     en él (23-oct-26: el ajuste del 19-oct era anterior a la carga de las
+     segundas divisiones y 6 partidos del fin de semana se saltaban).
 Corre en el weekly (paso "Auditoría del sistema", sin el 1, que ya corrió en
 el evening) y a mano:
     python scripts/system_audit.py
@@ -96,6 +103,29 @@ def bias_problems(residuals: list, state: dict | None, now: pd.Timestamp | None 
     return out
 
 
+def lineup_problems(found: dict) -> list:
+    """espn_lineups.identity_problems → problemas de la auditoría."""
+    out = []
+    if found.get("shared_events"):
+        out.append(f"Alineaciones: {len(found['shared_events'])} partido(s) de ESPN guardados en más de un partido "
+                   f"({', '.join(found['shared_events'][:3])})")
+    if found.get("foreign"):
+        out.append(f"Alineaciones: {len(found['foreign'])} alineación(es) terminadas que no comparten jugadores "
+                   f"con su equipo (ids {', '.join(map(str, found['foreign'][:5]))})")
+    return out
+
+
+def dc_problems(counts: dict, dc_teams: set, min_matches: int) -> list:
+    """counts: {equipo próximo: partidos en la ventana del ajuste}. Los que
+    tienen historia de sobra y no están en el ajuste Dixon-Coles."""
+    missing = sorted(t for t, n in counts.items() if n >= min_matches and t not in dc_teams)
+    if not missing:
+        return []
+    return [f"Dixon-Coles: {len(missing)} equipo(s) próximos con historia que no están en el ajuste "
+            f"({', '.join(missing[:6])}): el ajuste es más viejo que la historia; corre el paso "
+            f"'Fit DC-MLE parameters' del weekly"]
+
+
 def espn_problems(names: dict, leagues: dict) -> list:
     """names: {sport_key: nombre de la liga que devuelve ESPN o None}."""
     out = []
@@ -112,6 +142,24 @@ def espn_problems(names: dict, leagues: dict) -> list:
 # ─────────────────────────────────────────────────────────────────────────────
 # Corrida
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _upcoming_history_counts(days: int) -> dict:
+    """{equipo de los próximos 3 días: partidos con resultado en los últimos `days` días}."""
+    from sqlalchemy import text
+    from config.database import engine
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            WITH up AS (SELECT DISTINCT home_team_norm AS t FROM upcoming_matches
+                        WHERE match_date BETWEEN NOW() AND NOW() + INTERVAL '3 days'
+                        UNION SELECT DISTINCT away_team_norm FROM upcoming_matches
+                        WHERE match_date BETWEEN NOW() AND NOW() + INTERVAL '3 days')
+            SELECT up.t, COUNT(m.t) FROM up LEFT JOIN (
+                SELECT LOWER(home_team) AS t FROM matches WHERE home_goals IS NOT NULL AND date >= CURRENT_DATE - :d
+                UNION ALL SELECT LOWER(away_team) FROM matches WHERE home_goals IS NOT NULL AND date >= CURRENT_DATE - :d
+            ) m ON m.t = up.t
+            GROUP BY up.t"""), {"d": days}).fetchall()
+    return {r[0]: int(r[1]) for r in rows}
+
 
 def _espn_names(leagues: dict, get=None) -> dict:
     from src.features.espn_lineups import _get
@@ -149,6 +197,19 @@ def run_system_audit(include_daily: bool = True, espn_get=None) -> dict:
         state = load_side_bias()
         return bias_problems(residuals(read_pairs(), state), state)
     check("Sesgo del modelo", bias)
+
+    def lineups():
+        from config.database import engine
+        from src.features.espn_lineups import identity_problems, load_identity_rows
+        return lineup_problems(identity_problems(load_identity_rows(engine)))
+    check("Alineaciones de ESPN", lineups)
+
+    def dc():
+        from src.models.dc_mle_fitter import MAX_SEASONS, MIN_MATCHES
+        from src.utils.model_state import load_state
+        teams = {k.lower() for k in ((load_state("dc_params") or {}).get("teams") or {})}
+        return dc_problems(_upcoming_history_counts(MAX_SEASONS * 365), teams, MIN_MATCHES)
+    check("Dixon-Coles al día", dc)
 
     def elo():
         from src.features.elo_rating import compute_elo
