@@ -293,14 +293,11 @@ def _market_then(r: dict, then_snap, ratio=None) -> dict:
 
 def model_1x2(r: dict, bias: dict | None = None) -> list:
     """El 1X2 del programa de una fila de model_vs_sharp (que lo guarda CRUDO,
-    para aprender el sesgo) con el sesgo por lado ya descontado, como lo usa
-    el pipeline (side_bias.debias; 22-oct-26: el pick usaba el crudo)."""
-    model = [_num(r.get(c)) for _, c, *_ in SIDES]
-    if bias and None not in model:
-        from src.models.side_bias import debias
-        d, _ = debias(dict(zip(("home_win", "draw", "away_win"), model)), bias)
-        model = [d["home_win"], d["draw"], d["away_win"]]
-    return model
+    para aprender el sesgo) con el sesgo de su región ya descontado, como lo
+    usa el pipeline (side_bias.program_probs; 22-oct-26: el pick usaba el crudo)."""
+    from src.models.side_bias import program_probs
+    p = program_probs(r, bias)
+    return [p["home_win"], p["draw"], p["away_win"]]
 
 
 def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None) -> tuple:
@@ -309,10 +306,12 @@ def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None) -> tup
     from src.models.side_bias import is_skipped
     if is_skipped(r):                  # la última corrida ya no lo evaluó (22-oct-26)
         return None, STALE
-    model = model_1x2(r, bias)
+    from src.models.side_bias import program_probs
+    probs = program_probs(r, bias)                 # 1X2, goles y ambos anotan ya corregidos (23-oct-26)
+    model = [probs["home_win"], probs["draw"], probs["away_win"]]
     if None in model:
         return None, NO_EDGE
-    cs = candidates(model, (r.get("lam_home"), r.get("lam_away")), r.get("p_over25"), r.get("p_btts"), u, props, ratio)
+    cs = candidates(model, (r.get("lam_home"), r.get("lam_away")), probs["over25"], probs["btts"], u, props, ratio)
     pin = [_num(r.get(c)) for _, _, c, *_ in SIDES]
     if not any(c["family"] == "Ganador" for c in cs) and None not in pin:
         # sin momios del 1X2: el Pinnacle de cuando se analizó, sin precio
@@ -343,7 +342,7 @@ def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame |
     model_vs_sharp (la fila más reciente) con la última fila de
     upcoming_matches. snaps: odds_history, para los momios de cuando se
     analizó. props_for(home, away, league, kickoff) → {prop: fn(línea)}.
-    bias: sesgo por lado aprendido (side_bias)."""
+    bias: sesgo aprendido (side_bias: por lado, región y goles)."""
     up = {match_key(r.home_team_norm, r.away_team_norm, normalize): r for r in upcoming.itertuples(index=False)}
     idx = _snap_index(snaps if snaps is not None else pd.DataFrame(), normalize)
     latest = {}
@@ -397,7 +396,8 @@ def _props_for(engine):
 
 
 def load_bias(engine=None) -> dict | None:
-    """El sesgo por lado que descuenta el pipeline (model_state side_bias)."""
+    """El sesgo que descuenta el pipeline (model_state side_bias: por lado,
+    región y goles)."""
     import json
     from src.models.side_bias import STATE_KEY
     if engine is None:

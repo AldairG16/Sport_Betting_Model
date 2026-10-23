@@ -248,6 +248,7 @@ están todas las clases que ya pasaron, como chequeos que corren igual cada vez:
 | Lo que entra al modelo | La cobertura de cada feature en la última corrida (`model_state` `pipeline_coverage`) | Weekly |
 | Elo | Ningún NaN | Weekly |
 | Ligas de ESPN | Cada código apunta a la liga correcta (`chi.1` era Chile) | Weekly |
+| Sesgo del modelo | Lo que queda de sesgo después de la corrección (`side_bias.residuals`), global y por región, en el 1X2, más de 2.5 y ambos anotan: avisa si pasa de 3 pt a 3 errores estándar (n ≥ 30). También si lo aprendido tiene más de 8 días | Weekly |
 
 - Corre en el weekly (paso "Auditoría del sistema", después del ajuste Dixon-Coles); las
   salidas ya las revisó el evening.
@@ -935,7 +936,7 @@ fuente de verdad; los archivos de `config/` y `data/` son espejo local.
 | `clv_gate_markets` / `clv_gate_leagues` | `clv_gate.run_clv_gate` | kill-switch por mercado / liga |
 | `clv_cache` | `betting_engine.refresh_clv_cache` | fracción de Kelly por CLV |
 | `anchor_weights` | `anchor_learner.run_anchor_learning` | **peso del modelo** frente al mercado |
-| `side_bias` | `side_bias.run_side_bias` | **sesgo por lado** que se descuenta del 1X2 del modelo |
+| `side_bias` | `side_bias.run_side_bias` | **sesgo del modelo** (por lado, por región, en más de 2.5 y ambos anotan) que se descuenta antes del ancla |
 | `shadow_reactivation` | `clv_gate.run_shadow_reactivation` | `away_win`, AH con local favorito y grupos `sinref:*` |
 | `shade_scales` | `shade_learner.run_shade_learning` | **escala de los ajustes manuales** (FLB, tabla, empates) |
 | `rule_evidence` | `rule_evidence.run_rule_evidence` | veredicto de cada regla contra resultados (reporte; los filtros lo usan abajo) |
@@ -1286,13 +1287,44 @@ cuando la corrección se mueve.
   Pinnacle, `learn()` normal. Medido local +1.6 / empate −0.8 / visita −0.8 pts → corrección
   +1.1 / −0.5 / −0.6. La de antes, +3.0 / −1.8 / −1.2, venía del modelo con el error y
   sobrecorregía; respaldo en `model_state` `side_bias_backup_1019`.
-- **No es parejo:**
-  - 5 grandes: local +4.1 ± 1.1;
-  - resto de Europa: local +1.4 ± 0.9;
-  - América: local −0.8 ± 1.3.
-- **Goles y ambos anotan contra el promedio de las casas** (sin corrección todavía):
-  - más de 2.5: −1.3 ± 0.6 (América −3.9 ± 1.4);
-  - ambos anotan: −2.9 ± 0.7.
+**Por región y en goles (23-oct-2026).** Con el modelo del 22-oct (142 partidos) el sesgo no
+era parejo y una sola corrección global (+1.1 al local) no servía:
+
+| | local vs Pinnacle | más de 2.5 vs promedio de las casas | ambos anotan vs mejor precio |
+|---|---|---|---|
+| 5 grandes | +3.9 ± 1.1 | −0.1 ± 1.1 | −1.8 ± 1.1 |
+| Resto de Europa | +1.3 ± 0.9 | −0.4 ± 0.9 | −1.9 ± 1.1 |
+| América | −0.6 ± 1.2 | −3.8 ± 1.3 | −4.2 ± 1.3 |
+| Todo | +1.5 ± 0.6 | −1.3 ± 0.6 | −2.7 ± 0.7 |
+
+Con el modelo bajo en goles, los picks se iban al "menos" y al "no anotan ambos" sin razón.
+- **Regiones** (`region_of`): 5 grandes (`BIG5`, la misma lista del pipeline), América (MLS,
+  México, Brasil, Argentina, Conmebol, Concacaf), Asia (Japón, Corea, China, AFC) y Europa
+  (el resto, con las copas de la UEFA).
+- **Cómo aprende una región:** se separa de lo global en (su media − la global)·n/(n + 60)
+  (`REGION_SHRINK_N`); con menos de 15 partidos (`MIN_N_REGION`) usa lo global. Su paso
+  semanal parte de su valor anterior o, la primera vez, del global que se le venía aplicando
+  (±3 pt por semana, como siempre).
+- **Goles:** más de 2.5 y ambos anotan se aprenden igual (encogido, ±3 pt por semana, tope
+  ±6 pt `GOAL_MAX_ABS`), contra la **misma referencia de los picks**: promedio de las casas
+  sin margen en goles (si no hay, el mejor precio) y el mejor precio sin margen en ambos
+  anotan (Pinnacle no lo cotiza). Cada corrida la guarda en `model_vs_sharp.mkt_over25` y
+  `mkt_btts` (`market_goal_refs`). Los partidos analizados desde el 22-oct la tomaron de su
+  foto de momios con `scripts/backfill_goal_refs.py --apply` (una vez, solo llena vacíos).
+- **Dónde se aplica:** el pipeline descuenta el sesgo de la región del partido
+  (`bias_for` + `debias`): 1X2 y derivados como antes, y además más/menos de 2.5 y ambos
+  anotan / no anotan ambos, antes del ancla. Las líneas 1.5 y 3.5 del pipeline siguen con el
+  Poisson crudo; en los picks salen de la matriz calibrada al 2.5 ya corregido.
+- **Todo lo que lee el modelo guardado usa el corregido** (`side_bias.program_probs`): el pick,
+  el dashboard y el revisor de capturas de PlayDoit. El revisor usaba el crudo hasta el
+  23-oct.
+- **Primera corrida (23-oct):** desde la global +1.1 / −0.5 / −0.6 → 5 grandes +2.1 / −0.8 /
+  −1.4, resto de Europa +1.0 / −0.6 / −0.4, América +0.4 / −0.3 / −0.2; más de 2.5 −1.0
+  (América −2.1), ambos anotan −1.7 (América −2.3). Fuera de muestra (aprende con 82
+  partidos, mide en otros 66): el local en las 5 grandes queda a +0.3 de Pinnacle (antes
+  +1.3) y ambos anotan a −0.7 (antes −2.7); el resto, parejo.
+- **Lo vigila la auditoría del sistema** (chequeo "Sesgo del modelo", §3): lo que queda después
+  de corregir, global y por región, y que el weekly lo siga aprendiendo.
 
 ### Fuerza de liga (`src/features/clubelo.py`, 22-oct-2026)
 

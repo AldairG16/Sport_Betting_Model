@@ -208,7 +208,11 @@ def test_the_audit_runs_every_check_and_reports_each_problem(monkeypatch):
     monkeypatch.setattr(MS, "load_state", lambda key: None)
     monkeypatch.setattr(ER, "compute_elo", lambda: {"a": 1500.0, "b": float("nan")})
     monkeypatch.setattr(SA, "_espn_names", lambda leagues, get=None: {k: SA.ESPN_EXPECTED.get(k, "x") for k in leagues})
+    import src.models.side_bias as SB
+    monkeypatch.setattr(SB, "read_pairs", lambda: pd.DataFrame())
+    monkeypatch.setattr(SB, "load_side_bias", lambda: {"updated_at": pd.Timestamp.now(tz="UTC").isoformat()})
     out = SA.run_system_audit()
+    assert out["Sesgo del modelo"] == []
     assert out["Equipos próximos con historia"] == [] and out["Ligas de ESPN"] == []
     assert out["Salidas y datos de entrada"] == ["Datos: 40 partidos repetidos"]
     assert out["Nombres de Understat y ESPN"] == ["lineups (ESPN): 1"]

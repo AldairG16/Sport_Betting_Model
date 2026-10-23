@@ -839,10 +839,10 @@ def step_side_bias():
     """Sesgo del modelo por lado (local/empate/visitante) contra Pinnacle,
     que el pipeline descuenta del 1X2 y sus derivados (src/models/side_bias.py).
     Telegram cuando la corrección cambia: silencio = sin novedad."""
-    from src.models.side_bias import SIDES, format_report, load_side_bias, run_side_bias
+    from src.models.side_bias import format_report, load_side_bias, moved, run_side_bias
     previous = load_side_bias()
     state = run_side_bias(verbose=True)
-    if any(abs((state.get(s) or 0) - (previous.get(s) or 0)) > 1e-9 for s in SIDES):
+    if moved(state, previous):
         from scripts.notify_telegram import send_message
         send_message(format_report(state, previous, html=True))
 

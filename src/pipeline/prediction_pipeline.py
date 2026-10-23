@@ -1433,16 +1433,19 @@ def _stage_model_probabilities(row, T, L, ctx, stats):
 
 def _stage_side_bias(row, T, M, ctx, records, L=None):
     """Etapa 3b — registra el 1X2 CRUDO del modelo contra Pinnacle (de ahí
-    aprende side_bias) y descuenta el sesgo por lado ya aprendido del 1X2 y
-    de sus derivados, antes del ancla (src/models/side_bias.py)."""
-    from src.models.side_bias import debias, record
-    rec = record(f"{T.home} vs {T.away}", T.date, _row_league_of(row),
+    aprende side_bias) y descuenta el sesgo ya aprendido de su región del 1X2
+    y sus derivados, de más de 2.5 y de ambos anotan, antes del ancla
+    (src/models/side_bias.py)."""
+    from src.models.side_bias import bias_for, debias, market_goal_refs, record
+    league = _row_league_of(row)
+    rec = record(f"{T.home} vs {T.away}", T.date, league,
                  M.model_probs, pinnacle_probs(row),
                  lambdas=(L.lambda_home, L.lambda_away) if L is not None else None,
-                 league_factor=L.league_gap[2] if L is not None and getattr(L, "league_gap", None) else None)
+                 league_factor=L.league_gap[2] if L is not None and getattr(L, "league_gap", None) else None,
+                 market_goals=market_goal_refs(row))
     if rec:
         records.append(rec)
-    M.model_probs, M.side_bias_shift = debias(M.model_probs, getattr(ctx, "side_bias", None))
+    M.model_probs, M.side_bias_shift = debias(M.model_probs, bias_for(getattr(ctx, "side_bias", None), league))
     M.home_win = M.model_probs.get("home_win", M.home_win)
     M.draw = M.model_probs.get("draw", M.draw)
     M.away_win = M.model_probs.get("away_win", M.away_win)
@@ -2912,9 +2915,10 @@ def run_prediction_pipeline(dry_run: bool = False):
     if timing_blocked:
         print(f"⏱️ Horarios sin dinero real (pierden contra el cierre de Pinnacle): "
               f"{sorted(timing_blocked)}")
-    if any(side_bias_state.get(s) for s in ("home", "draw", "away")):
-        print("⚖️ Sesgo por lado descontado (vs Pinnacle): " + ", ".join(
-            f"{s}={side_bias_state.get(s, 0) * 100:+.1f}pt" for s in ("home", "draw", "away")))
+    if any(side_bias_state.get(s) for s in ("home", "draw", "away", "over25", "btts")):
+        print("⚖️ Sesgo descontado (global; cada región tiene el suyo): " + ", ".join(
+            f"{s}={(side_bias_state.get(s) or 0) * 100:+.1f}pt" for s in ("home", "draw", "away", "over25", "btts"))
+            + f" · regiones: {sorted(side_bias_state.get('regions') or {})}")
     if learned["blocked_markets"]:
         print(f"🚦 Mercados bloqueados por CLV gate: {sorted(learned['blocked_markets'])}")
     if learned["blocked_leagues"]:

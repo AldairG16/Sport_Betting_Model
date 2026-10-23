@@ -204,7 +204,8 @@ def handle_message(message: dict, token: str, owner_chat: str, engine=None, clie
             text = f"⚠️ {why}"
         else:
             fixtures = fixtures if fixtures is not None else PP.load_fixtures(engine)
-            rows = PP.evaluate_items(items, fixtures, normalize_team)
+            from src.models.program_picks import load_bias
+            rows = PP.evaluate_items(items, fixtures, normalize_team, load_bias(engine))
             text = PP.format_reply(rows)
             try:
                 PP.save_rows(engine, rows, message.get("message_id"))
