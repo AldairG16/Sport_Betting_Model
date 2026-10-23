@@ -291,13 +291,25 @@ def _market_then(r: dict, then_snap, ratio=None) -> dict:
     return {c["market"]: c["market_prob"] for c in cs}
 
 
-def decide(r: dict, u, then_snap=None, props=None, ratio=None) -> tuple:
+def model_1x2(r: dict, bias: dict | None = None) -> list:
+    """El 1X2 del programa de una fila de model_vs_sharp (que lo guarda CRUDO,
+    para aprender el sesgo) con el sesgo por lado ya descontado, como lo usa
+    el pipeline (side_bias.debias; 22-oct-26: el pick usaba el crudo)."""
+    model = [_num(r.get(c)) for _, c, *_ in SIDES]
+    if bias and None not in model:
+        from src.models.side_bias import debias
+        d, _ = debias(dict(zip(("home_win", "draw", "away_win"), model)), bias)
+        model = [d["home_win"], d["draw"], d["away_win"]]
+    return model
+
+
+def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None) -> tuple:
     """(pick, motivo) para una fila de model_vs_sharp con los momios de ahora
-    (u) y los de cuando se analizó (then_snap)."""
+    (u) y los de cuando se analizó (then_snap). bias: sesgo por lado aprendido."""
     from src.models.side_bias import is_skipped
     if is_skipped(r):                  # la última corrida ya no lo evaluó (22-oct-26)
         return None, STALE
-    model = [_num(r.get(c)) for _, c, *_ in SIDES]
+    model = model_1x2(r, bias)
     if None in model:
         return None, NO_EDGE
     cs = candidates(model, (r.get("lam_home"), r.get("lam_away")), r.get("p_over25"), r.get("p_btts"), u, props, ratio)
@@ -326,11 +338,12 @@ def _snap_before(idx: dict, key: str, kick, before) -> dict | None:
 
 
 def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame | None = None, ratio=None,
-                normalize=None, props_for=None) -> list:
+                normalize=None, props_for=None, bias=None) -> list:
     """Función pura: el pick (o "sin pick" con su motivo) de cada partido de
     model_vs_sharp (la fila más reciente) con la última fila de
     upcoming_matches. snaps: odds_history, para los momios de cuando se
-    analizó. props_for(home, away, league, kickoff) → {prop: fn(línea)}."""
+    analizó. props_for(home, away, league, kickoff) → {prop: fn(línea)}.
+    bias: sesgo por lado aprendido (side_bias)."""
     up = {match_key(r.home_team_norm, r.away_team_norm, normalize): r for r in upcoming.itertuples(index=False)}
     idx = _snap_index(snaps if snaps is not None else pd.DataFrame(), normalize)
     latest = {}
@@ -344,7 +357,7 @@ def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame |
         then = _snap_before(idx, key, r["match_date"], r["created_at"]) if r.get("created_at") is not None else None
         h, _, a = key.partition(" vs ")
         props = props_for(h, a, r.get("league"), r["match_date"]) if props_for else None
-        pk, why = decide(r, u, then, props, ratio)
+        pk, why = decide(r, u, then, props, ratio, bias)
         rows.append(_row(r, r["match_date"], f"{u.home_team} vs {u.away_team}" if u is not None else None, pk, why))
     return rows
 
@@ -381,6 +394,23 @@ def _props_for(engine):
         return {p: (lambda line, mu=v["mu"], p=p: PF.prob_over(mu, line, PF.PROPS[p]["dispersion"]))
                 for p, v in mp.items()}
     return fn
+
+
+def load_bias(engine=None) -> dict | None:
+    """El sesgo por lado que descuenta el pipeline (model_state side_bias)."""
+    import json
+    from src.models.side_bias import STATE_KEY
+    if engine is None:
+        from config.database import engine
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT value FROM model_state WHERE key = :k"), {"k": STATE_KEY}).first()
+    except Exception as e:
+        log.warning(f"⚠️  Picks sin sesgo por lado ({type(e).__name__}): se usa el 1X2 crudo")
+        return None
+    if not row or row[0] is None:
+        return None
+    return json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
 
 
 def _ratio(engine):
@@ -433,7 +463,7 @@ def snapshot_picks(hours: int = SNAPSHOT_HOURS, engine=None) -> int:
         now = pd.Timestamp.now(tz="UTC")
         snaps = pd.read_sql(text(_SNAPS_SQL), engine, params={"a": now.to_pydatetime(),
                                                                "b": (now + pd.Timedelta(hours=hours)).to_pydatetime()})
-        rows = build_picks(mvs, up, snaps, _ratio(engine), normalize_team, _props_for(engine))
+        rows = build_picks(mvs, up, snaps, _ratio(engine), normalize_team, _props_for(engine), load_bias(engine))
         if not rows:
             return 0
         with engine.begin() as conn:

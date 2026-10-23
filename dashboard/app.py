@@ -489,7 +489,8 @@ def api_predictions():
         if " vs " in str(p["match"]):
             h, a = str(p["match"]).split(" vs ", 1)
             saved[f"{normalize_team(h)} vs {normalize_team(a)}".lower()] = p
-    return jsonify({"ok": True, "matches": _vis.predictions(mvs, up, pending, normalize_team, saved)})
+    from src.models.program_picks import load_bias
+    return jsonify({"ok": True, "matches": _vis.predictions(mvs, up, pending, normalize_team, saved, load_bias())})
 
 
 @app.route("/api/lineups")

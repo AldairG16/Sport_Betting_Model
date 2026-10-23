@@ -111,14 +111,16 @@ def saved_pick(p) -> dict:
 
 
 def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
-                normalize=None, saved: dict | None = None) -> list:
+                normalize=None, saved: dict | None = None, bias: dict | None = None) -> list:
     """
     mvs: filas de model_vs_sharp de los próximos días. upcoming: la última
     fila de upcoming_matches por partido (nombres, mejores momios y
     Pinnacle). pending_matches: claves "local vs visitante" (normalizadas)
     con apuesta real pendiente. normalize: normalize_team (para unir alias).
-    saved: {clave del partido: fila de program_picks}.
+    saved: {clave del partido: fila de program_picks}. bias: sesgo por lado
+    aprendido: la barra del programa es su 1X2 ya corregido, el mismo del pick.
     """
+    from src.models.program_picks import model_1x2
     up = {}
     for r in upcoming.itertuples(index=False):
         up[_canon(_key(r.home_team_norm, r.away_team_norm), normalize)] = r
@@ -132,7 +134,7 @@ def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
         u = up.get(key)
         # la última corrida ya no lo evaluó (22-oct-26): sin la opinión vieja
         skipped = is_skipped(r)
-        model = [None if skipped else _num(getattr(r, c)) for _, c, _, _ in SIDES]
+        model = [None] * 3 if skipped else model_1x2(r._asdict(), bias)
         pin = _fresh_pinnacle(u) or [_num(getattr(r, c)) for _, _, c, _ in SIDES]
         sides = []
         for (name, _, _, odds_col), m, p in zip(SIDES, model, pin):
