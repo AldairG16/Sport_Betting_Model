@@ -30,7 +30,8 @@ def _xg_table(monkeypatch, row):
 
 def test_real_xg_is_per_match_not_the_season_total(monkeypatch):
     now = pd.Timestamp.now(tz="UTC")
-    sf = _xg_table(monkeypatch, {"xg_for": 23.2116, "xg_against": 9.6266, "matches": 9, "updated_at": now})
+    sf = _xg_table(monkeypatch, {"team": "Real Madrid", "season": "2026", "xg_for": 23.2116, "xg_against": 9.6266,
+                                 "matches": 9, "updated_at": now})
     xg = sf.get_real_xg("Real Madrid")
     assert xg["xg_for"] == pytest.approx(2.579, abs=1e-3)       # antes: 23.21
     assert xg["xg_against"] == pytest.approx(1.070, abs=1e-3)
@@ -39,10 +40,28 @@ def test_real_xg_is_per_match_not_the_season_total(monkeypatch):
 
 def test_real_xg_without_matches_or_absurd_is_dropped(monkeypatch):
     now = pd.Timestamp.now(tz="UTC")
-    assert _xg_table(monkeypatch, {"xg_for": 5.0, "xg_against": 4.0, "matches": 0,
+    assert _xg_table(monkeypatch, {"team": "x", "season": "2026", "xg_for": 5.0, "xg_against": 4.0, "matches": 0,
                                    "updated_at": now}).get_real_xg("x") is None
-    assert _xg_table(monkeypatch, {"xg_for": 50.0, "xg_against": 4.0, "matches": 2,
+    assert _xg_table(monkeypatch, {"team": "x", "season": "2026", "xg_for": 50.0, "xg_against": 4.0, "matches": 2,
                                    "updated_at": now}).get_real_xg("x") is None
+
+
+def test_real_xg_finds_the_understat_name_of_our_team(monkeypatch):
+    # 23-oct-26: Understat guarda "Bayern Munich" y "VfB Stuttgart"; el pipeline
+    # pregunta "bayern munchen" y "stuttgart". 24 de 96 equipos caían al estimado.
+    import src.features.soccerdata_feed as sf
+    now = pd.Timestamp.now(tz="UTC")
+    rows = pd.DataFrame([
+        {"team": "Bayern Munich", "season": "2026", "xg_for": 20.0, "xg_against": 5.0, "matches": 8, "updated_at": now},
+        {"team": "VfB Stuttgart", "season": "2026", "xg_for": 12.0, "xg_against": 10.0, "matches": 8, "updated_at": now},
+        {"team": "VfB Stuttgart", "season": "2025", "xg_for": 50.0, "xg_against": 40.0, "matches": 34, "updated_at": now},
+        {"team": "RasenBallsport Leipzig", "season": "2026", "xg_for": 14.0, "xg_against": 9.0, "matches": 8,
+         "updated_at": now}])
+    monkeypatch.setattr(sf.pd, "read_sql", lambda *a, **k: rows.copy())
+    assert sf.get_real_xg("bayern munchen")["xg_for"] == pytest.approx(2.5)
+    assert sf.get_real_xg("stuttgart")["xg_for"] == pytest.approx(1.5)            # la temporada más reciente
+    assert sf.get_real_xg("leipzig")["xg_against"] == pytest.approx(1.125)
+    assert sf.get_real_xg("arsenal") is None
 
 
 def test_pipeline_only_blends_credible_xg():

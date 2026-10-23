@@ -772,6 +772,29 @@ Un ensayo del pipeline desde esa PC (miles de consultas) tarda ~1 h; en GitHub, 
 - El 22-oct se agregó `pool_pre_ping` creyendo que los ensayos se colgaban en conexiones
   muertas. Eran lentos, no estaban colgados; se quitó el mismo día.
 
+**Nombres de otra fuente: siempre por `normalize_team` (23-oct-2026).** `team_xg_real` guarda el
+nombre de Understat ("Bayern Munich", "VfB Stuttgart") y `get_real_xg` lo comparaba tal cual con
+el canónico ("bayern munchen", "stuttgart"). 24 de los 96 equipos de las 5 grandes (Bayern,
+Atlético, Inter, Leipzig, Newcastle…) caían sin aviso al xG estimado.
+- Ahora se comparan los dos normalizados, y `TEAM_NAME_MAP` tiene los 5 nombres de Understat
+  que no se normalizaban (Gladbach, Mainz, Leipzig, Parma, Racing Santander → "real racing club
+  de santander"; "racing" a secas es Racing Club de Argentina). Con eso, 96 de 96.
+
+**La motivación contaba una sola vuelta (23-oct-2026).** `motivation_factor` calculaba las
+jornadas restantes como equipos − 1 − jugados. En las ligas de ida y vuelta el "final de
+temporada" empezaba en la jornada 11 (título +5%, Europa +4%, descenso +6%, partidos "sin nada
+en juego" que el pipeline salta). Desde la jornada 19, el líder quedaba "campeón" (−8%) y la
+zona de descenso "descendida" (−8%).
+- Ahora hay `SEASON_GAMES` por liga, y `current_season_start` empieza en enero en Brasil (antes
+  julio: la tabla traía la mitad de los partidos y 16 de 20 equipos tenían ajuste) y en
+  enero/julio en Liga MX.
+- Argentina sale del factor: 30 equipos en dos zonas; una tabla de 30 no dice quién pelea qué.
+
+**Liquidar córners y tiros 0-0 (23-oct-2026).** `resolve_market` tomaba un 0-0 como dato, y en
+Brasil, Liga MX y Argentina (sin córners ni tiros en football-data) un "menos de" salía ganado.
+Ahora es "unresolved" (`_has_pair`), igual que el chequeo independiente. No había ninguna
+apuesta así liquidada.
+
 **Un NaN no falla: se propaga (22-oct-2026).**
 - **Elo.** `compute_elo` leía también los partidos sin marcador: K = NaN contagiaba a los dos
   equipos y luego a cada rival. Dos partidos (Grecia 2019, Ligue 2 dic-2025) dejaron 107

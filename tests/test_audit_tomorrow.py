@@ -165,3 +165,18 @@ def test_the_snapshot_reads_the_side_bias_with_its_own_engine():
     eng = FakeEngine(lambda sql, p: FakeResult(rows=[(json.dumps(BIAS),)]) if "model_state" in sql else FakeResult())
     assert PP.load_bias(eng) == BIAS
     assert PP.load_bias(FakeEngine()) is None                             # sin aprender todavía: el crudo
+
+
+# ─── liquidar sin datos de córners y tiros (23-oct-26) ───────────────────────
+
+def test_zero_zero_corners_and_shots_are_not_settled():
+    from src.models.save_bets import resolve_market
+    from src.utils.output_checks import settle_independent
+    no_data = {"home_goals": 1, "away_goals": 0, "home_corners": 0, "away_corners": 0,
+               "home_shots_target": 0, "away_shots_target": 0}
+    assert resolve_market("corners_under_9.5", no_data, 1.9, 1.0)[0] == "unresolved"     # antes: win
+    assert resolve_market("shots_under_7.5", no_data, 1.9, 1.0)[0] == "unresolved"
+    assert settle_independent("corners_under_9.5", no_data) is None
+    real = {**no_data, "home_corners": 6, "away_corners": 2}
+    assert resolve_market("corners_under_9.5", real, 1.9, 1.0)[0] == "win"
+    assert settle_independent("corners_under_9.5", real) == "win"
