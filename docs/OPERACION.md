@@ -729,6 +729,27 @@ otro nombre. Todo `INSERT` en `matches` usa `normalize_team`.
 umbral, a diferencia de `update_upcoming_matches`. Con 15 ligas son hasta 15 créditos
 por corrida.
 
+**Un análisis viejo no es un análisis (22-oct-2026).** `model_vs_sharp` guarda una fila por
+partido y solo la pisa un análisis nuevo. Si una corrida ya no evalúa el partido (historia
+corta, sin Dixon-Coles confiable, sin momios), la fila de una corrida anterior seguía ahí, y
+de ahí salían el pick, el sesgo por lado y lo que mostraba el dashboard. El 22-oct eran 16
+partidos, uno del modelo con el error del xG. Ahora el pipeline los marca
+(`side_bias.mark_skipped` → `skipped_at`) y un análisis nuevo lo limpia. Toda lectura de la
+opinión del modelo filtra `skipped_at IS NULL` (`side_bias.is_skipped` en Python). El pick
+queda "sin pick" con el motivo `STALE`.
+
+**Un NaN no falla: se propaga (22-oct-2026).**
+- **Elo.** `compute_elo` leía también los partidos sin marcador: K = NaN contagiaba a los dos
+  equipos y luego a cada rival. Dos partidos (Grecia 2019, Ligue 2 dic-2025) dejaron 107
+  equipos en NaN: toda la Ligue 1 y Grecia, 34 de 40 en LaLiga, 32 de 36 en Champions. El
+  ensemble descartaba el Elo sin avisar.
+  - Ahora solo cuenta partidos con marcador, y un Elo NaN es ERROR a Telegram.
+  - Con el arreglo, en los 35 partidos que cambiaban, el 1X2 quedó más cerca de Pinnacle:
+    mediana 7.1 → 5.5 pts.
+- **Córners.** Los archivos `/new/` de football-data (Brasil, Liga MX, Argentina) no traen
+  córners y el loader los guardó como 0-0. `props_fair` veía ligas de 0 córners ("más de 9.5"
+  = 0%); ahora 0-0 es sin dato. `corners_stats` ya filtraba los ceros.
+
 ---
 
 ## 6. Presupuesto de Anthropic

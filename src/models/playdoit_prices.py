@@ -301,7 +301,7 @@ def load_fixtures(engine, hours_back: int = 2, days_ahead: int = 4) -> list:
     try:
         mv = pd.read_sql(text("""
             SELECT DISTINCT ON (match) match, p_home, p_draw, p_away, p_over25, p_btts
-            FROM model_vs_sharp WHERE match_date > NOW() - make_interval(hours => :hb)
+            FROM model_vs_sharp WHERE match_date > NOW() - make_interval(hours => :hb) AND skipped_at IS NULL
             ORDER BY match, created_at DESC
         """), engine, params={"hb": hours_back})
         model = {str(r["match"]).lower(): r for r in mv.to_dict("records")}

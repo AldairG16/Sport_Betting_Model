@@ -547,6 +547,7 @@ def api_predictions_history():
     mvs = _q("""
         SELECT * FROM model_vs_sharp
         WHERE match_date BETWEEN NOW() - make_interval(days => :d) AND NOW() - INTERVAL '2 hours'
+          AND skipped_at IS NULL
         ORDER BY match_date DESC
     """, {"d": d})
     if mvs.empty:
@@ -673,7 +674,7 @@ def _load_past_rows() -> list:
     if matches.empty:
         return []
     mvs = _q("""SELECT match, match_date, p_home, p_draw, p_away, pin_home, pin_draw, pin_away
-                FROM model_vs_sharp WHERE match_date >= CAST(:s AS date) - 2""", p)
+                FROM model_vs_sharp WHERE match_date >= CAST(:s AS date) - 2 AND skipped_at IS NULL""", p)
     picks = _q("""SELECT match, match_date, label, family, market, reason, model_prob, market_prob, result,
                          profit, source
                   FROM program_picks WHERE match_date >= CAST(:s AS date) - 2""", p)
@@ -720,7 +721,7 @@ def api_board_team():
     """, p)
     up = _q("""
         SELECT match, match_date, league, p_home, p_draw, p_away FROM model_vs_sharp
-        WHERE match_date >= NOW() AND (match LIKE :t1 OR match LIKE :t2)
+        WHERE match_date >= NOW() AND (match LIKE :t1 OR match LIKE :t2) AND skipped_at IS NULL
     """, p)
     if m.empty and up.empty:
         return _no_data("Sin partidos de este equipo desde septiembre")

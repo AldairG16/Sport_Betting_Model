@@ -99,6 +99,7 @@ TOO_FAR = "El programa se separa demasiado del mercado: probablemente se equivoc
 MOVED = "El mercado se movió en contra después del análisis (alineaciones o noticias)"
 CROSS = "Equipos de ligas distintas: falta ajustar por la fuerza de cada liga"
 NO_PRICE = "Sin momio en rango para lo que el programa cree"
+STALE = "El programa ya no lo evalúa: poca historia de estos equipos para opinar"
 
 
 def _num(v):
@@ -293,6 +294,9 @@ def _market_then(r: dict, then_snap, ratio=None) -> dict:
 def decide(r: dict, u, then_snap=None, props=None, ratio=None) -> tuple:
     """(pick, motivo) para una fila de model_vs_sharp con los momios de ahora
     (u) y los de cuando se analizó (then_snap)."""
+    from src.models.side_bias import is_skipped
+    if is_skipped(r):                  # la última corrida ya no lo evaluó (22-oct-26)
+        return None, STALE
     model = [_num(r.get(c)) for _, c, *_ in SIDES]
     if None in model:
         return None, NO_EDGE
