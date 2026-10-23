@@ -146,10 +146,13 @@ def _three_way_derived(p: list) -> dict:
             "dnb_home": h / (h + a) if h + a else None, "dnb_away": a / (h + a) if h + a else None}
 
 
-def reference_probs(f: dict) -> tuple[dict, dict]:
+def reference_probs(f: dict, bias: dict | None = None) -> tuple[dict, dict]:
     """(mercado sin margen, programa) por clave interna para un partido.
     f trae los momios de upcoming_matches y, si hay, el modelo
-    (model_vs_sharp: p_home/p_draw/p_away/p_over25/p_btts)."""
+    (model_vs_sharp: p_home/p_draw/p_away/p_over25/p_btts, crudo). bias: el
+    sesgo aprendido (side_bias); el programa sale corregido como en los picks
+    (23-oct-26: aquí se usaba el crudo)."""
+    from src.models.side_bias import program_probs
     market = {}
     pin = _fair(f.get("pin_home_odds"), f.get("pin_draw_odds"), f.get("pin_away_odds"))
     if pin:
@@ -162,18 +165,12 @@ def reference_probs(f: dict) -> tuple[dict, dict]:
     if bt:
         market.update({"btts": bt[0], "btts_no": bt[1]})
     model = {}
-    try:
-        mp = [float(f["p_home"]), float(f["p_draw"]), float(f["p_away"])]
-        model.update(_three_way_derived(mp))
-    except (KeyError, TypeError, ValueError):
-        pass
-    for k_in, k_yes, k_no in (("p_over25", "over25", "under25"), ("p_btts", "btts", "btts_no")):
-        try:
-            v = float(f[k_in])
-            if math.isfinite(v):
-                model.update({k_yes: v, k_no: 1 - v})
-        except (KeyError, TypeError, ValueError):
-            pass
+    p = program_probs(f, bias)
+    if None not in (p["home_win"], p["draw"], p["away_win"]):
+        model.update(_three_way_derived([p["home_win"], p["draw"], p["away_win"]]))
+    for k_yes, k_no in (("over25", "under25"), ("btts", "btts_no")):
+        if p[k_yes] is not None:
+            model.update({k_yes: p[k_yes], k_no: 1 - p[k_yes]})
     return market, model
 
 
@@ -210,9 +207,9 @@ def judge(price_decimal: float, market_p: float | None, model_p: float | None) -
             "ev": p * price_decimal - 1}
 
 
-def evaluate_items(items: list, fixtures: list, normalize=None) -> list:
+def evaluate_items(items: list, fixtures: list, normalize=None, bias: dict | None = None) -> list:
     """Cada momio leído de la captura con su veredicto. fixtures: partidos
-    próximos con momios y modelo (ver reference_probs)."""
+    próximos con momios y modelo (ver reference_probs); bias: sesgo aprendido."""
     out = []
     for it in items or []:
         price = parse_price(it.get("momio"))
@@ -226,7 +223,7 @@ def evaluate_items(items: list, fixtures: list, normalize=None) -> list:
         elif key is None:
             row["verdict"] = "sin_mercado"
         else:
-            market, model = reference_probs(f)
+            market, model = reference_probs(f, bias)
             row.update(judge(price, market.get(key), model.get(key)))
             row["market_p"], row["model_p"] = market.get(key), model.get(key)
             row["consensus"] = consensus_decimal(f, key)
@@ -312,6 +309,7 @@ def load_fixtures(engine, hours_back: int = 2, days_ahead: int = 4) -> list:
         key = f"{r['home_team_norm']} vs {r['away_team_norm']}".lower()
         m = model.get(key, {})
         out.append({**r, **{k: m.get(k) for k in ("p_home", "p_draw", "p_away", "p_over25", "p_btts")},
+                    "league": r["sport_key"],          # la región de su sesgo (side_bias.bias_for)
                     "home_norm": str(r["home_team_norm"]).lower(), "away_norm": str(r["away_team_norm"]).lower(),
                     "home": r["home_team"], "away": r["away_team"],
                     "label": f"{r['home_team']} vs {r['away_team']}"})

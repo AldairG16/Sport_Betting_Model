@@ -120,7 +120,7 @@ def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
     saved: {clave del partido: fila de program_picks}. bias: sesgo por lado
     aprendido: la barra del programa es su 1X2 ya corregido, el mismo del pick.
     """
-    from src.models.program_picks import model_1x2
+    from src.models.side_bias import program_probs
     up = {}
     for r in upcoming.itertuples(index=False):
         up[_canon(_key(r.home_team_norm, r.away_team_norm), normalize)] = r
@@ -134,7 +134,8 @@ def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
         u = up.get(key)
         # la última corrida ya no lo evaluó (22-oct-26): sin la opinión vieja
         skipped = is_skipped(r)
-        model = [None] * 3 if skipped else model_1x2(r._asdict(), bias)
+        probs = program_probs(r._asdict(), bias)   # ya corregido: el mismo del pick (23-oct-26)
+        model = [None] * 3 if skipped else [probs["home_win"], probs["draw"], probs["away_win"]]
         pin = _fresh_pinnacle(u) or [_num(getattr(r, c)) for _, _, c, _ in SIDES]
         sides = []
         for (name, _, _, odds_col), m, p in zip(SIDES, model, pin):
@@ -155,8 +156,8 @@ def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
             "sides": sides,
             "lam": [round(lam_h, 2), round(lam_a, 2)] if lam_h and lam_a else None,
             "likely": likely_score(lam_h, lam_a),
-            "p_over25": None if skipped else _num(getattr(r, "p_over25", None)),
-            "p_btts": None if skipped else _num(getattr(r, "p_btts", None)),
+            "p_over25": None if skipped else probs["over25"],
+            "p_btts": None if skipped else probs["btts"],
             "reading": reading(model, pin),
             "pick": saved_pick((saved or {}).get(key)),
             # sin goles esperados guardados = corrida anterior a la corrección

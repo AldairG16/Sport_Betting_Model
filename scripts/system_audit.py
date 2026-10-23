@@ -18,6 +18,10 @@ cada vez; la próxima clase que aparezca se agrega aquí.
   4. Lo que entró al modelo en la última corrida (cobertura de cada feature).
   5. Elo sin NaN.
   6. Cada liga de ESPN apunta a la liga correcta (chi.1 era Chile).
+  7. Sesgo del modelo que queda después de la corrección (side_bias), global
+     y por región, en el 1X2, más de 2.5 y ambos anotan, y que el weekly lo
+     siga aprendiendo (23-oct-26: el local en las 5 grandes y los goles en
+     América llevaban semanas sesgados sin que nada avisara).
 Corre en el weekly (paso "Auditoría del sistema", sin el 1, que ya corrió en
 el evening) y a mano:
     python scripts/system_audit.py
@@ -35,6 +39,10 @@ from src.utils.log import get_logger
 log = get_logger(__name__)
 
 COVERAGE_MAX_AGE_H = 36           # la última corrida del pipeline (morning o evening)
+BIAS_MAX_AGE_D = 8                # el weekly aprende el sesgo cada domingo
+RESIDUAL_MAX = 0.03               # sesgo que queda después de corregir: más de 3 pt…
+RESIDUAL_T = 3.0                  # …y a 3 errores estándar de 0 (no es ruido)
+RESIDUAL_MIN_N = 30
 # palabra que tiene que traer el nombre de la liga en ESPN
 ESPN_EXPECTED = {
     "soccer_epl": "Premier", "soccer_efl_champ": "Championship", "soccer_spain_la_liga": "LALIGA",
@@ -64,6 +72,27 @@ def coverage_problems(state: dict | None, now: pd.Timestamp | None = None) -> li
     if age_h is None or age_h > COVERAGE_MAX_AGE_H:
         out.append(f"Cobertura: la última corrida guardada es de hace {age_h:.0f} h" if age_h is not None
                    else "Cobertura: sin fecha")
+    return out
+
+
+def bias_problems(residuals: list, state: dict | None, now: pd.Timestamp | None = None) -> list:
+    """El sesgo que queda después de corregir (side_bias.residuals) y la edad
+    de lo aprendido."""
+    names = {"home_win": "local", "draw": "empate", "away_win": "visitante",
+             "over25": "más de 2.5", "btts": "ambos anotan"}
+    out = []
+    at = (state or {}).get("updated_at")
+    now = now or pd.Timestamp.now(tz="UTC")
+    if not at:
+        out.append("Sesgo: el weekly todavía no lo aprende")
+    elif (now - pd.Timestamp(at)).total_seconds() / 86400 > BIAS_MAX_AGE_D:
+        out.append(f"Sesgo: lo aprendido es de hace {(now - pd.Timestamp(at)).days} días (el weekly no corrió)")
+    for r in residuals:
+        if r["n"] < RESIDUAL_MIN_N or not r["se"]:
+            continue
+        if abs(r["mean"]) > RESIDUAL_MAX and abs(r["mean"]) / r["se"] > RESIDUAL_T:
+            out.append(f"Sesgo {names.get(r['market'], r['market'])} ({r['scope']}): queda "
+                       f"{r['mean'] * 100:+.1f} ±{r['se'] * 100:.1f} pt después de corregir (n={r['n']})")
     return out
 
 
@@ -114,6 +143,12 @@ def run_system_audit(include_daily: bool = True, espn_get=None) -> dict:
         from src.utils.model_state import load_state
         return coverage_problems(load_state("pipeline_coverage"))
     check("Lo que entra al modelo", coverage)
+
+    def bias():
+        from src.models.side_bias import load_side_bias, read_pairs, residuals
+        state = load_side_bias()
+        return bias_problems(residuals(read_pairs(), state), state)
+    check("Sesgo del modelo", bias)
 
     def elo():
         from src.features.elo_rating import compute_elo
