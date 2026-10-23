@@ -249,6 +249,12 @@ FEED_MAX_AGE_DAYS = {         # tabla: (columna de fecha, días)
     "team_xg_real": ("updated_at", 9),      # Understat, weekly
     "club_elo": ("fetched_on", 10),         # ClubElo, semanal (refresh_if_stale)
     "espn_matches": ("fetched_at", 3),      # copas, Europa, amistosos: evening
+    # lo que producen las corridas de cada día (morning, evening, closing)
+    "upcoming_matches": ("updated_at", 1),  # momios, cada closing
+    "odds_history": ("captured_at", 1),     # fotos de momios
+    "kalshi_history": ("captured_at", 2),   # referencia de Kalshi
+    "model_vs_sharp": ("created_at", 2),    # el análisis del modelo
+    "program_picks": ("picked_at", 1),      # los picks del dashboard
 }
 
 DATA_HEALTH_SQL = {
@@ -275,7 +281,8 @@ DATA_HEALTH_SQL = {
 
 def data_health(counts: dict, ages: dict) -> list:
     """counts: {"mirror", "future", "duplicate"}; ages: {tabla: días desde lo
-    último o None si no existe}. Avisos (vacío = en orden)."""
+    último, o None si está vacía o no se pudo leer}; una tabla que todavía no
+    existe (instalación nueva) no viene en ages. Avisos (vacío = en orden)."""
     out = []
     if int(counts.get("mirror") or 0) > MAX_MIRROR_PAIRS:
         out.append(f"Datos: {counts['mirror']} partidos repetidos con el día y el mes cruzados "
@@ -284,8 +291,10 @@ def data_health(counts: dict, ages: dict) -> list:
         out.append(f"Datos: {counts['future']} partidos con resultado y fecha futura (día y mes cruzados)")
     if int(counts.get("duplicate") or 0) > 0:
         out.append(f"Datos: {counts['duplicate']} partidos repetidos en los últimos 120 días")
-    for table, (col, max_age) in FEED_MAX_AGE_DAYS.items():
-        age = ages.get(table)
+    for table, age in ages.items():
+        if table not in FEED_MAX_AGE_DAYS:
+            continue
+        max_age = FEED_MAX_AGE_DAYS[table][1]
         if age is None:
             out.append(f"Datos: {table} vacía o ilegible")
         elif age > max_age:
@@ -384,8 +393,9 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
                 last = q(f"SELECT MAX({col}) AS t FROM {table}").iloc[0]["t"]
                 ages[table] = None if last is None or pd.isna(last) else                     (pd.Timestamp.now(tz="UTC") - (pd.Timestamp(last).tz_convert("UTC") if pd.Timestamp(last).tzinfo
                                                    else pd.Timestamp(last).tz_localize("UTC"))).days
-            except Exception:
-                ages[table] = None
+            except Exception as e:
+                if "does not exist" not in str(e):     # la tabla nace con su primera corrida
+                    ages[table] = None
         problems += data_health(counts, ages)
     except Exception as e:
         problems.append(f"Datos: no se pudo revisar ({type(e).__name__})")

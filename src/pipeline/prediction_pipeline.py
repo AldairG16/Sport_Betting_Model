@@ -3198,8 +3198,19 @@ def run_prediction_pipeline(dry_run: bool = False):
         # aporta en ningún partido (una consulta rota, un nombre que no cuadra)
         # devolvía "sin dato" para todos sin que nada fallara.
         from src.utils.output_checks import feature_coverage
-        for problem in feature_coverage(stats):
+        coverage_problems = feature_coverage(stats)
+        for problem in coverage_problems:
             log.error(f"❌ {problem}")
+        # para la auditoría del sistema (scripts/system_audit.py)
+        try:
+            from src.utils.model_state import save_state
+            keys = ("evaluated", "h2h_used", "xg_used", "corners_used", "shots_used", "big5", "xg_real_big5",
+                    "no_dc", "thin_history", "skipped_no_odds", "clubelo")
+            save_state("pipeline_coverage", {**{k: int(stats.get(k, 0)) for k in keys},
+                                             "problems": coverage_problems,
+                                             "at": pd.Timestamp.now(tz="UTC").isoformat()}, history=False)
+        except Exception as e:
+            log.warning(f"⚠️  Cobertura de la corrida no guardada: {type(e).__name__}")
     if stats['sharp_no_value'] or stats['sharp_no_ref']:
         print(f"🔒 Filtro Pinnacle: {stats['sharp_no_value']} sin valor frente a Pinnacle · "
               f"{stats['sharp_no_ref']} sin referencia (solo en sombra hasta tener evidencia)")
