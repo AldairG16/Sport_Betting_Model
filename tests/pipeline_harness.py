@@ -297,7 +297,7 @@ def run_pipeline(monkeypatch, matches: pd.DataFrame | None = None,
 
     df = default_matches() if matches is None else matches
     moves = LINE_MOVES if line_moves is None else line_moves
-    captured = {"bets": [], "shadow": [], "paper": [], "sql": [], "model_sharp": []}
+    captured = {"bets": [], "shadow": [], "paper": [], "sql": [], "model_sharp": [], "skipped": []}
 
     pend = pending or {}
 
@@ -333,6 +333,7 @@ def run_pipeline(monkeypatch, matches: pd.DataFrame | None = None,
             f"sinref:{f}" for f in (*FAMILIES, "otros")}
     monkeypatch.setattr(pp, "load_learned_state", lambda: dict(state))
     monkeypatch.setattr(sbm, "persist", lambda recs: captured["model_sharp"].extend(recs) or len(recs))
+    monkeypatch.setattr(sbm, "mark_skipped", lambda skips: captured["skipped"].extend(skips) or len(skips))
 
     # Features (leen la DB en producción)
     monkeypatch.setattr(pp, "compute_elo", lambda: dict(ELO))

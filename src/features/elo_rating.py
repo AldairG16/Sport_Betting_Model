@@ -5,12 +5,20 @@ from src.utils.team_normalizer import normalize_team
 
 def compute_elo():
 
+    # Solo partidos con marcador (22-oct-26): uno sin goles daba K = NaN y el
+    # NaN contagiaba a los dos equipos y luego a cada rival. Dos partidos (Grecia
+    # 2019, Ligue 2 dic-2025) dejaron 107 equipos en NaN (toda la Ligue 1 y
+    # Grecia, 34 de 40 en LaLiga, 32 de 36 en la Champions) y el ensemble
+    # descartaba el Elo sin avisar. Con el Elo arreglado, en los 35 partidos
+    # que cambiaban el 1X2 quedó más cerca de Pinnacle: mediana 7.1 → 5.5 pts.
     df = pd.read_sql("""
         SELECT home_team, away_team, home_goals, away_goals, date
         FROM matches
         WHERE (league IS NULL OR league LIKE 'soccer%%' OR league LIKE 'fifa%%' OR league LIKE 'uefa%%')
+          AND home_goals IS NOT NULL AND away_goals IS NOT NULL
         ORDER BY date
     """, engine)
+    df = df.dropna(subset=["home_goals", "away_goals"])
 
     elo = {}
 

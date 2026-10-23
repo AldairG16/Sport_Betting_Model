@@ -127,9 +127,12 @@ def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
     for r in order.itertuples(index=False):           # el más reciente manda
         latest[(_canon(r.match, normalize), str(r.match_date))] = r
     out = []
+    from src.models.side_bias import is_skipped
     for (key, _), r in sorted(latest.items(), key=lambda kv: pd.Timestamp(kv[1].match_date)):
         u = up.get(key)
-        model = [_num(getattr(r, c)) for _, c, _, _ in SIDES]
+        # la última corrida ya no lo evaluó (22-oct-26): sin la opinión vieja
+        skipped = is_skipped(r)
+        model = [None if skipped else _num(getattr(r, c)) for _, c, _, _ in SIDES]
         pin = _fresh_pinnacle(u) or [_num(getattr(r, c)) for _, _, c, _ in SIDES]
         sides = []
         for (name, _, _, odds_col), m, p in zip(SIDES, model, pin):
@@ -142,7 +145,7 @@ def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
                 # el mejor momio de Europa ya paga el mínimo (PlayDoit casi nunca)
                 "value_at_best": bool(best and min_us is not None and to_american(best) >= min_us),
             })
-        lam_h, lam_a = _num(getattr(r, "lam_home", None)), _num(getattr(r, "lam_away", None))
+        lam_h, lam_a = (None, None) if skipped else (_num(getattr(r, "lam_home", None)), _num(getattr(r, "lam_away", None)))
         out.append({
             "match_date": _iso(r.match_date),
             "match": (f"{u.home_team} vs {u.away_team}" if u is not None else match_name(r.match)),
@@ -150,13 +153,14 @@ def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
             "sides": sides,
             "lam": [round(lam_h, 2), round(lam_a, 2)] if lam_h and lam_a else None,
             "likely": likely_score(lam_h, lam_a),
-            "p_over25": _num(getattr(r, "p_over25", None)),
-            "p_btts": _num(getattr(r, "p_btts", None)),
+            "p_over25": None if skipped else _num(getattr(r, "p_over25", None)),
+            "p_btts": None if skipped else _num(getattr(r, "p_btts", None)),
             "reading": reading(model, pin),
             "pick": saved_pick((saved or {}).get(key)),
             # sin goles esperados guardados = corrida anterior a la corrección
             # del modelo (21-oct-26): su lectura no vale
-            "old_model": not (lam_h and lam_a),
+            "old_model": not skipped and not (lam_h and lam_a),
+            "skipped": skipped,
             "real_bet": key in pending_matches,
             "key": key,                    # nombres canónicos: /api/match (v1.10.0)
         })

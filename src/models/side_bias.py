@@ -58,6 +58,14 @@ TABLE_SQL = """
 EXTRA_COLUMNS = ("lam_home", "lam_away", "p_over25", "p_btts", "league_factor")
 ALTER_SQL = "; ".join(f"ALTER TABLE model_vs_sharp ADD COLUMN IF NOT EXISTS {c} NUMERIC"
                       for c in EXTRA_COLUMNS)
+# skipped_at (22-oct-26): la última corrida ya no evaluó el partido (poca
+# historia, sin Dixon-Coles confiable, sin momios) y su análisis anterior deja
+# de valer. Sin esto, el pick, el sesgo por lado y el dashboard usaban el
+# análisis de una corrida vieja: el 22-oct, 16 partidos (8 de ellos de mañana,
+# uno del modelo con el error del xG) que esa mañana el programa rechazó.
+# Un análisis nuevo lo limpia (persist).
+SKIP_SQL = "ALTER TABLE model_vs_sharp ADD COLUMN IF NOT EXISTS skipped_at TIMESTAMPTZ"
+VALID = "skipped_at IS NULL"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -187,6 +195,7 @@ def persist(records: list) -> int:
     with engine.begin() as conn:
         conn.execute(text(TABLE_SQL))
         conn.execute(text(ALTER_SQL))
+        conn.execute(text(SKIP_SQL))
         for r in rows:
             r = {**{c: None for c in EXTRA_COLUMNS}, **r}
             conn.execute(text("""
@@ -202,9 +211,31 @@ def persist(records: list) -> int:
                     pin_away = EXCLUDED.pin_away, lam_home = EXCLUDED.lam_home,
                     lam_away = EXCLUDED.lam_away, p_over25 = EXCLUDED.p_over25,
                     p_btts = EXCLUDED.p_btts, league_factor = EXCLUDED.league_factor,
-                    created_at = NOW()
+                    skipped_at = NULL, created_at = NOW()
             """), r)
     return len(rows)
+
+
+def mark_skipped(skips: list) -> int:
+    """Marca (skipped_at) los partidos que esta corrida ya no evaluó: su
+    análisis anterior deja de valer. skips: [{"match", "match_date"}] con el
+    mismo nombre y fecha que record()."""
+    rows = [s for s in skips if s]
+    if not rows:
+        return 0
+    from config.database import engine
+    with engine.begin() as conn:
+        conn.execute(text(TABLE_SQL))
+        conn.execute(text(SKIP_SQL))
+        conn.execute(text("UPDATE model_vs_sharp SET skipped_at = NOW() "
+                          "WHERE match = :match AND match_date = :match_date"), rows)
+    return len(rows)
+
+
+def is_skipped(r) -> bool:
+    """La fila de model_vs_sharp es un análisis que la última corrida ya no evaluó."""
+    v = r.get("skipped_at") if isinstance(r, dict) else getattr(r, "skipped_at", None)
+    return v is not None and not pd.isna(v)
 
 
 def load_side_bias() -> dict:
@@ -217,12 +248,14 @@ def read_pairs() -> pd.DataFrame:
     from config.database import engine
     with engine.begin() as conn:
         conn.execute(text(TABLE_SQL))
-    # solo partidos desde que el modelo dejó de estar roto (MODEL_SINCE)
+        conn.execute(text(SKIP_SQL))
+    # solo partidos desde que el modelo dejó de estar roto (MODEL_SINCE) y
+    # que la última corrida sí evaluó
     from config.settings import MODEL_SINCE
     return pd.read_sql(text(f"""
         SELECT * FROM model_vs_sharp
         WHERE match_date >= NOW() - INTERVAL '{WINDOW_DAYS} days'
-          AND match_date >= CAST(:since AS timestamptz)
+          AND match_date >= CAST(:since AS timestamptz) AND {VALID}
     """), engine, params={"since": MODEL_SINCE})
 
 

@@ -46,9 +46,15 @@ PROPS = {
     "cards": {"cols": ("home_cards", "away_cards"), "alpha": 0.4, "dispersion": None,
               "lines": (3.5, 4.5, 5.5), "name": "tarjetas"},
 }
-# Columnas calculadas: amarilla = 1 y roja = 1, como liquida PlayDoit (21-oct-26)
+# Columnas calculadas: amarilla = 1 y roja = 1, como liquida PlayDoit (21-oct-26).
+# Córners 0-0 = sin dato (22-oct-26): los archivos /new/ de football-data
+# (Brasil, Liga MX, Argentina) no traen córners y el loader los guardó en 0;
+# con ellos la liga promediaba 0 córners y "más de 9.5" daba 0%.
+_NO_CORNERS = "(home_corners = 0 AND away_corners = 0)"
 COLUMN_SQL = {"home_cards": "home_yellow + COALESCE(home_red, 0)",
-              "away_cards": "away_yellow + COALESCE(away_red, 0)"}
+              "away_cards": "away_yellow + COALESCE(away_red, 0)",
+              "home_corners": f"CASE WHEN {_NO_CORNERS} THEN NULL ELSE home_corners END",
+              "away_corners": f"CASE WHEN {_NO_CORNERS} THEN NULL ELSE away_corners END"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

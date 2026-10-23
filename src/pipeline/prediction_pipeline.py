@@ -2929,6 +2929,12 @@ def run_prediction_pipeline(dry_run: bool = False):
         print("🎚️ Ajustes manuales: escala 100% (sin evidencia para moverla)")
 
     elo = compute_elo()
+    # Un Elo NaN no falla: el ensemble lo descarta sin avisar (22-oct-26, 107
+    # equipos así por dos partidos sin marcador). Que llegue a Telegram.
+    _bad_elo = [t for t, v in elo.items() if pd.isna(v)]
+    if _bad_elo:
+        log.error(f"❌ Elo inválido (NaN) en {len(_bad_elo)} equipos ({', '.join(sorted(_bad_elo)[:3])}…): "
+                  f"el modelo no usa el Elo en sus partidos")
 
     # DISTINCT ON dedup: cuando un partido tiene 2 rows en upcoming_matches
     # (típicamente un row stale con match_date vieja + uno nuevo con la fecha
@@ -2965,6 +2971,7 @@ def run_prediction_pipeline(dry_run: bool = False):
     # 1X2 crudo del modelo vs Pinnacle en CADA partido con precio de Pinnacle
     # (no solo candidatas): de aquí aprende src/models/side_bias.py.
     model_sharp_records: list = []
+    skipped_records: list = []
     # Contadores del resumen (antes 14 variables nonlocal).
     stats = Counter()
     # Cada apuesta evaluada con su decisión (src/models/proposals.py, 12-oct-26)
@@ -3003,14 +3010,21 @@ def run_prediction_pipeline(dry_run: bool = False):
     # slate completo (pasó el 10-sep-26 con int(NaN) en corners_line). Cada
     # partido se evalúa en su propio try; el fallo queda en el log con su
     # traceback y el resto del slate sigue.
+    def _skip(row):
+        # el análisis anterior de este partido deja de valer (side_bias.mark_skipped)
+        skipped_records.append({"match": f"{normalize_team(row.home_team)} vs {normalize_team(row.away_team)}",
+                                "match_date": row.match_date})
+
     def _evaluate_match(row):
         T = _stage_team_strengths(row, stats)
         if T is None:
+            _skip(row)
             return
         L = _stage_lambdas(row, T, ctx, stats)
         if not getattr(L, "dc_ok", True):
             stats['no_dc'] += 1
             print(f"  Sin Dixon-Coles confiable: {T.home} vs {T.away} (peso {L.mle_w:.0%}) — no se evalúa")
+            _skip(row)
             return
         M, Q = _stage_model_probabilities(row, T, L, ctx, stats)
         _stage_side_bias(row, T, M, ctx, model_sharp_records, L)
@@ -3159,6 +3173,11 @@ def run_prediction_pipeline(dry_run: bool = False):
             from src.models.side_bias import persist as persist_model_sharp
             n_ms = persist_model_sharp(model_sharp_records)
             print(f"⚖️ Modelo vs Pinnacle: {n_ms} partidos registrados para medir el sesgo por lado")
+            from src.models.side_bias import mark_skipped
+            done = {(r["match"], str(r["match_date"])) for r in model_sharp_records if r}
+            n_sk = mark_skipped([s for s in skipped_records if (s["match"], str(s["match_date"])) not in done])
+            if n_sk:
+                print(f"⏭️ {n_sk} partidos ya no evaluados: su análisis anterior deja de contar")
         except Exception as e:
             # ERROR, no WARNING: sin estas filas el sesgo por lado no aprende
             # nunca, y un fallo silencioso ya costó semanas (§5, "OK silencioso")
