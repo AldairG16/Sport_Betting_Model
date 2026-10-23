@@ -10,6 +10,13 @@ el once que usó en cada uno, y la alineación del partido (la confirmada si
 ya salió; si no, la más probable). Además, los últimos 5 entre ellos.
 
 Funciones puras: dashboard/app.py hace las consultas (matches y lineups).
+
+22-oct-26, "te estás saltando partidos, no son los últimos 5": `matches`
+solo trae las ligas (y la Champions incompleta). Se suman los partidos de
+espn_matches (copas, Champions, Europa y Conference League, amistosos;
+src/features/espn_history.py) sin repetir los que ya están, con la
+competición de cada uno. Los amistosos se muestran, pero no cuentan en los
+promedios.
 """
 
 import json
@@ -85,12 +92,34 @@ def _lineup_for(lineups: list, team: str, when) -> dict | None:
     return None
 
 
+def merge_history(matches: list, extra: list) -> list:
+    """Los partidos de `matches` y los de espn_matches sin repetir: un partido
+    de ESPN que ya está en `matches` se descarta (±1 día, mismo marcador y al
+    menos un equipo igual: un equipo no juega dos veces el mismo día; el otro
+    nombre puede variar, "slovan bratislava" / "sk slovan bratislava"),
+    porque `matches` trae sus córners y tarjetas de football-data.
+    Cada fila lleva "label" (la competición) y "kind" ("amistoso", …)."""
+    out = [{**m, "label": league_name(m.get("league")) if m.get("league") else "", "kind": "liga"} for m in matches]
+    seen = [({m["h"], m["a"]}, _ts(m["date"]), (int(m["home_goals"]), int(m["away_goals"]))) for m in matches]
+    for e in extra:
+        d, score = _ts(e["date"]), (int(e["home_goals"]), int(e["away_goals"]))
+        if any(pair & {e["h"], e["a"]} and abs(d - t) <= pd.Timedelta(days=1) and sc == score
+               for pair, t, sc in seen):
+            continue
+        out.append({**e, "label": e.get("league") or "", "kind": e.get("kind") or "copa",
+                    "home_yellow": e.get("home_cards"), "away_yellow": e.get("away_cards"),
+                    "home_red": 0, "away_red": 0})
+    return out
+
+
 def team_last(matches: list, lineups: list, team: str, before, n: int = LAST_N) -> dict:
-    """Los últimos `n` partidos del equipo antes de `before` y sus promedios."""
+    """Los últimos `n` partidos del equipo antes de `before` (de todas las
+    competiciones) y sus promedios, sin los amistosos."""
     b = _ts(before)
     rows = [m for m in matches if team in (m["h"], m["a"]) and _ts(m["date"]) < b]
     rows.sort(key=lambda m: _ts(m["date"]), reverse=True)
     out, tot = [], {"gf": 0.0, "ga": 0.0, "cf": [], "ca": [], "cards": [], "w": 0, "d": 0, "l": 0}
+    official = 0
     for m in rows[:n]:
         home = m["h"] == team
         gf, ga = (m["home_goals"], m["away_goals"]) if home else (m["away_goals"], m["home_goals"])
@@ -101,25 +130,29 @@ def team_last(matches: list, lineups: list, team: str, before, n: int = LAST_N) 
         ch, ca_ = _cards(m, "home"), _cards(m, "away")
         cards = None if ch is None or ca_ is None else ch + ca_
         res = "G" if gf > ga else ("E" if gf == ga else "P")
-        tot["gf"] += gf
-        tot["ga"] += ga
-        tot[{"G": "w", "E": "d", "P": "l"}[res]] += 1
-        if cf is not None and ca is not None:
-            tot["cf"].append(cf)
-            tot["ca"].append(ca)
-        if cards is not None:
-            tot["cards"].append(cards)
-        out.append({"date": _ts(m["date"]).isoformat(), "league": league_name(m.get("league")) if m.get("league") else "",
+        friendly = m.get("kind") == "amistoso"
+        if not friendly:
+            official += 1
+            tot["gf"] += gf
+            tot["ga"] += ga
+            tot[{"G": "w", "E": "d", "P": "l"}[res]] += 1
+            if cf is not None and ca is not None:
+                tot["cf"].append(cf)
+                tot["ca"].append(ca)
+            if cards is not None:
+                tot["cards"].append(cards)
+        label = m["label"] if "label" in m else (league_name(m.get("league")) if m.get("league") else "")
+        out.append({"date": _ts(m["date"]).isoformat(), "league": label, "friendly": friendly,
                     "opponent": team_name(m["a"] if home else m["h"]), "venue": "L" if home else "V",
                     "score": f"{gf}-{ga}", "result": res,
                     "corners": None if cf is None or ca is None else [int(cf), int(ca)],
                     "cards": None if cards is None else int(cards),
                     "xi": _xi(_lineup_for(lineups, team, m["date"]))})
-    k = len(out)
+    k = official
     avg = lambda xs: round(sum(xs) / len(xs), 1) if xs else None
     return {"team": team_name(team), "matches": out,
             "summary": None if not k else {
-                "n": k, "w": tot["w"], "d": tot["d"], "l": tot["l"],
+                "n": k, "w": tot["w"], "d": tot["d"], "l": tot["l"], "friendlies": len(out) - k,
                 "goals_for": round(tot["gf"] / k, 1), "goals_against": round(tot["ga"] / k, 1),
                 "corners_for": avg(tot["cf"]), "corners_against": avg(tot["ca"]),
                 "cards": avg(tot["cards"])}}
@@ -134,7 +167,7 @@ def head_to_head(matches: list, home: str, away: str, before, n: int = LAST_N) -
     for m in rows[:n]:
         hc, ac = _corners(m)
         out.append({"date": _ts(m["date"]).isoformat(), "match": f"{team_name(m['h'])} vs {team_name(m['a'])}",
-                    "score": f"{int(m['home_goals'])}-{int(m['away_goals'])}",
+                    "score": f"{int(m['home_goals'])}-{int(m['away_goals'])}", "league": m.get("label", ""),
                     "corners": None if hc is None or ac is None else [int(hc), int(ac)]})
     return out
 
@@ -164,10 +197,13 @@ def match_lineup(lineups: list, team: str, kickoff) -> dict | None:
             "players": [f"{names.get(p, p)} ({starts[p]} de {len(past)})" for p in top]}
 
 
-def match_detail(matches: pd.DataFrame, lineups: pd.DataFrame, home: str, away: str, kickoff) -> dict:
+def match_detail(matches: pd.DataFrame, lineups: pd.DataFrame, home: str, away: str, kickoff,
+                 extra: pd.DataFrame | None = None) -> dict:
     """Todo lo que muestra el partido abierto. home/away: nombres canónicos
-    en minúsculas (los de matches y lineups)."""
-    m = matches.to_dict("records") if not matches.empty else []
+    en minúsculas (los de matches y lineups). extra: espn_matches (copas,
+    Europa, amistosos) con las columnas de matches más league y kind."""
+    m = merge_history(matches.to_dict("records") if not matches.empty else [],
+                      extra.to_dict("records") if extra is not None and not extra.empty else [])
     lu = lineups.to_dict("records") if not lineups.empty else []
     return {"home": {**team_last(m, lu, home, kickoff), "lineup": match_lineup(lu, home, kickoff)},
             "away": {**team_last(m, lu, away, kickoff), "lineup": match_lineup(lu, away, kickoff)},

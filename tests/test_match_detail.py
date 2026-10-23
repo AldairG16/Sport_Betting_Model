@@ -170,6 +170,8 @@ def test_match_endpoint_and_predictions_carry_the_key(monkeypatch):
             return MATCHES
         if "FROM lineups" in s:
             return LINEUPS
+        if "FROM espn_matches" in s:                 # copas y amistosos (22-oct-26): ninguno aquí
+            return pd.DataFrame()
         raise AssertionError(s[:80])
     monkeypatch.setattr(dash, "_q", fake_q)
     c = dash.app.test_client()

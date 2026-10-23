@@ -738,6 +738,37 @@ partidos, uno del modelo con el error del xG. Ahora el pipeline los marca
 opinión del modelo filtra `skipped_at IS NULL` (`side_bias.is_skipped` en Python). El pick
 queda "sin pick" con el motivo `STALE`.
 
+**`matches` solo trae las ligas (22-oct-2026).** Se llena con football-data (ligas) y con los
+resultados de The Odds API de las ligas que predecimos. Nunca llegaban la Europa League, la
+Conference, las copas nacionales ni los amistosos, y de la Champions faltaban partidos. El
+dueño lo vio al abrir Stuttgart–Gladbach ("te estás saltando partidos"): les faltaban la
+DFB-Pokal y dos amistosos de la fecha FIFA.
+- Ahora `src/features/espn_history.py` (paso "Historial ESPN" del evening, antes de
+  Predictions) guarda esas competiciones en `espn_matches`: marcador, córners y tarjetas
+  (roja = 1) del scoreboard público de ESPN, una petición por competición y mes.
+  - La primera carga (3 meses, unos 7 min) dejó 1,302 partidos. Después solo lee el mes en
+    curso de las ligas y dos meses de las copas.
+- **Nombres.** El id de ESPN se empareja con el nombre de `matches` con los partidos de liga
+  (misma fecha ±1 día, mismo marcador, el nombre más parecido; tabla `espn_teams`). Así un
+  "Barcelona SC" no se confunde con el Barcelona.
+- **Quién la usa:**
+  - el partido abierto (los últimos 5) y Equipos, con la competición de cada partido. Un
+    partido que ya está en `matches` no se repite (±1 día, mismo marcador, un equipo igual).
+    Los amistosos se ven atenuados y no cuentan en récord ni promedios;
+- **El modelo NO la usa** (forma, Elo, Dixon-Coles): un amistoso o un 4-0 de copa contra uno
+  de cuarta no son su liga.
+- **Pendiente:** `fixture_congestion` (días de descanso) solo lee `matches`, así que no ve el
+  jueves de Europa League. Con `espn_matches` cambiarían 50 equipos de los próximos partidos
+  del 22-oct, y 37 pasarían a "fatigado". Cambia el pronóstico, así que se mide contra
+  Pinnacle antes de activarlo.
+
+**Una conexión muerta no falla: espera (22-oct-2026).** Neon corta las conexiones inactivas,
+y `config/database.py` no tenía `pool_pre_ping` ni keepalives de TCP. Dos ensayos del pipeline
+se quedaron una hora esperando dentro de una consulta (`get_team_cards`), sin error. Ahora
+`pool_pre_ping=True` descarta la conexión del pool que ya no responde, y los keepalives
+(30 s, 10 s × 5) convierten en error, en ~1.5 min, la que muere a media consulta. El
+dashboard ya tenía `pool_pre_ping` y `pool_recycle`.
+
 **Un NaN no falla: se propaga (22-oct-2026).**
 - **Elo.** `compute_elo` leía también los partidos sin marcador: K = NaN contagiaba a los dos
   equipos y luego a cada rival. Dos partidos (Grecia 2019, Ligue 2 dic-2025) dejaron 107

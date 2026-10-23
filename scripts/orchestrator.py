@@ -657,6 +657,7 @@ def run_evening(logger: Logger):
     # apuestas antes de dormir aunque la laptop esté apagada por la mañana.
     run_step(logger, "Fetch odds (mañana)",       step_fetch_odds)
     run_step(logger, "Precios Kalshi (referencia)", step_kalshi)
+    run_step(logger, "Historial ESPN (copas, Europa, amistosos)", step_espn_history)
     predict_ok = run_step(logger, "Predictions (mañana)", step_predict)
     run_step(logger, "Picks del programa", step_program_picks)
     # run_step(logger, "MLB Predictions (mañana)",  step_mlb_predict)  # desactivado — sin creditos MLB
@@ -686,6 +687,14 @@ def run_full(logger: Logger, force_fetch: bool = False):
 def step_backtest():
     from src.models.backtest_engine import run_backtest
     run_backtest()
+
+
+def step_espn_history():
+    """Copas, Champions, Europa y Conference League y amistosos de ESPN
+    (espn_matches): los últimos 5 de verdad en el dashboard
+    (src/features/espn_history.py). En el evening, con los resultados del día."""
+    from src.features.espn_history import refresh_espn_history
+    refresh_espn_history()
 
 
 def step_clubelo():
