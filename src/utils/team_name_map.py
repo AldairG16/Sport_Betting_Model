@@ -51,6 +51,10 @@ TEAM_NAME_MAP = {
     "henan": "henan songshan longmen",
     "shanghai port fc": "shanghai port",
     "zhejiang professional fc": "zhejiang professional",
+    # Kalshi (23-oct-26): con el emparejamiento por nombre separado
+    "atletico": "ath madrid",
+    "new york rb": "ny red bulls",
+    "jeju sk": "jeju united fc",
     # Nombres de Understat (team_xg_real, player_club_goals; 23-oct-26)
     "borussia mgladbach": "gladbach",
     "mainz 05": "mainz",

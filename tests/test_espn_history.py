@@ -173,3 +173,15 @@ def test_without_the_espn_table_rest_days_use_the_leagues_as_before(monkeypatch)
         return pd.DataFrame({"date": ["2026-10-18"]})
     monkeypatch.setattr(FC.pd, "read_sql", read_sql)
     assert FC.get_fixture_congestion("celta", pd.Timestamp("2026-10-25 15:00", tz="UTC"))["days_rest"] == 7
+
+
+def test_team_ids_need_both_names_to_fit():
+    """23-oct-26: misma regla que las alineaciones; un solo nombre parecido (y una
+    palabra genérica como "gimnasia") no alcanza para aprender el id de un equipo."""
+    from src.features.espn_history import learn_team_ids
+    ev = {"kickoff": "2026-10-23T21:30:00Z", "home_name": "Gimnasia Mendoza", "away_name": "Platense",
+          "home_id": "1", "away_id": "2", "home_goals": 1, "away_goals": 0}
+    wrong = [{"date": "2026-10-23", "h": "gimnasia lp", "a": "sarmiento junin", "home_goals": 1, "away_goals": 0}]
+    assert learn_team_ids([ev], wrong) == {}
+    right = wrong + [{"date": "2026-10-23", "h": "gimnasia mendoza", "a": "platense", "home_goals": 1, "away_goals": 0}]
+    assert learn_team_ids([ev], right) == {"1": "gimnasia mendoza", "2": "platense"}

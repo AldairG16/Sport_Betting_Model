@@ -144,3 +144,28 @@ def test_lab_says_it_is_collecting_before_kalshi_has_prices():
     from src.models.strategy_lab import build_lab, format_lines
     text = "\n".join(format_lines(build_lab(_shadow(5), pd.DataFrame())))
     assert "juntando precios de Kalshi" in text
+
+
+def test_one_matching_name_is_not_enough():
+    """23-oct-26: con el partido verdadero ya fuera de la ventana, el de Gimnasia
+    Mendoza vs Platense se guardó como Gimnasia LP vs Sarmiento ("gimnasia" + 0.26)."""
+    ko = datetime(2026, 10, 23, 22, 0, tzinfo=timezone.utc)
+    fixtures = [("soccer_argentina_primera_division", "gimnasia lp", "sarmiento junin", ko)]
+    ev = {"league": "soccer_argentina_primera_division", "home": "gimnasia mendoza", "away": "platense",
+          "kick": ko - timedelta(minutes=30)}
+    assert K.match_fixture(ev, fixtures) is None
+    real = {**ev, "home": "gimnasia la plata", "away": "sarmiento", "kick": ko}
+    assert K.match_fixture(real, fixtures) is None or K.match_fixture(real, fixtures)[:2] == ("gimnasia lp", "sarmiento junin")
+    # las abreviaturas de Kalshi siguen encontrando su partido
+    mls = [("soccer_usa_mls", "ny red bulls", "inter miami", ko), ("soccer_usa_mls", "dallas", "san jose earthquakes", ko)]
+    assert K.match_fixture({"league": "soccer_usa_mls", "home": "dallas", "away": "san jose", "kick": ko}, mls)[:2] \
+        == ("dallas", "san jose earthquakes")
+
+
+def test_a_kalshi_price_far_from_pinnacle_is_another_match():
+    key = ("lg", "gimnasia lp", "sarmiento junin", "2026-10-23T22:00:00+00:00")
+    rows = [{"league": key[0], "home": key[1], "away": key[2], "kickoff": key[3], "market": m, "prob": p}
+            for m, p in (("home_win", 0.78), ("draw", 0.15), ("away_win", 0.07), ("btts", 0.4))]
+    assert K.price_mismatches(rows, {key: (0.59, 0.25, 0.16)}) == {key}                 # 19 pt: otro partido
+    assert K.price_mismatches(rows, {key: (0.76, 0.16, 0.08)}) == set()                 # 2 pt: el mismo
+    assert K.price_mismatches(rows, {}) == set()                                        # sin Pinnacle no se juzga

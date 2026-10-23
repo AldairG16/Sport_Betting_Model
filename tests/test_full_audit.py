@@ -214,8 +214,11 @@ def test_the_audit_runs_every_check_and_reports_each_problem(monkeypatch):
     import src.features.espn_lineups as EL
     monkeypatch.setattr(EL, "load_identity_rows", lambda engine: [])
     monkeypatch.setattr(SA, "_upcoming_history_counts", lambda days: {})
+    import src.features.kalshi as KS
+    monkeypatch.setattr(KS, "stored_mismatches", lambda engine, days=7: [])
     out = SA.run_system_audit()
     assert out["Sesgo del modelo"] == [] and out["Alineaciones de ESPN"] == [] and out["Dixon-Coles al día"] == []
+    assert out["Kalshi con su partido"] == []
     assert out["Equipos próximos con historia"] == [] and out["Ligas de ESPN"] == []
     assert out["Salidas y datos de entrada"] == ["Datos: 40 partidos repetidos"]
     assert out["Nombres de Understat y ESPN"] == ["lineups (ESPN): 1"]
