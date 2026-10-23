@@ -1135,6 +1135,20 @@ modelo y de lo que se deriva de él (doble oportunidad, empate anulado, hándica
 del ancla; el `decision_log.model.side_bias` guarda el cambio aplicado. Telegram solo
 cuando la corrección se mueve.
 
+- **El pick y el dashboard usan el 1X2 corregido** (`program_picks.model_1x2`, 22-oct-2026).
+  Antes usaban el crudo de `model_vs_sharp`, que se guarda así para aprender el sesgo.
+- **Recalculado a mano el 22-oct** con el modelo corregido (Elo arreglado): 141 partidos con
+  Pinnacle, `learn()` normal. Medido local +1.6 / empate −0.8 / visita −0.8 pts → corrección
+  +1.1 / −0.5 / −0.6. La de antes, +3.0 / −1.8 / −1.2, venía del modelo con el error y
+  sobrecorregía; respaldo en `model_state` `side_bias_backup_1019`.
+- **No es parejo:**
+  - 5 grandes: local +4.1 ± 1.1;
+  - resto de Europa: local +1.4 ± 0.9;
+  - América: local −0.8 ± 1.3.
+- **Goles y ambos anotan contra el promedio de las casas** (sin corrección todavía):
+  - más de 2.5: −1.3 ± 0.6 (América −3.9 ± 1.4);
+  - ambos anotan: −2.9 ± 0.7.
+
 ### Fuerza de liga (`src/features/clubelo.py`, 22-oct-2026)
 
 El programa mide a cada equipo dentro de su liga. En Champions, Europa League y Conference

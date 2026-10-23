@@ -20,6 +20,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from tests.fake_db import FakeEngine
 
@@ -127,3 +128,40 @@ def test_a_nan_elo_is_an_error_that_reaches_telegram(monkeypatch):
     run_pipeline(monkeypatch, overrides={"compute_elo": lambda: {**ELO, "brest": float("nan")}})
     assert any("Elo inválido" in e and "brest" in e for e in RUN_ISSUES.errors())
     RUN_ISSUES.reset()
+
+
+# ─── el pick usa el 1X2 corregido por el sesgo por lado ──────────────────────
+
+BIAS = {"home": 0.04, "draw": -0.02, "away": -0.02}
+
+
+def test_the_pick_uses_the_1x2_after_the_side_bias_like_the_pipeline():
+    from src.models import program_picks as PP
+    from tests.test_program_picks import _mvs, _u
+    row = _mvs(model=(0.48, 0.25, 0.27), over=None, btts=None)        # Pinnacle de _u: ≈ 43 / 26 / 28
+    pk, why = PP.decide(row, _u())
+    assert pk["market"] == "home_win" and why is None                     # crudo: 5 pts, pasa la regla
+    pk, why = PP.decide(row, _u(), bias=BIAS)
+    assert pk["market"] == "home_win" and why == PP.NO_EDGE               # corregido: ~44%, sin ventaja
+    assert pk["model"] == pytest.approx(0.44, abs=0.005)
+    assert PP.model_1x2(row) == [0.48, 0.25, 0.27]
+
+
+def test_the_dashboard_bar_is_the_corrected_1x2_the_same_as_the_pick():
+    from dashboard import visibility as V
+    kick = pd.Timestamp("2030-01-05 19:00", tz="UTC")
+    mvs = pd.DataFrame([{"match": "brest vs nice", "match_date": kick, "league": "soccer_france_ligue_one",
+                         "p_home": 0.48, "p_draw": 0.25, "p_away": 0.27, "pin_home": 0.43, "pin_draw": 0.26,
+                         "pin_away": 0.31, "lam_home": 1.5, "lam_away": 1.1, "p_over25": 0.5, "p_btts": 0.5,
+                         "created_at": kick, "skipped_at": pd.NaT}])
+    (m,) = V.predictions(mvs, pd.DataFrame(columns=["home_team_norm", "away_team_norm"]), set(), bias=BIAS)
+    assert [round(s["model"], 2) for s in m["sides"]] == [0.44, 0.27, 0.29]
+
+
+def test_the_snapshot_reads_the_side_bias_with_its_own_engine():
+    import json
+    from src.models import program_picks as PP
+    from tests.fake_db import FakeResult
+    eng = FakeEngine(lambda sql, p: FakeResult(rows=[(json.dumps(BIAS),)]) if "model_state" in sql else FakeResult())
+    assert PP.load_bias(eng) == BIAS
+    assert PP.load_bias(FakeEngine()) is None                             # sin aprender todavía: el crudo
