@@ -136,6 +136,8 @@ def dash(monkeypatch):
             return pd.DataFrame([{"date": "2026-10-21", "balance": 63.39}])
         if "FROM model_proposals" in s:
             return pd.DataFrame(columns=["match_date", "market", "odds", "result"])
+        if "FROM espn_matches" in s:                 # copas y amistosos (22-oct-26): ninguno aquí
+            return pd.DataFrame()
         raise AssertionError(s[:90])
     monkeypatch.setattr(d, "_q", fake_q)
     return d

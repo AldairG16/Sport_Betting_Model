@@ -118,7 +118,8 @@ function formBadges(ms){
   var h = '<div class="form">';
   for (var i = 0; i < ms.length; i++) {
     var m = ms[i];
-    h += '<span class="f ' + m.result + '" title="' + esc(shortDate(m.date) + ' · ' + (m.venue === 'L' ? 'vs ' : 'en ') + m.opponent + ' · ' + m.score) + '">' + m.result + '</span>';
+    h += '<span class="f ' + m.result + '"' + (m.friendly ? ' style="opacity:.45"' : '') + ' title="' +
+         esc(shortDate(m.date) + ' · ' + (m.venue === 'L' ? 'vs ' : 'en ') + m.opponent + ' · ' + m.score + (m.league ? ' · ' + m.league : '')) + '">' + m.result + '</span>';
   }
   return h + '</div>';
 }
@@ -126,14 +127,16 @@ function teamPanel(t){
   var h = '<div class="tp"><h3>' + esc(t.team) + '</h3>';
   if (!t.summary) return h + '<div class="muted small">Sin partidos anteriores</div></div>';
   var s = t.summary;
+  // v2.3: todas las competiciones; los amistosos se ven pero no cuentan en los promedios
   h += formBadges(t.matches) + '<div class="small muted">Goles ' + s.goals_for + ' - ' + s.goals_against +
        (s.corners_for !== null ? ' · Córners ' + s.corners_for + ' - ' + s.corners_against : '') +
-       (s.cards !== null ? ' · Tarjetas ' + s.cards : '') + '</div>';
-  h += '<table><thead><tr><th>Fecha</th><th>Rival</th><th>Res.</th><th>Córn.</th><th>Tarj.</th></tr></thead><tbody>';
+       (s.cards !== null ? ' · Tarjetas ' + s.cards : '') + (s.friendlies ? ' · sin amistosos' : '') + '</div>';
+  h += '<table><thead><tr><th>Fecha</th><th>Rival</th><th>Res.</th><th class="hide-sm">Comp.</th><th>Córn.</th><th>Tarj.</th></tr></thead><tbody>';
   for (var i = 0; i < t.matches.length; i++) {
     var m = t.matches[i], cls = m.result === 'G' ? 'pos' : m.result === 'P' ? 'neg' : '';
-    h += '<tr title="' + esc(m.xi ? m.xi.formation + ': ' + m.xi.players.join(', ') : '') + '"><td>' + shortDate(m.date) + '</td><td>' +
-         (m.venue === 'L' ? 'vs ' : '@ ') + esc(m.opponent) + '</td><td class="' + cls + '"><b>' + m.score + '</b></td><td>' +
+    h += '<tr' + (m.friendly ? ' style="opacity:.55"' : '') + ' title="' + esc(m.xi ? m.xi.formation + ': ' + m.xi.players.join(', ') : '') + '"><td>' + shortDate(m.date) + '</td><td>' +
+         (m.venue === 'L' ? 'vs ' : '@ ') + esc(m.opponent) + '</td><td class="' + cls + '"><b>' + m.score + '</b></td><td class="hide-sm small muted">' +
+         esc(m.league || '') + '</td><td>' +
          (m.corners ? m.corners[0] + '-' + m.corners[1] : '—') + '</td><td>' + (m.cards === null ? '—' : m.cards) + '</td></tr>';
   }
   h += '</tbody></table>';
@@ -145,7 +148,7 @@ function detailHtml(d){
   var h = '<div class="two">' + teamPanel(d.home) + teamPanel(d.away) + '</div>';
   if (d.h2h && d.h2h.length) {
     var x = [];
-    for (var i = 0; i < d.h2h.length; i++) x.push('<span title="' + esc(d.h2h[i].match) + '">' + shortDate(d.h2h[i].date) + ' <b>' + d.h2h[i].score + '</b></span>');
+    for (var i = 0; i < d.h2h.length; i++) x.push('<span title="' + esc(d.h2h[i].match + (d.h2h[i].league ? ' · ' + d.h2h[i].league : '')) + '">' + shortDate(d.h2h[i].date) + ' <b>' + d.h2h[i].score + '</b></span>');
     h += '<div class="h2h"><span class="muted">Entre ellos:</span> ' + x.join(' · ') + '</div>';
   }
   return h;
@@ -380,10 +383,10 @@ function loadTeam(key){
              '</div><div class="pk muted small">' + esc(x.league) + '</div><div></div></div></div>';
       }
     }
-    h += '<div class="day">Desde septiembre</div><div class="tbl"><table><thead><tr><th>Fecha</th><th>Rival</th><th></th><th>Res.</th><th>Córners</th><th>Tarjetas</th><th class="hide-sm">Liga</th></tr></thead><tbody>';
+    h += '<div class="day">Desde septiembre</div><div class="tbl"><table><thead><tr><th>Fecha</th><th>Rival</th><th></th><th>Res.</th><th>Córners</th><th>Tarjetas</th><th class="hide-sm">Competición</th></tr></thead><tbody>';
     for (var i = d.matches.length - 1; i >= 0; i--) {
       var m = d.matches[i], cls = m.result === 'G' ? 'pos' : m.result === 'P' ? 'neg' : '';
-      h += '<tr><td>' + shortDate(m.date) + '</td><td>' + esc(m.opponent) + '</td><td class="muted">' + (m.venue === 'L' ? 'Local' : 'Visita') +
+      h += '<tr' + (m.friendly ? ' style="opacity:.55" title="Amistoso: no cuenta en el récord ni en los promedios"' : '') + '><td>' + shortDate(m.date) + '</td><td>' + esc(m.opponent) + '</td><td class="muted">' + (m.venue === 'L' ? 'Local' : 'Visita') +
            '</td><td class="' + cls + '"><b>' + m.result + ' ' + m.gf + '-' + m.ga + '</b></td><td>' + (m.cf === null ? '—' : m.cf + '-' + m.ca) +
            '</td><td>' + (m.cards === null ? '—' : m.cards) + '</td><td class="hide-sm muted small">' + esc(m.league) + '</td></tr>';
     }
@@ -392,6 +395,7 @@ function loadTeam(key){
     var labels = [], gf = [], ga = [], cf = [], ca = [];
     for (var j = 0; j < d.matches.length; j++) {
       var mm = d.matches[j];
+      if (mm.friendly) continue;                // las gráficas, sin amistosos
       labels.push(shortDate(mm.date) + ' ' + mm.opponent);
       gf.push(mm.gf); ga.push(mm.ga); cf.push(mm.cf); ca.push(mm.ca);
     }

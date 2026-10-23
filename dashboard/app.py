@@ -629,9 +629,24 @@ def api_match():
                                                AND CAST(:d AS timestamptz) + INTERVAL '1 day'
         ORDER BY kickoff DESC LIMIT 60
     """, p)
-    if matches.empty and lineups.empty:
+    extra = _espn_history(p)
+    if matches.empty and lineups.empty and extra.empty:
         return _no_data("Sin partidos anteriores de estos equipos en la base")
-    return jsonify({"ok": True, **_md.match_detail(matches, lineups, home, away, when)})
+    return jsonify({"ok": True, **_md.match_detail(matches, lineups, home, away, when, extra)})
+
+
+def _espn_history(p: dict) -> pd.DataFrame:
+    """Copas, Champions, Europa y Conference League y amistosos de los dos
+    equipos (espn_matches, src/features/espn_history.py), con las columnas
+    de matches. Vacío si la tabla todavía no existe."""
+    return _q("""
+        SELECT kickoff AS date, competition AS league, kind, home AS h, away AS a, home_goals, away_goals,
+               home_corners, away_corners, home_cards, away_cards
+        FROM espn_matches
+        WHERE (home IN (:h, :a) OR away IN (:h, :a)) AND kickoff < :d
+          AND kickoff >= CAST(:d AS timestamptz) - INTERVAL '400 days'
+        ORDER BY kickoff DESC LIMIT 60
+    """, p)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -724,9 +739,14 @@ def api_board_team():
         SELECT match, match_date, league, p_home, p_draw, p_away FROM model_vs_sharp
         WHERE match_date >= NOW() AND (match LIKE :t1 OR match LIKE :t2) AND skipped_at IS NULL
     """, p)
-    if m.empty and up.empty:
+    extra = _q("""
+        SELECT kickoff AS date, competition AS league, kind, home AS h, away AS a, home_goals, away_goals,
+               home_corners, away_corners, home_cards, away_cards
+        FROM espn_matches WHERE kickoff >= CAST(:s AS date) AND (home = :t OR away = :t)
+    """, p)
+    if m.empty and up.empty and extra.empty:
         return _no_data("Sin partidos de este equipo desde septiembre")
-    return jsonify({"ok": True, **_b.team_view(t, m, up)})
+    return jsonify({"ok": True, **_b.team_view(t, m, up, extra)})
 
 
 @app.route("/api/board/charts")

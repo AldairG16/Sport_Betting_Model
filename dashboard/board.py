@@ -199,11 +199,16 @@ def team_list(matches: pd.DataFrame) -> list:
     return sorted(out, key=lambda e: (e["league"], e["name"]))
 
 
-def team_view(team: str, matches: pd.DataFrame, upcoming: pd.DataFrame) -> dict:
+def team_view(team: str, matches: pd.DataFrame, upcoming: pd.DataFrame, extra: pd.DataFrame | None = None) -> dict:
     """Los partidos del equipo desde SINCE (para la tabla y las gráficas),
-    sus promedios y sus próximos partidos con lo que dice el programa."""
+    sus promedios y sus próximos partidos con lo que dice el programa.
+    extra: espn_matches (copas, Europa, amistosos; 22-oct-26). Los amistosos
+    se listan pero no cuentan en el récord ni en los promedios."""
+    from dashboard.match_detail import merge_history
     rows = []
-    for r in (matches.to_dict("records") if not matches.empty else []):
+    merged = merge_history(matches.to_dict("records") if not matches.empty else [],
+                           extra.to_dict("records") if extra is not None and not extra.empty else [])
+    for r in merged:
         if team not in (r["h"], r["a"]):
             continue
         home = r["h"] == team
@@ -211,13 +216,15 @@ def team_view(team: str, matches: pd.DataFrame, upcoming: pd.DataFrame) -> dict:
         gf, ga = (hg, ag) if home else (ag, hg)
         c = _corners(r)
         cf, ca = (None, None) if c is None else ((c[0], c[1]) if home else (c[1], c[0]))
-        rows.append({"date": _day(r["date"]).strftime("%Y-%m-%d"), "league": league_name(r["league"]),
+        rows.append({"date": _day(r["date"]).strftime("%Y-%m-%d"), "league": r.get("label") or league_name(r["league"]),
+                     "friendly": r.get("kind") == "amistoso",
                      "opponent": team_name(r["a"] if home else r["h"]), "venue": "L" if home else "V",
                      "gf": gf, "ga": ga, "result": "G" if gf > ga else ("E" if gf == ga else "P"),
                      "cf": cf, "ca": ca, "cards": _cards(r),
                      "key": f"{r['h']} vs {r['a']}"})
     rows.sort(key=lambda x: x["date"])
-    n = len(rows)
+    off = [r for r in rows if not r["friendly"]]
+    n = len(off)
     avg = lambda xs: round(sum(xs) / len(xs), 2) if xs else None
     nxt = []
     for u in (upcoming.to_dict("records") if not upcoming.empty else []):
@@ -230,12 +237,12 @@ def team_view(team: str, matches: pd.DataFrame, upcoming: pd.DataFrame) -> dict:
                     "probs": None if None in probs else [round(x, 3) for x in probs]})
     nxt.sort(key=lambda x: x["date"])
     return {"team": team_name(team), "key": team, "matches": rows, "upcoming": nxt,
-            "record": {"w": sum(r["result"] == "G" for r in rows), "d": sum(r["result"] == "E" for r in rows),
-                       "l": sum(r["result"] == "P" for r in rows)},
-            "avg": {"gf": avg([r["gf"] for r in rows]), "ga": avg([r["ga"] for r in rows]),
-                    "cf": avg([r["cf"] for r in rows if r["cf"] is not None]),
-                    "ca": avg([r["ca"] for r in rows if r["ca"] is not None]),
-                    "cards": avg([r["cards"] for r in rows if r["cards"] is not None])} if n else None}
+            "record": {"w": sum(r["result"] == "G" for r in off), "d": sum(r["result"] == "E" for r in off),
+                       "l": sum(r["result"] == "P" for r in off)},
+            "avg": {"gf": avg([r["gf"] for r in off]), "ga": avg([r["ga"] for r in off]),
+                    "cf": avg([r["cf"] for r in off if r["cf"] is not None]),
+                    "ca": avg([r["ca"] for r in off if r["ca"] is not None]),
+                    "cards": avg([r["cards"] for r in off if r["cards"] is not None])} if n else None}
 
 
 def bankroll_series(hist: pd.DataFrame) -> dict:
