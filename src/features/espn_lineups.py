@@ -87,6 +87,9 @@ def parse_scoreboard(data: dict | None) -> list:
         teams = {c.get("homeAway"): c.get("team", {}).get("displayName") for c in comp.get("competitors", [])}
         if not teams.get("home") or not teams.get("away") or not e.get("date"):
             continue
+        # el partido de estrellas (MLS vs Liga MX) no es de ningún equipo nuestro
+        if any("all star" in str(teams[s]).lower() or "all-star" in str(teams[s]).lower() for s in ("home", "away")):
+            continue
         out.append({"event": str(e.get("id")), "kick": pd.Timestamp(e["date"]).to_pydatetime(),
                     "home": teams["home"], "away": teams["away"],
                     "completed": bool(e.get("status", {}).get("type", {}).get("completed"))})

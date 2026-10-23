@@ -314,6 +314,52 @@ def check_names_without_history(days: int = 10) -> list:
     return missing + split
 
 
+def off_canon(names, canon: set, normalize=normalize_team) -> list:
+    """Función pura: [(nombre, normalizado)] de los nombres que, ya
+    normalizados, no son ningún equipo de `matches`."""
+    out = []
+    for n in sorted({x for x in names if isinstance(x, str) and x}):
+        m = normalize(n)
+        if m not in canon:
+            out.append((n, m))
+    return out
+
+
+def check_source_names(days: int = 120) -> list:
+    """Para el weekly (23-oct-26): los nombres de las tablas de OTRAS fuentes
+    contra los de `matches`. Un nombre que no cuadra no se encuentra al buscar:
+    24 equipos de las 5 grandes perdieron el xG real (Understat) y 24 tenían
+    las alineaciones (ESPN) partidas en dos nombres. ERROR por tabla.
+    Solo los equipos de nuestras ligas: los rivales de copa de cuarta división
+    (espn_matches) no tienen por qué estar en `matches`."""
+    from config.database import engine
+    with engine.connect() as conn:
+        canon = {r[0] for r in conn.execute(text("""
+            SELECT DISTINCT LOWER(home_team) FROM matches WHERE date >= CURRENT_DATE - 730
+            UNION SELECT DISTINCT LOWER(away_team) FROM matches WHERE date >= CURRENT_DATE - 730"""))}
+        sources = {
+            "team_xg_real (Understat)": [r[0] for r in conn.execute(text("SELECT DISTINCT team FROM team_xg_real"))],
+            "player_club_goals (Understat)": [str(r[0]).split(",")[-1] for r in conn.execute(text(
+                "SELECT DISTINCT team FROM player_club_goals WHERE updated_at >= NOW() - INTERVAL '60 days'"))],
+            # alineaciones de las ligas que predecimos (no las de copas)
+            "lineups (ESPN)": [r[0] for r in conn.execute(text("""
+                SELECT DISTINCT team FROM lineups
+                WHERE kickoff >= NOW() - make_interval(days => :d) AND sport_key NOT LIKE 'soccer_uefa%%'
+                  AND sport_key NOT LIKE 'soccer_conmebol%%' AND sport_key <> 'soccer_china_superleague'"""), {"d": days})],
+        }
+    out = []
+    for name, values in sources.items():
+        bad = off_canon(values, canon)
+        if bad:
+            out.append((name, bad))
+            log.error(f"❌ Nombres de {name} que no son ningún equipo de matches: " + "; ".join(
+                f"'{n}'" + (f" → '{m}'" if m != n.lower() else "") for n, m in bad[:8])
+                + " → falta el alias en TEAM_NAME_MAP")
+    if not out:
+        print("✅ Nombres de Understat y ESPN: todos cuadran con matches")
+    return out
+
+
 def check_new_aliases(merge=None, verbose: bool = True) -> list:
     """
     Para el weekly: avisa (ERROR) los pares nuevos que siguen pendientes.

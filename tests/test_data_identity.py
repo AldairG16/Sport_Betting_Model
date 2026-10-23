@@ -75,8 +75,24 @@ def test_a_failed_download_is_a_failure_not_a_missing_file():
 
     def boom(u, timeout):
         raise TimeoutError("read timed out")
-    df, why = fetch_csv(E0, get=boom)
+    slept = []
+    df, why = fetch_csv(E0, get=boom, sleep=slept.append)
     assert df is None and why.startswith("descarga falló: TimeoutError") and not is_missing(why)
+    assert slept == [10, 30]                                   # se reintentó dos veces antes de rendirse
+
+
+def test_a_timeout_is_retried_and_the_download_recovers():
+    # el weekly del 19-oct perdió 10 descargas por timeouts de football-data (23-oct-26)
+    from src.utils.football_data import fetch_csv
+    calls = []
+
+    def flaky(u, timeout):
+        calls.append(u)
+        if len(calls) == 1:
+            raise TimeoutError("read timed out")
+        return _R(u, 200, CSV)
+    df, why = fetch_csv(E0, get=flaky, sleep=lambda s: None)
+    assert why == "" and len(df) == 10 and len(calls) == 2
 
 
 def test_check_division():

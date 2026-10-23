@@ -68,19 +68,33 @@ def file_name(url: str) -> str:
     return PurePosixPath(urlparse(str(url or "")).path).name
 
 
-def fetch_csv(url: str, timeout: int = 30, get=None) -> tuple[pd.DataFrame | None, str]:
+RETRY_PAUSES = (10, 30)       # segundos antes de cada reintento de red
+
+
+def fetch_csv(url: str, timeout: int = 30, get=None, pauses=RETRY_PAUSES, sleep=None) -> tuple[pd.DataFrame | None, str]:
     """
     (datos, "") o (None, motivo). Motivos: la descarga falló, el servidor
     mandó OTRO archivo (el pedido no existe), HTTP distinto de 200, archivo
     vacío o CSV ilegible. `get` es inyectable para los tests.
+
+    Un fallo de RED (timeout, conexión) se reintenta tras `pauses` (23-oct-26:
+    el weekly del 19-oct perdió 10 descargas por timeouts de football-data, y
+    una liga quedaba una semana sin resultados). Lo demás no se reintenta.
     """
     if get is None:
         import requests
         get = requests.get
-    try:
-        r = get(url, timeout=timeout)
-    except Exception as e:
-        return None, f"descarga falló: {type(e).__name__}: {str(e)[:160]}"
+    if sleep is None:
+        import time
+        sleep = time.sleep
+    for k in range(len(pauses) + 1):
+        try:
+            r = get(url, timeout=timeout)
+            break
+        except Exception as e:
+            if k == len(pauses):
+                return None, f"descarga falló: {type(e).__name__}: {str(e)[:160]}"
+            sleep(pauses[k])
     asked, got = file_name(url), file_name(getattr(r, "url", "") or url)
     if got.lower() != asked.lower():
         return None, f"no existe: el servidor redirige {asked} a {got}"

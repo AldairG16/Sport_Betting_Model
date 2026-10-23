@@ -7,6 +7,33 @@ TEAM_NAME_MAP = {
     # EXISTENTE
     # =========================
     "atletico madrid": "ath madrid",
+    # Nombres de ESPN (lineups, espn_matches; 23-oct-26): la historia de
+    # alineaciones de estos equipos estaba partida en dos nombres
+    "houston dynamo fc": "houston dynamo",
+    "chicago fire fc": "chicago fire",
+    "red bull new york": "new york red bulls",   # → "ny red bulls" en el 2.º paso de alias
+    "red bull bragantino": "bragantino",
+    "atletico de san luis": "atl san luis",
+    "belgrano (cordoba)": "belgrano",
+    "sarmiento (junin)": "sarmiento junin",
+    "talleres (cordoba)": "talleres cordoba",
+    "gimnasia (mendoza)": "gimnasia mendoza",
+    "union (santa fe)": "union santa fe",
+    "instituto (cordoba)": "instituto",
+    "central cordoba (santiago del estero)": "central cordoba",
+    "estudiantes de la plata": "estudiantes",
+    "jef united ichihara chiba": "jef united chiba",
+    "machida zelvia": "fc machida zelvia",
+    "tokyo verdy 1969": "tokyo verdy",
+    "kyoto sanga": "kyoto purple sanga",
+    "afc bournemouth": "bournemouth",
+    "brighton & hove albion": "brighton",
+    "olympiacos": "olympiakos piraeus",
+    "union st gilloise": "union saint gilloise",
+    "stade rennais": "rennes",
+    "1 fc heidenheim 1846": "heidenheim",
+    "1 fc nurnberg": "nurnberg",
+    "1 fc magdeburg": "magdeburg",
     # Nombres de Understat (team_xg_real, player_club_goals; 23-oct-26)
     "borussia mgladbach": "gladbach",
     "mainz 05": "mainz",
