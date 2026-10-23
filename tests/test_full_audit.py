@@ -105,7 +105,8 @@ def test_a_feature_that_stops_arriving_is_an_error():
 
 def test_data_health_flags_each_known_class_of_bad_data():
     from src.utils.output_checks import data_health
-    fresh = {"team_xg_real": 3, "club_elo": 1, "espn_matches": 0}
+    fresh = {"team_xg_real": 3, "club_elo": 1, "espn_matches": 0, "upcoming_matches": 0, "odds_history": 0,
+             "kalshi_history": 1, "model_vs_sharp": 0, "program_picks": 0}
     assert data_health({"mirror": 0, "future": 0, "duplicate": 0}, fresh) == []
     assert data_health({"mirror": 3, "future": 0, "duplicate": 0}, fresh) == []   # coincidencias reales
     msgs = data_health({"mirror": 40, "future": 2, "duplicate": 5}, {**fresh, "club_elo": 15, "espn_matches": None})

@@ -851,7 +851,14 @@ córners que nadie lee, en una sola transacción de ~70 s. Chocaba con el closin
   tiros llegan a menos del 20-25% de los partidos evaluados, o el xG real a menos del 80% en
   las 5 grandes. Lo normal: H2H ~98%, córners y tiros ~65%, xG real 100%.
 - `output_checks.data_health`, diario: fechas espejo, resultados con fecha futura, partidos
-  repetidos en 120 días, y `team_xg_real`, `club_elo` y `espn_matches` al día.
+  repetidos en 120 días, y que cada fuente esté al día (`FEED_MAX_AGE_DAYS`):
+  - `upcoming_matches`, `odds_history` y `program_picks`: 1 día;
+  - `model_vs_sharp` y `kalshi_history`: 2 días;
+  - `espn_matches`: 3 días;
+  - `team_xg_real`: 9 días;
+  - `club_elo`: 10 días.
+
+  Una tabla que todavía no existe (instalación nueva) no cuenta.
 
 **Nombres de otra fuente: siempre por `normalize_team` (23-oct-2026).** `team_xg_real` guarda el
 nombre de Understat ("Bayern Munich", "VfB Stuttgart") y `get_real_xg` lo comparaba tal cual con
