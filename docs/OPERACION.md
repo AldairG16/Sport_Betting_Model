@@ -762,12 +762,15 @@ DFB-Pokal y dos amistosos de la fecha FIFA.
   del 22-oct, y 37 pasarían a "fatigado". Cambia el pronóstico, así que se mide contra
   Pinnacle antes de activarlo.
 
-**Una conexión muerta no falla: espera (22-oct-2026).** Neon corta las conexiones inactivas,
-y `config/database.py` no tenía `pool_pre_ping` ni keepalives de TCP. Dos ensayos del pipeline
-se quedaron una hora esperando dentro de una consulta (`get_team_cards`), sin error. Ahora
-`pool_pre_ping=True` descarta la conexión del pool que ya no responde, y los keepalives
-(30 s, 10 s × 5) convierten en error, en ~1.5 min, la que muere a media consulta. El
-dashboard ya tenía `pool_pre_ping` y `pool_recycle`.
+**La base está en Oregon: cada consulta es un viaje de red (22-oct-2026).** Neon está en
+`us-west-2`. Una consulta típica tarda 3.5 ms dentro del servidor y ~165 ms en total desde la
+PC del dueño. Esa PC sale a internet por el exit node de Tailscale "GDL-VPN" (ping a 8.8.8.8:
+97 ms), y una consulta de pandas son ~3 viajes (pedir la conexión, la consulta, el rollback).
+Un ensayo del pipeline desde esa PC (miles de consultas) tarda ~1 h; en GitHub, ~7 min.
+- `config/database.py` lleva `pool_recycle=240` (Neon corta conexiones inactivas) y
+  keepalives de TCP, sin `pool_pre_ping`: agrega un viaje por consulta (+166 ms medidos).
+- El 22-oct se agregó `pool_pre_ping` creyendo que los ensayos se colgaban en conexiones
+  muertas. Eran lentos, no estaban colgados; se quitó el mismo día.
 
 **Un NaN no falla: se propaga (22-oct-2026).**
 - **Elo.** `compute_elo` leía también los partidos sin marcador: K = NaN contagiaba a los dos
