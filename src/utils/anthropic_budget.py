@@ -17,6 +17,9 @@ Ajustable vía env var ANTHROPIC_DAILY_BUDGET_USD.
 """
 
 from sqlalchemy import text
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 
 # ============================================================
@@ -98,7 +101,7 @@ def get_daily_spent_usd(engine) -> float | None:
             )).first()
         return float(r.cost_usd) if r else 0.0
     except Exception as e:
-        print(f"⚠️  anthropic_usage ilegible — el presupuesto se trata como agotado: {e}")
+        log.warning(f"⚠️  anthropic_usage ilegible — el presupuesto se trata como agotado: {e}")
         return None
 
 
@@ -167,7 +170,8 @@ def record_call(engine, input_tokens: int, output_tokens: int,
                 "w": int(web_searches), "c": float(cost),
             })
     except Exception as e:
-        print(f"⚠️  No se pudo grabar anthropic_usage: {e}")
+        # sin el registro, el tope diario no ve este gasto (23-oct-26: ERROR)
+        log.error(f"❌ No se pudo grabar anthropic_usage (el tope no verá ${cost:.4f}): {e}")
     return cost
 
 

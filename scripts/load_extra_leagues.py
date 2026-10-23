@@ -102,11 +102,11 @@ def _download_csv(code: str) -> pd.DataFrame | None:
 
 
 def _normalize_date(date_str: str) -> str | None:
-    """Convierte fecha de DD/MM/YYYY a YYYY-MM-DD."""
-    try:
-        return pd.to_datetime(date_str, dayfirst=True).strftime("%Y-%m-%d")
-    except Exception:
-        return None
+    """Convierte fecha de DD/MM/YYYY a YYYY-MM-DD (formato explícito: con
+    dayfirst sin formato, una fecha ISO sale con el día y el mes cruzados)."""
+    from src.utils.dates import parse_match_date
+    d = parse_match_date(date_str)
+    return d.strftime("%Y-%m-%d") if d is not None else None
 
 
 def season_start(value) -> int | None:

@@ -420,6 +420,8 @@ def real_bets_with_state(learned: dict, real_bets: list) -> list:
 # cumplir λ_total = 2.5·tempo y λ_home/λ_away = home_advantage. Aplicarlo
 # como multiplicador solo a λ_home dejaba el total en (1+HA)·baseline·tempo
 # (+23% de goles esperados medido en producción — ronda 4, D4/D8).
+BIG5_LEAGUES = ("soccer_epl", "soccer_spain_la_liga", "soccer_germany_bundesliga",
+                "soccer_italy_serie_a", "soccer_france_ligue_one")   # xG real de Understat
 LAMBDA_CAP = 3.5   # guardia de cola (simulado: recorta ~1% de ratings legítimos)
 
 def compute_lambdas(home_attack, home_defense, away_attack, away_defense,
@@ -742,6 +744,10 @@ def _stage_team_strengths(row, stats):
     away_xg = _credible_xg(get_real_xg(away)) or _credible_xg(get_team_xg(away))
     _xg_source = "understat" if (home_xg and home_xg.get("source") == "understat"
                                  and away_xg and away_xg.get("source") == "understat") else "proxy"
+    # cobertura del xG real en las 5 grandes (output_checks.feature_coverage)
+    if _row_league_of(row) in BIG5_LEAGUES:
+        stats['big5'] += 1
+        stats['xg_real_big5'] += _xg_source == "understat"
 
     if home_xg:
         home_attack  = home_attack  * (1 - XG_WEIGHT) + home_xg["xg_for"]     * XG_WEIGHT
@@ -3027,6 +3033,7 @@ def run_prediction_pipeline(dry_run: bool = False):
             _skip(row)
             return
         M, Q = _stage_model_probabilities(row, T, L, ctx, stats)
+        stats['evaluated'] += 1
         _stage_side_bias(row, T, M, ctx, model_sharp_records, L)
         market_probs, market_probs_raw = _stage_market_probabilities(row, Q, M.p_ah_home)
         probabilities, model_deviation, signed_deviation = _stage_blend(
@@ -3186,6 +3193,12 @@ def run_prediction_pipeline(dry_run: bool = False):
         # tuvo 3 semanas los goles esperados en el tope sin que nada fallara.
         from src.utils.output_checks import pipeline_invariants
         for problem in pipeline_invariants(model_sharp_records):
+            log.error(f"❌ {problem}")
+        # Lo que ENTRA al modelo (23-oct-26): una feature que de pronto no
+        # aporta en ningún partido (una consulta rota, un nombre que no cuadra)
+        # devolvía "sin dato" para todos sin que nada fallara.
+        from src.utils.output_checks import feature_coverage
+        for problem in feature_coverage(stats):
             log.error(f"❌ {problem}")
     if stats['sharp_no_value'] or stats['sharp_no_ref']:
         print(f"🔒 Filtro Pinnacle: {stats['sharp_no_value']} sin valor frente a Pinnacle · "

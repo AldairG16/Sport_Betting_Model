@@ -22,6 +22,9 @@ from sqlalchemy import text
 sys.path.append(str(Path(__file__).parent.parent))
 
 from config.database import engine
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 from src.models.calibration_monitor import CALIBRATION_HOLDOUT_DAYS, CALIBRATION_WINDOW_DAYS
 
 HALF_WIN = {"win": 1.0, "half_win": 0.5, "push": 0.0, "half_loss": 0.0, "loss": 0.0}
@@ -31,7 +34,7 @@ def evaluate_holdout() -> dict:
     try:
         return _evaluate_holdout_inner()
     except Exception as e:
-        print(f"❌ evaluate_holdout: {e}")
+        log.error(f"❌ evaluate_holdout: {type(e).__name__}: {e}")
         return {"status": "error", "error": str(e)}
 
 

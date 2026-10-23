@@ -7,9 +7,9 @@ if hasattr(sys.stdout, "reconfigure"):
 
 import json
 
-import pandas as pd
 from sqlalchemy import text
 from config.database import engine
+from src.utils.dates import parse_match_dates
 from src.utils.team_normalizer import normalize_team
 from src.utils.db_batch import insert_ignore_conflicts, describe
 from src.utils.football_data import (HISTORY_LEAGUES, SEASON_LEAGUES, SEASON_URL,
@@ -123,7 +123,7 @@ def load_historical_data():
 
             df["league"] = league
             df["season"] = int(s[:2]) + 2000
-            df["date"] = pd.to_datetime(df["date"], dayfirst=True, errors="coerce")
+            df["date"] = parse_match_dates(df["date"]).values   # formato explícito (src/utils/dates.py)
             df = df.dropna(subset=["date"])
             df["home_team"] = df["home_team"].apply(normalize_team)
             df["away_team"] = df["away_team"].apply(normalize_team)

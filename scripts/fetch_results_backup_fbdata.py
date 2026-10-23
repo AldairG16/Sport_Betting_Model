@@ -108,8 +108,10 @@ def _normalize_and_clean(df: pd.DataFrame, league: str, season_start: int) -> pd
             "home_red", "away_red", "home_goals_ht", "away_goals_ht"]
     df = df[[c for c in keep if c in df.columns]].copy()
 
-    # Parse date (football-data usa DD/MM/YYYY o DD/MM/YY)
-    df["date"] = pd.to_datetime(df["date"], dayfirst=True, errors="coerce")
+    # Parse date (football-data usa DD/MM/YYYY o DD/MM/YY), con formato
+    # explícito: dayfirst sin formato cruza día y mes en las fechas ISO
+    from src.utils.dates import parse_match_dates
+    df["date"] = parse_match_dates(df["date"]).values
     df = df.dropna(subset=["date"])
 
     # Filtrar filas sin resultado final (fixtures futuros)

@@ -314,6 +314,10 @@ def test_daily_check_skips_the_picks_table_until_it_exists(monkeypatch):
         s = " ".join(str(sql).split())
         if "FROM program_picks" in s:
             raise RuntimeError('relation "program_picks" does not exist')
+        if s.startswith("SELECT COUNT(*) FROM matches"):          # datos de entrada (23-oct-26): sanos
+            return pd.DataFrame([[0]])
+        if s.startswith("SELECT MAX(") and " AS t FROM " in s:
+            return pd.DataFrame([{"t": now}])
         if "AS bets" in s:
             return pd.DataFrame([{"bets": 0, "shadow": 0, "props": 0}])
         if "model_state" in s:
