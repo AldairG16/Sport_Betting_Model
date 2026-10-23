@@ -44,7 +44,7 @@ lesiones y calendarios pueden haber cambiado, así que busca noticias de este pa
 de responder.
 
 Te doy un partido que arranca en menos de una hora y los titulares habituales que NO salen
-en la alineación de un equipo. Decide si ese equipo sale de verdad debilitado:
+en la alineación del equipo (o los equipos) con bajas. Decide si sale de verdad debilitado:
 - CONFIRMA: las bajas son por lesión, sanción u otra causa que debilita al equipo, y no hay
   noticias que indiquen que el rival no lo aprovechará.
 - DESCARTA: las bajas son descanso planeado (otro partido más importante cerca, ya
@@ -58,16 +58,23 @@ Responde SOLO con un objeto JSON, sin texto antes ni después:
 
 
 def _user_message(group: list) -> str:
+    """Las alertas de UN partido (23-oct-26: una revisión por partido, no por
+    equipo); puede haber bajas en los dos equipos."""
     a = group[0]
-    rival = a["away"] if a["weakened"] == a["home"] else a["home"]
-    kick = a["kickoff"]
     lines = [f"Partido: {a['home']} (local) vs {a['away']} (visitante), {a['sport_key']}, "
-             f"inicio {kick} UTC.",
-             f"Equipo con bajas: {a['weakened']}. Rival: {rival}.",
-             f"Titulares habituales que no salen: {', '.join(a['missing']) or 'ninguno'}."]
-    if a.get("top_scorer_out"):
-        lines.append(f"Entre ellos su goleador: {a['top_scorer_out']}.")
-    lines.append(f"Pinnacle le da al rival {a['pin_prob'] * 100:.0f}% en '{a['market']}'.")
+             f"inicio {a['kickoff']} UTC."]
+    seen = set()
+    for x in group:
+        if x["weakened"] in seen:
+            continue
+        seen.add(x["weakened"])
+        rival = x["away"] if x["weakened"] == x["home"] else x["home"]
+        lines.append(f"Equipo con bajas: {x['weakened']} (rival: {rival}). Titulares habituales que no "
+                     f"salen: {', '.join(x['missing']) or 'ninguno'}.")
+        if x.get("top_scorer_out"):
+            lines.append(f"Entre ellos su goleador: {x['top_scorer_out']}.")
+    for x in group:
+        lines.append(f"Pinnacle le da {x['pin_prob'] * 100:.0f}% a '{x['market']}'.")
     return "\n".join(lines)
 
 
@@ -121,8 +128,9 @@ def weekly_spent(engine) -> float | None:
 
 def review_alert(group: list, engine=None, client=None, now=None) -> dict | None:
     """
-    {"verdict", "absences", "reason", "cost"} para las alertas de un equipo en
-    un partido, o None (sin tope, sin clave, error o sin respuesta usable).
+    {"verdict", "absences", "reason", "cost"} para las alertas de un partido
+    (uno o los dos equipos), o None (sin tope, sin clave, error o sin respuesta
+    usable).
     """
     from src.utils.anthropic_budget import (can_call, estimate_call_cost,
                                             extract_usage_from_response, record_call)
@@ -176,7 +184,7 @@ def review_line(review: dict | None) -> str:
     """Renglón del mensaje de Telegram."""
     if not review or not review.get("verdict"):
         return ""
-    head = {"CONFIRMA": "🔎 Claude revisó noticias: <b>confirma</b>",
-            "DUDA": "🔎 Claude revisó noticias: <b>sin información clara</b>",
-            "DESCARTA": "🔎 Claude revisó noticias: <b>sugiere no apostar</b>"}[review["verdict"]]
+    head = {"CONFIRMA": "🔎 Claude: <b>confirma las bajas</b>",
+            "DUDA": "🔎 Claude: <b>sin información clara</b>",
+            "DESCARTA": "🔎 Claude: <b>no apuestes al rival</b>"}[review["verdict"]]
     return f"{head} — {review['reason']}" if review.get("reason") else head

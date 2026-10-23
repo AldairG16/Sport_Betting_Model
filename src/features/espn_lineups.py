@@ -18,7 +18,18 @@ queda por medir es si una casa como PlayDoit tarda en ajustar después de que
 sale la alineación.
 
 Los nombres se guardan con normalize_team; en un partido por jugar, con los
-nombres y la hora del sistema (mismo emparejamiento que Kalshi).
+nombres y la hora del sistema.
+
+Emparejamiento estricto (23-oct-26): el de Kalshi sumaba el parecido de los
+dos nombres y una palabra larga compartida contaba como nombre igual. El
+23-oct la alineación de Gimnasia Mendoza vs Platense se guardó también como
+la de Gimnasia LP vs Sarmiento ("gimnasia" = "gimnasia", Platense ~
+Sarmiento 0.26: suma 1.26) y el dueño recibió avisos de 8 y 9 titulares
+fuera que eran de otro partido; en el historial había 9 partidos de
+Argentina guardados con el equipo equivocado. Ahora cada nombre tiene que
+parecerse por separado (MIN_SIDE_SCORE), las palabras que comparten clubes
+distintos (central, independiente, gimnasia…) no bastan, y cada partido de
+ESPN va a un solo partido del sistema y viceversa (assign_events).
 """
 
 import json
@@ -34,6 +45,14 @@ log = get_logger(__name__)
 BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/{what}"
 HEADERS = {"User-Agent": "SportBettingModel/1.0"}
 TABLE = "lineups"
+UNNAMED_RETRY_DAYS = 3      # partido terminado sin su resultado en matches todavía: se reintenta
+MIN_SIDE_SCORE = 0.75       # parecido mínimo de CADA nombre (local y visitante)
+KICK_WINDOW_S = 90 * 60     # inicio de ESPN contra el del sistema
+# palabras que comparten clubes distintos: no alcanzan para decir "es el mismo"
+GENERIC_WORDS = {"central", "independiente", "estudiantes", "gimnasia", "racing", "atletico", "athletic",
+                 "deportivo", "sporting", "united", "union", "olympique", "dynamo", "dinamo", "rapid",
+                 "borussia", "wanderers", "rovers", "albion", "county", "academico", "nacional",
+                 "universidad", "america", "santa", "saint", "inter"}
 DDL = f"""
     CREATE TABLE IF NOT EXISTS {TABLE} (
         id BIGSERIAL PRIMARY KEY,
@@ -118,20 +137,66 @@ def parse_summary(data: dict | None) -> dict | None:
     return out if {"home", "away"} <= set(out) else None
 
 
+def name_score(a: str, b: str) -> float:
+    """Parecido de dos nombres de equipo (0-1): igual, una palabra propia de
+    5+ letras contenida en el otro ("sarmiento" en "sarmiento junin"), o el
+    parecido de las letras. Las palabras genéricas no cuentan como propias."""
+    import difflib
+    a, b = str(a or "").lower(), str(b or "").lower()
+    if a == b:
+        return 1.0
+    own = (lambda name, other: any(len(w) >= 5 and w not in GENERIC_WORDS and w in other.split()
+                                   for w in name.split()))
+    if own(a, b) or own(b, a):
+        return 1.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def pair_score(home: str, away: str, h: str, a: str) -> float | None:
+    """Parecido de un partido con otro (suma de los dos nombres) o None si
+    alguno de los dos nombres no se parece (MIN_SIDE_SCORE)."""
+    sh, sa = name_score(home, h), name_score(away, a)
+    return sh + sa if min(sh, sa) >= MIN_SIDE_SCORE else None
+
+
 def system_names(event: dict, candidates: list) -> tuple | None:
     """(local, visitante) con los nombres de `matches` del partido de ESPN, o
     None. candidates: [(fecha, local, visitante)] de la liga. Misma fecha ±1
-    día y el mejor parecido de los dos nombres (como Kalshi); si dos partidos
-    se parecen casi igual, no se adivina."""
-    from src.features.kalshi import _name_score
+    día y los dos nombres parecidos (pair_score); si dos partidos se parecen
+    casi igual, no se adivina."""
     from src.utils.team_normalizer import normalize_team
     h, a = normalize_team(event["home"]), normalize_team(event["away"])
     day = pd.Timestamp(event["kick"]).date()
-    scored = sorted(((_name_score(h, ch) + _name_score(a, ca), ch, ca) for d, ch, ca in candidates
-                     if abs((pd.Timestamp(d).date() - day).days) <= 1), reverse=True)
-    if not scored or scored[0][0] < 1.2 or (len(scored) > 1 and scored[0][0] - scored[1][0] < 0.3):
+    scored = sorted(((sc, ch, ca) for d, ch, ca in candidates
+                     if abs((pd.Timestamp(d).date() - day).days) <= 1
+                     for sc in [pair_score(h, a, ch, ca)] if sc is not None), reverse=True)
+    if not scored or (len(scored) > 1 and scored[0][0] - scored[1][0] < 0.3):
         return None
     return scored[0][1], scored[0][2]
+
+
+def assign_events(sport_key: str, events: list, fixtures: list) -> dict:
+    """{id de ESPN: (local, visitante, inicio)} con los partidos del sistema
+    (fixtures: [(liga, local, visitante, inicio)]): misma liga, inicio a
+    ±90 min, los dos nombres parecidos, y cada partido de ESPN con un solo
+    partido del sistema y viceversa (gana el más parecido)."""
+    from src.utils.team_normalizer import normalize_team
+    pairs = []
+    for ev in events:
+        eh, ea = normalize_team(ev["home"]), normalize_team(ev["away"])
+        for lg, h, a, k in fixtures:
+            if lg != sport_key or abs((pd.Timestamp(k) - pd.Timestamp(ev["kick"])).total_seconds()) > KICK_WINDOW_S:
+                continue
+            sc = pair_score(eh, ea, h, a)
+            if sc is not None:
+                pairs.append((sc, ev["event"], (h, a, k)))
+    out, taken = {}, set()
+    for sc, eid, fx in sorted(pairs, key=lambda x: -x[0]):
+        if eid in out or fx[:2] in taken:
+            continue
+        out[eid] = fx
+        taken.add(fx[:2])
+    return out
 
 
 def lineup_rows(sport_key: str, event: dict, summary: dict, home: str, away: str, kick) -> list:
@@ -211,6 +276,11 @@ def backfill_lineups(days: int = 10, leagues: dict | None = None, engine=None, g
                     continue
                 names = system_names(ev, cands)
                 if names is None:
+                    # recién jugado: su resultado todavía no está en matches; se
+                    # reintenta en la próxima corrida en vez de guardarlo con el
+                    # nombre de ESPN (que partía la historia del equipo, 23-oct-26)
+                    if ev["kick"].date() >= today - timedelta(days=UNNAMED_RETRY_DAYS):
+                        continue
                     unnamed += 1
                     names = (normalize_team(ev["home"]), normalize_team(ev["away"]))
                 summ = parse_summary(_get(slug, "summary", f"event={ev['event']}", get))
@@ -226,8 +296,6 @@ def backfill_lineups(days: int = 10, leagues: dict | None = None, engine=None, g
 def capture_upcoming(window_min: tuple = (5, 80), engine=None, get=None) -> list:
     """Alineaciones publicadas de los partidos del sistema que arrancan en la
     ventana (minutos). Devuelve las filas guardadas."""
-    from src.features.kalshi import match_fixture
-    from src.utils.team_normalizer import normalize_team
     if engine is None:
         from config.database import engine
     leagues = espn_leagues()
@@ -244,17 +312,53 @@ def capture_upcoming(window_min: tuple = (5, 80), engine=None, get=None) -> list
         events = []
         for day in {lo.date(), hi.date(), (lo - timedelta(days=1)).date()}:   # ESPN usa su propia fecha
             events += parse_scoreboard(_get(slug, "scoreboard", f"dates={day:%Y%m%d}", get))
-        seen = set()
-        for ev in events:
-            if ev["event"] in seen or not (lo - timedelta(minutes=90) <= ev["kick"] <= hi + timedelta(minutes=90)):
-                continue
-            seen.add(ev["event"])
-            m = match_fixture({"league": sport_key, "home": normalize_team(ev["home"]),
-                               "away": normalize_team(ev["away"]), "kick": ev["kick"]}, fixtures)
-            if not m:
-                continue
-            summ = parse_summary(_get(slug, "summary", f"event={ev['event']}", get))
+        uniq = {ev["event"]: ev for ev in events
+                if lo - timedelta(minutes=90) <= ev["kick"] <= hi + timedelta(minutes=90)}
+        for eid, m in assign_events(sport_key, list(uniq.values()), fixtures).items():
+            summ = parse_summary(_get(slug, "summary", f"event={eid}", get))
             if summ:
-                rows += lineup_rows(sport_key, ev, summ, m[0], m[1], m[2])
+                rows += lineup_rows(sport_key, uniq[eid], summ, m[0], m[1], m[2])
     save_lineups(engine, rows)
     return rows
+
+
+def identity_problems(rows: list, min_rows: int = 4, max_shared: int = 3) -> dict:
+    """Alineaciones guardadas con el partido o el equipo equivocado (23-oct-26):
+    shared_events = el mismo partido de ESPN guardado en más de un partido del
+    sistema; foreign = alineaciones (terminadas o por jugar) que comparten
+    max_shared o menos titulares con las terminadas de su equipo (con min_rows
+    o más).
+    rows: [{id, event_id, sport_key, kickoff, team, opponent, completed, starters}]."""
+    by_event = {}
+    for r in rows:
+        if r.get("event_id"):
+            # los equipos guardados con ese partido de ESPN: más de dos = está en
+            # más de un partido (el mismo guardado antes del inicio con la hora del
+            # sistema y ya terminado con la de ESPN no es un error)
+            by_event.setdefault(str(r["event_id"]), set()).add((r["sport_key"], r["team"]))
+    shared = sorted(e for e, teams in by_event.items() if len(teams) > 2)
+    done, by_team = {}, {}
+    for r in rows:
+        by_team.setdefault(r["team"], []).append(r)
+        if r.get("completed"):
+            done.setdefault(r["team"], []).append(r)
+    foreign = []
+    for team, rs in by_team.items():
+        for r in rs:
+            others = [o for o in done.get(team, []) if o["id"] != r["id"]]
+            if len(others) < min_rows - 1:
+                continue
+            pool = {p for o in others for p in (o["starters"] or [])}
+            if len(set(r["starters"] or []) & pool) <= max_shared:
+                foreign.append(r["id"])
+    return {"shared_events": shared, "foreign": sorted(foreign)}
+
+
+def load_identity_rows(engine) -> list:
+    with engine.connect() as conn:
+        if conn.execute(text(f"SELECT to_regclass('{TABLE}')")).scalar() is None:
+            return []
+        rows = conn.execute(text(
+            f"SELECT id, event_id, sport_key, kickoff, team, opponent, completed, starters FROM {TABLE}")).mappings().all()
+    load = (lambda v: v if isinstance(v, list) else json.loads(v or "[]"))
+    return [{**dict(r), "starters": load(r["starters"])} for r in rows]

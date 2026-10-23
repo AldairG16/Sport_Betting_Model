@@ -249,6 +249,8 @@ están todas las clases que ya pasaron, como chequeos que corren igual cada vez:
 | Elo | Ningún NaN | Weekly |
 | Ligas de ESPN | Cada código apunta a la liga correcta (`chi.1` era Chile) | Weekly |
 | Sesgo del modelo | Lo que queda de sesgo después de la corrección (`side_bias.residuals`), global y por región, en el 1X2, más de 2.5 y ambos anotan: avisa si pasa de 3 pt a 3 errores estándar (n ≥ 30). También si lo aprendido tiene más de 8 días | Weekly |
+| Alineaciones de ESPN | Que cada alineación sea de su partido y su equipo (`espn_lineups.identity_problems`): un partido de ESPN guardado con más de dos equipos, o alineaciones que no comparten jugadores con su equipo | Weekly |
+| Dixon-Coles al día | Que ningún equipo de los próximos 3 días con la historia que pide el ajuste (8+ partidos en 3 años) falte del ajuste Dixon-Coles: si falta, el ajuste es más viejo que la historia y sus partidos se saltan | Weekly |
 
 - Corre en el weekly (paso "Auditoría del sistema", después del ajuste Dixon-Coles); las
   salidas ya las revisó el evening.
@@ -1236,6 +1238,41 @@ casa como PlayDoit ajusta. No se puede medir con historia, solo en vivo.
     antigüedad del precio.
   - Una alerta por equipo, partido y mercado (`lineup_alerts`, `UNIQUE`). Una falla es
     ERROR.
+  - **Un mensaje por partido (23-oct-2026, a pedido del dueño):** llegaban dos, uno por
+    equipo, largos. Ahora es uno corto (`format_match`):
+    - quién falta en cada equipo (⚽ = su goleador; "completo" si no falta nadie);
+    - el momio mínimo del rival;
+    - la revisión de Claude, una por partido;
+    - el **pick del programa** (el del dashboard, `program_picks`) con cuándo sí apostarlo
+      (`pick_line`):
+      - si pasa la regla 🎯: "apuesta solo si PlayDoit paga X o más";
+      - si no la pasa: "no lo apuestes" y el motivo;
+      - si el pick es el equipo debilitado y Claude no descartó las bajas: no lo apuestes.
+  - **Emparejamiento estricto con ESPN (23-oct-2026).** El de Kalshi sumaba el parecido de
+    los dos nombres, y una palabra larga compartida contaba como nombre igual. Así, la
+    alineación de Gimnasia Mendoza vs Platense se guardó también como la de Gimnasia LP vs
+    Sarmiento, y llegaron avisos de 8 y 9 titulares fuera que no existían. En el historial
+    había 9 partidos de Argentina de ago-sep con el equipo equivocado.
+    - Ahora cada nombre tiene que parecerse por separado (`MIN_SIDE_SCORE` 0.75).
+    - Las palabras que comparten clubes distintos no bastan (`GENERIC_WORDS`: central,
+      independiente, gimnasia…).
+    - Cada partido de ESPN va a un solo partido del sistema y viceversa (`assign_events`).
+    - Medido con 2,129 partidos terminados de jun-oct: empareja igual que el viejo. Hicieron
+      falta 15 alias de ESPN (Deportivo, Internazionale, Sporting CP, Heart of Midlothian…).
+  - **Alineación ajena:** si el XI comparte menos de 5 jugadores con la plantilla de la
+    historia del equipo (`KNOWN_MIN`), no es la suya: no hay aviso, solo un warning.
+  - **Partido recién jugado sin resultado en `matches`:** se reintenta en la próxima corrida
+    (`UNNAMED_RETRY_DAYS`), en vez de guardarlo con el nombre de ESPN.
+  - **Limpieza del 23-oct** (`scripts/fix_lineup_identity.py --apply`; respaldo en
+    `lineups_identity_backup` y `lineup_alerts_backup`):
+    - 11 alineaciones ajenas a su equipo, re-descargadas con el emparejamiento nuevo;
+    - los 7 avisos falsos de Gimnasia Mendoza–Platense y Gimnasia LP–Sarmiento;
+    - 142 alineaciones de Chile guardadas como China (de cuando el código apuntaba a
+      `chi.1`);
+    - 144 filas con un nombre de ESPN que ahora tiene alias.
+  - **Lo vigila la auditoría del sistema** (chequeo "Alineaciones de ESPN",
+    `identity_problems`): un partido de ESPN guardado con más de dos equipos, o alineaciones
+    que no comparten jugadores con su equipo.
 - **Medición** (weekly, paso "Referencia Pinnacle", `resolve_alerts`):
   - **Precio de cierre:** la última foto de `odds_history` en los 150 min previos.
   - **Resultado:** de `matches`.
@@ -1253,8 +1290,8 @@ tope de **$0.50 por semana**.
   filtrado dinámico).
 - **Qué responde:** en JSON, si las bajas son lesión o sanción (`CONFIRMA`), descanso
   planeado con suplentes de nivel (`DESCARTA`) o falta de información (`DUDA`).
-- **Dónde queda:** el veredicto va en el mensaje ("Claude revisó noticias: confirma / sugiere
-  no apostar") y en `lineup_alerts` (`analyst_*`).
+- **Dónde queda:** el veredicto va en el mensaje ("Claude: confirma las bajas / no apuestes al
+  rival", una revisión por partido desde el 23-oct) y en `lineup_alerts` (`analyst_*`).
 - **Costo:** ~2-3 centavos por revisión, casi todo en búsquedas ($0.01 cada una).
 - **Topes:**
   - el semanal (`LINEUP_REVIEW_WEEKLY_USD`) se cuenta en `lineup_alerts.analyst_cost` de los
