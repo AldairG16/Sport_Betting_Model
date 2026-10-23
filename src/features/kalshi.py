@@ -15,6 +15,16 @@ diferencia).
 
 SOLO MIDE. API pública de lectura: sin clave y sin créditos de The Odds API.
 Se guarda en kalshi_history solo cuando el precio cambió (como odds_history).
+
+Emparejamiento (23-oct-26): sumaba el parecido de los dos nombres y una
+palabra larga compartida contaba como nombre igual; cuando el partido
+verdadero ya no estaba en la ventana, el de Gimnasia Mendoza vs Platense se
+guardó como Gimnasia LP vs Sarmiento ("gimnasia" + Platense~Sarmiento 0.26).
+Ahora cada nombre tiene que parecerse por separado (KALSHI_MIN_SIDE; Kalshi
+abrevia mucho, por eso más bajo que el de ESPN), las palabras genéricas no
+bastan, y un 1X2 de Kalshi a más de MAX_PIN_GAP de Pinnacle no es ese partido
+(se descarta todo lo de ese evento): Kalshi y Pinnacle difieren 0.74 pt en
+promedio (354 partidos).
 """
 
 import json
@@ -64,6 +74,8 @@ MAX_SPREAD = 0.08        # más de 8 centavos entre compra y venta no es un prec
 # se guarda la hora de inicio del sistema, no esta.
 END_OFFSET_H = {"GAME": 3, "1H": 3, "BTTS": 4, "TOTAL": 4}
 MATCH_WINDOW_S = 90 * 60
+KALSHI_MIN_SIDE = 0.5    # parecido mínimo de CADA nombre (Kalshi abrevia: "m gladbach", "bilbao")
+MAX_PIN_GAP = 0.10       # 1X2 de Kalshi contra el de Pinnacle: más lejos = otro partido
 
 KALSHI_DDL = """
     CREATE TABLE IF NOT EXISTS kalshi_history (
@@ -193,9 +205,11 @@ def _name_score(a: str, b: str) -> float:
     "frankfurt", "m gladbach"): una palabra larga contenida en el otro nombre
     cuenta como igual."""
     import difflib
+    from src.features.espn_lineups import GENERIC_WORDS
     if a == b:
         return 1.0
-    if any(len(w) >= 5 and w in b for w in a.split()) or any(len(w) >= 5 and w in a for w in b.split()):
+    own = (lambda x, y: any(len(w) >= 5 and w not in GENERIC_WORDS and w in y for w in x.split()))
+    if own(a, b) or own(b, a):
         return 1.0
     return difflib.SequenceMatcher(None, a, b).ratio()
 
@@ -204,9 +218,9 @@ def match_fixture(event: dict, fixtures) -> tuple | None:
     """
     (local, visitante, inicio) del partido del sistema que corresponde a un
     evento de Kalshi, o None (función pura). fixtures: [(liga, local,
-    visitante, inicio)]. Misma liga, inicio estimado a ±90 min y el mejor
-    parecido de los dos nombres; si dos partidos se parecen casi igual, no se
-    adivina.
+    visitante, inicio)]. Misma liga, inicio estimado a ±90 min, cada nombre
+    parecido por separado (KALSHI_MIN_SIDE) y el mejor de los dos; si dos
+    partidos se parecen casi igual, no se adivina.
     """
     ko = event["kick"]
     cands = []
@@ -215,7 +229,9 @@ def match_fixture(event: dict, fixtures) -> tuple | None:
         if lg != event["league"] or abs((k - ko).total_seconds()) > MATCH_WINDOW_S or (h, a) in seen:
             continue
         seen.add((h, a))
-        cands.append((_name_score(event["home"], h) + _name_score(event["away"], a), h, a, k))
+        sh, sa = _name_score(event["home"], h), _name_score(event["away"], a)
+        if min(sh, sa) >= KALSHI_MIN_SIDE:
+            cands.append((sh + sa, h, a, k))
     if not cands:
         return None
     cands.sort(reverse=True)
@@ -223,6 +239,44 @@ def match_fixture(event: dict, fixtures) -> tuple | None:
     if best[0] < 1.2 or (len(cands) > 1 and best[0] - cands[1][0] < 0.3):
         return None
     return best[1], best[2], best[3]
+
+
+def price_mismatches(rows: list, pinnacle: dict) -> set:
+    """Función pura: las claves (liga, local, visitante, inicio ISO) cuyo 1X2 de
+    Kalshi está a más de MAX_PIN_GAP del de Pinnacle (pinnacle: misma clave →
+    (local, empate, visitante) sin margen). Sin 1X2 o sin Pinnacle no se juzga."""
+    game = {}
+    for r in rows:
+        if r["market"] in ("home_win", "away_win"):
+            game.setdefault((r["league"], r["home"], r["away"], r["kickoff"]), {})[r["market"]] = r["prob"]
+    out = set()
+    for key, g in game.items():
+        pin = pinnacle.get(key)
+        if pin is None or len(g) < 2:
+            continue
+        if abs(g["home_win"] - pin[0]) > MAX_PIN_GAP or abs(g["away_win"] - pin[2]) > MAX_PIN_GAP:
+            out.add(key)
+    return out
+
+
+def _pinnacle_1x2(conn, horizon_hours: float) -> dict:
+    """{(liga, local, visitante, inicio ISO): 1X2 de Pinnacle sin margen} de upcoming_matches."""
+    from src.features.market_odds import market_probabilities
+    out = {}
+    for lg, h, a, k, ph, pd_, pa in conn.execute(text("""
+        SELECT DISTINCT ON (sport_key, home_team_norm, away_team_norm, match_date)
+               sport_key, home_team_norm, away_team_norm, match_date, pin_home_odds, pin_draw_odds, pin_away_odds
+        FROM upcoming_matches
+        WHERE match_date BETWEEN NOW() AND NOW() + make_interval(hours => :h) AND pin_home_odds IS NOT NULL
+        ORDER BY sport_key, home_team_norm, away_team_norm, match_date, updated_at DESC NULLS LAST
+    """), {"h": int(horizon_hours)}).fetchall():
+        try:
+            p = market_probabilities(float(ph), float(pd_), float(pa))
+        except (TypeError, ValueError):
+            continue
+        if p and p[0] is not None:
+            out[(lg, h, a, k.isoformat())] = tuple(float(x) for x in p)
+    return out
 
 
 def fetch_league(sport_key: str) -> list:
@@ -284,6 +338,14 @@ def capture_kalshi(horizon_hours: float = 96, every: bool = False, verbose: bool
             r["kickoff"] = kick.isoformat()
             matched.append(r)
     rows = matched
+    if rows:
+        with engine.connect() as conn:
+            pin = _pinnacle_1x2(conn, horizon_hours)
+        bad = price_mismatches(rows, pin)
+        if bad:
+            log.warning(f"⚠️  Kalshi: {len(bad)} evento(s) con un 1X2 lejos de Pinnacle — emparejados con otro "
+                        f"partido, no se guardan: {sorted(f'{k[1]} vs {k[2]}' for k in bad)[:3]}")
+            rows = [r for r in rows if (r["league"], r["home"], r["away"], r["kickoff"]) not in bad]
     inserted = 0
     if rows:
         with engine.begin() as conn:
@@ -319,3 +381,39 @@ def capture_kalshi(horizon_hours: float = 96, every: bool = False, verbose: bool
         print(f"📈 Kalshi: {seen} precios vistos, {len(rows)} de partidos del sistema, "
               f"{inserted} cambios guardados ({len(set(leagues) & set(LEAGUE_CODES))} ligas)")
     return inserted
+
+
+def stored_mismatches(engine, days: int = 7) -> list:
+    """Partidos de kalshi_history de los últimos `days` días cuyo 1X2 está a más
+    de MAX_PIN_GAP de Pinnacle (la última foto de odds_history): emparejados con
+    otro partido. [(liga, local, visitante, inicio, kalshi local, pinnacle local)]."""
+    from src.features.market_odds import market_probabilities
+    with engine.connect() as conn:
+        if conn.execute(text("SELECT to_regclass('kalshi_history')")).scalar() is None:
+            return []
+        k = conn.execute(text("""
+            SELECT DISTINCT ON (league, home, away, kickoff, market) league, home, away, kickoff, market, prob
+            FROM kalshi_history WHERE market IN ('home_win', 'away_win')
+              AND kickoff >= NOW() - make_interval(days => :d)
+            ORDER BY league, home, away, kickoff, market, captured_at DESC"""), {"d": days}).fetchall()
+        pin = conn.execute(text("""
+            SELECT DISTINCT ON (league, match_key, kickoff) league, match_key, kickoff,
+                   pin_home_odds, pin_draw_odds, pin_away_odds
+            FROM odds_history WHERE pin_home_odds IS NOT NULL AND kickoff >= NOW() - make_interval(days => :d)
+            ORDER BY league, match_key, kickoff, captured_at DESC"""), {"d": days + 1}).fetchall()
+    fair = {}
+    for lg, mk, kick, ph, pdr, pa in pin:
+        p = market_probabilities(float(ph), float(pdr), float(pa))
+        if p and p[0] is not None:
+            fair[(lg, str(mk).rsplit("_", 1)[0], kick)] = p        # match_key = local_visitante_fecha
+    game = {}
+    for lg, h, a, kick, market, prob in k:
+        game.setdefault((lg, h, a, kick), {})[market] = float(prob)
+    out = []
+    for (lg, h, a, kick), g in game.items():
+        p = fair.get((lg, f"{h}_{a}", kick))
+        if p is None or len(g) < 2:
+            continue
+        if abs(g["home_win"] - p[0]) > MAX_PIN_GAP or abs(g["away_win"] - p[2]) > MAX_PIN_GAP:
+            out.append((lg, h, a, kick, g["home_win"], float(p[0])))
+    return out

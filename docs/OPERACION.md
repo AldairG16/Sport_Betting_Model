@@ -251,6 +251,7 @@ están todas las clases que ya pasaron, como chequeos que corren igual cada vez:
 | Sesgo del modelo | Lo que queda de sesgo después de la corrección (`side_bias.residuals`), global y por región, en el 1X2, más de 2.5 y ambos anotan: avisa si pasa de 3 pt a 3 errores estándar (n ≥ 30). También si lo aprendido tiene más de 8 días | Weekly |
 | Alineaciones de ESPN | Que cada alineación sea de su partido y su equipo (`espn_lineups.identity_problems`): un partido de ESPN guardado con más de dos equipos, o alineaciones que no comparten jugadores con su equipo | Weekly |
 | Dixon-Coles al día | Que ningún equipo de los próximos 3 días con la historia que pide el ajuste (8+ partidos en 3 años) falte del ajuste Dixon-Coles: si falta, el ajuste es más viejo que la historia y sus partidos se saltan | Weekly |
+| Kalshi con su partido | Que el 1X2 guardado de Kalshi no esté a más de 10 pt del de Pinnacle (`kalshi.stored_mismatches`): si lo está, es otro partido. Se limpia con `scripts/fix_kalshi_mismatches.py --apply` | Weekly |
 
 - Corre en el weekly (paso "Auditoría del sistema", después del ajuste Dixon-Coles); las
   salidas ya las revisó el evening.
@@ -486,6 +487,16 @@ cuyo precio es la probabilidad.
 - **Emparejamiento:** Kalshi abrevia nombres ("bilbao", "m gladbach") y publica la hora de FIN
   estimada (+3 h en ganador y 1T, +4 h en ambos anotan y totales). Por eso se empareja por liga,
   inicio a ±90 min y parecido de nombres, y se guarda con los nombres y la hora del sistema.
+  - **Desde el 23-oct-2026:**
+    - Cada nombre tiene que parecerse por separado (`KALSHI_MIN_SIDE` 0.5) y las palabras
+      genéricas no bastan. Antes, con el partido verdadero fuera de la ventana, Gimnasia
+      Mendoza vs Platense se guardó como Gimnasia LP vs Sarmiento.
+    - Un evento cuyo 1X2 queda a más de 10 pt del de Pinnacle no se guarda (`price_mismatches`):
+      Kalshi y Pinnacle difieren 0.74 pt en promedio.
+    - Con los 163 eventos abiertos ese día empareja igual que antes (3 alias: "atletico",
+      "new york rb", "jeju sk").
+    - El partido mal guardado se quitó con `scripts/fix_kalshi_mismatches.py` (respaldo en
+      `kalshi_history_backup`).
 - **Medición:** el laboratorio mide esos mercados contra el cierre de Kalshi.
 - **Qué no cubre:** córners y tarjetas casi no se operan en Kalshi (25-46 c de diferencia
   entre compra y venta). Apostar ahí no está al alcance del dueño (cuentas de EE. UU.).

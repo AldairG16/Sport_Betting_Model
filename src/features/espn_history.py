@@ -121,9 +121,10 @@ def parse_events(data: dict | None, slug: str) -> list:
 
 def learn_team_ids(events: list, matches: list) -> dict:
     """{id de ESPN: nombre de `matches`} con los partidos de liga: misma fecha
-    ±1 día, mismo marcador y el mejor parecido de los dos nombres. Si dos
+    ±1 día, mismo marcador y los dos nombres parecidos por separado
+    (espn_lineups.pair_score, 23-oct-26: antes bastaba la suma). Si dos
     candidatos se parecen casi igual, no se adivina."""
-    from src.features.kalshi import _name_score
+    from src.features.espn_lineups import pair_score
     from src.utils.team_normalizer import normalize_team
     by_score = {}
     for m in matches:
@@ -133,10 +134,11 @@ def learn_team_ids(events: list, matches: list) -> dict:
         day = pd.Timestamp(ev["kickoff"]).tz_convert("UTC").date() if pd.Timestamp(ev["kickoff"]).tzinfo \
             else pd.Timestamp(ev["kickoff"]).date()
         h, a = normalize_team(ev["home_name"]), normalize_team(ev["away_name"])
-        scored = sorted(((_name_score(h, m["h"]) + _name_score(a, m["a"]), m["h"], m["a"])
+        scored = sorted(((sc, m["h"], m["a"])
                          for m in by_score.get((ev["home_goals"], ev["away_goals"]), [])
-                         if abs((pd.Timestamp(m["date"]).date() - day).days) <= 1), reverse=True)
-        if not scored or scored[0][0] < 1.2 or (len(scored) > 1 and scored[0][0] - scored[1][0] < 0.3):
+                         if abs((pd.Timestamp(m["date"]).date() - day).days) <= 1
+                         for sc in [pair_score(h, a, m["h"], m["a"])] if sc is not None), reverse=True)
+        if not scored or (len(scored) > 1 and scored[0][0] - scored[1][0] < 0.3):
             continue
         out[ev["home_id"]], out[ev["away_id"]] = scored[0][1], scored[0][2]
     return out

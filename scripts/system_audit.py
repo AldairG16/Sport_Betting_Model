@@ -29,6 +29,8 @@ cada vez; la próxima clase que aparezca se agrega aquí.
      con la historia que pide el ajuste (MIN_MATCHES en 3 años) que no está
      en él (23-oct-26: el ajuste del 19-oct era anterior a la carga de las
      segundas divisiones y 6 partidos del fin de semana se saltaban).
+ 10. Kalshi con su partido: su 1X2 a más de 10 pt del de Pinnacle es otro
+     partido (23-oct-26: Gimnasia Mendoza guardado como Gimnasia LP).
 Corre en el weekly (paso "Auditoría del sistema", sin el 1, que ya corrió en
 el evening) y a mano:
     python scripts/system_audit.py
@@ -210,6 +212,15 @@ def run_system_audit(include_daily: bool = True, espn_get=None) -> dict:
         teams = {k.lower() for k in ((load_state("dc_params") or {}).get("teams") or {})}
         return dc_problems(_upcoming_history_counts(MAX_SEASONS * 365), teams, MIN_MATCHES)
     check("Dixon-Coles al día", dc)
+
+    def kalshi():
+        from config.database import engine
+        from src.features.kalshi import stored_mismatches
+        bad = stored_mismatches(engine)
+        return [f"Kalshi: {len(bad)} partido(s) con un 1X2 lejos de Pinnacle — emparejados con otro partido "
+                f"({', '.join(f'{h} vs {a}' for _, h, a, *_ in bad[:3])}); limpiar con "
+                f"scripts/fix_kalshi_mismatches.py"] if bad else []
+    check("Kalshi con su partido", kalshi)
 
     def elo():
         from src.features.elo_rating import compute_elo
