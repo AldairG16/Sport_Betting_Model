@@ -283,11 +283,6 @@ def step_load_historical():
     load_historical_data()
 
 
-def step_enrich():
-    from scripts.enrich_matches import enrich_matches
-    enrich_matches()
-
-
 def step_predict():
     from src.pipeline.prediction_pipeline import run_prediction_pipeline
     run_prediction_pipeline()
@@ -551,7 +546,6 @@ def run_morning(logger: Logger, force_fetch: bool = False):
     logger.log("MODO: MORNING (fetch + predict + notify)")
 
     run_step(logger, "Fetch odds",        step_fetch_odds, force_fetch)
-    run_step(logger, "Enrich data",       step_enrich)
     # Fotografía de cuotas para el dataset de movimientos de línea
     try:
         from scripts.odds_history import capture_snapshot
@@ -676,7 +670,6 @@ def run_full(logger: Logger, force_fetch: bool = False):
     logger.log("MODO: FULL")
 
     run_step(logger, "Fetch odds",   step_fetch_odds, force_fetch)
-    run_step(logger, "Enrich data",  step_enrich)
     run_step(logger, "Predictions",  step_predict)
     run_step(logger, "Notify",       step_notify)
     run_step(logger, "Closing odds",  step_closing_odds)

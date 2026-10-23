@@ -263,6 +263,10 @@ def test_daily_check_reports_every_problem_as_an_error(monkeypatch):
 
     def fake_read_sql(sql, con=None, params=None, **kw):
         s = " ".join(str(sql).split())
+        if s.startswith("SELECT COUNT(*) FROM matches"):          # datos de entrada (23-oct-26): sanos
+            return pd.DataFrame([[0]])
+        if s.startswith("SELECT MAX(") and " AS t FROM " in s:
+            return pd.DataFrame([{"t": now}])
         if "AS bets" in s:
             return pd.DataFrame([{"bets": 0, "shadow": 2, "props": 0}])
         if "FROM matches" in s:

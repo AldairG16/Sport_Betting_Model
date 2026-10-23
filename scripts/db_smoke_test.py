@@ -12,9 +12,8 @@ septiembre-2026 funcionan contra el esquema real de producción:
   4. Query del CLV gate (por mercado, 120d)
   5. Queries del holdout evaluation (fit vs holdout)
   6. Query del market regime monitor (vig/consenso desde upcoming_matches)
-  7. Query de stats por equipo de enrich_matches (filtro SQL por equipo)
-  8. Query de line movement por match_key
-  9. Query del cap de exposición por slate (pending por fecha)
+  7. Query de line movement por match_key
+  8. Query del cap de exposición por slate (pending por fecha)
   10. Queries de slippage (odds_placed) y backtest_engine
   11. DDL guards de save_bets (ADD COLUMN IF NOT EXISTS — idempotente)
   12. Ciclo de aprendizaje (22-sep-26): model_state, cohorte, peso del
@@ -122,34 +121,6 @@ def _regime():
           AND home_odds > 1 AND away_odds > 1
     """), engine)
     return f"{len(df)} partidos con odds completas"
-
-
-@check("enrich_matches: filtro SQL por equipo (últimos 20)")
-def _enrich():
-    df = pd.read_sql(text("""
-        SELECT home_team
-        FROM matches
-        WHERE home_corners IS NOT NULL
-        LIMIT 1
-    """), engine)
-    team = df.iloc[0]["home_team"] if not df.empty else "test"
-    _SQL_CLEAN = (
-        "trim(regexp_replace(regexp_replace(lower({col}), "
-        "'[.,\\-_]', ' ', 'g'), '\\s+', ' ', 'g'))"
-    )
-    df2 = pd.read_sql(
-        text(f"""
-            SELECT home_team, away_team, home_corners, away_corners, date
-            FROM matches
-            WHERE {_SQL_CLEAN.format(col='home_team')} = :team
-               OR {_SQL_CLEAN.format(col='away_team')} = :team
-            ORDER BY date DESC
-            LIMIT 20
-        """),
-        engine,
-        params={"team": str(team).lower().strip()},
-    )
-    return f"equipo '{team}': {len(df2)} partidos"
 
 
 @check("Line movement: lookup por match_key")

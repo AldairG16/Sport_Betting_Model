@@ -772,6 +772,37 @@ Un ensayo del pipeline desde esa PC (miles de consultas) tarda ~1 h; en GitHub, 
 - El 22-oct se agregó `pool_pre_ping` creyendo que los ensayos se colgaban en conexiones
   muertas. Eran lentos, no estaban colgados; se quitó el mismo día.
 
+**Fechas: siempre con formato explícito (`src/utils/dates.py`, 23-oct-2026).**
+`pd.to_datetime(x, dayfirst=True)` sin formato cae a dateutil elemento por elemento, y dateutil
+con dayfirst lee "2025-02-06" como 2-jun. El cargador de FBref dejó así toda la historia
+argentina con día ≤ 12. `fix_swapped_dates.py` (25-sep) solo corrigió las que caían en el
+futuro; después `load_extra_leagues` cargó la historia buena y su chequeo de repetidos (±1 día)
+no vio los espejos.
+- Resultado: 2,271 partidos argentinos dos veces, uno con la fecha mala. La forma, Dixon-Coles,
+  el Elo y el entre-ellos los contaban doble.
+- Limpieza: `scripts/fix_argentina_swapped_dates.py`, con respaldo en `matches_swap_backup`.
+  El árbitro es el propio `/new/ARG.csv`, no ESPN: ESPN no trae la Copa de la Liga, y
+  Talleres–Sarmiento 1-0 se jugó dos veces en 2022.
+- Los cargadores usan `parse_match_dates`, se borró `load_historical_fbref.py` y el chequeo
+  diario avisa si vuelven los espejos o hay resultados con fecha futura.
+- Verificado contra ESPN: en Brasil, Liga MX y MLS el cargador viejo dejó las fechas bien.
+
+**"Enrich data" se quitó (23-oct-2026).** Escribía en `upcoming_matches` promedios de tiros y
+córners que nadie lee, en una sola transacción de ~70 s. Chocaba con el closing:
+`DeadlockDetected` en 20 partidos de la mañana del 23-oct, con el paso en "OK".
+
+**Un error que solo se imprime no existe (23-oct-2026).** `print("❌ …")` no llega a Telegram.
+- Pasaron a `log.error`: el bankroll (que además devolvía 100 como saldo si fallaba), el
+  registro del gasto de Anthropic, las descargas de goleadores y selecciones, el holdout y el
+  monitor de mercado.
+
+**Lo que entra al modelo se vigila (23-oct-2026).**
+- `output_checks.feature_coverage`, al final de cada corrida: ERROR si H2H, xG, córners o
+  tiros llegan a menos del 20-25% de los partidos evaluados, o el xG real a menos del 80% en
+  las 5 grandes. Lo normal: H2H ~98%, córners y tiros ~65%, xG real 100%.
+- `output_checks.data_health`, diario: fechas espejo, resultados con fecha futura, partidos
+  repetidos en 120 días, y `team_xg_real`, `club_elo` y `espn_matches` al día.
+
 **Nombres de otra fuente: siempre por `normalize_team` (23-oct-2026).** `team_xg_real` guarda el
 nombre de Understat ("Bayern Munich", "VfB Stuttgart") y `get_real_xg` lo comparaba tal cual con
 el canónico ("bayern munchen", "stuttgart"). 24 de los 96 equipos de las 5 grandes (Bayern,

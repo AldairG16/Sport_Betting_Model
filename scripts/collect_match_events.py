@@ -77,7 +77,7 @@ def collect_match_events(verbose: bool = True):
         resp.raise_for_status()
         df = pd.read_csv(io.StringIO(resp.text))
     except Exception as e:
-        print(f"❌ Error descargando goalscorers.csv: {e}")
+        log.error(f"❌ Error descargando goalscorers.csv: {e}")
         return
 
     if verbose:

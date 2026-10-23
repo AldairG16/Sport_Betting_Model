@@ -151,8 +151,10 @@ def update_bankroll(profit: float, notes: str = "", conn=None) -> float:
         with engine.begin() as c:
             return _apply_bankroll_movement(c, profit, notes)
     except Exception as e:
-        print(f"⚠️ bankroll_manager.update_bankroll error: {e}")
-        return float(INITIAL_BANKROLL)
+        # 23-oct-26: antes devolvía INITIAL_BANKROLL (100) como si fuera el
+        # saldo, sin avisar. Ahora es ERROR y se propaga.
+        log.error(f"❌ Bankroll no actualizado ({notes}): {type(e).__name__}: {e}")
+        raise
 
 
 def _apply_bankroll_movement(conn, profit: float, notes: str) -> float:
@@ -208,8 +210,8 @@ def deposit(amount: float, notes: str = "Depósito manual") -> float:
         return new_balance
 
     except Exception as e:
-        print(f"⚠️ bankroll_manager.deposit error: {e}")
-        return float(INITIAL_BANKROLL)
+        log.error(f"❌ Depósito no registrado: {type(e).__name__}: {e}")
+        raise
 
 
 # ─────────────────────────────────────────────────────────────

@@ -270,7 +270,7 @@ def load_international_data(verbose: bool = True) -> int:
         if verbose:
             print(f"   Descargados: {len(df):,} partidos totales")
     except Exception as e:
-        print(f"❌ Error descargando CSV: {e}")
+        log.error(f"❌ Error descargando CSV de selecciones: {e}")
         return 0
 
     # ── Filtrar por fecha ──────────────────────────────────────────────────

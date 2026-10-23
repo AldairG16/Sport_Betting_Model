@@ -80,6 +80,35 @@ def pipeline_invariants(records: list) -> list:
     return out
 
 
+# Cobertura mínima de cada feature sobre los partidos evaluados (23-oct-26).
+# Normal en producción: H2H ~98%, córners y tiros ~65%, xG ~70%, xG real en
+# las 5 grandes 100%. Por debajo de esto, algo dejó de llegar.
+MIN_EVALUATED = 20
+MIN_COVERAGE = {"h2h_used": ("H2H", 0.25), "xg_used": ("xG", 0.25),
+                "corners_used": ("córners", 0.20), "shots_used": ("tiros al arco", 0.20)}
+MIN_XG_REAL_BIG5 = 0.80
+
+
+def feature_coverage(stats: dict) -> list:
+    """stats: contadores de una corrida del pipeline. Avisos de las features
+    que casi no llegaron (vacío = en orden)."""
+    n = int(stats.get("evaluated", 0))
+    if n < MIN_EVALUATED:
+        return []
+    out = []
+    for key, (name, floor) in MIN_COVERAGE.items():
+        k = int(stats.get(key, 0))
+        if k < floor * n:
+            out.append(f"Entrada: {name} en {k} de {n} partidos evaluados (lo normal es mucho más) — "
+                       f"revisar su consulta o sus nombres")
+    b5 = int(stats.get("big5", 0))
+    real = int(stats.get("xg_real_big5", 0))
+    if b5 >= 10 and real < MIN_XG_REAL_BIG5 * b5:
+        out.append(f"Entrada: xG real de Understat en {real} de {b5} partidos de las 5 grandes — "
+                   f"nombres de team_xg_real o la carga semanal")
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Liquidación independiente
 # ─────────────────────────────────────────────────────────────────────────────
@@ -213,6 +242,57 @@ def stale_learning(updated: dict, now: datetime | None = None) -> list:
     return out
 
 
+# Datos que alimentan al modelo (23-oct-26): cada clase de error que ya pasó,
+# revisada cada día en vez de esperar a la próxima auditoría.
+MAX_MIRROR_PAIRS = 3          # 2 partidos reales con fechas espejo y mismo marcador pasan (Belgica 2023)
+FEED_MAX_AGE_DAYS = {         # tabla: (columna de fecha, días)
+    "team_xg_real": ("updated_at", 9),      # Understat, weekly
+    "club_elo": ("fetched_on", 10),         # ClubElo, semanal (refresh_if_stale)
+    "espn_matches": ("fetched_at", 3),      # copas, Europa, amistosos: evening
+}
+
+DATA_HEALTH_SQL = {
+    # la fecha espejo (6-feb ↔ 2-jun) con los mismos equipos y marcador: el
+    # cargador de FBref dejó 2,271 así en Argentina
+    "mirror": """SELECT COUNT(*) FROM matches a JOIN matches b
+                   ON LOWER(a.home_team) = LOWER(b.home_team) AND LOWER(a.away_team) = LOWER(b.away_team)
+                  AND a.id < b.id AND EXTRACT(YEAR FROM a.date) = EXTRACT(YEAR FROM b.date)
+                  AND EXTRACT(DAY FROM a.date) = EXTRACT(MONTH FROM b.date)
+                  AND EXTRACT(MONTH FROM a.date) = EXTRACT(DAY FROM b.date)
+                  AND EXTRACT(DAY FROM a.date) <> EXTRACT(MONTH FROM a.date)
+                  AND a.home_goals = b.home_goals AND a.away_goals = b.away_goals
+                 WHERE a.date >= CURRENT_DATE - 400""",
+    # partido con resultado y fecha futura: día y mes cruzados
+    "future": "SELECT COUNT(*) FROM matches WHERE home_goals IS NOT NULL AND date > CURRENT_DATE + 1",
+    # el mismo partido dos veces (±1 día, mismo marcador, mismos equipos)
+    "duplicate": """SELECT COUNT(*) FROM matches a JOIN matches b
+                      ON LOWER(a.home_team) = LOWER(b.home_team) AND LOWER(a.away_team) = LOWER(b.away_team)
+                     AND a.id < b.id AND ABS(a.date::date - b.date::date) <= 1
+                     AND a.home_goals = b.home_goals AND a.away_goals = b.away_goals
+                    WHERE a.date >= CURRENT_DATE - 120""",
+}
+
+
+def data_health(counts: dict, ages: dict) -> list:
+    """counts: {"mirror", "future", "duplicate"}; ages: {tabla: días desde lo
+    último o None si no existe}. Avisos (vacío = en orden)."""
+    out = []
+    if int(counts.get("mirror") or 0) > MAX_MIRROR_PAIRS:
+        out.append(f"Datos: {counts['mirror']} partidos repetidos con el día y el mes cruzados "
+                   f"(algún cargador lee mal las fechas; ver src/utils/dates.py)")
+    if int(counts.get("future") or 0) > 0:
+        out.append(f"Datos: {counts['future']} partidos con resultado y fecha futura (día y mes cruzados)")
+    if int(counts.get("duplicate") or 0) > 0:
+        out.append(f"Datos: {counts['duplicate']} partidos repetidos en los últimos 120 días")
+    for table, (col, max_age) in FEED_MAX_AGE_DAYS.items():
+        age = ages.get(table)
+        if age is None:
+            out.append(f"Datos: {table} vacía o ilegible")
+        elif age > max_age:
+            out.append(f"Datos: {table} sin actualizar hace {age} días (máximo {max_age})")
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Corrida diaria (evening)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -295,9 +375,24 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     except Exception as e:
         problems.append(f"Aprendizaje: no se pudo revisar ({type(e).__name__})")
 
+    # 6) los datos que alimentan al modelo
+    try:
+        counts = {k: int(q(sql).iloc[0, 0]) for k, sql in DATA_HEALTH_SQL.items()}
+        ages = {}
+        for table, (col, _) in FEED_MAX_AGE_DAYS.items():
+            try:
+                last = q(f"SELECT MAX({col}) AS t FROM {table}").iloc[0]["t"]
+                ages[table] = None if last is None or pd.isna(last) else                     (pd.Timestamp.now(tz="UTC") - (pd.Timestamp(last).tz_convert("UTC") if pd.Timestamp(last).tzinfo
+                                                   else pd.Timestamp(last).tz_localize("UTC"))).days
+            except Exception:
+                ages[table] = None
+        problems += data_health(counts, ages)
+    except Exception as e:
+        problems.append(f"Datos: no se pudo revisar ({type(e).__name__})")
+
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")
     if not problems:
         print(f"✅ Chequeo de salidas: liquidación ({len(rows)} revisadas), resultados, pendientes, "
-              f"xG y aprendizaje en orden")
+              f"xG, aprendizaje y datos de entrada en orden")
     return problems

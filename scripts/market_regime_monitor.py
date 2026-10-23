@@ -29,6 +29,9 @@ from sqlalchemy import text
 sys.path.append(str(Path(__file__).parent.parent))
 
 from config.database import engine
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 
 def run_market_regime_monitor(verbose: bool = True) -> dict:
@@ -45,8 +48,7 @@ def run_market_regime_monitor(verbose: bool = True) -> dict:
               AND home_odds > 1 AND away_odds > 1
         """), engine)
     except Exception as e:
-        if verbose:
-            print(f"❌ market_regime_monitor: {e}")
+        log.error(f"❌ market_regime_monitor: {type(e).__name__}: {e}")
         return {"status": "error", "error": str(e)}
 
     if df.empty:
