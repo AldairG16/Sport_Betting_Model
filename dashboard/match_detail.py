@@ -97,14 +97,22 @@ def merge_history(matches: list, extra: list) -> list:
     de ESPN que ya está en `matches` se descarta (±1 día, mismo marcador y al
     menos un equipo igual: un equipo no juega dos veces el mismo día; el otro
     nombre puede variar, "slovan bratislava" / "sk slovan bratislava"),
-    porque `matches` trae sus córners y tarjetas de football-data.
-    Cada fila lleva "label" (la competición) y "kind" ("amistoso", …)."""
+    porque `matches` trae sus córners y tarjetas de football-data; lo que a
+    esa fila le falte (la Champions de The Odds API llega sin córners ni
+    tarjetas) se completa con ESPN. Cada fila lleva "label" (la competición)
+    y "kind" ("amistoso", …)."""
     out = [{**m, "label": league_name(m.get("league")) if m.get("league") else "", "kind": "liga"} for m in matches]
     seen = [({m["h"], m["a"]}, _ts(m["date"]), (int(m["home_goals"]), int(m["away_goals"]))) for m in matches]
     for e in extra:
         d, score = _ts(e["date"]), (int(e["home_goals"]), int(e["away_goals"]))
-        if any(pair & {e["h"], e["a"]} and abs(d - t) <= pd.Timedelta(days=1) and sc == score
-               for pair, t, sc in seen):
+        dup = next((k for k, (pair, t, sc) in enumerate(seen)
+                    if pair & {e["h"], e["a"]} and abs(d - t) <= pd.Timedelta(days=1) and sc == score), None)
+        if dup is not None:
+            m = out[dup]                         # mismo marcador: misma orientación local / visita
+            if _corners(m) == (None, None):
+                m["home_corners"], m["away_corners"] = e.get("home_corners"), e.get("away_corners")
+            if _cards(m, "home") is None and _num(e.get("home_cards")) is not None:
+                m.update(home_yellow=e.get("home_cards"), away_yellow=e.get("away_cards"), home_red=0, away_red=0)
             continue
         out.append({**e, "label": e.get("league") or "", "kind": e.get("kind") or "copa",
                     "home_yellow": e.get("home_cards"), "away_yellow": e.get("away_cards"),

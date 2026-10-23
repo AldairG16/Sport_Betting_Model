@@ -125,10 +125,12 @@ def test_the_last_five_include_every_competition_without_repeating_a_match():
     assert [(m["opponent"][:6], m["league"], m["friendly"]) for m in ms] == [
         ("Hambur", "Bundesliga", False), ("Sk Slo", "Champions League", False),
         ("Spvgg ", "Amistoso", True), ("Hansa ", "DFB-Pokal", False)]
+    # la Champions de The Odds API llega sin córners ni tarjetas: se completan con ESPN
+    assert (ms[1]["corners"], ms[1]["cards"]) == ([8, 1], 4)
     s = d["home"]["summary"]
     # el 5-0 amistoso se ve, pero no cuenta en los promedios
     assert (s["n"], s["friendlies"], s["w"], s["l"]) == (3, 1, 2, 1)
-    assert s["goals_for"] == pytest.approx(round(7 / 3, 1)) and s["corners_for"] == pytest.approx(8.5)
+    assert s["goals_for"] == pytest.approx(round(7 / 3, 1)) and s["corners_for"] == pytest.approx(8.3)
 
 
 def test_the_team_tab_lists_cups_and_friendlies_but_the_record_is_official():
