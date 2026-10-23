@@ -236,6 +236,26 @@ Una auditoría revisa **lo que sale**, no solo que corra: el evening ya lo hace 
 día (`src/utils/output_checks.py`, ver §5 "Auditoría de salidas"). A mano:
 `run_output_checks(days=7)` revisa una semana.
 
+**La auditoría del sistema, siempre la misma (`scripts/system_audit.py`, 23-oct-2026).** Cada
+auditoría hecha a mano encontraba una clase de error nueva porque revisaba otra cosa. Aquí
+están todas las clases que ya pasaron, como chequeos que corren igual cada vez:
+
+| Chequeo | Qué revisa | Cuándo corre |
+|---|---|---|
+| Salidas y datos de entrada | Liquidación contra un cálculo independiente; resultados que faltan; pendientes atorados; xG fuera de escala; lo aprendido del weekly; fechas espejo, resultados con fecha futura, repetidos, tablas de otras fuentes viejas | Evening (`output_checks`) |
+| Equipos próximos con historia | Que tengan historia y que no esté partida en dos nombres | Weekly |
+| Nombres de Understat y ESPN | Que cuadren con `matches` | Weekly |
+| Lo que entra al modelo | La cobertura de cada feature en la última corrida (`model_state` `pipeline_coverage`) | Weekly |
+| Elo | Ningún NaN | Weekly |
+| Ligas de ESPN | Cada código apunta a la liga correcta (`chi.1` era Chile) | Weekly |
+
+- Corre en el weekly (paso "Auditoría del sistema", después del ajuste Dixon-Coles); las
+  salidas ya las revisó el evening.
+- Cada problema es ERROR y llega a Telegram.
+- A mano: `python scripts/system_audit.py` (sale con código 1 si algo falla).
+- **Cuando aparezca una clase de error nueva, se agrega aquí como chequeo**, para que la
+  próxima auditoría no la tenga que volver a encontrar.
+
 ---
 
 ## 4. Watchdog
@@ -755,12 +775,15 @@ DFB-Pokal y dos amistosos de la fecha FIFA.
   - el partido abierto (los últimos 5) y Equipos, con la competición de cada partido. Un
     partido que ya está en `matches` no se repite (±1 día, mismo marcador, un equipo igual).
     Los amistosos se ven atenuados y no cuentan en récord ni promedios;
-- **El modelo NO la usa** (forma, Elo, Dixon-Coles): un amistoso o un 4-0 de copa contra uno
-  de cuarta no son su liga.
-- **Pendiente:** `fixture_congestion` (días de descanso) solo lee `matches`, así que no ve el
-  jueves de Europa League. Con `espn_matches` cambiarían 50 equipos de los próximos partidos
-  del 22-oct, y 37 pasarían a "fatigado". Cambia el pronóstico, así que se mide contra
-  Pinnacle antes de activarlo.
+- **El modelo no la usa para la fuerza de los equipos** (forma, Elo, Dixon-Coles): un amistoso
+  o un 4-0 de copa contra uno de cuarta no son su liga.
+- **Sí la usan los días de descanso** (`fixture_congestion`, sin amistosos; 23-oct-2026).
+  Antes el jueves de Europa League no contaba y el equipo llegaba "fresco" al domingo.
+  - Cambian 52 equipos de los próximos partidos.
+  - A/B en seco contra Pinnacle en los 39 partidos afectados: cambian 28 (1-2 pts), con
+    mediana 5.7 → 5.7 y media 7.2 → 7.0 (16 mejoran, 11 empeoran). Los goles esperados
+    pasan de 3.20 a 3.13.
+  - Sin la tabla, usa solo las ligas, como antes.
 
 **La base está en Oregon: cada consulta es un viaje de red (22-oct-2026).** Neon está en
 `us-west-2`. Una consulta típica tarda 3.5 ms dentro del servidor y ~165 ms en total desde la

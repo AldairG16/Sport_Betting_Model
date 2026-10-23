@@ -147,3 +147,29 @@ def test_the_evening_reads_espn_before_the_predictions(monkeypatch):
     names, steps, O = _steps(monkeypatch, "run_evening")
     assert names.index("Historial ESPN (copas, Europa, amistosos)") == names.index("Predictions (mañana)") - 1
     assert steps["Historial ESPN (copas, Europa, amistosos)"] is O.step_espn_history
+
+
+# ─── días de descanso con el jueves de Europa (parte 2) ──────────────────────
+
+def test_rest_days_count_the_thursday_europa_league_match(monkeypatch):
+    import src.features.fixture_congestion as FC
+    seen = []
+
+    def read_sql(sql, con=None, params=None, **k):
+        seen.append(" ".join(str(sql).split()))
+        return pd.DataFrame({"date": ["2026-10-22", "2026-10-18"]})          # jueves de Europa y la liga
+    monkeypatch.setattr(FC.pd, "read_sql", read_sql)
+    c = FC.get_fixture_congestion("celta", pd.Timestamp("2026-10-25 15:00", tz="UTC"))
+    assert "espn_matches" in seen[0] and "kind <> 'amistoso'" in seen[0]
+    assert c["days_rest"] == 3 and c["is_fatigued"] is True
+
+
+def test_without_the_espn_table_rest_days_use_the_leagues_as_before(monkeypatch):
+    import src.features.fixture_congestion as FC
+
+    def read_sql(sql, con=None, params=None, **k):
+        if "espn_matches" in str(sql):
+            raise RuntimeError('relation "espn_matches" does not exist')
+        return pd.DataFrame({"date": ["2026-10-18"]})
+    monkeypatch.setattr(FC.pd, "read_sql", read_sql)
+    assert FC.get_fixture_congestion("celta", pd.Timestamp("2026-10-25 15:00", tz="UTC"))["days_rest"] == 7

@@ -684,10 +684,18 @@ def step_backtest():
     run_backtest()
 
 
+def step_system_audit():
+    """Cada clase de error que ya pasó, revisada igual cada semana
+    (scripts/system_audit.py). Las salidas ya las revisó el evening."""
+    from scripts.system_audit import run_system_audit
+    run_system_audit(include_daily=False)
+
+
 def step_espn_history():
     """Copas, Champions, Europa y Conference League y amistosos de ESPN
-    (espn_matches): los últimos 5 de verdad en el dashboard
-    (src/features/espn_history.py). En el evening, con los resultados del día."""
+    (espn_matches): los últimos 5 de verdad en el dashboard y los días de
+    descanso del modelo (src/features/espn_history.py). En el evening, antes
+    de Predictions: el jueves de Europa League cuenta para el domingo."""
     from src.features.espn_history import refresh_espn_history
     refresh_espn_history()
 
@@ -1028,6 +1036,50 @@ def run_closing(logger: Logger):
     run_step(logger, "Picks del programa", step_program_picks)
 
 
+def run_weekly(logger: Logger):
+    """Domingo: lo que aprende de lo recolectado, las cargas de datos, el
+    ajuste Dixon-Coles, la auditoría del sistema y los reportes."""
+    # 1) PRIMERO lo que aprende de datos ya recolectados (bets y
+    #    shadow resueltos por evening/closing): solo DB, segundos en
+    #    total, y no depende de las cargas de abajo. Ir antes las
+    #    protege del timeout del job — las cargas tardan ~50 min
+    #    (eventos 21', ligas extra 25') y un corte ahí dejaba al
+    #    sistema una semana sin aprender.
+    run_step(logger, "Calibration monitor",      step_calibration)
+    run_step(logger, "CLV gate (kill-switch)",   step_clv_gate)
+    run_step(logger, "Reactivación por shadow",  step_shadow_reactivation)
+    run_step(logger, "Peso del modelo (ancla)",  step_anchor_learning)
+    run_step(logger, "Sesgo por lado (Pinnacle)", step_side_bias)
+    run_step(logger, "Evidencia de reglas",      step_rule_evidence)
+    run_step(logger, "Filtros aprendidos",       step_filter_learning)
+    run_step(logger, "Referencia Pinnacle",      step_sharp_reference)
+    run_step(logger, "Horario de apuesta",       step_timing_learning)
+    run_step(logger, "Refresh CLV cache",        step_refresh_clv_cache)   # Mejora #14
+    run_step(logger, "Holdout evaluation",       step_evaluate_holdout)
+    # 2) Cargas de datos (lentas) y el ajuste que depende de ellas
+    run_step(logger, "Load historical data",     step_load_historical)
+    run_step(logger, "Load international data",  step_load_international)
+    run_step(logger, "Collect match events",     step_collect_events)
+    run_step(logger, "Load extra leagues",       step_load_extra_leagues)
+    run_step(logger, "Momios históricos",        step_historical_odds)
+    run_step(logger, "Alineaciones (ESPN)",      step_lineup_history)
+    run_step(logger, "Buscador de ventajas",     step_edge_finder)
+    run_step(logger, "Nombres de equipo y repetidos", step_team_names_check)
+    run_step(logger, "Apuestas sin fuente con dato nuevo", step_resolve_stale)
+    # run_step(logger, "Load MLB data",            step_load_mlb)  # desactivado — sin creditos MLB
+    run_step(logger, "Soccerdata refresh (xG real)", step_soccerdata_refresh)
+    run_step(logger, "Fit DC-MLE parameters",    step_fit_dc_mle)
+    run_step(logger, "Auditoría del sistema",    step_system_audit)
+    # 3) Monitores y reportes
+    run_step(logger, "Drift detection",          step_drift_detection)     # Mejora #15
+    run_step(logger, "Market regime monitor",    step_market_regime)
+    # La auditoría de sanidad NO corre aquí: la ejecuta su propio paso
+    # en weekly.yml (if: always(), corre aunque el weekly falle).
+    # Correrla en los dos sitios mandaba el mismo mensaje dos veces.
+    run_step(logger, "Walk-forward backtest",    step_walkforward)
+    run_step(logger, "Weekly Telegram report",   step_weekly_report)
+
+
 def run_results_only(logger: Logger):
     # Incluye fbdata backup: el late_results.yml a las 06:30 MX existe
     # justamente para atrapar corners/cards de Europa que ya sincronizó
@@ -1086,44 +1138,7 @@ def main():
         elif args.mode == "closing":
             run_closing(logger)
         elif args.mode == "weekly":
-            # 1) PRIMERO lo que aprende de datos ya recolectados (bets y
-            #    shadow resueltos por evening/closing): solo DB, segundos en
-            #    total, y no depende de las cargas de abajo. Ir antes las
-            #    protege del timeout del job — las cargas tardan ~50 min
-            #    (eventos 21', ligas extra 25') y un corte ahí dejaba al
-            #    sistema una semana sin aprender.
-            run_step(logger, "Calibration monitor",      step_calibration)
-            run_step(logger, "CLV gate (kill-switch)",   step_clv_gate)
-            run_step(logger, "Reactivación por shadow",  step_shadow_reactivation)
-            run_step(logger, "Peso del modelo (ancla)",  step_anchor_learning)
-            run_step(logger, "Sesgo por lado (Pinnacle)", step_side_bias)
-            run_step(logger, "Evidencia de reglas",      step_rule_evidence)
-            run_step(logger, "Filtros aprendidos",       step_filter_learning)
-            run_step(logger, "Referencia Pinnacle",      step_sharp_reference)
-            run_step(logger, "Horario de apuesta",       step_timing_learning)
-            run_step(logger, "Refresh CLV cache",        step_refresh_clv_cache)   # Mejora #14
-            run_step(logger, "Holdout evaluation",       step_evaluate_holdout)
-            # 2) Cargas de datos (lentas) y el ajuste que depende de ellas
-            run_step(logger, "Load historical data",     step_load_historical)
-            run_step(logger, "Load international data",  step_load_international)
-            run_step(logger, "Collect match events",     step_collect_events)
-            run_step(logger, "Load extra leagues",       step_load_extra_leagues)
-            run_step(logger, "Momios históricos",        step_historical_odds)
-            run_step(logger, "Alineaciones (ESPN)",      step_lineup_history)
-            run_step(logger, "Buscador de ventajas",     step_edge_finder)
-            run_step(logger, "Nombres de equipo y repetidos", step_team_names_check)
-            run_step(logger, "Apuestas sin fuente con dato nuevo", step_resolve_stale)
-            # run_step(logger, "Load MLB data",            step_load_mlb)  # desactivado — sin creditos MLB
-            run_step(logger, "Soccerdata refresh (xG real)", step_soccerdata_refresh)
-            run_step(logger, "Fit DC-MLE parameters",    step_fit_dc_mle)
-            # 3) Monitores y reportes
-            run_step(logger, "Drift detection",          step_drift_detection)     # Mejora #15
-            run_step(logger, "Market regime monitor",    step_market_regime)
-            # La auditoría de sanidad NO corre aquí: la ejecuta su propio paso
-            # en weekly.yml (if: always(), corre aunque el weekly falle).
-            # Correrla en los dos sitios mandaba el mismo mensaje dos veces.
-            run_step(logger, "Walk-forward backtest",    step_walkforward)
-            run_step(logger, "Weekly Telegram report",   step_weekly_report)
+            run_weekly(logger)
     except Exception as fatal:
         # ── Crash report a Telegram ──────────────────────────────────────
         logger.log(f"💀 ERROR FATAL: {fatal}")

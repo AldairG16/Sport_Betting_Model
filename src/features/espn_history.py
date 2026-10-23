@@ -15,11 +15,11 @@ Aquí, del scoreboard público de ESPN (sin llave, una petición por
 competición y mes, con pausa): marcador, córners y tarjetas (roja = 1, como
 PlayDoit) de cada partido terminado.
 
-Van en su propia tabla, espn_matches: el modelo no la lee (un amistoso o un
-4-0 de copa contra uno de cuarta no son su liga). La usan el partido abierto
-del dashboard (los últimos 5 de verdad) y Equipos. Pendiente: los días de
-descanso (fixture_congestion) no ven el jueves de Europa League; usarla ahí
-cambia el pronóstico de ~37 equipos por fin de semana y se mide antes.
+Van en su propia tabla, espn_matches: el modelo no la lee para la fuerza de
+los equipos (un amistoso o un 4-0 de copa contra uno de cuarta no son su
+liga). La usan el partido abierto del dashboard (los últimos 5 de verdad),
+Equipos y los días de descanso (fixture_congestion, sin amistosos; medido
+contra Pinnacle el 23-oct-26: neutro a levemente mejor).
 
 Nombres: el id de equipo de ESPN se empareja con el nombre de `matches` con
 los partidos de liga del mismo scoreboard (misma fecha ±1 día, mismo

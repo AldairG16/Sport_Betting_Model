@@ -168,3 +168,59 @@ def test_exchange_prices_count_net_of_their_commission():
     assert bf["markets"][0]["outcomes"][0]["price"] == 2.10                 # el JSON original no se toca
     book = {"key": "unibet_eu", "markets": [{"key": "h2h", "outcomes": [{"name": "A", "price": 2.10}]}]}
     assert net_of_commission(book) is book
+
+
+# ─── la auditoría del sistema, siempre la misma ──────────────────────────────
+
+def test_the_audit_flags_a_missing_old_or_thin_pipeline_coverage():
+    from scripts.system_audit import coverage_problems
+    now = pd.Timestamp("2026-10-23 12:00", tz="UTC")
+    ok = {"evaluated": 136, "h2h_used": 134, "xg_used": 96, "corners_used": 90, "shots_used": 90, "big5": 43,
+          "xg_real_big5": 43, "at": "2026-10-23T06:00:00+00:00"}
+    assert coverage_problems(ok, now) == []
+    assert coverage_problems(None, now) == ["Cobertura: ninguna corrida del pipeline la guardó todavía"]
+    assert any("hace 54 h" in p for p in coverage_problems({**ok, "at": "2026-10-21T06:00:00+00:00"}, now))
+    assert any("córners en 0" in p for p in coverage_problems({**ok, "corners_used": 0}, now))
+
+
+def test_the_audit_checks_each_espn_slug_is_the_right_league():
+    from scripts.system_audit import espn_problems
+    leagues = {"soccer_china_superleague": "chi.1", "soccer_epl": "eng.1", "soccer_japan_j_league": "jpn.1"}
+    names = {"soccer_china_superleague": "Chilean Primera División", "soccer_epl": "English Premier League",
+             "soccer_japan_j_league": None}
+    out = espn_problems(names, leagues)
+    assert out == ["ESPN: soccer_china_superleague → chi.1 es 'Chilean Primera División', no Chinese",
+                   "ESPN: soccer_japan_j_league → jpn.1 no responde"]
+
+
+def test_the_audit_runs_every_check_and_reports_each_problem(monkeypatch):
+    import scripts.system_audit as SA
+    import scripts.learn_team_aliases as LTA
+    import src.utils.model_state as MS
+    import src.features.elo_rating as ER
+    import src.utils.output_checks as OC
+    from src.utils.log import RUN_ISSUES
+    RUN_ISSUES.reset()
+    monkeypatch.setattr(OC, "run_output_checks", lambda: ["Datos: 40 partidos repetidos"])
+    monkeypatch.setattr(LTA, "check_names_without_history", lambda: [])
+    monkeypatch.setattr(LTA, "check_source_names", lambda: [("lineups (ESPN)", [("x", "x")])])
+    monkeypatch.setattr(MS, "load_state", lambda key: None)
+    monkeypatch.setattr(ER, "compute_elo", lambda: {"a": 1500.0, "b": float("nan")})
+    monkeypatch.setattr(SA, "_espn_names", lambda leagues, get=None: {k: SA.ESPN_EXPECTED.get(k, "x") for k in leagues})
+    out = SA.run_system_audit()
+    assert out["Equipos próximos con historia"] == [] and out["Ligas de ESPN"] == []
+    assert out["Salidas y datos de entrada"] == ["Datos: 40 partidos repetidos"]
+    assert out["Nombres de Understat y ESPN"] == ["lineups (ESPN): 1"]
+    assert out["Elo"] and out["Lo que entra al modelo"]
+    assert sum(1 for e in RUN_ISSUES.errors() if "Auditoría del sistema" in e) == 4
+    RUN_ISSUES.reset()
+
+
+def test_the_weekly_runs_the_system_audit_after_the_dc_fit(monkeypatch):
+    from scripts import orchestrator as O
+    ran = []
+    monkeypatch.setattr(O, "run_step", lambda logger, name, fn, *a, **k: ran.append((name, fn)) or True)
+    O.run_weekly(type("L", (), {"log": lambda self, msg: None})())
+    names = [n for n, _ in ran]
+    assert names.index("Auditoría del sistema") == names.index("Fit DC-MLE parameters") + 1
+    assert dict(ran)["Auditoría del sistema"] is O.step_system_audit

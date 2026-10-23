@@ -71,13 +71,21 @@ def get_fixture_congestion(team: str, match_date) -> dict:
     match_date = ts.to_pydatetime()
 
     # ── Consultar últimos 5 partidos del equipo antes del partido en cuestión
+    # Con las copas, la Champions, la Europa y la Conference League de ESPN
+    # (espn_matches, sin amistosos; 22-oct-26): `matches` solo trae las
+    # ligas, y un equipo que jugó la Europa League el jueves llegaba "fresco"
+    # al domingo. Un día con partido en las dos tablas cuenta una vez.
     try:
         df = pd.read_sql(
             text("""
-                SELECT date
-                FROM matches
-                WHERE (LOWER(home_team) = :team OR LOWER(away_team) = :team)
-                  AND date < :match_date
+                SELECT DISTINCT CAST(d AS date) AS date FROM (
+                    SELECT date AS d FROM matches
+                    WHERE (LOWER(home_team) = :team OR LOWER(away_team) = :team) AND date < :match_date
+                    UNION ALL
+                    SELECT (kickoff AT TIME ZONE 'UTC') AS d FROM espn_matches
+                    WHERE (home = :team OR away = :team) AND kind <> 'amistoso'
+                      AND (kickoff AT TIME ZONE 'UTC') < :match_date
+                ) x
                 ORDER BY date DESC
                 LIMIT 5
             """),
@@ -85,7 +93,21 @@ def get_fixture_congestion(team: str, match_date) -> dict:
             params={"team": team_lower, "match_date": match_date},
         )
     except Exception:
-        return _default_congestion()
+        try:                                    # sin espn_matches todavía: solo las ligas
+            df = pd.read_sql(
+                text("""
+                    SELECT date
+                    FROM matches
+                    WHERE (LOWER(home_team) = :team OR LOWER(away_team) = :team)
+                      AND date < :match_date
+                    ORDER BY date DESC
+                    LIMIT 5
+                """),
+                engine,
+                params={"team": team_lower, "match_date": match_date},
+            )
+        except Exception:
+            return _default_congestion()
 
     if df.empty:
         return _default_congestion()
