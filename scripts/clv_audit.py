@@ -31,7 +31,7 @@ LOOKBACK_DAYS = 30
 def audit_clv() -> dict:
     df = pd.read_sql(text(f"""
         SELECT id, match, market, odds, closing_odds, clv, result,
-               CASE WHEN result = 'win'  THEN (odds - 1) * stake
+               CASE WHEN result = 'win'  THEN (COALESCE(odds_playdoit_min, odds) - 1) * stake
                     WHEN result = 'loss' THEN -stake
                     ELSE 0 END AS pnl
         FROM bets_history

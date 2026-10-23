@@ -1629,6 +1629,19 @@ reporte semanal, que pone las canceladas en una línea aparte). El registro de l
 (v1.4.0) se quitó en v1.5.0 por pedido del dueño. La columna `bets_history.odds_placed`
 sigue en la base, sin uso.
 
+**Las apuestas reales se liquidan a ese mínimo de PlayDoit** (23-oct-2026), no a la
+mejor cuota europea: el dueño apuesta en PlayDoit cuando paga el mínimo o más, así que
+liquidar a la mejor de Europa inflaba el bankroll del sistema.
+- `save_bets.playdoit_settle_odds` lo calcula al guardar la apuesta: `min_odds` con el
+  modelo y el Pinnacle del momento de apostar (`pin_prob` de la bet o, si no viene,
+  `decision_log.market_ctx.pin_prob`, el mismo que lee Telegram), sin pasar de la mejor
+  cuota europea. Se guarda en `bets_history.odds_playdoit_min`.
+- `plan_bet_settlements` liquida con `settle_odds`: `odds_playdoit_min` si existe, si no
+  `odds` (las apuestas anteriores al 23-oct).
+- `scripts/clv_audit.py` (weekly) cuenta la ganancia con el mismo precio.
+- El valor contra Pinnacle (`sharp_reference`) se sigue midiendo a la mejor cuota europea:
+  mide al modelo, no lo que cobra el dueño.
+
 Hasta el 22-sep-2026 el `.exe` en uso no se podía reconstruir desde el repo: `app.py`
 era una reescritura a medias, sin rutas.
 
