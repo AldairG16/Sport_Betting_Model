@@ -353,6 +353,14 @@ def _has(v) -> bool:
     return v is not None and not pd.isna(v)
 
 
+def _has_pair(h, a) -> bool:
+    """Córners o tiros al arco de los dos equipos. 0-0 es "sin dato"
+    (23-oct-26): los archivos /new/ de football-data (Brasil, Liga MX,
+    Argentina) no los traen y el loader guardó 0; un "menos de" se habría
+    liquidado ganado con un partido sin datos."""
+    return _has(h) and _has(a) and float(h) + float(a) > 0
+
+
 def card_total(mrow) -> float:
     """Tarjetas del partido como las cuenta PlayDoit: amarilla = 1 y roja = 1
     (el dueño, 21-oct-26). Hasta entonces contaban solo las amarillas. Una
@@ -449,7 +457,7 @@ def resolve_market(market: str, _mrow, odds: float, stake: float) -> tuple[str, 
         # _has, no `is not None`: un NULL leído por pandas llega como NaN, y
         # con NaN toda comparación es False → over Y under salían "loss"
         # (se liquidaban como perdidas apuestas sin datos; fix 22-sep-26)
-        if _has(hs) and _has(as_):
+        if _has_pair(hs, as_):
             outcome = _over_under(float(hs) + float(as_), market)
             if outcome == "push":
                 profit = 0.0
@@ -564,7 +572,7 @@ def resolve_market(market: str, _mrow, odds: float, stake: float) -> tuple[str, 
     elif market.startswith("corners_over_") or market.startswith("corners_under_"):
         hc = _mrow.get("home_corners") if _mrow is not None else None
         ac = _mrow.get("away_corners") if _mrow is not None else None
-        if _has(hc) and _has(ac):      # NaN = sin dato (ver shots)
+        if _has_pair(hc, ac):          # NaN o 0-0 = sin dato (ver shots)
             outcome = _over_under(float(hc) + float(ac), market)
             if outcome == "push":
                 profit = 0.0

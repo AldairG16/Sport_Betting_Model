@@ -7,6 +7,12 @@ TEAM_NAME_MAP = {
     # EXISTENTE
     # =========================
     "atletico madrid": "ath madrid",
+    # Nombres de Understat (team_xg_real, player_club_goals; 23-oct-26)
+    "borussia mgladbach": "gladbach",
+    "mainz 05": "mainz",
+    "rasenballsport leipzig": "leipzig",
+    "parma calcio 1913": "parma",
+    "racing santander": "real racing club de santander",
     "atl madrid": "ath madrid",   # así entró un partido de agosto-26 (lo fusionó el weekly del 5-oct)
     "real sociedad": "sociedad",
 

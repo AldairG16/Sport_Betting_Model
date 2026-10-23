@@ -145,7 +145,7 @@ def settle_independent(market: str, r: dict) -> str | None:
         g = re.fullmatch(prop + r"_(over|under)_(\d+(?:\.\d+)?)", market)
         if g:
             a, b = _num(r.get(cols[0])), _num(r.get(cols[1]))
-            if a is None or b is None:
+            if a is None or b is None or (prop == "corners" and a + b == 0):    # 0-0 en córners = sin dato
                 return None
             reds = (_num(r.get("home_red")) or 0) + (_num(r.get("away_red")) or 0) if prop == "cards" else 0
             return _ou(a + b + reds, float(g.group(2)), g.group(1))

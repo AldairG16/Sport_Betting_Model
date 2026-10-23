@@ -45,7 +45,10 @@ LEAGUE_SIZES = {
     "soccer_netherlands_eredivisie":      18,
     "soccer_portugal_primeira_liga":      18,
     "soccer_brazil_campeonato":           20,
-    "soccer_argentina_primera_division":  30,
+    # Argentina NO (23-oct-26): 30 equipos en dos zonas de 15 y playoff; una
+    # sola tabla de 30 no dice quién pelea qué. Con las jornadas mal contadas
+    # nunca se activaba; bien contadas marcaba 7 de 14 partidos "sin nada en
+    # juego" con esa tabla.
     "soccer_mexico_ligamx":               18,
 }
 
@@ -76,6 +79,40 @@ EUROPE_SPOTS = {
 }
 
 
+# Partidos de cada equipo en la temporada (en Liga MX, en el torneo). Con ellos se cuentan las jornadas que faltan (23-oct-26): era
+# equipos − 1 − jugados, la cuenta de UNA vuelta, y en las ligas de ida y
+# vuelta el "final de temporada" empezaba en la jornada 11 (título +5%,
+# Europa +4%, descenso +6%, partidos "sin nada en juego"); desde la jornada
+# 19 el líder quedaba "campeón" (−8%) y la zona de descenso "descendida" (−8%).
+SEASON_GAMES = {
+    "soccer_epl": 38, "soccer_spain_la_liga": 38, "soccer_germany_bundesliga": 34,
+    "soccer_italy_serie_a": 38, "soccer_france_ligue_one": 34, "soccer_efl_champ": 46,
+    "soccer_netherlands_eredivisie": 34, "soccer_portugal_primeira_liga": 34,
+    "soccer_brazil_campeonato": 38, "soccer_mexico_ligamx": 17,
+}
+# Cuándo empieza la temporada: julio en Europa; Brasil va de enero a
+# diciembre (antes se contaba desde julio: la tabla salía con la mitad de los
+# partidos); Liga MX juega dos torneos por año.
+CALENDAR_YEAR = {"soccer_brazil_campeonato"}
+TWO_TOURNAMENTS = {"soccer_mexico_ligamx"}
+
+
+def current_season_start(league: str, now: datetime | None = None) -> str:
+    """Primer día de la temporada (o torneo) en curso de la liga."""
+    now = now or datetime.now()
+    if league in CALENDAR_YEAR:
+        return f"{now.year}-01-01"
+    if league in TWO_TOURNAMENTS:
+        return f"{now.year}-{'01' if now.month < 7 else '07'}-01"
+    return f"{now.year - 1}-07-01" if now.month < 7 else f"{now.year}-07-01"
+
+
+def games_left(league: str, played: int) -> int:
+    """Jornadas que le faltan al equipo en la temporada (o torneo)."""
+    total = SEASON_GAMES.get(league, 2 * (LEAGUE_SIZES.get(league, 20) - 1))
+    return max(0, total - int(played))
+
+
 def _get_current_standings(league: str, season_start: str = None) -> pd.DataFrame:
     """
     Calcula la tabla de posiciones actual desde la tabla matches.
@@ -85,13 +122,7 @@ def _get_current_standings(league: str, season_start: str = None) -> pd.DataFram
         Vacío si no hay datos suficientes.
     """
     if season_start is None:
-        # Asumir temporada actual: si estamos antes de julio, la temporada empezó
-        # en agosto del año anterior
-        now = datetime.now()
-        if now.month < 7:
-            season_start = f"{now.year - 1}-07-01"
-        else:
-            season_start = f"{now.year}-07-01"
+        season_start = current_season_start(league)
 
     try:
         df = pd.read_sql(
@@ -208,10 +239,7 @@ def get_motivation_factor(team: str, league: str) -> float:
     if played < MIN_MATCHES_SEASON:
         return 0.0
 
-    # Calcular partidos restantes aproximados
-    games_remaining = n_teams - 1 - played  # ligas de vuelta doble
-    if games_remaining < 0:
-        games_remaining = 0
+    games_remaining = games_left(league, played)
 
     # Máximo puntos posibles
     max_pts_possible = pts + games_remaining * 3
@@ -291,7 +319,7 @@ def is_unreliable_match(home_team: str, away_team: str, league: str) -> tuple[bo
     safe_zone_lo = n_europe + 2          # > posición safe_zone_lo y < safe_zone_hi = zona media
     safe_zone_hi = n_teams - n_relegated - 1
 
-    games_remaining = max(0, n_teams - 1 - int(rh["played"]))
+    games_remaining = games_left(league, rh["played"])
 
     # 1) Dead rubber — ambos en zona media + fin de temporada
     pos_h = int(rh["position"])

@@ -200,19 +200,22 @@ def get_real_xg(team: str) -> dict | None:
     esperados chocaban con el tope (3.5 y 3.5) en las 5 grandes ligas y en
     la Champions. El 1X2 del modelo salía ~40/17/43 en todos esos partidos.
     """
-    team = team.strip().lower()
+    from src.utils.team_normalizer import normalize_team
+    team = normalize_team(team)
     try:
-        df = pd.read_sql(text("""
-            SELECT xg_for, xg_against, matches, updated_at
-            FROM team_xg_real
-            WHERE LOWER(team) = LOWER(:team)
-            ORDER BY season DESC LIMIT 1
-        """), engine, params={"team": team})
+        df = pd.read_sql(text("SELECT team, season, xg_for, xg_against, matches, updated_at FROM team_xg_real"),
+                         engine)
     except Exception:
         return None
+    # La tabla guarda el nombre de Understat ("Bayern Munich", "VfB Stuttgart")
+    # y el pipeline pregunta con el canónico ("bayern munchen", "stuttgart"):
+    # se comparan los dos normalizados. Hasta el 23-oct-26 se comparaban tal
+    # cual y 24 de los 96 equipos de las 5 grandes (Bayern, Atlético, Inter,
+    # Leipzig, Newcastle…) caían sin aviso al xG estimado.
+    df = df[df["team"].map(normalize_team) == team]
     if df.empty:
         return None
-    row = df.iloc[0]
+    row = df.sort_values("season", ascending=False).iloc[0]
     updated = row["updated_at"]
     if pd.notna(updated) and (pd.Timestamp.now(tz="UTC") - pd.Timestamp(updated)
                                > pd.Timedelta(days=STALE_DAYS)):
