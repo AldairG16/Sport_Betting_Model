@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 from sqlalchemy import text
 from config.database import engine
@@ -212,6 +214,42 @@ def persist_shadow_bets(records: list):
 # SAVE BETS
 # =========================
 
+def playdoit_settle_odds(bet: dict) -> float | None:
+    """El momio al que se liquida una apuesta real (23-oct-26): el mínimo de
+    PlayDoit que le dice el mensaje ("apuesta si paga X o mejor"; min_odds con
+    Pinnacle), sin pasar del mejor momio de Europa. El dueño apuesta en
+    PlayDoit solo si paga eso o más, así que es el piso de lo que cobró.
+    Antes se liquidaba al MEJOR momio de Europa, que PlayDoit no paga: el
+    bankroll del sistema salía más alto que el de su cuenta. None sin datos."""
+    from src.utils.min_odds import min_odds
+    try:
+        best = float(bet.get("odds"))
+    except (TypeError, ValueError):
+        return None
+    pin = bet.get("pin_prob")
+    if pin is None:               # la bet del pipeline lo trae en su decision_log, como lo lee Telegram
+        log_ = bet.get("decision_log")
+        try:
+            log_ = json.loads(log_) if isinstance(log_, str) else (log_ or {})
+            pin = (log_.get("market_ctx") or {}).get("pin_prob")
+        except (TypeError, ValueError, AttributeError):
+            pin = None
+    floor = min_odds(bet.get("probability"), pin_prob=pin)
+    if floor is None or not best > 1:
+        return None
+    return round(min(floor, best), 4)
+
+
+def settle_odds(row) -> float:
+    """El momio para liquidar: el de PlayDoit si se guardó, si no el de siempre."""
+    v = row.get("odds_playdoit_min") if hasattr(row, "get") else None
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        v = None
+    return v if v is not None and v > 1 and not pd.isna(v) else float(row["odds"])
+
+
 def save_bets(bets):
 
     if not bets:
@@ -219,6 +257,7 @@ def save_bets(bets):
         return
 
     df = pd.DataFrame(bets)
+    df["odds_playdoit_min"] = [playdoit_settle_odds(b) for b in bets]
 
     df["result"] = "pending"
     df["profit"] = 0.0
@@ -245,6 +284,8 @@ def save_bets(bets):
             ALTER TABLE bets_history
             ADD COLUMN IF NOT EXISTS odds_placed NUMERIC
         """))
+        # el momio de PlayDoit al que se liquida (playdoit_settle_odds)
+        conn.execute(text("ALTER TABLE bets_history ADD COLUMN IF NOT EXISTS odds_playdoit_min NUMERIC"))
         conn.execute(text(BETS_CLOSING_ALTER_SQL))
 
     with engine.begin() as conn:
@@ -264,7 +305,8 @@ def save_bets(bets):
                     closing_odds,
                     clv,
                     decision_log,
-                    odds_placed
+                    odds_placed,
+                    odds_playdoit_min
                 )
                 VALUES (
                     :match,
@@ -280,12 +322,14 @@ def save_bets(bets):
                     :closing_odds,
                     :clv,
                     :decision_log,
-                    :odds_placed
+                    :odds_placed,
+                    :odds_playdoit_min
                 )
                 ON CONFLICT (match, market, match_date) DO NOTHING
             """), {
                 **row.to_dict(),
                 "odds_placed": row.get("odds_placed"),
+                "odds_playdoit_min": row.get("odds_playdoit_min"),
             })
 
     print(f"✅ {len(df)} bets saved to bets_history")
@@ -700,7 +744,7 @@ def plan_bet_settlements(bets: pd.DataFrame, all_matches: pd.DataFrame) -> list[
             if mrow is None or not (_has(mrow["home_goals"]) and _has(mrow["away_goals"])):
                 continue
             if all(_has(mrow.get(f)) for f in _market_required_match_fields(market)):
-                outcome, profit = resolve_market(market, mrow, float(row["odds"]),
+                outcome, profit = resolve_market(market, mrow, settle_odds(row),
                                                  float(row["stake"]))
             else:
                 outcome, profit = "unresolved", 0.0

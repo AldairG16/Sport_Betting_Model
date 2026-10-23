@@ -225,3 +225,30 @@ def test_the_weekly_runs_the_system_audit_after_the_dc_fit(monkeypatch):
     names = [n for n, _ in ran]
     assert names.index("Auditoría del sistema") == names.index("Fit DC-MLE parameters") + 1
     assert dict(ran)["Auditoría del sistema"] is O.step_system_audit
+
+
+# ─── apuestas reales liquidadas al precio de PlayDoit ────────────────────────
+
+def test_a_real_bet_settles_at_the_playdoit_minimum_not_the_best_european_price():
+    from tests.test_market_resolution import MATCHES, _bet, _matches_like_production
+    from src.models.save_bets import plan_bet_settlements, playdoit_settle_odds
+    from src.utils.min_odds import min_odds
+    # el mensaje: "PlayDoit: apuesta si paga X o mejor" (X = min_odds con Pinnacle)
+    bet = {"odds": 2.10, "probability": 0.55, "pin_prob": 0.52}
+    floor = min_odds(0.55, pin_prob=0.52)
+    assert playdoit_settle_odds(bet) == pytest.approx(min(floor, 2.10))
+    assert playdoit_settle_odds({**bet, "odds": 1.50}) == pytest.approx(1.50)    # PlayDoit no paga más que Europa
+    assert playdoit_settle_odds({"odds": 2.10, "probability": None}) is None
+    bets = pd.DataFrame([{**_bet(1, "alpha vs beta", "home_win", "pending", 20, odds=2.10), "odds_playdoit_min": 1.95},
+                         {**_bet(2, "alpha vs beta", "draw", "pending", 20, odds=3.40), "odds_playdoit_min": None}])
+    plan = {p["id"]: p for p in plan_bet_settlements(bets, _matches_like_production(MATCHES))}
+    assert plan[1]["result"] == "win" and plan[1]["profit"] == pytest.approx(0.95)      # no 1.10
+    assert plan[2]["result"] == "loss"                                                   # sin dato: como antes
+
+
+def test_the_settle_odds_reads_pinnacle_from_the_decision_log_like_telegram():
+    import json
+    from src.models.save_bets import playdoit_settle_odds
+    from src.utils.min_odds import min_odds
+    bet = {"odds": 2.10, "probability": 0.55, "decision_log": json.dumps({"market_ctx": {"pin_prob": 0.50}})}
+    assert playdoit_settle_odds(bet) == pytest.approx(min(min_odds(0.55, pin_prob=0.50), 2.10))
