@@ -258,7 +258,7 @@ def fetch_data(sport_key: str, cache: dict, force: bool = False) -> list:
     }
 
     try:
-        r = requests.get(url, params=params, timeout=15)
+        r = get_with_retry(url, params)
     except requests.RequestException as e:
         log.error(f"  ❌ Error de red: {e}")
         return cache.get(sport_key, {}).get("data", [])
@@ -344,7 +344,7 @@ def fetch_event_specialty_markets(sport_key: str, event_id: str, cache: dict) ->
     }
 
     try:
-        r = requests.get(url, params=params, timeout=15)
+        r = get_with_retry(url, params)
     except requests.RequestException:
         return []
 
@@ -1102,6 +1102,28 @@ def upsert_matches(rows: list[dict]):
 # ============================================================
 # MAIN
 # ============================================================
+RETRY_PAUSES = (3, 10)      # segundos antes de cada reintento
+
+
+def get_with_retry(url: str, params: dict, get=None, sleep=time.sleep, pauses=RETRY_PAUSES):
+    """GET a The Odds API con reintentos ante 5xx y errores de red (24-oct-26:
+    un 502 pasajero dejó la MLS sin recargar en un closing). Un 5xx no cobra
+    créditos; un 4xx (clave, plan, sin créditos) no se reintenta."""
+    get = get or requests.get
+    for i, pause in enumerate((0,) + tuple(pauses)):
+        if pause:
+            sleep(pause)
+        try:
+            r = get(url, params=params, timeout=15)
+        except requests.RequestException:
+            if i == len(pauses):
+                raise
+            continue
+        if r.status_code < 500 or i == len(pauses):
+            return r
+    return r
+
+
 def _cleanup_old_matches():
     """Elimina partidos de upcoming_matches que ya pasaron hace más de 7 días."""
     try:

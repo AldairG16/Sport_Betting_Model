@@ -218,3 +218,15 @@ def test_the_pick_line_says_when_to_bet_it():
     no = LA.pick_line(win("btts", reason="El programa se separa demasiado del mercado: probablemente se equivoca"), alerts)
     assert no.endswith("no pasa la regla del programa (el programa se separa demasiado del mercado): no lo apuestes.")
     assert LA.pick_line(None, alerts) == "" and "sin precio" in LA.pick_line(win("draw", min_us=None), alerts)
+
+
+def test_no_alert_line_below_the_picks_odds_floor():
+    """24-oct-26: AEK vs Panetolikos mandó "Empate o AEK si paga −1579": no es una apuesta."""
+    profiles = {"alpha": LA.team_profile(_history()), "beta": LA.team_profile(_history())}
+    heavy = {**_fixture(), "pin_home_odds": 1.12, "pin_draw_odds": 9.0, "pin_away_odds": 21.0}
+    lineups = {"beta": XI[:7] + ["x1", "x2", "x3", "x4"], "alpha": XI}          # el visitante débil
+    assert LA.alerts_for_match(heavy, lineups, profiles, now=NOW) == []          # −568 y −1579: nada que avisar
+    fair = LA.alerts_for_match(_fixture(), lineups, profiles, now=NOW)
+    assert [a["market"] for a in fair] == ["home_win"]                         # "empate o local" ~1.37: fuera
+    assert all(1 + (a["min_american"] / 100 if a["min_american"] > 0 else 100 / -a["min_american"]) >= LA.MIN_ALERT_ODDS
+               for a in fair)

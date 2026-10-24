@@ -681,6 +681,11 @@ anterior. Ahora resume hoy, y ayer solo si el run se atrasó pasada la medianoch
 fallaban con HTTPError, y las mismas respondían bien desde otra máquina. Ahora `_get`
 espera 0.25 s entre llamadas y reintenta ante 429/5xx (1, 2 y 4 s).
 
+**The Odds API: reintento ante 5xx y errores de red (24-oct-2026).** Un 502 pasajero dejó la
+MLS sin recargar en un closing. `update_upcoming_matches.get_with_retry` reintenta 2 veces,
+tras 3 y 10 s, en los momios por liga y por evento. Un 5xx no cobra créditos; un 4xx (clave,
+plan, sin créditos) no se reintenta.
+
 **Un cierre solo vale si se DESCARGÓ cerca del kickoff.** La cuota de una fila de
 `upcoming_matches` puede tener horas: sin una recarga cerca del partido, el "cierre"
 de una bet o candidata shadow era la misma cuota de apertura (CLV 0 exacto — se veía
@@ -1267,6 +1272,9 @@ casa como PlayDoit ajusta. No se puede medir con historia, solo en vivo.
     semana completo.
   - **Longshots:** "el rival gana" solo sale si Pinnacle le da 20% o más (con 15% o menos,
     el buscador de ventajas mide −24%); "empate o rival" sale siempre.
+  - **Momio mínimo de 1.40** (`MIN_ALERT_ODDS`, 24-oct-2026), el mismo piso de los picks: un
+    renglón por debajo no sale ("empate o AEK a −1579" no es una apuesta). Si no queda
+    ninguno, no hay aviso.
   - **El goleador no avisa:** cuando falta, la casa exagera (el rival ganó 34.4% contra
     36.0% esperado). Solo se menciona en el mensaje.
   - **Cómo calcula el mínimo:** con el precio de Pinnacle de `upcoming_matches` y 2 pt de
@@ -1659,6 +1667,9 @@ de responder "cómo nos fue con los picks".
   - sin momios del 1X2 (antes del 12-oct `odds_history` no tiene Pinnacle ni promedio), el 1X2
     contra el Pinnacle de `model_vs_sharp`, sin precio: cuenta acierto, no unidades;
   - solo un partido que el programa no analizó (sin fila en `model_vs_sharp`) se queda sin pick.
+  - **El motivo se ve escrito** (v2.4.1, 24-oct-2026), no solo al pasar el mouse: "Sin análisis
+    · poca historia" (K-League y ascendidos con menos de 15 partidos), "Sin pick · sin momio
+    en rango"… El dueño veía los partidos de la K-League vacíos sin saber por qué.
   - Al 22-oct: 461 partidos jugados con pick (antes 24); 24 pasan la regla; 246 sin precio.
 - **Tiros al arco** no tiene precio en ninguna fuente: no es pick.
 - **El dashboard muestra el pick guardado** (`visibility.saved_pick`), no lo recalcula: lo que
