@@ -194,6 +194,18 @@ def test_the_audit_checks_each_espn_slug_is_the_right_league():
                    "ESPN: soccer_japan_j_league → jpn.1 no responde"]
 
 
+class _NoRowsEngine:
+    """Motor falso: toda consulta devuelve cero filas."""
+    def connect(self):
+        import contextlib
+        from types import SimpleNamespace
+        @contextlib.contextmanager
+        def cm():
+            yield SimpleNamespace(execute=lambda *a, **k: SimpleNamespace(mappings=lambda: [], fetchall=lambda: [],
+                                                                          scalar=lambda: None))
+        return cm()
+
+
 def test_the_audit_runs_every_check_and_reports_each_problem(monkeypatch):
     import scripts.system_audit as SA
     import scripts.learn_team_aliases as LTA
@@ -216,6 +228,10 @@ def test_the_audit_runs_every_check_and_reports_each_problem(monkeypatch):
     monkeypatch.setattr(SA, "_upcoming_history_counts", lambda days: {})
     import src.features.kalshi as KS
     monkeypatch.setattr(KS, "stored_mismatches", lambda engine, days=7: [])
+    import scripts.update_upcoming_matches as UU
+    monkeypatch.setattr(UU, "stale_norms", lambda rows: [])
+    import config.database as DB
+    monkeypatch.setattr(DB, "engine", _NoRowsEngine())
     out = SA.run_system_audit()
     assert out["Sesgo del modelo"] == [] and out["Alineaciones de ESPN"] == [] and out["Dixon-Coles al día"] == []
     assert out["Kalshi con su partido"] == []
@@ -272,3 +288,15 @@ def test_the_audit_flags_teams_with_history_missing_from_dixon_coles():
     out = dc_problems(counts, {"fc koln"}, 8)
     assert len(out) == 1 and "1 equipo(s)" in out[0] and "schalke 04" in out[0]
     assert dc_problems(counts, {"fc koln", "schalke 04"}, 8) == []          # Iraklis: poca historia, no es error
+
+
+def test_upcoming_rows_with_an_outdated_normalized_name_are_found():
+    """23-oct-26: "erzurum bb" quedó en upcoming_matches después del alias a
+    "erzurumspor" y el pipeline analizaba el partido dos veces."""
+    from scripts.update_upcoming_matches import stale_norms
+    norm = {"Erzurum BB": "erzurumspor", "Gazişehir Gaziantep": "gazisehir gaziantep"}.get
+    rows = [{"match_key": "a", "home_team": "Gazişehir Gaziantep", "away_team": "Erzurum BB",
+             "home_team_norm": "gazisehir gaziantep", "away_team_norm": "erzurum bb"},
+            {"match_key": "b", "home_team": "Gazişehir Gaziantep", "away_team": "Erzurum BB",
+             "home_team_norm": "gazisehir gaziantep", "away_team_norm": "erzurumspor"}]
+    assert stale_norms(rows, norm) == [("a", "gazisehir gaziantep", "erzurumspor")]

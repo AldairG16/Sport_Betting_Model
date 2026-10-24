@@ -252,6 +252,7 @@ están todas las clases que ya pasaron, como chequeos que corren igual cada vez:
 | Alineaciones de ESPN | Que cada alineación sea de su partido y su equipo (`espn_lineups.identity_problems`): un partido de ESPN guardado con más de dos equipos, o alineaciones que no comparten jugadores con su equipo | Weekly |
 | Dixon-Coles al día | Que ningún equipo de los próximos 3 días con la historia que pide el ajuste (8+ partidos en 3 años) falte del ajuste Dixon-Coles: si falta, el ajuste es más viejo que la historia y sus partidos se saltan | Weekly |
 | Kalshi con su partido | Que el 1X2 guardado de Kalshi no esté a más de 10 pt del de Pinnacle (`kalshi.stored_mismatches`): si lo está, es otro partido. Se limpia con `scripts/fix_kalshi_mismatches.py --apply` | Weekly |
+| Nombres de los próximos partidos | Que ninguna fila de `upcoming_matches` siga con el nombre normalizado de antes de un alias (`update_upcoming_matches.stale_norms`): sería el mismo partido dos veces. Cada recarga de momios los re-normaliza antes de limpiar duplicados | Weekly |
 
 - Corre en el weekly (paso "Auditoría del sistema", después del ajuste Dixon-Coles); las
   salidas ya las revisó el evening.
@@ -711,6 +712,15 @@ CLV hasta el 22-sep-2026.
 `match_day`, derivado del kickoff, así que cuando la API corrige un horario se inserta
 fila nueva en vez de actualizar. Todo consumidor debe leer con
 `DISTINCT ON (home_team_norm, away_team_norm, sport_key) … ORDER BY updated_at DESC`.
+- **Con un alias nuevo pasaba lo mismo (23-oct-2026).** La limpieza de duplicados reconoce
+  el partido por los nombres normalizados. Cuando un alias cambiaba uno ("erzurum bb" →
+  "erzurumspor"), la fila vieja quedaba con el nombre anterior y el pipeline analizaba el
+  partido dos veces, hasta 7 días después.
+- Ahora cada recarga corre `_renormalize_names` antes de `_cleanup_stale_duplicates`, y la
+  auditoría del sistema lo vigila (chequeo "Nombres de los próximos partidos").
+- Las tablas derivadas (`model_vs_sharp`, `program_picks`) pueden tener nombres de antes de un
+  alias en partidos ya jugados. No importa: quien las lee normaliza (`match_key`, la
+  liquidación).
 
 **El cron de GH descarta `*/N` en los minutos punta** (`:00/:15/:30/:45`). Para algo
 más frecuente que cada hora usa minutos off-peak — `pre_kickoff.yml` usa
