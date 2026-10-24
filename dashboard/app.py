@@ -548,7 +548,7 @@ def api_predictions_history():
     mvs = _q("""
         SELECT * FROM model_vs_sharp
         WHERE match_date BETWEEN NOW() - make_interval(days => :d) AND NOW() - INTERVAL '2 hours'
-          AND skipped_at IS NULL
+          AND skipped_at IS NULL AND low_history IS NULL
         ORDER BY match_date DESC
     """, {"d": d})
     if mvs.empty:
@@ -687,11 +687,9 @@ def _load_past_rows() -> list:
         WHERE date >= CAST(:s AS date) AND home_goals IS NOT NULL AND league IN {_COVERED}
         ORDER BY date DESC
     """, p)
-    if matches.empty:
-        return []
-    mvs = _q("""SELECT match, match_date, p_home, p_draw, p_away, pin_home, pin_draw, pin_away
+    mvs = _q("""SELECT match, match_date, p_home, p_draw, p_away, pin_home, pin_draw, pin_away, low_history
                 FROM model_vs_sharp WHERE match_date >= CAST(:s AS date) - 2 AND skipped_at IS NULL""", p)
-    picks = _q("""SELECT match, match_date, label, family, market, reason, model_prob, market_prob, result,
+    picks = _q("""SELECT match, match_date, league, label, family, market, reason, model_prob, market_prob, result,
                          profit, source
                   FROM program_picks WHERE match_date >= CAST(:s AS date) - 2""", p)
     bets = _q("""SELECT match, match_date, market, result, profit FROM bets_history

@@ -100,6 +100,10 @@ MOVED = "El mercado se movió en contra después del análisis (alineaciones o n
 CROSS = "Equipos de ligas distintas: falta ajustar por la fuerza de cada liga"
 NO_PRICE = "Sin momio en rango para lo que el programa cree"
 STALE = "El programa ya no lo evalúa: poca historia de estos equipos para opinar"
+# 24-oct-26 (el dueño: "aunque tenga poca historia quiero ver el pick"): el
+# partido se analiza igual y su pick se ve, nunca 🎯, con el detalle de
+# model_vs_sharp.low_history
+LOW_HISTORY = "Poca historia para apostar"
 
 
 def _num(v):
@@ -317,7 +321,11 @@ def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None) -> tup
         # sin momios del 1X2: el Pinnacle de cuando se analizó, sin precio
         cs += [_cand(market, label, "Ganador", p, mk, None, None)
                for (_, _, _, _, _, market, label), p, mk in zip(SIDES, model, pin)]
-    return choose(cs, _market_then(r, then_snap, ratio), r.get("league"), _num(r.get("league_factor")) is not None)
+    pick, why = choose(cs, _market_then(r, then_snap, ratio), r.get("league"), _num(r.get("league_factor")) is not None)
+    low = r.get("low_history")
+    if pick and low and not (isinstance(low, float) and pd.isna(low)):
+        why = f"{LOW_HISTORY}: {low}"                     # se ve el pick, nunca 🎯
+    return pick, why
 
 
 def _snap_index(snaps: pd.DataFrame, normalize=None) -> dict:

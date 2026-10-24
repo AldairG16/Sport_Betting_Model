@@ -179,7 +179,7 @@ function upRow(m, i){
             '  ·  Pinnacle: ' + p100(pin[0]) + ' / ' + p100(pin[1]) + ' / ' + p100(pin[2]);
   // v2.2: todos los partidos analizados tienen pick; 🎯 = pasa la regla
   var pick = pk.label ? (pk.rule ? '🎯 ' : '') + famIcon(pk.family) + ' <b>' + esc(pk.label) + '</b>' +
-             (pk.playdoit_us ? ' <span class="muted">' + esc(pk.playdoit_us) + '</span>' : '') :
+             (pk.playdoit_us ? ' <span class="muted">' + esc(pk.playdoit_us) + '</span>' : '') + whyTag(pk) :
              noPick(pk.reason);
   var tipPick = pk.label ? 'Programa ' + p100(pk.model) + ' · mercado ' + p100(pk.market_prob) + ' · momio PlayDoit aprox.' +
                 (pk.rule ? ' · 🎯 pasa la regla' : (pk.reason ? ' · no pasa la regla: ' + pk.reason : '')) : (pk.reason || '');
@@ -253,6 +253,24 @@ function noPick(reason){
   return '<span class="muted" title="' + esc(r || 'El programa no analizó este partido') + '">' + esc(txt) + '</span>';
 }
 
+// Por qué un pick no pasa la regla, corto y a la vista (v2.4.2, 24-oct-26: el dueño
+// quiere ver el pick aunque tenga poca historia, con una breve descripción)
+function shortWhy(reason){
+  var r = String(reason || '');
+  if (!r) return '';
+  if (/^Poca historia/i.test(r)) return '⚠️ poca historia';
+  if (/^Sin ventaja/i.test(r)) return 'sin ventaja';
+  if (/demasiado/i.test(r)) return 'muy lejos del mercado';
+  if (/se movi/i.test(r)) return 'el mercado se movió en contra';
+  if (/ligas distintas/i.test(r)) return 'ligas distintas';
+  if (/momio/i.test(r)) return 'sin momio en rango';
+  return r.split(':')[0].toLowerCase();
+}
+function whyTag(pk){
+  return (pk && !pk.rule && pk.reason) ?
+    ' <span class="muted small" title="' + esc(pk.reason) + '">· ' + esc(shortWhy(pk.reason)) + '</span>' : '';
+}
+
 // ── Anteriores (desde septiembre) ──
 var _past = [], _pastShown = 150, _pastOnly = false;
 function ok(v){ return v === true ? '✅' : v === false ? '❌' : '<span class="muted">·</span>'; }
@@ -273,10 +291,13 @@ function pastRow(r, i){
               (pk.rule ? ' · 🎯 pasa la regla' : (pk.reason ? ' · no pasa la regla: ' + pk.reason : '')) +
               (pk.rebuilt ? ' · reconstruido con la predicción guardada antes del partido' : '')) + '">' + (pk.rebuilt ? '↺ ' : '') +
               (played ? ok(pk.result === 'win' || pk.result === 'half_win') : '⏳') + ' ' + (pk.rule ? '🎯 ' : '') + famIcon(pk.family) + ' ' + esc(pk.label) +
-              (pk.profit !== null && played ? ' <span class="' + (pk.profit >= 0 ? 'pos' : 'neg') + '">' + money(pk.profit) + '</span>' : '') + '</span>';
+              (pk.profit !== null && played ? ' <span class="' + (pk.profit >= 0 ? 'pos' : 'neg') + '">' + money(pk.profit) + '</span>' : '') + '</span>' +
+              whyTag(pk);
   }
   return '<tr class="r" onclick="openPast(' + i + ')"><td class="hide-sm muted small">' + esc(r.league) + '</td><td style="text-align:right">' + esc(r.home) +
-         '</td><td class="sc">' + r.score[0] + ' - ' + r.score[1] + '</td><td>' + esc(r.away) + '</td><td>' +
+         '</td><td class="sc">' + (r.score ? r.score[0] + ' - ' + r.score[1] :
+                                  '<span class="muted" title="Ya empezó; el marcador llega en la corrida de la noche">⏳</span>') +
+         '</td><td>' + esc(r.away) + '</td><td>' +
          (r.corners ? r.corners[0] + '-' + r.corners[1] : '<span class="muted">—</span>') + '</td><td class="hide-sm">' +
          (r.cards === null ? '<span class="muted">—</span>' : r.cards) + '</td>' +
          '<td title="' + esc(f ? 'Programa: ' + side[f.model] + ' ' + p100(f.model_p) : '') + '">' + ok(f ? f.model_hit : null) + '</td>' +

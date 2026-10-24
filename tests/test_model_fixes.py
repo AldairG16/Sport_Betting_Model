@@ -143,15 +143,19 @@ def test_learners_of_the_model_opinion_start_after_the_fix():
 # Sin historia suficiente, el modelo no opina
 # ============================================================
 
-def test_teams_with_almost_no_history_are_not_priced(monkeypatch):
-    import src.pipeline.prediction_pipeline as pp
-    from collections import Counter
-    forms = {"inter milan": {"matches": 8, "attack_rating": 2.2, "defense_rating": 0.9, "is_fallback": False},
-             "shakhtar donetsk": {"matches": 2, "attack_rating": 1.9, "defense_rating": 2.4, "is_fallback": False}}
-    monkeypatch.setattr(pp, "get_safe_form", lambda team, venue=None: forms[team])
-    row = pd.Series({"home_team": "Inter Milan", "away_team": "Shakhtar Donetsk", "match_date": "2026-10-21",
-                     "home_odds": 1.30, "over25_odds": 1.70, "btts_yes_odds": None,
-                     "sport_key": "soccer_uefa_champs_league"})
-    stats = Counter()
-    assert pp._stage_team_strengths(row, stats) is None
-    assert stats["thin_history"] == 1
+def test_teams_with_almost_no_history_get_only_an_informative_pick(monkeypatch):
+    """21-oct-26: con 2 partidos el modelo daba 46/22/32 al Inter contra 77/14/9
+    de Pinnacle: no opina para apostar. 24-oct-26 (el dueño: "aunque tenga poca
+    historia quiero ver el pick"): se analiza igual, marcado, sin apuestas."""
+    from tests.pipeline_harness import _form, extended_kwargs, run_pipeline
+    kw = extended_kwargs()
+    kw["form_fn"] = lambda team, venue=None, **k: {**_form(team, venue), **({"matches": 2} if team == "pi" else {})}
+    m = kw["matches"]
+    omi = (m["home_team"].str.lower() == "omi").to_numpy()
+    for c, v in (("pin_home_odds", 2.3), ("pin_draw_odds", 3.3), ("pin_away_odds", 3.2)):  # sin Pinnacle no se registra
+        m[c] = [v if o else None for o in omi]
+    out = run_pipeline(monkeypatch, **kw)
+    rec = next(r for r in out["model_sharp"] if r["match"] == "omi vs pi")
+    assert "pi con 2" in rec["low_history"]                          # el motivo, para el pick
+    assert "omi vs pi" not in {b["match"] for b in out["bets"] + out["shadow"] + out["paper"]}
+    assert all(not r.get("low_history") for r in out["model_sharp"] if r["match"] != "omi vs pi")

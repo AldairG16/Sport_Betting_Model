@@ -1670,6 +1670,23 @@ de responder "cómo nos fue con los picks".
   - **El motivo se ve escrito** (v2.4.1, 24-oct-2026), no solo al pasar el mouse: "Sin análisis
     · poca historia" (K-League y ascendidos con menos de 15 partidos), "Sin pick · sin momio
     en rango"… El dueño veía los partidos de la K-League vacíos sin saber por qué.
+  - **Pick aunque haya poca historia** (v2.4.2, 24-oct-2026; el dueño: "aunque tenga poca
+    historia o no cumpla, yo quiero ver el pick, con una breve descripción").
+    - **Cuándo aplica:** un equipo con menos de 5 partidos en la base, o Dixon-Coles por debajo
+      del 50% (algún equipo con menos de 15 partidos).
+    - **Qué hace:** el partido se analiza igual y se guarda marcado
+      (`model_vs_sharp.low_history`, con el motivo). Su pick se ve, nunca 🎯, con el motivo
+      `LOW_HISTORY` ("Poca historia para apostar: …").
+    - **Qué no hace:** no apuesta, no entra a la sombra ni a las propuestas, no aprende el sesgo
+      (`side_bias.LEARNABLE`), no cuenta en la auditoría ni en los aciertos del dashboard.
+    - Sin ninguna historia (sin forma) no hay análisis ni pick.
+  - **Cada pick que no pasa la regla dice por qué, corto, a la vista:** "⚠️ poca historia",
+    "sin ventaja", "muy lejos del mercado", "el mercado se movió en contra", "sin momio en
+    rango".
+  - **Los partidos que ya empezaron salen en Anteriores** con su pick y ⏳ en el marcador, hasta
+    que el marcador llega en la corrida de la noche. Antes los de hoy no estaban ni en Próximos
+    (ya empezaron) ni en Anteriores (sin marcador): el 24-oct el dueño no veía ninguno de los 19
+    partidos de las 5 grandes, aunque todos tenían su pick guardado.
   - Al 22-oct: 461 partidos jugados con pick (antes 24); 24 pasan la regla; 246 sin precio.
 - **Tiros al arco** no tiene precio en ninguna fuente: no es pick.
 - **El dashboard muestra el pick guardado** (`visibility.saved_pick`), no lo recalcula: lo que
