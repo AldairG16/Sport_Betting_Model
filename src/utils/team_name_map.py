@@ -55,6 +55,10 @@ TEAM_NAME_MAP = {
     "atletico": "ath madrid",
     "new york rb": "ny red bulls",
     "jeju sk": "jeju united fc",
+    # segunda de Holanda en ESPN (24-oct-26): los nombres de football-data en matches
+    "rkc waalwijk": "waalwijk",
+    "de graafschap": "graafschap",
+    "roda jc kerkrade": "roda",
     # Nombres de Understat (team_xg_real, player_club_goals; 23-oct-26)
     "borussia mgladbach": "gladbach",
     "mainz 05": "mainz",

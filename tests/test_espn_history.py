@@ -185,3 +185,23 @@ def test_team_ids_need_both_names_to_fit():
     assert learn_team_ids([ev], wrong) == {}
     right = wrong + [{"date": "2026-10-23", "h": "gimnasia mendoza", "a": "platense", "home_goals": 1, "away_goals": 0}]
     assert learn_team_ids([ev], right) == {"1": "gimnasia mendoza", "2": "platense"}
+
+
+def test_second_division_rows_use_our_names():
+    """24-oct-26: la segunda de Holanda (ESPN) como historia de los que suben."""
+    from src.features.espn_history import second_division_rows
+    ev = [{"kickoff": "2026-04-12T18:45Z", "home_id": "10", "away_id": "99", "home_name": "SC Cambuur",
+           "away_name": "RKC Waalwijk", "home_goals": 2, "away_goals": 1, "home_corners": 6, "away_corners": 3}]
+    (r,) = second_division_rows(ev, {"10": "cambuur"}, "soccer_netherlands_eerste_divisie")
+    assert (r["home_team"], r["away_team"]) == ("cambuur", "waalwijk")            # id aprendido, alias
+    assert str(r["date"]) == "2026-04-12" and r["league"] == r["sport_key"] == "soccer_netherlands_eerste_divisie"
+    assert (r["home_goals"], r["away_goals"], r["home_corners"]) == (2, 1, 6)
+
+
+def test_the_weekly_loads_the_second_divisions_after_the_extra_leagues(monkeypatch):
+    import scripts.orchestrator as O
+    ran = []
+    monkeypatch.setattr(O, "run_step", lambda logger, name, fn: ran.append(name))
+    O.run_weekly(None)
+    assert ran.index("Segundas divisiones (ESPN)") == ran.index("Load extra leagues") + 1
+    assert ran.index("Segundas divisiones (ESPN)") < ran.index("Fit DC-MLE parameters")

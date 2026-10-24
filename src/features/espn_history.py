@@ -235,3 +235,70 @@ def refresh_espn_history(engine=None, months: int = MONTHS, get=None, pause: flo
     print(f"📚 Historial ESPN: {len(rows)} partidos de copas, Europa y amistosos ({read} lecturas) · "
           f"{len(ids)} equipos emparejados")
     return len(rows)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Segundas divisiones que solo publica ESPN → matches (24-oct-26)
+# ─────────────────────────────────────────────────────────────────────────────
+# Un equipo recién ascendido sin historia en su segunda división tiene menos
+# de 15 partidos y el pipeline no lo evalúa (Dixon-Coles poco confiable): el
+# 24-oct, Willem II vs Cambuur y Den Haag vs Heerenveen. football-data no
+# publica la segunda de Holanda; ESPN sí (760 partidos en 2024-26). Bélgica,
+# Grecia, Turquía, Portugal y Corea no están en ninguna de las dos: sus
+# ascendidos entran solos al llegar a 15 partidos en primera.
+SECOND_DIVISIONS = {"ned.2": "soccer_netherlands_eerste_divisie"}
+SECOND_DIVISION_MONTHS = 38          # la ventana del ajuste Dixon-Coles (3 años) y un poco más
+
+
+def second_division_rows(events: list, ids: dict, league: str) -> list:
+    """Función pura: filas de matches para los partidos terminados de una
+    segunda división, con nuestros nombres (ids de ESPN ya emparejados; si no,
+    normalize_team)."""
+    from src.utils.team_normalizer import normalize_team
+    out = []
+    for e in events:
+        kick = pd.Timestamp(e["kickoff"])
+        kick = kick.tz_convert("UTC") if kick.tzinfo else kick
+        out.append({"date": kick.date(), "league": league, "sport_key": league,
+                    "home_team": ids.get(e["home_id"]) or normalize_team(e["home_name"]),
+                    "away_team": ids.get(e["away_id"]) or normalize_team(e["away_name"]),
+                    "home_goals": e["home_goals"], "away_goals": e["away_goals"],
+                    "home_corners": e["home_corners"], "away_corners": e["away_corners"]})
+    return out
+
+
+def load_second_divisions(engine=None, months: int = 2, get=None, pause: float = 0.3, today=None) -> int:
+    """Carga en matches los partidos de SECOND_DIVISIONS de los últimos
+    `months` meses (weekly: 2; la carga inicial, SECOND_DIVISION_MONTHS). No
+    pisa nada (ON CONFLICT DO NOTHING)."""
+    from src.features.espn_lineups import _get
+    if engine is None:
+        from config.database import engine
+    with engine.connect() as conn:
+        ids = dict(conn.execute(text("SELECT espn_id, team FROM espn_teams")).fetchall()) \
+            if conn.execute(text("SELECT to_regclass('espn_teams')")).scalar() else {}
+    rows, read = [], 0
+    for slug, league in SECOND_DIVISIONS.items():
+        for ym in months_back(today, months):
+            data = _get(slug, "scoreboard", f"dates={ym}&limit=500", get)
+            if pause:
+                time.sleep(pause)
+            if data is not None:
+                read += 1
+            rows += second_division_rows(parse_events(data, slug), ids, league)
+    if not read:
+        log.error("❌ Segundas divisiones (ESPN): no se pudo leer ninguna — los ascendidos se quedan sin historia")
+        return 0
+    if not rows:
+        return 0
+    cols = ("date", "league", "sport_key", "home_team", "away_team", "home_goals", "away_goals",
+            "home_corners", "away_corners")
+    with engine.begin() as conn:
+        before = conn.execute(text("SELECT COUNT(*) FROM matches WHERE league = ANY(:l)"),
+                              {"l": list(SECOND_DIVISIONS.values())}).scalar()
+        conn.execute(text(f"""INSERT INTO matches ({", ".join(cols)}) VALUES ({", ".join(":" + c for c in cols)})
+                              ON CONFLICT (date, home_team, away_team) DO NOTHING"""), rows)
+        after = conn.execute(text("SELECT COUNT(*) FROM matches WHERE league = ANY(:l)"),
+                             {"l": list(SECOND_DIVISIONS.values())}).scalar()
+    print(f"📚 Segundas divisiones (ESPN): {after - before} partidos nuevos ({len(rows)} leídos, {read} lecturas)")
+    return int(after - before)

@@ -487,6 +487,14 @@ def step_load_extra_leagues():
     load_extra_leagues()
 
 
+def step_second_divisions():
+    """Segundas divisiones que solo publica ESPN (24-oct-26, hoy la de
+    Holanda): la historia de los que suben, para que el pipeline los evalúe
+    desde su primer partido en primera (src/features/espn_history.py)."""
+    from src.features.espn_history import load_second_divisions
+    load_second_divisions(months=2)
+
+
 def step_resolve_stale():
     """Las apuestas reales que quedaron sin resultado ('stale') se liquidan
     solas cuando llega su dato con las cargas del weekly (2-oct-26). Gratis:
@@ -1061,6 +1069,7 @@ def run_weekly(logger: Logger):
     run_step(logger, "Load international data",  step_load_international)
     run_step(logger, "Collect match events",     step_collect_events)
     run_step(logger, "Load extra leagues",       step_load_extra_leagues)
+    run_step(logger, "Segundas divisiones (ESPN)", step_second_divisions)
     run_step(logger, "Momios históricos",        step_historical_odds)
     run_step(logger, "Alineaciones (ESPN)",      step_lineup_history)
     run_step(logger, "Buscador de ventajas",     step_edge_finder)

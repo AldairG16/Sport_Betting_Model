@@ -350,6 +350,22 @@ la de UTC: un partido ya guardado con los mismos equipos a ±1 día no se repite
 (`already_stored`). La K-League no está en football-data: solo tiene los marcadores de la
 API.
 
+**La segunda de Holanda sale de ESPN (24-oct-2026).** Willem II vs Cambuur y Den Haag vs
+Heerenveen no se evaluaban: Cambuur y Den Haag tenían 9 partidos, y hacen falta 15 para que
+Dixon-Coles pese 55% (`DC_WEIGHT_BY_HISTORY`, `MIN_DC_WEIGHT`).
+- ESPN publica la Keuken Kampioen Divisie (`ned.2`).
+- `espn_history.load_second_divisions` la carga en `matches` como
+  `soccer_netherlands_eerste_divisie`. Los nombres salen de los ids ya emparejados
+  (`espn_teams`) o de `normalize_team`, más 3 alias de football-data (waalwijk, graafschap,
+  roda).
+- Carga inicial: 1,230 partidos desde sep-2023. Desde entonces el weekly trae los últimos 2
+  meses (paso "Segundas divisiones (ESPN)", antes del ajuste Dixon-Coles).
+- Con el ajuste rehecho, los dos partidos se evalúan, y la distancia de Dixon-Coles a
+  Pinnacle bajó de 13.0 a 12.0 pt de mediana.
+- **Sin fuente gratis:** Bélgica, Grecia, Turquía (ESPN lista `tur.2` sin partidos), Portugal
+  y la K-League. Sus ascendidos entran solos al llegar a 15 partidos en primera; el 24-oct
+  tenían entre 7 y 10.
+
 **football-data manda OTRO archivo cuando el pedido no existe.** El servidor corrige el
 nombre y redirige a uno que difiere en una letra, con HTTP 200. Así entraron, sin un solo
 error, partidos con la etiqueta de otra liga (medido el 1-oct-2026):
