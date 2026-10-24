@@ -91,6 +91,12 @@ ALTER_SQL = "; ".join(f"ALTER TABLE model_vs_sharp ADD COLUMN IF NOT EXISTS {c} 
 # Un análisis nuevo lo limpia (persist).
 SKIP_SQL = "ALTER TABLE model_vs_sharp ADD COLUMN IF NOT EXISTS skipped_at TIMESTAMPTZ"
 VALID = "skipped_at IS NULL"
+# low_history (24-oct-26): el partido se analizó con poca historia (menos de 5
+# partidos o Dixon-Coles por debajo de MIN_DC_WEIGHT). Su pick se ve, marcado,
+# pero no aprende el sesgo ni cuenta en la auditoría: está lejos de Pinnacle a
+# propósito. NULL = análisis normal.
+LOW_SQL = "ALTER TABLE model_vs_sharp ADD COLUMN IF NOT EXISTS low_history TEXT"
+LEARNABLE = "skipped_at IS NULL AND low_history IS NULL"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -213,7 +219,8 @@ def program_probs(r, state: dict | None) -> dict:
 
 
 def record(match: str, match_date, league, model_probs: dict, pin: dict,
-           lambdas: tuple | None = None, league_factor=None, market_goals: dict | None = None) -> dict | None:
+           lambdas: tuple | None = None, league_factor=None, market_goals: dict | None = None,
+           low_history: str | None = None) -> dict | None:
     """Fila de model_vs_sharp con el 1X2 CRUDO del modelo y el de Pinnacle,
     (para el dashboard) goles esperados, más de 2.5 y ambos anotan, el
     factor de liga si el partido se ajustó con ClubElo y el mercado de goles
@@ -232,7 +239,8 @@ def record(match: str, match_date, league, model_probs: dict, pin: dict,
             "p_over25": _num(model_probs.get("over25")), "p_btts": _num(model_probs.get("btts")),
             "league_factor": _num(league_factor),
             "mkt_over25": _num((market_goals or {}).get("over25")),
-            "mkt_btts": _num((market_goals or {}).get("btts"))}
+            "mkt_btts": _num((market_goals or {}).get("btts")),
+            "low_history": low_history or None}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -366,15 +374,16 @@ def persist(records: list) -> int:
         conn.execute(text(TABLE_SQL))
         conn.execute(text(ALTER_SQL))
         conn.execute(text(SKIP_SQL))
+        conn.execute(text(LOW_SQL))
         for r in rows:
-            r = {**{c: None for c in EXTRA_COLUMNS}, **r}
+            r = {**{c: None for c in EXTRA_COLUMNS}, "low_history": None, **r}
             conn.execute(text("""
                 INSERT INTO model_vs_sharp
                     (match, match_date, league, p_home, p_draw, p_away, pin_home, pin_draw, pin_away,
-                     lam_home, lam_away, p_over25, p_btts, league_factor, mkt_over25, mkt_btts)
+                     lam_home, lam_away, p_over25, p_btts, league_factor, mkt_over25, mkt_btts, low_history)
                 VALUES (:match, :match_date, :league, :p_home, :p_draw, :p_away,
                         :pin_home, :pin_draw, :pin_away, :lam_home, :lam_away, :p_over25, :p_btts,
-                        :league_factor, :mkt_over25, :mkt_btts)
+                        :league_factor, :mkt_over25, :mkt_btts, :low_history)
                 ON CONFLICT (match, match_date) DO UPDATE SET
                     p_home = EXCLUDED.p_home, p_draw = EXCLUDED.p_draw, p_away = EXCLUDED.p_away,
                     pin_home = EXCLUDED.pin_home, pin_draw = EXCLUDED.pin_draw,
@@ -382,6 +391,7 @@ def persist(records: list) -> int:
                     lam_away = EXCLUDED.lam_away, p_over25 = EXCLUDED.p_over25,
                     p_btts = EXCLUDED.p_btts, league_factor = EXCLUDED.league_factor,
                     mkt_over25 = EXCLUDED.mkt_over25, mkt_btts = EXCLUDED.mkt_btts,
+                    low_history = EXCLUDED.low_history,
                     skipped_at = NULL, created_at = NOW()
             """), r)
     return len(rows)
@@ -420,13 +430,15 @@ def read_pairs() -> pd.DataFrame:
     with engine.begin() as conn:
         conn.execute(text(TABLE_SQL))
         conn.execute(text(SKIP_SQL))
-    # solo partidos desde que el modelo dejó de estar roto (MODEL_SINCE) y
-    # que la última corrida sí evaluó
+        conn.execute(text(LOW_SQL))
+    # solo partidos desde que el modelo dejó de estar roto (MODEL_SINCE), que
+    # la última corrida sí evaluó y con historia suficiente (no los de
+    # poca historia: no son la opinión normal del modelo)
     from config.settings import MODEL_SINCE
     return pd.read_sql(text(f"""
         SELECT * FROM model_vs_sharp
         WHERE match_date >= NOW() - INTERVAL '{WINDOW_DAYS} days'
-          AND match_date >= CAST(:since AS timestamptz) AND {VALID}
+          AND match_date >= CAST(:since AS timestamptz) AND {LEARNABLE}
     """), engine, params={"since": MODEL_SINCE})
 
 

@@ -704,14 +704,18 @@ def _stage_team_strengths(row, stats):
         stats['skipped_no_odds'] += 1
         return None
     # Con menos de MIN_FORM_MATCHES partidos en la base el modelo no tiene
-    # opinión (21-oct-26: Shakhtar y LASK en la Champions, con 2 partidos
-    # porque sus ligas no se cargan: el modelo daba 46/22/32 al Inter contra
-    # 77/14/9 de Pinnacle). Antes solo se saltaban los equipos con 0.
+    # opinión confiable (21-oct-26: Shakhtar y LASK en la Champions, con 2
+    # partidos porque sus ligas no se cargan: el modelo daba 46/22/32 al Inter
+    # contra 77/14/9 de Pinnacle). Desde el 24-oct (el dueño: "aunque tenga
+    # poca historia quiero ver el pick") se calcula igual, marcado: solo pick
+    # informativo, sin apuestas ni aprendizaje (_evaluate_match).
+    low_history = None
     if min(home_form["matches"], away_form["matches"]) < MIN_FORM_MATCHES:
         stats['thin_history'] += 1
-        log.warning(f"⚠️  Skip historia corta: {home} ({home_form['matches']}) vs "
-                    f"{away} ({away_form['matches']}) — menos de {MIN_FORM_MATCHES} partidos")
-        return None
+        low_history = (f"{home} con {home_form['matches']} y {away} con {away_form['matches']} partidos "
+                       f"en la base (mínimo {MIN_FORM_MATCHES})")
+        log.warning(f"⚠️  Historia corta: {home} ({home_form['matches']}) vs "
+                    f"{away} ({away_form['matches']}) — menos de {MIN_FORM_MATCHES} partidos: solo pick informativo")
     # 🔥 CONFIDENCE
     min_matches = min(home_form["matches"], away_form["matches"])
     confidence  = min(1.0, min_matches / 10)
@@ -836,6 +840,7 @@ def _stage_team_strengths(row, stats):
         confidence=confidence, home_xg=home_xg, away_xg=away_xg, xg_source=_xg_source,
         home_cong=home_cong, away_cong=away_cong,
         home_motiv=home_motiv, away_motiv=away_motiv,
+        low_history=low_history,
     )
 
 
@@ -1431,7 +1436,7 @@ def _stage_model_probabilities(row, T, L, ctx, stats):
     return M, Q
 
 
-def _stage_side_bias(row, T, M, ctx, records, L=None):
+def _stage_side_bias(row, T, M, ctx, records, L=None, low_history=None):
     """Etapa 3b — registra el 1X2 CRUDO del modelo contra Pinnacle (de ahí
     aprende side_bias) y descuenta el sesgo ya aprendido de su región del 1X2
     y sus derivados, de más de 2.5 y de ambos anotan, antes del ancla
@@ -1442,7 +1447,7 @@ def _stage_side_bias(row, T, M, ctx, records, L=None):
                  M.model_probs, pinnacle_probs(row),
                  lambdas=(L.lambda_home, L.lambda_away) if L is not None else None,
                  league_factor=L.league_gap[2] if L is not None and getattr(L, "league_gap", None) else None,
-                 market_goals=market_goal_refs(row))
+                 market_goals=market_goal_refs(row), low_history=low_history)
     if rec:
         records.append(rec)
     M.model_probs, M.side_bias_shift = debias(M.model_probs, bias_for(getattr(ctx, "side_bias", None), league))
@@ -3031,10 +3036,22 @@ def run_prediction_pipeline(dry_run: bool = False):
             _skip(row)
             return
         L = _stage_lambdas(row, T, ctx, stats)
+        low = getattr(T, "low_history", None)
         if not getattr(L, "dc_ok", True):
             stats['no_dc'] += 1
-            print(f"  Sin Dixon-Coles confiable: {T.home} vs {T.away} (peso {L.mle_w:.0%}) — no se evalúa")
-            _skip(row)
+            print(f"  Sin Dixon-Coles confiable: {T.home} vs {T.away} (peso {L.mle_w:.0%}) — solo pick informativo")
+            low = low or (f"Dixon-Coles al {L.mle_w:.0%}: algún equipo tiene menos de "
+                          f"{DC_WEIGHT_BY_HISTORY[1][0]} partidos en la base")
+        if low:
+            # Poca historia (24-oct-26, a pedido del dueño): el modelo no es
+            # confiable para apostar, pero el pick se ve con su motivo. Se
+            # registra marcado (model_vs_sharp.low_history) y no entra a las
+            # apuestas, la sombra, las propuestas ni el aprendizaje del sesgo.
+            M, _Q = _stage_model_probabilities(row, T, L, ctx, stats)
+            n_before = len(model_sharp_records)
+            _stage_side_bias(row, T, M, ctx, model_sharp_records, L, low_history=low)
+            if len(model_sharp_records) == n_before:
+                _skip(row)          # sin Pinnacle no se registra: que no quede el análisis viejo
             return
         M, Q = _stage_model_probabilities(row, T, L, ctx, stats)
         stats['evaluated'] += 1
@@ -3196,7 +3213,8 @@ def run_prediction_pipeline(dry_run: bool = False):
         # Lo que sale del modelo tiene sentido (21-oct-26): el xG mal escalado
         # tuvo 3 semanas los goles esperados en el tope sin que nada fallara.
         from src.utils.output_checks import pipeline_invariants
-        for problem in pipeline_invariants(model_sharp_records):
+        # (los de poca historia no: están lejos de Pinnacle a propósito)
+        for problem in pipeline_invariants([r for r in model_sharp_records if r and not r.get("low_history")]):
             log.error(f"❌ {problem}")
         # Lo que ENTRA al modelo (23-oct-26): una feature que de pronto no
         # aporta en ningún partido (una consulta rota, un nombre que no cuadra)

@@ -20,6 +20,7 @@ import pandas as pd
 
 from dashboard.display import league_name, market_name, team_name
 from dashboard.visibility import who_was_right
+from src.models.program_picks import LOW_HISTORY
 
 SINCE = "2026-09-01"
 FAMILIES = ("Ganador", "Goles", "Ambos anotan", "Córners", "Tarjetas")
@@ -80,17 +81,41 @@ def _near(index: dict, match: str, day, date_key="match_date") -> list:
     return [r for r in index.get(match, []) if abs((_day(r[date_key]) - d).days) <= 1]
 
 
+def _low(v) -> bool:
+    return bool(v) and not (isinstance(v, float) and pd.isna(v))
+
+
+def _pick_info(p: dict) -> dict:
+    """El pick guardado tal como lo ve la tabla de anteriores."""
+    res_p = _str(p.get("result")) or "pending"
+    when = pd.Timestamp(p["match_date"])
+    when = when.tz_convert("UTC") if when.tzinfo else when.tz_localize("UTC")
+    base = {"rebuilt": _str(p.get("source")) == "reconstruido", "old_model": bool(when < MODEL_FIXED),
+            "reason": _str(p.get("reason")) or ""}
+    if not _str(p.get("market")):              # sin pick: el motivo (v2.1)
+        return {**base, "none": True, "result": "none"}
+    return {**base, "label": p.get("label"), "family": _str(p.get("family")) or "Ganador", "result": res_p,
+            "profit": _num(p.get("profit")), "rule": not _str(p.get("reason")),
+            "model": _num(p.get("model_prob")), "market": _num(p.get("market_prob")),
+            "winner": who_was_right(p.get("model_prob"), p.get("market_prob"), res_p),
+            # 24-oct-26: con poca historia se ve, pero no cuenta en los aciertos
+            "low": base["reason"].startswith(LOW_HISTORY)}
+
+
 def past_matches(matches: pd.DataFrame, mvs: pd.DataFrame, picks: pd.DataFrame, bets: pd.DataFrame,
-                 normalize=None) -> list:
+                 normalize=None, now=None) -> list:
     """Cada partido jugado, del más reciente: marcador, córners, tarjetas,
     el favorito del programa y el de Pinnacle (¿acertaron?), el pick del
-    programa y las apuestas reales. Nombres canónicos en minúsculas."""
+    programa y las apuestas reales. Nombres canónicos en minúsculas.
+    Los que ya empezaron y todavía no tienen marcador en matches (se carga en
+    la noche) también salen, con su pick y sin resultado (24-oct-26: los
+    partidos de hoy de las ligas grandes no estaban ni en Próximos ni aquí)."""
     canon = (lambda m: m) if normalize is None else (
         lambda m: " vs ".join(normalize(x) for x in str(m).split(" vs ", 1)) if " vs " in str(m) else m)
     mv = _by_match(mvs.to_dict("records") if not mvs.empty else [])
     pk = _by_match(picks.to_dict("records") if not picks.empty else [])
     bt = _by_match(bets.to_dict("records") if not bets.empty else [], key=lambda r: canon(r["match"]))
-    out = []
+    out, used = [], set()
     for r in (matches.to_dict("records") if not matches.empty else []):
         hg, ag = int(r["home_goals"]), int(r["away_goals"])
         key = f"{r['h']} vs {r['a']}"
@@ -112,22 +137,15 @@ def past_matches(matches: pd.DataFrame, mvs: pd.DataFrame, picks: pd.DataFrame, 
                 fav = {"model": mf, "model_p": round(max(model), 3), "model_hit": mf == res,
                        "pin": pf, "pin_p": round(max(pin), 3) if pf else None, "pin_hit": pf == res if pf else None,
                        "probs": [round(x, 3) for x in model],
-                       "pin_probs": [round(x, 3) for x in pin] if pf else None}
+                       "pin_probs": [round(x, 3) for x in pin] if pf else None,
+                       "low": _low(m.get("low_history"))}
         pick = None
         for p in _near(pk, key, r["date"]):
-            res_p = _str(p.get("result")) or "pending"
-            when = pd.Timestamp(p["match_date"])
-            when = when.tz_convert("UTC") if when.tzinfo else when.tz_localize("UTC")
-            if not _str(p.get("market")):              # sin pick: el motivo (v2.1)
-                pick = {"none": True, "reason": _str(p.get("reason")) or "", "result": "none",
-                        "rebuilt": _str(p.get("source")) == "reconstruido", "old_model": bool(when < MODEL_FIXED)}
+            used.add(id(p))
+            info = _pick_info(p)
+            if info.get("none") and pick:              # el pick de verdad gana a un "sin pick" viejo
                 continue
-            pick = {"label": p.get("label"), "family": _str(p.get("family")) or "Ganador", "result": res_p,
-                    "profit": _num(p.get("profit")), "rule": not _str(p.get("reason")),
-                    "reason": _str(p.get("reason")) or "",
-                    "model": _num(p.get("model_prob")), "market": _num(p.get("market_prob")),
-                    "winner": who_was_right(p.get("model_prob"), p.get("market_prob"), res_p),
-                    "rebuilt": _str(p.get("source")) == "reconstruido", "old_model": bool(when < MODEL_FIXED)}
+            pick = info
         bets_out = [{"market": market_name(b["market"]), "result": _str(b.get("result")) or "pending",
                      "profit": _num(b.get("profit"))}
                     for b in _near(bt, key, r["date"]) if _str(b.get("result")) != "stale"]
@@ -135,6 +153,31 @@ def past_matches(matches: pd.DataFrame, mvs: pd.DataFrame, picks: pd.DataFrame, 
                     "league_key": r["league"], "home": team_name(r["h"]), "away": team_name(r["a"]),
                     "key": key, "score": [hg, ag], "corners": _corners(r), "cards": _cards(r),
                     "fav": fav, "pick": pick, "bets": bets_out})
+    now = pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz="UTC")
+    now = now.tz_convert("UTC") if now.tzinfo else now.tz_localize("UTC")
+    for k, ps in pk.items():
+        for p in ps:
+            when = pd.Timestamp(p["match_date"])
+            when = when.tz_convert("UTC") if when.tzinfo else when.tz_localize("UTC")
+            if id(p) in used or not (now - pd.Timedelta(hours=48) <= when <= now):
+                continue
+            h, _, a = k.partition(" vs ")
+            mrow = (_near(mv, k, when) or [None])[-1]
+            model = [_num(mrow.get(f"p_{s}")) for s in SIDES] if mrow else [None] * 3
+            pin = [_num(mrow.get(f"pin_{s}")) for s in SIDES] if mrow else [None] * 3
+            fav = None
+            if None not in model:
+                mf = SIDES[max(range(3), key=lambda i: model[i])]
+                pf = SIDES[max(range(3), key=lambda i: pin[i])] if None not in pin else None
+                fav = {"model": mf, "model_p": round(max(model), 3), "model_hit": None,
+                       "pin": pf, "pin_p": round(max(pin), 3) if pf else None, "pin_hit": None,
+                       "probs": [round(x, 3) for x in model],
+                       "pin_probs": [round(x, 3) for x in pin] if pf else None, "low": _low(mrow.get("low_history"))}
+            out.append({"date": (when - pd.Timedelta(hours=6)).tz_localize(None).normalize().strftime("%Y-%m-%d"),
+                        "league": league_name(p.get("league")) if p.get("league") else "",
+                        "league_key": p.get("league"), "home": team_name(h), "away": team_name(a),
+                        "key": k, "score": None, "corners": None, "cards": None, "started": True,
+                        "fav": fav, "pick": _pick_info(p), "bets": []})
     out.sort(key=lambda x: x["date"], reverse=True)
     return out
 
@@ -144,7 +187,7 @@ def weekly_accuracy(rows: list) -> list:
     weeks = {}
     for r in rows:
         f = r.get("fav")
-        if not f or f.get("pin_hit") is None:
+        if not f or f.get("pin_hit") is None or f.get("low"):
             continue
         d = pd.Timestamp(r["date"])
         wk = (d - pd.Timedelta(days=d.weekday())).strftime("%Y-%m-%d")
@@ -160,16 +203,19 @@ def weekly_accuracy(rows: list) -> list:
 
 
 def summary(rows: list) -> dict:
-    """Totales de la lista de partidos anteriores."""
-    fav = [r["fav"] for r in rows if r.get("fav") and r["fav"].get("pin_hit") is not None]
-    picks = [r["pick"] for r in rows if r.get("pick") and r["pick"]["result"] in PLAYED]
+    """Totales de la lista de partidos anteriores. Los de poca historia se ven
+    en la tabla pero no cuentan en los aciertos (24-oct-26)."""
+    fav = [r["fav"] for r in rows if r.get("fav") and r["fav"].get("pin_hit") is not None
+           and not r["fav"].get("low")]
+    picks = [r["pick"] for r in rows if r.get("pick") and r["pick"]["result"] in PLAYED
+             and not r["pick"].get("low")]
     bets = [b for r in rows for b in r["bets"] if b["result"] in PLAYED]
 
     def rec(ps):
         return {"n": len(ps), "won": sum(1 for p in ps if p["result"] in ("win", "half_win")),
                 "profit": round(sum(p["profit"] for p in ps if p["profit"] is not None), 2),
                 "priced": sum(1 for p in ps if p["profit"] is not None)}
-    return {"matches": len(rows), "analyzed": len(fav),
+    return {"matches": sum(1 for r in rows if r.get("score") is not None), "analyzed": len(fav),
             "model_hit": round(sum(f["model_hit"] for f in fav) / len(fav), 3) if fav else None,
             "pin_hit": round(sum(f["pin_hit"] for f in fav) / len(fav), 3) if fav else None,
             "picks_fixed": rec([p for p in picks if not p.get("old_model")]),

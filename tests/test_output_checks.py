@@ -63,10 +63,17 @@ def test_match_with_thin_dixon_coles_is_not_evaluated(monkeypatch, capsys):
                               "phi", "khi", "psi", "ome", "iota", "beta", "gamma", "kappa",
                               "eqa", "eqb", "alpha", "zeta", "theta", "nof", "delta", "epsilon")}
     counts.update({"omi": 8, "pi": 8})                       # 25% de Dixon-Coles
+    m = kw["matches"]
+    omi = (m["home_team"].str.lower() == "omi").to_numpy()
+    for c, v in (("pin_home_odds", 2.3), ("pin_draw_odds", 3.3), ("pin_away_odds", 3.2)):
+        m[c] = [v if o else None for o in omi]
     out = run_pipeline(monkeypatch, **_skip_on(kw, _safe_history_counts=lambda: dict(counts)))
     assert "omi vs pi" not in _evaluated(out)
     assert "lam vs mu" in _evaluated(out)
     assert "Sin Dixon-Coles confiable: omi vs pi (peso 25%)" in capsys.readouterr().out
+    # 24-oct-26: se ve su pick, marcado con el motivo
+    rec = next(r for r in out["model_sharp"] if r["match"] == "omi vs pi")
+    assert rec["low_history"].startswith("Dixon-Coles al 25%")
 
 
 def test_without_the_real_history_count_nothing_is_skipped(monkeypatch, capsys):
