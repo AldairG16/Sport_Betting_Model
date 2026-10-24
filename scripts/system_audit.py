@@ -31,6 +31,9 @@ cada vez; la próxima clase que aparezca se agrega aquí.
      segundas divisiones y 6 partidos del fin de semana se saltaban).
  10. Kalshi con su partido: su 1X2 a más de 10 pt del de Pinnacle es otro
      partido (23-oct-26: Gimnasia Mendoza guardado como Gimnasia LP).
+ 11. Los próximos partidos con los nombres de hoy: una fila de
+     upcoming_matches con el nombre normalizado de antes de un alias es el
+     mismo partido dos veces (23-oct-26: Gaziantep vs "erzurum bb").
 Corre en el weekly (paso "Auditoría del sistema", sin el 1, que ya corrió en
 el evening) y a mano:
     python scripts/system_audit.py
@@ -221,6 +224,19 @@ def run_system_audit(include_daily: bool = True, espn_get=None) -> dict:
                 f"({', '.join(f'{h} vs {a}' for _, h, a, *_ in bad[:3])}); limpiar con "
                 f"scripts/fix_kalshi_mismatches.py"] if bad else []
     check("Kalshi con su partido", kalshi)
+
+    def upcoming_names():
+        from sqlalchemy import text
+        from config.database import engine
+        from scripts.update_upcoming_matches import stale_norms
+        with engine.connect() as conn:
+            rows = [dict(r) for r in conn.execute(text("""
+                SELECT match_key, home_team, away_team, home_team_norm, away_team_norm FROM upcoming_matches
+                WHERE match_date > NOW()""")).mappings()]
+        bad = stale_norms(rows)
+        return [f"Próximos partidos: {len(bad)} fila(s) con el nombre de antes de un alias "
+                f"({', '.join(f'{h} vs {a}' for _, h, a in bad[:3])}) — el partido queda dos veces"] if bad else []
+    check("Nombres de los próximos partidos", upcoming_names)
 
     def elo():
         from src.features.elo_rating import compute_elo

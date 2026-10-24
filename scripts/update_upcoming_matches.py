@@ -1116,6 +1116,42 @@ def _cleanup_old_matches():
         log.error(f"⚠️  Cleanup error: {e}")
 
 
+def stale_norms(rows: list, normalize=normalize_team) -> list:
+    """Función pura: [(match_key, local, visitante)] de las filas cuyo nombre
+    normalizado guardado ya no es el de hoy (se agregó un alias después)."""
+    out = []
+    for r in rows:
+        h = normalize(r["home_team"]).lower().strip()
+        a = normalize(r["away_team"]).lower().strip()
+        if (h, a) != (r["home_team_norm"], r["away_team_norm"]):
+            out.append((r["match_key"], h, a))
+    return out
+
+
+def _renormalize_names():
+    """
+    Vuelve a normalizar los nombres de upcoming_matches con los alias de hoy
+    (23-oct-26). La limpieza de duplicados reconoce el mismo partido por los
+    nombres normalizados: cuando un alias nuevo cambia uno ("erzurum bb" →
+    "erzurumspor"), la fila vieja quedaba con el nombre anterior, no se
+    reconocía como duplicada y el pipeline analizaba el partido dos veces
+    hasta 7 días después. Corre antes de _cleanup_stale_duplicates.
+    """
+    try:
+        with engine.begin() as conn:
+            rows = [dict(r) for r in conn.execute(text("""
+                SELECT match_key, home_team, away_team, home_team_norm, away_team_norm FROM upcoming_matches
+            """)).mappings()]
+            fix = stale_norms(rows)
+            for mk, h, a in fix:
+                conn.execute(text("""UPDATE upcoming_matches SET home_team_norm = :h, away_team_norm = :a
+                                     WHERE match_key = :mk"""), {"mk": mk, "h": h, "a": a})
+        if fix:
+            print(f"🔤 Nombres re-normalizados con los alias de hoy: {len(fix)} filas de upcoming_matches")
+    except Exception as e:
+        log.error(f"❌ Re-normalizar nombres de upcoming_matches: {type(e).__name__}: {e}")
+
+
 def _cleanup_stale_duplicates():
     """
     Elimina rows duplicadas en upcoming_matches del mismo partido (mismo
@@ -1442,6 +1478,7 @@ def update_all(force: bool = False):
     # Limpieza de duplicados stale: si la API corrigió la fecha de un fixture
     # (placeholder 00:00 UTC → kickoff real), elimina la row vieja para que la
     # pipeline no vea 2 versiones del mismo partido.
+    _renormalize_names()          # antes: la limpieza reconoce el partido por estos nombres
     _cleanup_stale_duplicates()
 
     print(f"\n✅ DONE — {total_rows} partidos totales | {api_calls} llamadas API realizadas")
