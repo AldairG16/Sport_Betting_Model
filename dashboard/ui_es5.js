@@ -180,7 +180,7 @@ function upRow(m, i){
   // v2.2: todos los partidos analizados tienen pick; 🎯 = pasa la regla
   var pick = pk.label ? (pk.rule ? '🎯 ' : '') + famIcon(pk.family) + ' <b>' + esc(pk.label) + '</b>' +
              (pk.playdoit_us ? ' <span class="muted">' + esc(pk.playdoit_us) + '</span>' : '') :
-             '<span class="muted" title="' + esc(pk.reason || 'Sin análisis') + '">Sin pick</span>';
+             noPick(pk.reason);
   var tipPick = pk.label ? 'Programa ' + p100(pk.model) + ' · mercado ' + p100(pk.market_prob) + ' · momio PlayDoit aprox.' +
                 (pk.rule ? ' · 🎯 pasa la regla' : (pk.reason ? ' · no pasa la regla: ' + pk.reason : '')) : (pk.reason || '');
   var al = _alerts[m.match] ? ' <span title="' + esc(_alerts[m.match]) + '">⚠️</span>' : '';
@@ -243,6 +243,16 @@ function loadUpcoming(){
 el('uleague').onchange = renderUp;
 el('ufam').onchange = function(){ _upFam = this.value; renderUp(); };
 
+// Sin pick: el motivo a la vista, no solo al pasar el mouse (v2.4.1, 24-oct-26: los
+// partidos de la K-League se veían vacíos sin decir por qué)
+function noPick(reason){
+  var r = String(reason || '');
+  var txt = /poca historia/i.test(r) ? 'Sin análisis · poca historia' :
+            /momio/i.test(r) ? 'Sin pick · sin momio en rango' :
+            r ? 'Sin pick · ' + r.split(':')[0] : 'Sin análisis';
+  return '<span class="muted" title="' + esc(r || 'El programa no analizó este partido') + '">' + esc(txt) + '</span>';
+}
+
 // ── Anteriores (desde septiembre) ──
 var _past = [], _pastShown = 150, _pastOnly = false;
 function ok(v){ return v === true ? '✅' : v === false ? '❌' : '<span class="muted">·</span>'; }
@@ -254,8 +264,8 @@ function pastRow(r, i){
             (x.profit !== null ? ' ' + money(x.profit) : '') + '</span> ';
   }
   var side = { home: 'Local', draw: 'Empate', away: 'Visitante' };
-  var pickTxt = '<span class="muted">·</span>';
-  if (pk && pk.none) pickTxt = '<span class="muted" title="' + esc('Sin pick: ' + pk.reason) + '">—</span>';
+  var pickTxt = noPick('');
+  if (pk && pk.none) pickTxt = noPick(pk.reason);
   else if (pk) {
     var played = pk.result === 'win' || pk.result === 'loss' || pk.result === 'half_win' || pk.result === 'half_loss';
     pickTxt = '<span' + (pk.old_model ? ' style="opacity:.6"' : '') + ' title="' + esc(pk.label + ' · programa ' + p100(pk.model) + ' vs mercado ' + p100(pk.market) +

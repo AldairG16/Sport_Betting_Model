@@ -55,6 +55,8 @@ MAX_PIN_AGE_H = 12          # precio de Pinnacle más viejo que esto: sin alerta
 MIN_WIN_PROB = 0.20         # "el rival gana" solo si Pinnacle le da 20%+: los longshots pierden
                             # aun contra el precio justo (buscador de ventajas: −24% con ≤15%)
 KNOWN_MIN = 5               # titulares que tienen que haber jugado antes en el equipo
+MIN_ALERT_ODDS = 1.40       # momio mínimo que vale la pena avisar (el piso de los picks): un
+                            # "empate o favorito" a −1579 no es una apuesta (24-oct-26)
 
 TABLE = "lineup_alerts"
 DDL = f"""
@@ -166,11 +168,14 @@ def alerts_for_match(fixture: dict, lineups: dict, profiles: dict, now=None) -> 
             p = pinnacle_prob(market, fixture)
             if p is None or (market == rival_win and p < MIN_WIN_PROB):
                 continue
+            us = min_american(p)
+            if us is None or 1 + (us / 100 if us > 0 else 100 / -us) < MIN_ALERT_ODDS:
+                continue
             out.append({"sport_key": fixture["sport_key"], "kickoff": fixture["match_date"],
                         "home": home, "away": away, "weakened": team,
                         "missing": a["missing"], "top_scorer_out": a["top_out"], "market": market,
                         "pin_prob": float(p), "pin_fetched_at": fetched.to_pydatetime(),
-                        "min_american": min_american(p)})
+                        "min_american": us})
     return out
 
 
