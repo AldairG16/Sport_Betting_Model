@@ -210,7 +210,8 @@ def _steps(monkeypatch, fn):
 
 
 @pytest.mark.parametrize("fn,after", [("run_morning", "Predictions"), ("run_evening", "Predictions (mañana)"),
-                                      ("run_closing", "Pre-kickoff closing odds")])
+                                      # el closing lee antes los marcadores del día (v2.4.4)
+                                      ("run_closing", "Marcadores del día (ESPN)")])
 def test_picks_are_saved_after_every_analysis_and_every_closing(monkeypatch, fn, after):
     names, steps, O = _steps(monkeypatch, fn)
     assert names.index("Picks del programa") == names.index(after) + 1

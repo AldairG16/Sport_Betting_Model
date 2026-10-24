@@ -266,6 +266,12 @@ function shortWhy(reason){
   if (/momio/i.test(r)) return 'sin momio en rango';
   return r.split(':')[0].toLowerCase();
 }
+// Marcador de ESPN del día (v2.4.4): en vivo o final, provisional hasta la noche
+function liveTag(lv){
+  if (!lv) return '';
+  return lv.status === 'live' ? ' <span class="small muted" title="En juego (ESPN)">● ' + esc(lv.clock || 'en vivo') + '</span>' :
+         ' <span class="small muted" title="Marcador final de ESPN; se confirma en la corrida de la noche">final</span>';
+}
 function whyTag(pk){
   return (pk && !pk.rule && pk.reason) ?
     ' <span class="muted small" title="' + esc(pk.reason) + '">· ' + esc(shortWhy(pk.reason)) + '</span>' : '';
@@ -289,14 +295,15 @@ function pastRow(r, i){
     pickTxt = '<span' + (pk.old_model ? ' style="opacity:.6"' : '') + ' title="' + esc(pk.label + ' · programa ' + p100(pk.model) + ' vs mercado ' + p100(pk.market) +
               (pk.winner ? ' · tuvo razón el ' + pk.winner : '') + (pk.old_model ? ' · modelo con error (antes del 22 oct)' : '') +
               (pk.rule ? ' · 🎯 pasa la regla' : (pk.reason ? ' · no pasa la regla: ' + pk.reason : '')) +
-              (pk.rebuilt ? ' · reconstruido con la predicción guardada antes del partido' : '')) + '">' + (pk.rebuilt ? '↺ ' : '') +
+              (pk.rebuilt ? ' · reconstruido con la predicción guardada antes del partido' : '') +
+              (pk.provisional ? ' · provisional: con el marcador de ESPN, se confirma en la noche' : '')) + '">' + (pk.rebuilt ? '↺ ' : '') +
               (played ? ok(pk.result === 'win' || pk.result === 'half_win') : '⏳') + ' ' + (pk.rule ? '🎯 ' : '') + famIcon(pk.family) + ' ' + esc(pk.label) +
               (pk.profit !== null && played ? ' <span class="' + (pk.profit >= 0 ? 'pos' : 'neg') + '">' + money(pk.profit) + '</span>' : '') + '</span>' +
               whyTag(pk);
   }
   return '<tr class="r" onclick="openPast(' + i + ')"><td class="hide-sm muted small">' + esc(r.league) + '</td><td style="text-align:right">' + esc(r.home) +
-         '</td><td class="sc">' + (r.score ? r.score[0] + ' - ' + r.score[1] :
-                                  '<span class="muted" title="Ya empezó; el marcador llega en la corrida de la noche">⏳</span>') +
+         '</td><td class="sc">' + (r.score ? r.score[0] + ' - ' + r.score[1] + liveTag(r.live) :
+                                  '<span class="muted" title="Ya empezó; el marcador llega en unos minutos">⏳</span>') +
          '</td><td>' + esc(r.away) + '</td><td>' +
          (r.corners ? r.corners[0] + '-' + r.corners[1] : '<span class="muted">—</span>') + '</td><td class="hide-sm">' +
          (r.cards === null ? '<span class="muted">—</span>' : r.cards) + '</td>' +

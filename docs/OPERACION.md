@@ -1688,6 +1688,17 @@ de responder "cómo nos fue con los picks".
     (ya empezaron) ni en Anteriores (sin marcador): el 24-oct el dueño no veía ninguno de los 19
     partidos de las 5 grandes, aunque todos tenían su pick guardado. Un partido reprogramado (con
     pick en una fecha posterior) no sale como empezado en la fecha vieja (v2.4.3).
+  - **Marcadores del día (v2.4.4, 24-oct-2026).** El dueño: "también quiero ver si se ganó o
+    perdió".
+    - Cada closing (paso "Marcadores del día (ESPN)", `src/features/live_scores.py`) lee de
+      ESPN, gratis, el marcador de los partidos del sistema que empezaron en las últimas 6 h, con
+      córners y tarjetas. Lo guarda en `live_scores`, aparte: `matches` y la liquidación oficial
+      no cambian. El emparejamiento es el estricto de las alineaciones.
+    - En Anteriores se ve el marcador ("● 67'" en juego, "final" al terminar). Con el final, el
+      pick sale ✅ o ❌ con la misma regla de liquidación (`provisional_result` →
+      `save_bets.resolve_market`), al momio estimado de PlayDoit.
+    - Es provisional: no cuenta en los totales hasta que la corrida de la noche lo confirma.
+    - El 24-oct se emparejaron los 59 partidos que habían empezado.
   - Al 22-oct: 461 partidos jugados con pick (antes 24); 24 pasan la regla; 246 sin precio.
 - **Tiros al arco** no tiene precio en ninguna fuente: no es pick.
 - **El dashboard muestra el pick guardado** (`visibility.saved_pick`), no lo recalcula: lo que

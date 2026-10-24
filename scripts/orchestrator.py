@@ -487,6 +487,14 @@ def step_load_extra_leagues():
     load_extra_leagues()
 
 
+def step_live_scores():
+    """Marcador de ESPN de los partidos que ya empezaron (24-oct-26): el
+    dashboard muestra si el pick se ganó o se perdió sin esperar a la noche
+    (src/features/live_scores.py). Gratis; no toca matches ni la liquidación."""
+    from src.features.live_scores import capture_live_scores
+    capture_live_scores()
+
+
 def step_second_divisions():
     """Segundas divisiones que solo publica ESPN (24-oct-26, hoy la de
     Holanda): la historia de los que suben, para que el pipeline los evalúe
@@ -1041,6 +1049,7 @@ def run_closing(logger: Logger):
     (Mejora 6) y, con los momios recién recargados, el pick del programa de
     cada partido: el último antes del partido es el que cuenta."""
     run_step(logger, "Pre-kickoff closing odds", step_pre_kickoff_closing)
+    run_step(logger, "Marcadores del día (ESPN)", step_live_scores)
     run_step(logger, "Picks del programa", step_program_picks)
 
 

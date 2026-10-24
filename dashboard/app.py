@@ -690,11 +690,18 @@ def _load_past_rows() -> list:
     mvs = _q("""SELECT match, match_date, p_home, p_draw, p_away, pin_home, pin_draw, pin_away, low_history
                 FROM model_vs_sharp WHERE match_date >= CAST(:s AS date) - 2 AND skipped_at IS NULL""", p)
     picks = _q("""SELECT match, match_date, league, label, family, market, reason, model_prob, market_prob, result,
-                         profit, source
+                         profit, source, playdoit_odds
                   FROM program_picks WHERE match_date >= CAST(:s AS date) - 2""", p)
     bets = _q("""SELECT match, match_date, market, result, profit FROM bets_history
                  WHERE match_date >= CAST(:s AS date) - 2""", p)
-    return _b.past_matches(matches, mvs, picks, bets, normalize_team)
+    # marcador de ESPN de los que ya empezaron (v2.4.4): la tabla la llena el closing
+    try:
+        live = _q("""SELECT home, away, kickoff, home_goals, away_goals, home_corners, away_corners,
+                            home_cards, away_cards, status, clock
+                     FROM live_scores WHERE kickoff >= NOW() - INTERVAL '2 days'""")
+    except Exception:
+        live = pd.DataFrame()
+    return _b.past_matches(matches, mvs, picks, bets, normalize_team, live=live)
 
 
 @app.route("/api/board/past")
