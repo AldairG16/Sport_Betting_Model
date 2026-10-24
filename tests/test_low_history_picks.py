@@ -96,3 +96,14 @@ def test_low_history_rows_do_not_teach_the_side_bias(monkeypatch):
     monkeypatch.setattr(SB.pd, "read_sql", lambda sql, con=None, params=None: seen.append(str(sql)) or pd.DataFrame())
     SB.read_pairs()
     assert "low_history IS NULL" in seen[0] and "skipped_at IS NULL" in seen[0]
+
+
+def test_a_rescheduled_match_does_not_show_up_as_started():
+    """24-oct-26: Toulouse vs Troyes pasó del 24 al 25; la fecha vieja salía como empezada."""
+    now = pd.Timestamp("2026-10-24 19:40", tz="UTC")
+    picks = pd.DataFrame([_pick("toulouse vs troyes", "2026-10-24 15:15", market=None, label=None,
+                                reason=PK.STALE),
+                          _pick("toulouse vs troyes", "2026-10-25 16:15")])
+    rows = B.past_matches(pd.DataFrame(), pd.DataFrame(), picks, pd.DataFrame(),
+                          normalize=lambda t: str(t).lower(), now=now)
+    assert rows == []

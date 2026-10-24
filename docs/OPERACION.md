@@ -1686,7 +1686,8 @@ de responder "cómo nos fue con los picks".
   - **Los partidos que ya empezaron salen en Anteriores** con su pick y ⏳ en el marcador, hasta
     que el marcador llega en la corrida de la noche. Antes los de hoy no estaban ni en Próximos
     (ya empezaron) ni en Anteriores (sin marcador): el 24-oct el dueño no veía ninguno de los 19
-    partidos de las 5 grandes, aunque todos tenían su pick guardado.
+    partidos de las 5 grandes, aunque todos tenían su pick guardado. Un partido reprogramado (con
+    pick en una fecha posterior) no sale como empezado en la fecha vieja (v2.4.3).
   - Al 22-oct: 461 partidos jugados con pick (antes 24); 24 pasan la regla; 246 sin precio.
 - **Tiros al arco** no tiene precio en ninguna fuente: no es pick.
 - **El dashboard muestra el pick guardado** (`visibility.saved_pick`), no lo recalcula: lo que

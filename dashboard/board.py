@@ -161,6 +161,9 @@ def past_matches(matches: pd.DataFrame, mvs: pd.DataFrame, picks: pd.DataFrame, 
             when = when.tz_convert("UTC") if when.tzinfo else when.tz_localize("UTC")
             if id(p) in used or not (now - pd.Timedelta(hours=48) <= when <= now):
                 continue
+            later = [pd.Timestamp(o["match_date"]) for o in ps if o is not p]
+            if any((t.tz_convert("UTC") if t.tzinfo else t.tz_localize("UTC")) > when for t in later):
+                continue        # se reprogramó: en esta fecha no se jugó (Toulouse vs Troyes, 24-oct)
             h, _, a = k.partition(" vs ")
             mrow = (_near(mv, k, when) or [None])[-1]
             model = [_num(mrow.get(f"p_{s}")) for s in SIDES] if mrow else [None] * 3
