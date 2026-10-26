@@ -1708,6 +1708,9 @@ de responder "cómo nos fue con los picks".
       (`_partial_is_an_error`) y no se guarda en la caché.
     - Las tablas que pueden no existir todavía van con `optional=True` (`live_scores`,
       `weekly_narrative`).
+    - Lo vigila `tests/test_dashboard_db_down.py`: recorre todos los endpoints de datos con cada
+      consulta fallando. Ninguno puede contestar ok con datos vacíos ni tronar con un 500. La
+      clase entera queda vigilada, no solo la pantalla donde apareció.
   - **Lo que vio el programa (v2.4.6, 26-oct-2026).** El dueño dudó del pick de LAFC vs LA Galaxy
     (gana el local, terminó 2-2): "yo hubiera propuesto ambos anotan".
     - El detalle de cada partido muestra todos los mercados que el programa pesó
