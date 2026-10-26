@@ -144,6 +144,20 @@ function teamPanel(t){
   if (lu) h += '<div class="xi">' + (lu.confirmed ? '✅ ' : '👥 ') + '<b>' + esc(lu.formation) + '</b> ' + esc(lu.players.join(', ').replace(/ \(\d+ de \d+\)/g, '')) + '</div>';
   return h + '</div>';
 }
+// Lo que vio el programa en cada mercado (v2.4.6, 26-oct-26): por qué eligió ese pick y no otro
+function marketsHtml(d){
+  if (!d.markets || !d.markets.length) return '';
+  var rows = '';
+  for (var i = 0; i < d.markets.length; i++) {
+    var m = d.markets[i], picked = d.picked && m.market === d.picked;
+    rows += '<tr' + (picked ? ' style="font-weight:bold"' : '') + '><td>' + famIcon(m.family) + ' ' + esc(m.label) +
+            (picked ? ' <span class="small">← pick</span>' : '') + '</td><td>' + p100(m.model) + '</td><td>' + p100(m.market_prob) +
+            '</td><td class="' + (m.gap >= 0 ? 'pos' : 'neg') + '">' + (m.gap >= 0 ? '+' : '') + (m.gap * 100).toFixed(1) + ' pt</td></tr>';
+  }
+  return '<div class="small" style="margin-top:8px"><b>Lo que vio el programa</b> <span class="muted">· programa contra el mercado sin margen; ' +
+         'propone solo donde ve más que el mercado</span><table><thead><tr><th>Mercado</th><th>Programa</th><th>Mercado</th><th>Diferencia</th></tr></thead><tbody>' +
+         rows + '</tbody></table></div>';
+}
 function detailHtml(d){
   var h = '<div class="two">' + teamPanel(d.home) + teamPanel(d.away) + '</div>';
   if (d.h2h && d.h2h.length) {
@@ -151,7 +165,7 @@ function detailHtml(d){
     for (var i = 0; i < d.h2h.length; i++) x.push('<span title="' + esc(d.h2h[i].match + (d.h2h[i].league ? ' · ' + d.h2h[i].league : '')) + '">' + shortDate(d.h2h[i].date) + ' <b>' + d.h2h[i].score + '</b></span>');
     h += '<div class="h2h"><span class="muted">Entre ellos:</span> ' + x.join(' · ') + '</div>';
   }
-  return h;
+  return h + marketsHtml(d);
 }
 function openDetail(id, key, date){
   var box = el(id), ck = key + '|' + date;

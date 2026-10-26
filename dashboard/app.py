@@ -660,7 +660,37 @@ def api_match():
     extra = _espn_history(p)
     if matches.empty and lineups.empty and extra.empty:
         return _no_data("Sin partidos anteriores de estos equipos en la base")
-    return jsonify({"ok": True, **_md.match_detail(matches, lineups, home, away, when, extra)})
+    return jsonify({"ok": True, **_md.match_detail(matches, lineups, home, away, when, extra),
+                    **_market_view(home, away, when)})
+
+
+def _market_view(home: str, away: str, when) -> dict:
+    """Lo que vio el programa en cada mercado (v2.4.6): su último análisis del
+    partido y la última foto de momios antes del inicio (o la de ahora)."""
+    from src.models import program_picks as _pp
+    from src.utils.team_normalizer import normalize_team
+    mv = _q("""SELECT * FROM model_vs_sharp WHERE match = :m AND skipped_at IS NULL
+               AND match_date BETWEEN CAST(:d AS timestamptz) - INTERVAL '12 hours'
+                                  AND CAST(:d AS timestamptz) + INTERVAL '36 hours'
+               ORDER BY created_at DESC LIMIT 1""", {"m": f"{home} vs {away}", "d": when.to_pydatetime()})
+    if mv.empty:
+        return {"markets": [], "picked": None}
+    r = mv.iloc[0].to_dict()
+    kick = pd.Timestamp(r["match_date"])
+    kick = kick.tz_convert("UTC") if kick.tzinfo else kick.tz_localize("UTC")
+    before = min(kick, pd.Timestamp.now(tz="UTC"))
+    snaps = _q(_pp._SNAPS_SQL, {"a": (kick - pd.Timedelta(hours=3)).to_pydatetime(),
+                                "b": (kick + pd.Timedelta(hours=3)).to_pydatetime()})
+    snap = _pp._snap_before(_pp._snap_index(snaps, normalize_team), _pp.match_key(home, away, normalize_team),
+                            kick, before) if not snaps.empty else None
+    from types import SimpleNamespace
+    u = SimpleNamespace(**{"pin_total_line": None, "pin_total_over_odds": None, "pin_total_under_odds": None,
+                           "corners_line": None, "cards_line": None, **snap}) if snap else None
+    pk = _q("""SELECT market FROM program_picks WHERE match = :m
+               AND match_date BETWEEN CAST(:k AS timestamptz) - INTERVAL '3 hours' AND CAST(:k AS timestamptz) + INTERVAL '3 hours'
+               ORDER BY picked_at DESC NULLS LAST LIMIT 1""", {"m": f"{home} vs {away}", "k": kick.to_pydatetime()})
+    return {"markets": _pp.market_view(r, u, bias=_pp.load_bias()),
+            "picked": (pk.iloc[0]["market"] if not pk.empty else None)}
 
 
 def _espn_history(p: dict) -> pd.DataFrame:

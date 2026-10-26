@@ -12,6 +12,7 @@ cuenta en los aciertos del dashboard.
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from dashboard import board as B
 from src.models import program_picks as PK
@@ -107,3 +108,17 @@ def test_a_rescheduled_match_does_not_show_up_as_started():
     rows = B.past_matches(pd.DataFrame(), pd.DataFrame(), picks, pd.DataFrame(),
                           normalize=lambda t: str(t).lower(), now=now)
     assert rows == []
+
+
+def test_the_market_view_shows_every_market_the_program_weighed():
+    """26-oct-26 (LAFC vs Galaxy): el dueño quería ver por qué el pick fue el local y
+    no ambos anotan. La vista enseña todos los mercados, de la más a favor a la más
+    en contra, con los mismos candidatos que el pick."""
+    view = PK.market_view(dict(ROW), UP)
+    assert [v["gap"] for v in view] == sorted((v["gap"] for v in view), reverse=True)
+    labels = {v["label"] for v in view}
+    assert {"Gana el local", "Empate", "Gana el visitante", "Más de 2.5 goles", "Ambos anotan"} <= labels
+    pick, _ = PK.decide(dict(ROW), UP)
+    top = next(v for v in view if v["market"] == pick["market"])
+    assert top["gap"] == pytest.approx(pick["model"] - pick["market_prob"], abs=1e-3)
+    assert PK.market_view({**ROW, "p_home": None}, UP) == []
