@@ -652,6 +652,10 @@ evening, antes del resumen de Telegram). Cada problema es un ERROR y llega en "e
 tolerados":
 
 - liquidación de los últimos 3 días contra el cálculo independiente (`settle_independent`);
+- **picks y alineaciones** (sección 8, v2.5.0, `lineup_pick_problems`, desde el 27-oct):
+  - ningún 🎯 a que gana un equipo al que le faltaron 4+ titulares habituales;
+  - si más del 30% de los picks con las dos alineaciones publicadas no las vio (10+ picks),
+    el closing no los está recalculando;
 - partidos analizados que ya se jugaron y no tienen marcador (más del 15%);
 - pendientes atorados más allá de su ventana (reales 8 días, sombra y propuestas 11);
 - xG real de más de 4 por partido;
@@ -1272,7 +1276,9 @@ casa como PlayDoit ajusta. No se puede medir con historia, solo en vivo.
     últimos 10 días, en las 24 ligas de `ESPN_LEAGUES`. La carga inicial cubrió 120 días.
   - Los nombres son los de `matches` (`system_names`: misma fecha ±1 día y parecido de
     nombres), para que el historial se encuentre con el nombre de `upcoming_matches`.
-- **En vivo** (closing, cada 30 min, `run_lineup_alerts`):
+- **En vivo** (closing, cada 30 min; desde v2.5.0 en dos pasos: "Alineaciones publicadas"
+  guarda el XI con `capture_upcoming`, luego se recalcula el pick y "Alertas de alineación"
+  corre `run_lineup_alerts(capture=False)` con lo guardado):
   - Para los partidos que arrancan en 5-80 min, lee la alineación publicada.
   - **Titular habitual:** 70%+ de las titularidades en los últimos 15 partidos terminados,
     con al menos 6.
@@ -1666,6 +1672,28 @@ de responder "cómo nos fue con los picks".
   - El mercado no se movió 3 pts o más en contra desde que el programa analizó el partido
     (`MOVED_AGAINST`; foto de `odds_history` de antes de `created_at`). En el Bayern–Arsenal
     del 21-oct, Pinnacle pasó de 46% a 40% por la rotación; el programa no usa alineaciones.
+  - **El ganador no trae 4+ titulares habituales fuera** (v2.5.0, 26-oct-2026). El dueño:
+    "ponemos los picks mucho antes de que la lista de alineaciones esté lista… no es correcto
+    poner que un equipo ganará cuando no tiene a jugadores importantes o sale con equipo
+    suplente".
+    - El closing guarda la alineación de ESPN (paso "Alineaciones publicadas", ~1 h antes) y
+      DESPUÉS recalcula el pick ("Picks del programa"); el aviso de alineación sale al final
+      ("Alertas de alineación") con ese pick.
+    - `lineup_check`: si al ganador le faltan 4+ titulares habituales (`TRIGGER_MISSING`, el
+      umbral de las alertas), su motivo es `WEAKENED` ("Alineación: a X le faltan N titulares
+      habituales (…)"). El pick pasa a lo mejor que quede de lo que el programa cree; solo si no
+      queda nada sigue siendo ese ganador, con el motivo, nunca 🎯.
+    - `program_picks.lineup`: NULL = el pick todavía no vio la alineación; "confirmada" (y
+      quién trae 4+ fuera) = se recalculó con ella. Lo que se mide es el último pick.
+    - Por qué 4: contra el cierre, el rival del equipo debilitado gana +2.6 pt con 4 fuera y
+      +8.2 con 5+ (4,389 partidos, 20-oct), y el programa ni siquiera ve la rotación.
+    - Medido el 26-oct: en 415 picks a que gana un equipo (desde septiembre) los de 4+ fuera
+      salieron 23/41 (+0.78u), igual que el resto; la muestra es chica. En los últimos 4 días
+      bloquea al ganador en 9 de 173 partidos con alineación (Stuttgart, Besiktas, Benfica,
+      Leipzig, Palmeiras…), y uno era 🎯 (Palmeiras–Bragantino).
+    - Dashboard: 📋 el pick ya vio la alineación; ⏳ todavía no (sale ~1 h antes: para
+      apostar, esperar ese pick); "· sin alineación" en las ligas que ESPN no cubre
+      (`espn_leagues`), donde el pick nunca la ve.
   - Si es un partido entre ligas distintas (`CROSS_LEAGUE`: Champions, Europa League…), el
     análisis tiene que traer el ajuste por fuerza de liga (`model_vs_sharp.league_factor` no
     NULL; §7, "Fuerza de liga"). Sin él el programa sobrevalora a quien golea en una liga débil:
@@ -1739,6 +1767,13 @@ de responder "cómo nos fue con los picks".
       - 🎯 ambos anotan 19/31 (+1.4u);
       - 🎯 goles 11/25 (−5.8u), el más débil. En 153 partidos el mercado predice los goles
         mejor que el programa, y la forma de los últimos 5 sola predice peor que los dos.
+  - **Más de 2.5 y ambos anotan por equipo (v2.5.0, 26-oct-2026).** El resumen de cada equipo
+    en el detalle dice en cuántos de sus últimos 5 hubo más de 2.5 y ambos anotaron. El dueño
+    dudó del "más de 2.5" de Unión vs Estudiantes ("hay demasiados partidos donde no meten
+    gol"), y en los últimos 5 eran 3 de 5 en cada uno (7 de 10 y 6 de 10 en los últimos 10).
+    El programa veía 51% (48% crudo + 3 pt del sesgo de goles de América, donde el modelo
+    queda 4.3 pt abajo del mercado en Argentina y en 52 partidos salió 42% contra 37.5% del
+    programa) y el mercado 43%.
   - **Ángulo de goles (v2.4.7, 26-oct-2026).** Si alguno recibe 2+ goles por partido en sus
     últimos 5 oficiales (4+ partidos), el detalle lo dice (`match_detail.goals_angle`):
     - lo que ve el programa en más de 2.5 y ambos anotan contra el mercado;
@@ -1752,7 +1787,8 @@ de responder "cómo nos fue con los picks".
   - Al 22-oct: 461 partidos jugados con pick (antes 24); 24 pasan la regla; 246 sin precio.
 - **Nombres en pantalla** (`dashboard/display.team_name`, solo para mostrar; la clave sigue en
   minúsculas): las siglas van en `_UPPER_WORDS` y la primera palabra siempre con mayúscula. El
-  26-oct salían "la Galaxy", "Lafc", "Aik", "Psv Eindhoven", "Malmo Ff".
+  26-oct salían "la Galaxy", "Lafc", "Aik", "Psv Eindhoven", "Malmo Ff". Telegram usa la misma
+  función (aviso de alineación, títulos de partido y doble oportunidad), no `.title()`.
 - **Tiros al arco** no tiene precio en ninguna fuente: no es pick.
 - **El dashboard muestra el pick guardado** (`visibility.saved_pick`), no lo recalcula: lo que
   se ve es lo que se mide. 🎯 marca los que pasan la regla; el motivo de los demás va en el

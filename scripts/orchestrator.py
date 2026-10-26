@@ -385,15 +385,9 @@ def step_pre_kickoff_closing():
     except Exception as e:
         log.warning(f"   ⚠️  Kalshi: {type(e).__name__}: {e}")
 
-    # Alertas de alineación (20-oct-26): sale el XI ~1 h antes; si a un equipo
-    # le faltan titulares habituales o su goleador, se avisa el momio mínimo
-    # que debe pagar PlayDoit por el rival (src/models/lineup_alerts.py).
-    # ERROR al fallar: es un aviso al dueño, no solo medición.
-    try:
-        from src.models.lineup_alerts import run_lineup_alerts
-        run_lineup_alerts()
-    except Exception as e:
-        log.error(f"   ❌ Alertas de alineación: {type(e).__name__}: {e}")
+    # Las alineaciones y sus alertas van en pasos propios después de este
+    # (26-oct-26, run_closing): primero se guardan, luego el pick las ve y
+    # al final sale el aviso con ese pick.
 
     # Revalidar bets del día contra las odds frescas recién descargadas:
     # si la línea se movió en contra y el edge murió, cancelar la bet ANTES
@@ -1047,10 +1041,30 @@ def step_refresh_clv_cache():
 def run_closing(logger: Logger):
     """Cada 30 min (cron-job.org): momios de cierre pre-kickoff para el CLV
     (Mejora 6) y, con los momios recién recargados, el pick del programa de
-    cada partido: el último antes del partido es el que cuenta."""
+    cada partido: el último antes del partido es el que cuenta. 26-oct-26:
+    el pick se recalcula DESPUÉS de guardar las alineaciones publicadas
+    (el dueño: "ponemos los picks mucho antes de que la lista de alineaciones
+    esté lista"), y el aviso de alineación sale al final, con ese pick."""
     run_step(logger, "Pre-kickoff closing odds", step_pre_kickoff_closing)
     run_step(logger, "Marcadores del día (ESPN)", step_live_scores)
+    run_step(logger, "Alineaciones publicadas", step_capture_lineups)
     run_step(logger, "Picks del programa", step_program_picks)
+    run_step(logger, "Alertas de alineación", step_lineup_alerts)
+
+
+def step_capture_lineups():
+    """El XI que ESPN publica ~1 h antes de cada partido (tabla lineups)."""
+    from src.features.espn_lineups import capture_upcoming
+    rows = capture_upcoming()
+    print(f"📋 Alineaciones publicadas: {len(rows) // 2} partidos")
+
+
+def step_lineup_alerts():
+    """Si a un equipo le faltan 4+ titulares habituales, el momio mínimo que
+    debe pagar PlayDoit por el rival y el pick del programa (ya recalculado
+    con la alineación). Falla = paso en rojo: es un aviso al dueño."""
+    from src.models.lineup_alerts import run_lineup_alerts
+    run_lineup_alerts(capture=False)
 
 
 def run_weekly(logger: Logger):

@@ -333,6 +333,45 @@ def live_score_mismatches(live: list, matches: list, normalize=None) -> list:
     return out
 
 
+LINEUP_SINCE = "2026-10-27"      # desde aquí el pick se recalcula con la alineación (v2.5.0)
+UNSEEN_MAX = 0.30                # más picks sin ver su alineación publicada que esto: el paso falla
+
+
+def lineup_pick_problems(picks: list, lineups: list, profiles: dict) -> dict:
+    """Función pura (26-oct-26, el dueño: "no es correcto poner que un equipo
+    ganará cuando no tiene a jugadores importantes"). picks: program_picks
+    jugados (match, match_date, market, reason, lineup); lineups: filas de
+    `lineups` (team, opponent, is_home, kickoff, starters) de esos partidos;
+    profiles: {equipo: team_profile}. Devuelve {"weak_rule": picks 🎯 a que
+    gana un equipo al que le faltaron 4+ titulares habituales, "unseen": picks
+    con las dos alineaciones publicadas que no las vieron, "with_lineup": de
+    cuántos}."""
+    import json
+    import pandas as pd
+    from src.models.lineup_alerts import TRIGGER_MISSING, absences
+    idx = {}
+    for r in lineups:
+        home, away = (r["team"], r["opponent"]) if r["is_home"] else (r["opponent"], r["team"])
+        xi = r["starters"] if isinstance(r["starters"], list) else json.loads(r["starters"] or "[]")
+        idx.setdefault(f"{home} vs {away}", []).append((pd.Timestamp(r["kickoff"]), r["team"], xi))
+    out = {"weak_rule": [], "unseen": [], "with_lineup": 0}
+    for p in picks:
+        k = pd.Timestamp(p["match_date"])
+        got = {t: xi for kk, t, xi in idx.get(p["match"], []) if abs((kk - k).total_seconds()) <= 3 * 3600}
+        home, _, away = str(p["match"]).partition(" vs ")
+        if home not in got or away not in got:
+            continue
+        out["with_lineup"] += 1
+        if not isinstance(p.get("lineup"), str):
+            out["unseen"].append(p["match"])
+        team = {"home_win": home, "away_win": away}.get(p.get("market"))
+        if team and not isinstance(p.get("reason"), str) and team in profiles:
+            a = absences(got[team], profiles[team])
+            if a["known"] and len(a["missing"]) >= TRIGGER_MISSING:
+                out["weak_rule"].append(f"{p['match']} ({team} sin {len(a['missing'])})")
+    return out
+
+
 def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     """Corre todo y avisa cada problema como ERROR. Devuelve los avisos."""
     import pandas as pd
@@ -438,6 +477,28 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     except Exception as e:
         if "does not exist" not in str(e):              # la tabla nace con el primer closing
             problems.append(f"Marcadores del día: no se pudo revisar ({type(e).__name__})")
+
+    # 8) el pick con la alineación (v2.5.0): ningún 🎯 a un equipo con 4+
+    #    titulares fuera, y los picks ven la alineación cuando ESPN la publica
+    try:
+        pk = q("""SELECT match, match_date, market, reason, lineup FROM program_picks
+                  WHERE match_date BETWEEN GREATEST(NOW() - make_interval(days => :d), CAST(:since AS timestamptz))
+                                       AND NOW() AND market IS NOT NULL""", d=days, since=LINEUP_SINCE).to_dict("records")
+        if pk:
+            lu = q("""SELECT team, opponent, is_home, kickoff, starters FROM lineups
+                      WHERE kickoff BETWEEN GREATEST(NOW() - make_interval(days => :d), CAST(:since AS timestamptz))
+                                        - INTERVAL '3 hours' AND NOW()""", d=days, since=LINEUP_SINCE).to_dict("records")
+            from src.models.lineup_alerts import load_profiles
+            lp = lineup_pick_problems(pk, lu, load_profiles(engine, sorted({r["team"] for r in lu})))
+            if lp["weak_rule"]:
+                problems.append(f"Picks y alineaciones: {len(lp['weak_rule'])} 🎯 a que gana un equipo con 4+ "
+                                f"titulares fuera ({'; '.join(lp['weak_rule'][:3])})")
+            if lp["with_lineup"] >= 10 and len(lp["unseen"]) > UNSEEN_MAX * lp["with_lineup"]:
+                problems.append(f"Picks y alineaciones: {len(lp['unseen'])} de {lp['with_lineup']} picks no vieron "
+                                f"la alineación publicada (el closing no los recalculó; p. ej. {lp['unseen'][0]})")
+    except Exception as e:
+        if "does not exist" not in str(e):        # la tabla y la columna lineup nacen con el closing
+            problems.append(f"Picks y alineaciones: no se pudo revisar ({type(e).__name__})")
 
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")

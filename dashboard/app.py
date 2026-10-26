@@ -509,7 +509,7 @@ def api_predictions():
                                    "consensus_draw_odds", "consensus_away_odds"])
     # el pick guardado de cada partido (v2.1): el que se ve es el que se mide
     picks = _q("""
-        SELECT match, label, family, market, model_prob, market_prob, playdoit_odds, reason
+        SELECT match, label, family, market, model_prob, market_prob, playdoit_odds, reason, lineup
         FROM program_picks WHERE match_date BETWEEN NOW() - INTERVAL '3 hours' AND NOW() + INTERVAL '3 days'
     """)
     saved = {}
@@ -518,7 +518,9 @@ def api_predictions():
             h, a = str(p["match"]).split(" vs ", 1)
             saved[f"{normalize_team(h)} vs {normalize_team(a)}".lower()] = p
     from src.models.program_picks import load_bias
-    return jsonify({"ok": True, "matches": _vis.predictions(mvs, up, pending, normalize_team, saved, load_bias())})
+    from src.features.espn_lineups import espn_leagues
+    return jsonify({"ok": True, "matches": _vis.predictions(mvs, up, pending, normalize_team, saved, load_bias(),
+                                                            set(espn_leagues()))})
 
 
 @app.route("/api/lineups")

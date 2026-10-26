@@ -310,3 +310,29 @@ def test_evening_runs_the_check_before_the_telegram_summary(monkeypatch):
     names = [n for n, _ in ran]
     assert names.index("Chequeo de salidas") < names.index("Telegram evening")
     assert dict(ran)["Chequeo de salidas"] is O.step_output_checks
+
+
+# ─── 8) el pick con la alineación (v2.5.0, 26-oct-26) ───────────────────────
+
+def test_lineup_check_finds_a_star_pick_on_a_weakened_team_and_picks_that_never_saw_the_lineup():
+    from src.models import lineup_alerts as LA
+    from src.utils.output_checks import lineup_pick_problems
+    xi = [f"p{i}" for i in range(11)]
+    hist = [{"starters": xi, "goals": {}, "names": {p: p.upper() for p in xi}} for _ in range(8)]
+    profiles = {"alpha": LA.team_profile(hist), "beta": LA.team_profile(hist)}
+    k = pd.Timestamp("2026-10-28 19:00", tz="UTC")
+    lu = lambda team, opp, home, starters: {"team": team, "opponent": opp, "is_home": home, "kickoff": k,
+                                            "starters": starters}
+    lineups = [lu("alpha", "beta", True, xi[:6] + ["x1", "x2", "x3", "x4", "x5"]),        # 5 fuera
+               lu("beta", "alpha", False, xi)]
+    pick = lambda **kw: {"match": "alpha vs beta", "match_date": k, "market": "home_win", "reason": None,
+                         "lineup": "confirmada", **kw}
+    assert lineup_pick_problems([pick()], lineups, profiles)["weak_rule"] == ["alpha vs beta (alpha sin 5)"]
+    # con el motivo de la alineación (no es 🎯) o a favor del rival: bien
+    assert lineup_pick_problems([pick(reason="Alineación: …")], lineups, profiles)["weak_rule"] == []
+    assert lineup_pick_problems([pick(market="away_win")], lineups, profiles)["weak_rule"] == []
+    # el pick no vio la alineación publicada
+    r = lineup_pick_problems([pick(lineup=None, market="over25")], lineups, profiles)
+    assert r["unseen"] == ["alpha vs beta"] and r["with_lineup"] == 1
+    # sin las dos alineaciones no cuenta
+    assert lineup_pick_problems([pick()], lineups[:1], profiles)["with_lineup"] == 0

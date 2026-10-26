@@ -129,7 +129,7 @@ def team_last(matches: list, lineups: list, team: str, before, n: int = LAST_N) 
     b = _ts(before)
     rows = [m for m in matches if team in (m["h"], m["a"]) and _ts(m["date"]) < b]
     rows.sort(key=lambda m: _ts(m["date"]), reverse=True)
-    out, tot = [], {"gf": 0.0, "ga": 0.0, "cf": [], "ca": [], "cards": [], "w": 0, "d": 0, "l": 0}
+    out, tot = [], {"gf": 0.0, "ga": 0.0, "cf": [], "ca": [], "cards": [], "w": 0, "d": 0, "l": 0, "o25": 0, "btts": 0}
     official = 0
     for m in rows[:n]:
         home = m["h"] == team
@@ -147,6 +147,8 @@ def team_last(matches: list, lineups: list, team: str, before, n: int = LAST_N) 
             tot["gf"] += gf
             tot["ga"] += ga
             tot[{"G": "w", "E": "d", "P": "l"}[res]] += 1
+            tot["o25"] += gf + ga > 2.5            # 26-oct-26: el dueño lee los goles "a simple vista"
+            tot["btts"] += gf > 0 and ga > 0
             if cf is not None and ca is not None:
                 tot["cf"].append(cf)
                 tot["ca"].append(ca)
@@ -165,6 +167,7 @@ def team_last(matches: list, lineups: list, team: str, before, n: int = LAST_N) 
             "summary": None if not k else {
                 "n": k, "w": tot["w"], "d": tot["d"], "l": tot["l"], "friendlies": len(out) - k,
                 "goals_for": round(tot["gf"] / k, 1), "goals_against": round(tot["ga"] / k, 1),
+                "over25": tot["o25"], "btts": tot["btts"],
                 "corners_for": avg(tot["cf"]), "corners_against": avg(tot["ca"]),
                 "cards": avg(tot["cards"])}}
 

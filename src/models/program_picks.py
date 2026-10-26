@@ -86,13 +86,15 @@ PICKS_DDL = """
 # (backfill_picks); NULL = guardado en su momento. family: Ganador, Goles,
 # Ambos anotan, Córners, Tarjetas. reason: por qué el pick no pasa la regla
 # (NULL = la pasa). Sin pick (el programa no se inclina por nada con
-# precio): market NULL y reason.
+# precio): market NULL y reason. lineup: NULL = el pick todavía no vio la
+# alineación; "confirmada" (y quién trae 4+ fuera) = se recalculó con ella.
 PICKS_ALTERS = ("ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS source TEXT",
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS family TEXT",
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS reason TEXT",
-                "ALTER TABLE program_picks ALTER COLUMN market DROP NOT NULL")
+                "ALTER TABLE program_picks ALTER COLUMN market DROP NOT NULL",
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS lineup TEXT")
 _COLS = ("match", "match_date", "league", "display", "market", "label", "family", "reason", "model_prob",
-         "market_prob", "lean", "min_us", "best_odds", "playdoit_odds", "value")
+         "market_prob", "lean", "min_us", "best_odds", "playdoit_odds", "value", "lineup")
 
 NO_EDGE = "Sin ventaja: el programa ve lo mismo que el mercado"
 TOO_FAR = "El programa se separa demasiado del mercado: probablemente se equivoca"
@@ -104,6 +106,15 @@ STALE = "El programa ya no lo evalúa: poca historia de estos equipos para opina
 # partido se analiza igual y su pick se ve, nunca 🎯, con el detalle de
 # model_vs_sharp.low_history
 LOW_HISTORY = "Poca historia para apostar"
+# 26-oct-26, el dueño: "ponemos los picks mucho antes de que la lista de
+# alineaciones esté lista… no es correcto poner que un equipo ganará cuando no
+# tiene a jugadores importantes o sale con equipo suplente". El closing guarda
+# la alineación (~1 h antes) y DESPUÉS recalcula el pick: si al equipo que el
+# pick da por ganador le faltan 4+ titulares habituales (el umbral de las
+# alertas: contra el cierre su rival gana +2.6 pt con 4 fuera y +8.2 con 5+),
+# ese pick no es 🎯 y el pick pasa a lo mejor que quede de lo que el programa cree.
+WEAKENED = "Alineación: a {team} le faltan {n} titulares habituales ({names})"
+LINEUP_OK = "confirmada"
 
 
 def _num(v):
@@ -244,30 +255,56 @@ def _why(c: dict, then: dict | None, unadjusted_cross: bool) -> str | None:
     return None
 
 
-def choose(cands: list, then: dict | None = None, league=None, adjusted: bool = False) -> tuple:
+def choose(cands: list, then: dict | None = None, league=None, adjusted: bool = False,
+           weak: dict | None = None) -> tuple:
     """(pick, motivo). then: {mercado: probabilidad del mercado cuando el
     programa analizó el partido}, para la regla del movimiento en contra.
     adjusted: el partido entre ligas se analizó con la fuerza de cada liga.
-    De lo que pasa la regla, el de mayor diferencia (motivo None). Si nada
-    la pasa, igual hay pick: de lo que el programa cree, donde más se separa
-    del mercado, con el motivo por el que no pasa. Sin nada que el programa
-    crea con precio: (None, NO_PRICE)."""
+    weak: {mercado: motivo} de los ganadores con la alineación debilitada
+    (lineup_check). De lo que pasa la regla, el de mayor diferencia (motivo
+    None). Si nada la pasa, igual hay pick: de lo que el programa cree, donde
+    más se separa del mercado, con el motivo por el que no pasa; el equipo
+    debilitado solo si no queda otra cosa. Sin nada que el programa crea con
+    precio: (None, NO_PRICE)."""
+    weak = weak or {}
     fav = max((c["model"] for c in cands if c["family"] == "Ganador"), default=None)
     leaning = [c for c in cands if (c["model"] >= fav - 1e-9 if c["family"] == "Ganador" else c["model"] >= 0.5)]
     if not leaning:
         return None, NO_PRICE
     unadjusted = cross_league(league) and not adjusted
-    why = [(c, _why(c, then, unadjusted)) for c in leaning]
+    why = [(c, weak.get(c["market"]) or _why(c, then, unadjusted)) for c in leaning]
     ok = [c for c, w in why if w is None]
     gap = (lambda c: c["model"] - c["market_prob"])
     if ok:
         return max(ok, key=gap), None
-    return max(why, key=lambda cw: gap(cw[0]))
+    rest = [cw for cw in why if cw[0]["market"] not in weak] or why
+    return max(rest, key=lambda cw: gap(cw[0]))
 
 
-def _row(r: dict, kick, display, pick_: dict | None, reason: str | None, source=None) -> dict:
+def lineup_check(home: str, away: str, absent: dict | None) -> tuple:
+    """(weak, nota) de un partido con la alineación publicada. absent:
+    {"home": absences(), "away": absences()} (lineup_alerts.absences; un lado
+    que falta = ese equipo no tiene alineación todavía). weak: {mercado:
+    motivo} del ganador al que le faltan 4+ titulares habituales; nota: lo que
+    se guarda en program_picks.lineup (None = el pick no vio la alineación)."""
+    from src.models.lineup_alerts import TRIGGER_MISSING
+    from dashboard.display import team_name
+    if not absent or absent.get("home") is None or absent.get("away") is None:
+        return {}, None
+    weak, notes = {}, []
+    for side, team, market in (("home", home, "home_win"), ("away", away, "away_win")):
+        a = absent[side]
+        if a.get("known") and len(a["missing"]) >= TRIGGER_MISSING:
+            n = len(a["missing"])
+            names = ", ".join(a["missing"][:6]) + ("…" if n > 6 else "")
+            weak[market] = WEAKENED.format(team=team_name(team), n=n, names=names)
+            notes.append(f"{team_name(team)} con {n} fuera")
+    return weak, LINEUP_OK + (": " + "; ".join(notes) if notes else "")
+
+
+def _row(r: dict, kick, display, pick_: dict | None, reason: str | None, source=None, lineup=None) -> dict:
     base = {"match": str(r["match"]).lower(), "match_date": pd.Timestamp(kick).to_pydatetime(),
-            "league": r.get("league"), "display": display, "source": source}
+            "league": r.get("league"), "display": display, "source": source, "lineup": lineup}
     if not pick_:
         return {**base, **{c: None for c in ("market", "label", "family", "model_prob", "market_prob", "lean",
                                              "min_us", "best_odds", "playdoit_odds", "value")}, "reason": reason}
@@ -304,16 +341,18 @@ def model_1x2(r: dict, bias: dict | None = None) -> list:
     return [p["home_win"], p["draw"], p["away_win"]]
 
 
-def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None) -> tuple:
+def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=None) -> tuple:
     """(pick, motivo) para una fila de model_vs_sharp con los momios de ahora
-    (u) y los de cuando se analizó (then_snap). bias: sesgo por lado aprendido."""
+    (u) y los de cuando se analizó (then_snap). bias: sesgo por lado aprendido.
+    weak: los ganadores con la alineación debilitada (lineup_check)."""
     from src.models.side_bias import is_skipped
     if is_skipped(r):                  # la última corrida ya no lo evaluó (22-oct-26)
         return None, STALE
     cs = _candidates_of(r, u, props, ratio, bias)
     if cs is None:
         return None, NO_EDGE
-    pick, why = choose(cs, _market_then(r, then_snap, ratio), r.get("league"), _num(r.get("league_factor")) is not None)
+    pick, why = choose(cs, _market_then(r, then_snap, ratio), r.get("league"), _num(r.get("league_factor")) is not None,
+                       weak)
     low = r.get("low_history")
     if pick and low and not (isinstance(low, float) and pd.isna(low)):
         why = f"{LOW_HISTORY}: {low}"                     # se ve el pick, nunca 🎯
@@ -367,12 +406,13 @@ def _snap_before(idx: dict, key: str, kick, before) -> dict | None:
 
 
 def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame | None = None, ratio=None,
-                normalize=None, props_for=None, bias=None) -> list:
+                normalize=None, props_for=None, bias=None, lineups_for=None) -> list:
     """Función pura: el pick (o "sin pick" con su motivo) de cada partido de
     model_vs_sharp (la fila más reciente) con la última fila de
     upcoming_matches. snaps: odds_history, para los momios de cuando se
     analizó. props_for(home, away, league, kickoff) → {prop: fn(línea)}.
-    bias: sesgo aprendido (side_bias: por lado, región y goles)."""
+    bias: sesgo aprendido (side_bias: por lado, región y goles).
+    lineups_for(home, away, kickoff) → (weak, nota) de lineup_check."""
     up = {match_key(r.home_team_norm, r.away_team_norm, normalize): r for r in upcoming.itertuples(index=False)}
     idx = _snap_index(snaps if snaps is not None else pd.DataFrame(), normalize)
     latest = {}
@@ -386,8 +426,10 @@ def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame |
         then = _snap_before(idx, key, r["match_date"], r["created_at"]) if r.get("created_at") is not None else None
         h, _, a = key.partition(" vs ")
         props = props_for(h, a, r.get("league"), r["match_date"]) if props_for else None
-        pk, why = decide(r, u, then, props, ratio, bias)
-        rows.append(_row(r, r["match_date"], f"{u.home_team} vs {u.away_team}" if u is not None else None, pk, why))
+        weak, lineup = lineups_for(h, a, r["match_date"]) if lineups_for else ({}, None)
+        pk, why = decide(r, u, then, props, ratio, bias, weak)
+        rows.append(_row(r, r["match_date"], f"{u.home_team} vs {u.away_team}" if u is not None else None, pk, why,
+                         lineup=lineup))
     return rows
 
 
@@ -422,6 +464,45 @@ def _props_for(engine):
                             if pd.Timestamp(kickoff).tzinfo else pd.Timestamp(kickoff))
         return {p: (lambda line, mu=v["mu"], p=p: PF.prob_over(mu, line, PF.PROPS[p]["dispersion"]))
                 for p, v in mp.items()}
+    return fn
+
+
+def _utc(t) -> pd.Timestamp:
+    t = pd.Timestamp(t)
+    return t.tz_convert("UTC") if t.tzinfo else t.tz_localize("UTC")
+
+
+def _lineups_for(engine, normalize=None):
+    """fn(home, away, kickoff) → (weak, nota) con las alineaciones publicadas
+    de los próximos partidos (lineups sin terminar: el closing las guarda
+    ~1 h antes, justo antes de este paso). None si no hay ninguna."""
+    import json
+    from src.models import lineup_alerts as LA
+    try:
+        lu = pd.read_sql(text("""
+            SELECT team, opponent, is_home, kickoff, starters FROM lineups
+            WHERE NOT completed AND kickoff BETWEEN NOW() - INTERVAL '3 hours' AND NOW() + INTERVAL '1 day'
+        """), engine)
+        if lu.empty:
+            return None
+        profiles = LA.load_profiles(engine, sorted(set(lu["team"])))
+    except Exception as e:
+        # sin alineaciones el pick sale igual, pero que se vea: el dueño cuenta con que el pick las vio
+        log.error(f"❌ Picks sin alineaciones ({type(e).__name__}: {str(e)[:120]}): no se revisan las bajas")
+        return None
+    idx = {}
+    for r in lu.itertuples(index=False):
+        home, away = (r.team, r.opponent) if r.is_home else (r.opponent, r.team)
+        xi = r.starters if isinstance(r.starters, list) else json.loads(r.starters or "[]")
+        prof = profiles.get(r.team)
+        ab = LA.absences(xi, prof) if prof else {"missing": [], "top_out": None, "known": False}
+        idx.setdefault(match_key(home, away, normalize), []).append((_utc(r.kickoff), "home" if r.is_home else "away", ab))
+
+    def fn(home, away, kickoff):
+        k = _utc(kickoff)
+        got = {side: ab for t, side, ab in idx.get(match_key(home, away, normalize), [])
+               if abs((t - k).total_seconds()) <= 3 * 3600}
+        return lineup_check(home, away, got)
     return fn
 
 
@@ -493,7 +574,8 @@ def snapshot_picks(hours: int = SNAPSHOT_HOURS, engine=None) -> int:
         now = pd.Timestamp.now(tz="UTC")
         snaps = pd.read_sql(text(_SNAPS_SQL), engine, params={"a": now.to_pydatetime(),
                                                                "b": (now + pd.Timedelta(hours=hours)).to_pydatetime()})
-        rows = build_picks(mvs, up, snaps, _ratio(engine), normalize_team, _props_for(engine), load_bias(engine))
+        rows = build_picks(mvs, up, snaps, _ratio(engine), normalize_team, _props_for(engine), load_bias(engine),
+                           _lineups_for(engine, normalize_team))
         if not rows:
             return 0
         with engine.begin() as conn:

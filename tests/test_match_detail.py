@@ -179,6 +179,8 @@ def test_last_five_with_results_goals_corners_cards_and_xi():
     assert ch["matches"][3]["corners"] is None                          # el 0-0 no se muestra como dato
     assert ch["matches"][0]["xi"]["players"][0] == "Jugador 1" and ch["matches"][4]["xi"] is None
     assert ch["summary"]["w"] == 2 and ch["summary"]["goals_for"] == 2.0
+    # 2-0, 5-1, 0-3, 2-2, 1-2: más de 2.5 en 4 de 5 y ambos anotan en 3 (26-oct-26, "a simple vista")
+    assert (ch["summary"]["over25"], ch["summary"]["btts"]) == (4, 3)
     assert ch["summary"]["corners_for"] == pytest.approx((7 + 1 + 4 + 4) / 4)       # de visitante cuenta la columna away
 
 

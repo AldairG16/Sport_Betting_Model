@@ -225,11 +225,12 @@ def _get_market_label(market: str, match: str = "") -> str:
     """Convierte el market key en etiqueta legible. Maneja AH dinámico y DC con equipo."""
     # Doble Oportunidad: agregar nombre del equipo protegido
     if market.startswith("dc_") and " vs " in match:
+        from dashboard.display import team_name
         home, away = match.split(" vs ", 1)
         if market == "dc_1x":
-            return f"DC 1X ({home.title()} no pierde)"
+            return f"DC 1X ({team_name(home)} no pierde)"
         elif market == "dc_x2":
-            return f"DC X2 ({away.title()} no pierde)"
+            return f"DC X2 ({team_name(away)} no pierde)"
         elif market == "dc_12":
             return "DC 12 (no empate)"
     if market in MARKET_LABELS:
@@ -829,11 +830,13 @@ def _format_lineups_label(raw: str) -> str:
 
 
 def _format_match_title(match: str) -> str:
-    """'gazisehir gaziantep vs besiktas jk' -> 'Gazisehir Gaziantep vs Besiktas Jk'."""
+    """'gazisehir gaziantep vs besiktas jk' -> 'Gazisehir Gaziantep vs Besiktas JK'
+    (los nombres como en el dashboard: siglas en mayúsculas, 26-oct-26)."""
+    from dashboard.display import team_name
     if not match or " vs " not in match:
-        return (match or "").title()
+        return team_name(match or "")
     home, away = match.split(" vs ", 1)
-    return f"{home.title()} vs {away.title()}"
+    return f"{team_name(home)} vs {team_name(away)}"
 
 
 def _format_single_match_message(match: str, verdicts_for_match: list) -> str:
