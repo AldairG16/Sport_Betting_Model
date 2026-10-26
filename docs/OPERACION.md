@@ -242,7 +242,7 @@ están todas las clases que ya pasaron, como chequeos que corren igual cada vez:
 
 | Chequeo | Qué revisa | Cuándo corre |
 |---|---|---|
-| Salidas y datos de entrada | Liquidación contra un cálculo independiente; resultados que faltan; pendientes atorados; xG fuera de escala; lo aprendido del weekly; fechas espejo, resultados con fecha futura, repetidos, tablas de otras fuentes viejas | Evening (`output_checks`) |
+| Salidas y datos de entrada | Liquidación contra un cálculo independiente; resultados que faltan; pendientes atorados; xG fuera de escala; lo aprendido del weekly; fechas espejo, resultados con fecha futura, repetidos, tablas de otras fuentes viejas; marcador provisional de ESPN contra el oficial | Evening (`output_checks`) |
 | Equipos próximos con historia | Que tengan historia y que no esté partida en dos nombres | Weekly |
 | Nombres de Understat y ESPN | Que cuadren con `matches` | Weekly |
 | Lo que entra al modelo | La cobertura de cada feature en la última corrida (`model_state` `pipeline_coverage`) | Weekly |
@@ -1698,6 +1698,9 @@ de responder "cómo nos fue con los picks".
       pick sale ✅ o ❌ con la misma regla de liquidación (`provisional_result` →
       `save_bets.resolve_market`), al momio estimado de PlayDoit.
     - Es provisional: no cuenta en los totales hasta que la corrida de la noche lo confirma.
+    - **Lo vigila el chequeo diario de salidas** (sección 7, `output_checks.live_score_mismatches`):
+      un marcador final de ESPN distinto del oficial del mismo partido es ERROR, porque sería un
+      emparejamiento o un dato malo. Al 26-oct coincidían los 139 que ya tenían oficial.
     - El 24-oct se emparejaron los 59 partidos que habían empezado.
   - **Una consulta que falla no deja la página a medias (v2.4.5, 25-oct-2026).** La consulta de
     los picks falló (la base tardó, por la VPN de la PC) y Anteriores salió con todos los

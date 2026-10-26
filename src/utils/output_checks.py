@@ -306,6 +306,33 @@ def data_health(counts: dict, ages: dict) -> list:
 # Corrida diaria (evening)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def live_score_mismatches(live: list, matches: list, normalize=None) -> list:
+    """Función pura (26-oct-26): los marcadores finales de ESPN del día
+    (live_scores, el resultado provisional del dashboard) que no coinciden con
+    el oficial de matches del mismo partido (±1 día). Uno distinto es un
+    partido de ESPN emparejado con otro o un dato malo: el dashboard habría
+    dado por ganado o perdido un pick con el marcador equivocado."""
+    import pandas as pd
+    norm = normalize or (lambda t: t)
+    idx = {}
+    for m in matches:
+        idx.setdefault((norm(m["h"]), norm(m["a"])), []).append(m)
+    out = []
+    for r in live:
+        if r.get("status") != "final" or r.get("home_goals") is None:
+            continue
+        day = pd.Timestamp(r["kickoff"]).tz_convert("UTC").date() if pd.Timestamp(r["kickoff"]).tzinfo \
+            else pd.Timestamp(r["kickoff"]).date()
+        for m in idx.get((norm(r["home"]), norm(r["away"])), []):
+            if abs((pd.Timestamp(m["d"]).date() - day).days) > 1:
+                continue
+            if (int(m["home_goals"]), int(m["away_goals"])) != (int(r["home_goals"]), int(r["away_goals"])):
+                out.append({"match": f"{r['home']} vs {r['away']}", "espn": f"{r['home_goals']}-{r['away_goals']}",
+                            "oficial": f"{m['home_goals']}-{m['away_goals']}"})
+            break
+    return out
+
+
 def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     """Corre todo y avisa cada problema como ERROR. Devuelve los avisos."""
     import pandas as pd
@@ -399,6 +426,18 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
         problems += data_health(counts, ages)
     except Exception as e:
         problems.append(f"Datos: no se pudo revisar ({type(e).__name__})")
+
+    # 7) el marcador provisional del dashboard (ESPN) contra el oficial
+    try:
+        live = q("""SELECT home, away, kickoff, home_goals, away_goals, status FROM live_scores
+                    WHERE kickoff >= NOW() - make_interval(days => :d)""", d=days).to_dict("records")
+        bad = live_score_mismatches(live, matches, normalize)
+        if bad:
+            problems.append(f"Marcadores del día: {len(bad)} de ESPN no coinciden con el oficial ("
+                            + "; ".join(f"{b['match']} {b['espn']}≠{b['oficial']}" for b in bad[:3]) + ")")
+    except Exception as e:
+        if "does not exist" not in str(e):              # la tabla nace con el primer closing
+            problems.append(f"Marcadores del día: no se pudo revisar ({type(e).__name__})")
 
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")
