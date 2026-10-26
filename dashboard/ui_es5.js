@@ -158,6 +158,31 @@ function marketsHtml(d){
          'propone solo donde ve más que el mercado</span><table><thead><tr><th>Mercado</th><th>Programa</th><th>Mercado</th><th>Diferencia</th></tr></thead><tbody>' +
          rows + '</tbody></table></div>';
 }
+// El ángulo de goles (v2.4.7, 26-oct-26): un equipo que recibe 2+ por partido
+function goalsHtml(d){
+  var a = d.goals_angle;
+  if (!a) return '';
+  var who = [], i;
+  for (i = 0; i < a.teams.length; i++) who.push(esc(a.teams[i].team) + ' recibe <b>' + a.teams[i].goals_against + '</b> goles por partido');
+  var h = '<div class="small" style="margin-top:8px"><b>⚽ Ángulo de goles</b> · ' + who.join(' y ') + ' (últimos ' + a.teams[0].n + ').<br>';
+  var alt = a.alternative;
+  if (alt && d.picked === alt.market) {
+    h += 'El pick ya es de goles: <b>' + esc(alt.label) + '</b>.';
+  } else if (alt) {
+    h += 'Alternativa de goles: <b>' + esc(alt.label) + '</b> · programa ' + p100(alt.model) + ' contra mercado ' + p100(alt.market_prob) +
+         ' (+' + (alt.gap * 100).toFixed(1) + ' pt). No es el pick: el pick tiene más diferencia o pasa reglas que esta no.';
+  } else if (a.markets.length) {
+    var x = [];
+    for (i = 0; i < a.markets.length; i++) x.push(esc(a.markets[i].label) + ': programa ' + p100(a.markets[i].model) + ' · mercado ' + p100(a.markets[i].market_prob));
+    h += x.join(' · ') + '. El mercado ya cuenta con esos goles y el programa no ve más: no hay pick de goles.';
+  } else {
+    h += 'Sin momios de goles para comparar.';
+  }
+  var e = a.evidence;
+  if (e && e.n) h += '<br><span class="muted">En ' + Number(e.n).toLocaleString() + ' partidos históricos así, el más de 2.5 salió ' + p100(e.hit) +
+                     ' y el mercado esperaba ' + p100(e.expected) + ': apostarlo siempre dejó ' + (e.roi >= 0 ? '+' : '') + (e.roi * 100).toFixed(1) + '%.</span>';
+  return h + '</div>';
+}
 function detailHtml(d){
   var h = '<div class="two">' + teamPanel(d.home) + teamPanel(d.away) + '</div>';
   if (d.h2h && d.h2h.length) {
@@ -165,7 +190,7 @@ function detailHtml(d){
     for (var i = 0; i < d.h2h.length; i++) x.push('<span title="' + esc(d.h2h[i].match + (d.h2h[i].league ? ' · ' + d.h2h[i].league : '')) + '">' + shortDate(d.h2h[i].date) + ' <b>' + d.h2h[i].score + '</b></span>');
     h += '<div class="h2h"><span class="muted">Entre ellos:</span> ' + x.join(' · ') + '</div>';
   }
-  return h + marketsHtml(d);
+  return h + goalsHtml(d) + marketsHtml(d);
 }
 function openDetail(id, key, date){
   var box = el(id), ck = key + '|' + date;

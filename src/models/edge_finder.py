@@ -105,6 +105,19 @@ HYPOTHESES = (
      lambda f: (f.fh - f.fa).abs() <= 0.05),
     ("empate_pocos_goles", "Empate cuando el mercado espera pocos goles (menos de 2.5 al 60%+)", "D",
      lambda f: f.fu >= 0.60),
+    # 26-oct-26, el dueño: "si un equipo es propenso a recibir muchos goles, que también
+    # pienses en un pick de goles" (LAFC vs LA Galaxy, que recibía 2.9 por partido de visita)
+    ("local_goleable", "Local que recibe 2+ goles por partido (últimos 5) → más de 2.5", "O",
+     lambda f: f.h_ga5 >= 10),
+    ("visita_goleable", "Visitante que recibe 2+ goles por partido (últimos 5) → más de 2.5", "O",
+     lambda f: f.a_ga5 >= 10),
+    ("alguno_goleable", "Alguno de los dos recibe 2+ goles por partido (últimos 5) → más de 2.5", "O",
+     lambda f: (f.h_ga5 >= 10) | (f.a_ga5 >= 10)),
+    ("goleable_contra_goleador", "Visitante que recibe 2+ contra local que anota 2+ (últimos 5) → más de 2.5", "O",
+     lambda f: (f.a_ga5 >= 10) & (f.h_gf5 >= 10)),
+    # al revés: si el mercado exagera esos goles, el menos de 2.5 tendría el valor
+    ("alguno_goleable_menos", "Alguno de los dos recibe 2+ goles por partido (últimos 5) → menos de 2.5", "U",
+     lambda f: (f.h_ga5 >= 10) | (f.a_ga5 >= 10)),
 )
 
 
@@ -155,6 +168,8 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
             feat[f"{side}_pts5"] = sum(x[0] for x in last5) if len(last5) == 5 else np.nan
             feat[f"{side}_scored5"] = sum(x[1] > 0 for x in last5) if len(last5) == 5 else np.nan
             feat[f"{side}_conceded5"] = sum(x[2] > 0 for x in last5) if len(last5) == 5 else np.nan
+            feat[f"{side}_gf5"] = sum(x[1] for x in last5) if len(last5) == 5 else np.nan     # goles a favor
+            feat[f"{side}_ga5"] = sum(x[2] for x in last5) if len(last5) == 5 else np.nan     # goles en contra
             feat[f"{side}_rest"] = (r.match_date - h[-1][5]).days if h else np.nan
             feat[f"{side}_last"] = (h[-1][1] - h[-1][2]) if h else np.nan
             last6 = h[-6:]
@@ -311,7 +326,7 @@ def format_report(rep: dict, html: bool = True) -> str:
         lines += [line(k) for k in promising]
     discarded = [k for k, h in hyps.items() if h["verdict"] == DISCARDED]
     lines.append(f"❌ Descartadas: {len(discarded)}. Por ejemplo:")
-    for k in ("local_racha", "ambos_goleadores"):
+    for k in ("local_racha", "ambos_goleadores", "alguno_goleable"):
         if k in hyps and hyps[k]["verdict"] == DISCARDED:
             h = hyps[k]
             lines.append(f"  • {h['name']}: gana {h['pooled']['hit'] * 100:.0f}%, la casa esperaba "

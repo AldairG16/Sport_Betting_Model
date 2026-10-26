@@ -102,6 +102,42 @@ def test_proposals_say_who_was_right_against_pinnacle_and_pending_is_not_nan():
     assert out["right"] == {"programa": 1, "mercado": 0}
 
 
+# ─── el ángulo de goles (v2.4.7) ────────────────────────────────────────────
+
+def _detail(ga_home, ga_away, n=5):
+    return {"home": {"team": "LAFC", "summary": {"n": n, "goals_against": ga_home}},
+            "away": {"team": "LA Galaxy", "summary": {"n": n, "goals_against": ga_away}}}
+
+
+def _mk(market, model, market_prob):
+    return {"market": market, "label": market, "family": "Goles", "model": model,
+            "market_prob": market_prob, "gap": round(model - market_prob, 3)}
+
+
+WIN = _mk("home_win", 0.62, 0.55)
+
+
+def test_goals_angle_only_for_a_team_that_concedes_two_or_more_per_match():
+    mk = [WIN, _mk("over25", 0.58, 0.61), _mk("btts", 0.55, 0.54)]
+    assert MD.goals_angle(_detail(1.0, 1.8), mk) is None
+    assert MD.goals_angle(_detail(1.0, 2.9, n=3), mk) is None         # 3 partidos no alcanzan
+    a = MD.goals_angle(_detail(1.0, 2.9), mk)
+    assert [t["team"] for t in a["teams"]] == ["LA Galaxy"] and a["teams"][0]["goals_against"] == 2.9
+    assert [m["market"] for m in a["markets"]] == ["over25", "btts"]    # solo goles, no el ganador
+
+
+def test_goals_alternative_only_where_the_program_also_sees_more_than_the_market():
+    # LAFC–Galaxy: el mercado ya cobra esos goles y el programa no ve más → sin alternativa
+    assert MD.goals_angle(_detail(1.0, 2.9), [WIN, _mk("over25", 0.58, 0.61), _mk("btts", 0.55, 0.54)])["alternative"] is None
+    # el programa ve +5 pt en ambos anotan → esa es la alternativa
+    alt = MD.goals_angle(_detail(1.0, 2.9), [WIN, _mk("over25", 0.58, 0.61), _mk("btts", 0.60, 0.55)])["alternative"]
+    assert alt["market"] == "btts"
+    # con diferencia pero el programa no lo cree (menos de 50%) → no
+    assert MD.goals_angle(_detail(2.2, 2.9), [_mk("over25", 0.48, 0.42)])["alternative"] is None
+    # sin momios de goles: el ángulo se ve, sin mercados
+    assert MD.goals_angle(_detail(2.2, 1.0), [WIN])["markets"] == []
+
+
 # ─── el partido abierto ──────────────────────────────────────────────────────
 
 def _m(date, h, a, hg, ag, hc=5, ac=4, hy=2, ay=1, hr=0, ar=0, league="soccer_epl"):
@@ -181,6 +217,7 @@ def test_match_endpoint_and_predictions_carry_the_key(monkeypatch):
     assert d["ok"] and d["home"]["team"] == "Chelsea" and len(d["home"]["matches"]) == 5
     assert seen[0]["h"] == "chelsea" and str(seen[0]["d"]).startswith("2026-10-24 16:30")
     assert c.get("/api/match?home=chelsea").get_json()["ok"] is False
+    assert d["goals_angle"] is None                  # Chelsea recibe 1.6 por partido: sin ángulo de goles
 
     mvs = pd.DataFrame([{"match": "chelsea vs tottenham", "match_date": KICK, "league": "soccer_epl",
                          "p_home": 0.66, "p_draw": 0.19, "p_away": 0.15, "pin_home": 0.57, "pin_draw": 0.22,

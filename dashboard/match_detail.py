@@ -29,6 +29,9 @@ from dashboard.display import league_name, team_name
 LAST_N = 5
 PROBABLE_FROM = 10          # el once probable sale de sus últimos 10 partidos con alineación
 CONFIRMED_WINDOW = pd.Timedelta(hours=3)
+LEAKY_GA = 2.0              # ángulo de goles: recibe 2+ por partido en sus últimos 5 oficiales
+LEAKY_MIN_N = 4
+GOAL_MARKETS = ("over25", "btts")
 
 
 def _num(v):
@@ -203,6 +206,29 @@ def match_lineup(lineups: list, team: str, kickoff) -> dict | None:
     top = sorted(starts, key=lambda p: -starts[p])[:11]
     return {"formation": past[0].get("formation") or "", "confirmed": False, "from": len(past),
             "players": [f"{names.get(p, p)} ({starts[p]} de {len(past)})" for p in top]}
+
+
+def goals_angle(detail: dict, markets: list, min_gap: float = 0.03) -> dict | None:
+    """El ángulo de goles (v2.4.7, 26-oct-26, el dueño: "si un equipo es
+    propenso a recibir muchos goles, que también pienses en un pick de goles").
+    Si alguno recibe 2+ por partido en sus últimos 5, lo que ve el programa en
+    más de 2.5 y ambos anotan contra el mercado (markets: market_view).
+    Alternativa solo si el programa lo cree (50%+) y ve más que el mercado
+    (min_gap, el mismo del pick): en 136 mil partidos la regla sola perdió,
+    el mercado ya cobra de más esos goles (edge_finder, "alguno_goleable")."""
+    leaky = []
+    for side in ("home", "away"):
+        t = detail.get(side) or {}
+        s = t.get("summary")
+        if s and s["n"] >= LEAKY_MIN_N and s["goals_against"] >= LEAKY_GA:
+            leaky.append({"team": t["team"], "goals_against": s["goals_against"], "n": s["n"]})
+    if not leaky:
+        return None
+    by = {m["market"]: m for m in markets or []}
+    reads = [by[k] for k in GOAL_MARKETS if k in by]
+    good = [m for m in reads if m["model"] >= 0.5 and m["gap"] >= min_gap]
+    return {"teams": leaky, "markets": reads,
+            "alternative": max(good, key=lambda m: m["gap"]) if good else None, "evidence": None}
 
 
 def match_detail(matches: pd.DataFrame, lineups: pd.DataFrame, home: str, away: str, kickoff,

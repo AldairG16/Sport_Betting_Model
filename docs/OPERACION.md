@@ -1192,6 +1192,19 @@ Los mismos CSV de football-data que descarga el weekly traen el cierre de Pinnac
   - "Local en racha" gana 59% cuando la casa esperaba 58%: −4.8% a precio común.
   - Apostar temprano no cambia nada: la casa común arriba de Pinnacle en el mismo momento
     salió en 181 de 10,706 partidos y valía −4.8% contra el cierre.
+- **Equipos goleables (26-oct-2026).** El dueño: "si un equipo es propenso a recibir muchos
+  goles, que también pienses en un pick de goles". Cinco ideas nuevas con los goles a favor y en
+  contra de los últimos 5 (`{h,a}_gf5` / `{h,a}_ga5`, la suma; 10 = 2 por partido). Sobre
+  136,257 partidos, al precio promedio:
+  - alguno recibe 2+ → más de 2.5: n=22,512, sale 50.8% y el mercado esperaba 52.3%: −7.5%
+    (Pinnacle −5.7%), peor que apostar el más de 2.5 siempre (−5.3%);
+  - local que recibe 2+: −8.1%; visitante que recibe 2+: −7.1%; visitante goleable contra local
+    goleador: −8.3%; los dos reciben 2+: −8.5%.
+  - Al revés (alguno recibe 2+ → menos de 2.5): sale 1.4 pt más de lo que espera el mercado, pero
+    igual pierde −4.4% (Pinnacle −2.0%). **El mercado exagera los goles de una defensa que
+    recibe mucho**, y no alcanza para ganarle al margen.
+  - Quedan en el buscador semanal ("alguno_goleable" sale en el reporte de Telegram) y en el
+    detalle de cada partido (el ángulo de goles, v2.4.7).
 - **Ojo con las temporadas:** los códigos de mmz4281 se leen con `code_start` ('1920' →
   2019). El primer backfill guardó '1920' y '2021' como años y se corrigió en la tabla.
 
@@ -1726,7 +1739,20 @@ de responder "cómo nos fue con los picks".
       - 🎯 ambos anotan 19/31 (+1.4u);
       - 🎯 goles 11/25 (−5.8u), el más débil. En 153 partidos el mercado predice los goles
         mejor que el programa, y la forma de los últimos 5 sola predice peor que los dos.
+  - **Ángulo de goles (v2.4.7, 26-oct-2026).** Si alguno recibe 2+ goles por partido en sus
+    últimos 5 oficiales (4+ partidos), el detalle lo dice (`match_detail.goals_angle`):
+    - lo que ve el programa en más de 2.5 y ambos anotan contra el mercado;
+    - **alternativa de goles** solo si el programa la cree (50%+) y ve 3+ pt más que el mercado,
+      el mismo umbral del pick; si ya es el pick, lo dice;
+    - si no, que el mercado ya cuenta con esos goles;
+    - abajo, lo que midió el buscador del lunes sobre esa situación (`_goals_evidence`, lee
+      `model_state/edge_finder`; sin reporte nuevo no sale la línea).
+    - No cambia el pick: la regla sola pierde (arriba). LAFC vs LA Galaxy (2-2): la Galaxy
+      recibía 2.4, el mercado daba más de 2.5 al 67% y el programa 63%, sin alternativa.
   - Al 22-oct: 461 partidos jugados con pick (antes 24); 24 pasan la regla; 246 sin precio.
+- **Nombres en pantalla** (`dashboard/display.team_name`, solo para mostrar; la clave sigue en
+  minúsculas): las siglas van en `_UPPER_WORDS` y la primera palabra siempre con mayúscula. El
+  26-oct salían "la Galaxy", "Lafc", "Aik", "Psv Eindhoven", "Malmo Ff".
 - **Tiros al arco** no tiene precio en ninguna fuente: no es pick.
 - **El dashboard muestra el pick guardado** (`visibility.saved_pick`), no lo recalcula: lo que
   se ve es lo que se mide. 🎯 marca los que pasan la regla; el motivo de los demás va en el

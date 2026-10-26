@@ -83,9 +83,24 @@ def test_features_only_use_previous_matches():
     f = EF.build_features(pd.DataFrame(rows))
     last = f.iloc[-1]
     assert last.h_played == 5 and last.h_pts5 == 15 and last.h_scored5 == 5 and last.h_conceded5 == 0
+    assert last.h_gf5 == 10 and last.h_ga5 == 0                          # goles a favor y en contra, no partidos
     assert last.h_rest == 4 and last.h_last == 2                        # 14-sep → 18-sep, ganó 2-0
     assert np.isnan(last.a_pts5) and last.a_played == 0                 # beta sin historia
     assert np.isnan(f.iloc[0].h_pts5)                                   # el primer partido no se ve a sí mismo
+
+
+def test_a_leaky_defense_points_to_a_goals_bet():
+    # 26-oct-26, el dueño: "si un equipo es propenso a recibir muchos goles, que también pienses en un pick de goles"
+    dates = ["2020-08-10", "2020-08-17", "2020-08-24", "2020-08-31", "2020-09-14"]
+    rows = [_match(d, f"rival{i}", "beta", 3, 1) for i, d in enumerate(dates)]      # beta recibe 3 por partido
+    rows.append(_match("2020-09-18", "alpha", "beta", 1, 1))
+    last = EF.build_features(pd.DataFrame(rows)).iloc[-1:]
+    assert last.a_ga5.iloc[0] == 15 and last.a_gf5.iloc[0] == 5
+    rules = {k: (side, r) for k, _, side, r in EF.HYPOTHESES}
+    fires = lambda k: bool(rules[k][1](last).fillna(False).iloc[0])
+    assert fires("visita_goleable") and fires("alguno_goleable") and fires("alguno_goleable_menos")
+    assert not fires("local_goleable")                                  # alpha sin historia
+    assert rules["alguno_goleable"][0] == "O" and rules["alguno_goleable_menos"][0] == "U"
 
 
 def test_promoted_luck_and_relegation_zone():
