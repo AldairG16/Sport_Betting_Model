@@ -1708,6 +1708,18 @@ de responder "cómo nos fue con los picks".
       (`_partial_is_an_error`) y no se guarda en la caché.
     - Las tablas que pueden no existir todavía van con `optional=True` (`live_scores`,
       `weekly_narrative`).
+  - **Lo que vio el programa (v2.4.6, 26-oct-2026).** El dueño dudó del pick de LAFC vs LA Galaxy
+    (gana el local, terminó 2-2): "yo hubiera propuesto ambos anotan".
+    - El detalle de cada partido muestra todos los mercados que el programa pesó
+      (`program_picks.market_view`, los mismos candidatos que el pick): programa, mercado sin
+      margen y diferencia, con el pick marcado.
+    - En ese partido: local +6.1 (el pick); ambos anotan −4.4 y más de 2.5 −4.6. El programa
+      veía menos goles que el mercado y solo propone donde ve más.
+    - Medido el 26-oct en 140 picks jugados desde el 22-oct:
+      - 🎯 ganador 16/26 (+6.7u), el tipo que mejor va;
+      - 🎯 ambos anotan 19/31 (+1.4u);
+      - 🎯 goles 11/25 (−5.8u), el más débil. En 153 partidos el mercado predice los goles
+        mejor que el programa, y la forma de los últimos 5 sola predice peor que los dos.
   - Al 22-oct: 461 partidos jugados con pick (antes 24); 24 pasan la regla; 246 sin precio.
 - **Tiros al arco** no tiene precio en ninguna fuente: no es pick.
 - **El dashboard muestra el pick guardado** (`visibility.saved_pick`), no lo recalcula: lo que

@@ -170,6 +170,8 @@ def test_match_endpoint_and_predictions_carry_the_key(monkeypatch):
             return MATCHES
         if "FROM lineups" in s:
             return LINEUPS
+        if "FROM model_vs_sharp" in s:               # sin análisis: la vista de mercados vacía (v2.4.6)
+            return pd.DataFrame()
         if "FROM espn_matches" in s:                 # copas y amistosos (22-oct-26): ninguno aquí
             return pd.DataFrame()
         raise AssertionError(s[:80])

@@ -310,22 +310,44 @@ def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None) -> tup
     from src.models.side_bias import is_skipped
     if is_skipped(r):                  # la última corrida ya no lo evaluó (22-oct-26)
         return None, STALE
+    cs = _candidates_of(r, u, props, ratio, bias)
+    if cs is None:
+        return None, NO_EDGE
+    pick, why = choose(cs, _market_then(r, then_snap, ratio), r.get("league"), _num(r.get("league_factor")) is not None)
+    low = r.get("low_history")
+    if pick and low and not (isinstance(low, float) and pd.isna(low)):
+        why = f"{LOW_HISTORY}: {low}"                     # se ve el pick, nunca 🎯
+    return pick, why
+
+
+def _candidates_of(r: dict, u, props=None, ratio=None, bias=None) -> list | None:
+    """Los candidatos de un partido de model_vs_sharp con el modelo corregido
+    (None sin 1X2 del programa). Los mismos para el pick y para la vista."""
     from src.models.side_bias import program_probs
     probs = program_probs(r, bias)                 # 1X2, goles y ambos anotan ya corregidos (23-oct-26)
     model = [probs["home_win"], probs["draw"], probs["away_win"]]
     if None in model:
-        return None, NO_EDGE
+        return None
     cs = candidates(model, (r.get("lam_home"), r.get("lam_away")), probs["over25"], probs["btts"], u, props, ratio)
     pin = [_num(r.get(c)) for _, _, c, *_ in SIDES]
     if not any(c["family"] == "Ganador" for c in cs) and None not in pin:
         # sin momios del 1X2: el Pinnacle de cuando se analizó, sin precio
         cs += [_cand(market, label, "Ganador", p, mk, None, None)
                for (_, _, _, _, _, market, label), p, mk in zip(SIDES, model, pin)]
-    pick, why = choose(cs, _market_then(r, then_snap, ratio), r.get("league"), _num(r.get("league_factor")) is not None)
-    low = r.get("low_history")
-    if pick and low and not (isinstance(low, float) and pd.isna(low)):
-        why = f"{LOW_HISTORY}: {low}"                     # se ve el pick, nunca 🎯
-    return pick, why
+    return cs
+
+
+def market_view(r: dict, u, ratio=None, bias=None) -> list:
+    """Lo que vio el programa en cada mercado de un partido (26-oct-26, el
+    dueño: "pusiste que ganaba el local… yo hubiera propuesto ambos anotan"):
+    programa, mercado sin margen y diferencia, de la más a favor a la más en
+    contra. El pick sale de los que el programa cree (choose); aquí se ven
+    todos, también los que descartó."""
+    cs = _candidates_of(r, u, None, ratio, bias) or []
+    out = [{"label": c["label"], "family": c["family"], "market": c["market"],
+            "model": round(float(c["model"]), 3), "market_prob": round(float(c["market_prob"]), 3),
+            "gap": round(float(c["model"]) - float(c["market_prob"]), 3)} for c in cs]
+    return sorted(out, key=lambda c: -c["gap"])
 
 
 def _snap_index(snaps: pd.DataFrame, normalize=None) -> dict:
