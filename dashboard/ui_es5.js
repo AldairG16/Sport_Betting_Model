@@ -180,7 +180,8 @@ function goalsHtml(d){
   }
   var e = a.evidence;
   if (e && e.n) h += '<br><span class="muted">En ' + Number(e.n).toLocaleString() + ' partidos históricos así, el más de 2.5 salió ' + p100(e.hit) +
-                     ' y el mercado esperaba ' + p100(e.expected) + ': apostarlo siempre dejó ' + (e.roi >= 0 ? '+' : '') + (e.roi * 100).toFixed(1) + '%.</span>';
+                     ' y el mercado esperaba ' + p100(e.expected) + ': apostarlo solo porque un equipo recibe mucho dejó ' + (e.roi >= 0 ? '+' : '') + (e.roi * 100).toFixed(1) +
+                     '%. Por eso el pick de goles sale solo cuando el programa ve más que el mercado.</span>';
   return h + '</div>';
 }
 function detailHtml(d){
