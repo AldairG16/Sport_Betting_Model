@@ -90,3 +90,16 @@ def test_capture_matches_espn_to_our_fixtures(monkeypatch):
     assert n == 1
     (sql, params), = eng.statements("INSERT INTO live_scores")
     assert params[0]["home"] == "chelsea" and params[0]["away"] == "tottenham" and params[0]["status"] == "final"
+
+
+def test_the_daily_check_catches_a_provisional_score_that_was_wrong():
+    from src.utils.output_checks import live_score_mismatches
+    kick = pd.Timestamp("2026-10-24 16:30", tz="UTC")
+    live = [{"home": "chelsea", "away": "tottenham", "kickoff": kick, "home_goals": 0, "away_goals": 2, "status": "final"},
+            {"home": "arsenal", "away": "everton", "kickoff": kick, "home_goals": 2, "away_goals": 0, "status": "final"},
+            {"home": "lazio", "away": "parma", "kickoff": kick, "home_goals": 1, "away_goals": 0, "status": "live"}]
+    matches = [{"h": "chelsea", "a": "tottenham", "d": "2026-10-24", "home_goals": 0, "away_goals": 2},
+               {"h": "arsenal", "a": "everton", "d": "2026-10-24", "home_goals": 2, "away_goals": 1},     # ESPN dijo 2-0
+               {"h": "lazio", "a": "parma", "d": "2026-10-24", "home_goals": 2, "away_goals": 1}]          # en juego: no
+    bad = live_score_mismatches(live, matches)
+    assert bad == [{"match": "arsenal vs everton", "espn": "2-0", "oficial": "2-1"}]

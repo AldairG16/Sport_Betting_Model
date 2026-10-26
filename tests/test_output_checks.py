@@ -283,6 +283,8 @@ def test_daily_check_reports_every_problem_as_an_error(monkeypatch):
                                   "result": "loss"}])
         if "FROM shadow_bets WHERE" in s or "FROM model_proposals WHERE" in s or "FROM program_picks WHERE" in s:
             return pd.DataFrame(columns=["id", "match", "match_date", "market", "result"])
+        if "FROM live_scores" in s:                 # marcadores del día (26-oct-26): ninguno
+            return pd.DataFrame(columns=["home", "away", "kickoff", "home_goals", "away_goals", "status"])
         if "FROM model_vs_sharp" in s:
             return pd.DataFrame(columns=["match", "match_date"])
         if "team_xg_real" in s:
