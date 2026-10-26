@@ -660,8 +660,27 @@ def api_match():
     extra = _espn_history(p)
     if matches.empty and lineups.empty and extra.empty:
         return _no_data("Sin partidos anteriores de estos equipos en la base")
-    return jsonify({"ok": True, **_md.match_detail(matches, lineups, home, away, when, extra),
-                    **_market_view(home, away, when)})
+    detail = _md.match_detail(matches, lineups, home, away, when, extra)
+    view = _market_view(home, away, when)
+    angle = _md.goals_angle(detail, view["markets"])
+    if angle:
+        angle["evidence"] = _goals_evidence()
+    return jsonify({"ok": True, **detail, **view, "goals_angle": angle})
+
+
+def _goals_evidence() -> dict | None:
+    """Lo que midió el buscador de ventajas del lunes para "alguno recibe 2+
+    por partido → más de 2.5" (v2.4.7): cuántos partidos, cuánto salió,
+    cuánto esperaba el mercado y cuánto dejó apostarlo siempre."""
+    st = _q("SELECT value FROM model_state WHERE key = 'edge_finder'", optional=True)
+    if st.empty:
+        return None
+    v = st.iloc[0]["value"]
+    h = ((_json.loads(v) if isinstance(v, str) else v) or {}).get("hypotheses", {}).get("alguno_goleable")
+    p = (h or {}).get("pooled") or {}
+    if not p.get("n"):
+        return None
+    return {"n": p["n"], "hit": p["hit"], "expected": p.get("expected"), "roi": p["roi"], "verdict": h["verdict"]}
 
 
 def _market_view(home: str, away: str, when) -> dict:

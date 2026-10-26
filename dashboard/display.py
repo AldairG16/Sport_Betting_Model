@@ -59,6 +59,7 @@ MARKET_NAMES = {
 
 # Abreviaturas de equipos → nombre oficial (display solamente)
 TEAM_DISPLAY = {
+    "la galaxy": "LA Galaxy",
     "nottm forest": "Nottingham Forest",
     "man united": "Manchester United",
     "man city": "Manchester City",
@@ -83,7 +84,10 @@ TEAM_DISPLAY = {
 }
 
 # Partículas que van en mayúsculas / minúsculas al aplicar título
-_UPPER_WORDS = {"fc", "ac", "sc", "cf", "if", "bk", "aif", "afc", "u19", "u23", "rj", "sp", "mg", "go"}
+_UPPER_WORDS = {"fc", "ac", "sc", "cf", "if", "bk", "aif", "afc", "u19", "u23", "rj", "sp", "mg", "go",
+                # siglas que salían como palabra (26-oct-26: "Lafc", "Psv", "Malmo Ff")
+                "aik", "lafc", "dc", "ny", "kc", "psv", "vvv", "mvv", "ucv", "ksv", "kv", "sv", "sk", "fk",
+                "ff", "jk", "bb", "gais", "kfum", "avs", "pr", "lp", "sj"}
 _LOWER_WORDS = {"de", "del", "la", "las", "los", "y", "el"}
 
 
@@ -107,7 +111,7 @@ def team_name(name: str) -> str:
     for w in n.split():
         if w in _UPPER_WORDS:
             words.append(w.upper())
-        elif w in _LOWER_WORDS:
+        elif w in _LOWER_WORDS and words:           # "LA Galaxy", "Las Palmas": la primera va con mayúscula
             words.append(w)
         else:
             words.append(w.capitalize())
