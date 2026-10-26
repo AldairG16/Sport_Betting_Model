@@ -200,6 +200,8 @@ def pick_line(pick: dict | None, alerts: list, review: dict | None = None) -> st
     discarded = (review or {}).get("verdict") == "DESCARTA"
     if picked_team and picked_team in weakened and not discarded:
         return f"{head} — las bajas van contra este pick: no lo apuestes."
+    if str(pick.get("reason") or "").startswith("Alineación"):
+        return f"{head} — el pick ya vio la alineación y no pasa la regla por las bajas: no lo apuestes."
     if pick.get("reason"):
         why = str(pick["reason"]).split(":")[0].lower()
         return f"{head} — no pasa la regla del programa ({why}): no lo apuestes."
@@ -216,12 +218,13 @@ def format_match(alerts: list, absent: dict | None = None, pick: dict | None = N
     absent: {equipo: absences()} de los dos equipos."""
     if not alerts:
         return ""
+    from dashboard.display import team_name
     now = now or datetime.now(timezone.utc)
     a0 = alerts[0]
     home, away = a0["home"], a0["away"]
     kick = pd.Timestamp(a0["kickoff"]).tz_convert("America/Mexico_City")
     absent = absent or {a["weakened"]: {"missing": a["missing"], "top_out": a["top_scorer_out"]} for a in alerts}
-    lines = [f"📋 <b>{home.title()} vs {away.title()}</b> · {kick:%H:%M}"]
+    lines = [f"📋 <b>{team_name(home)} vs {team_name(away)}</b> · {kick:%H:%M}"]
     for team in (home, away):
         ab = absent.get(team)
         if ab is None or ab.get("foreign"):
@@ -230,10 +233,10 @@ def format_match(alerts: list, absent: dict | None = None, pick: dict | None = N
         if ab.get("top_out") and ab["top_out"] not in names:
             names.append(ab["top_out"])
         names = [f"{n} ⚽" if n == ab.get("top_out") else n for n in names]
-        lines.append(f"❌ {team.title()}: {', '.join(names)}" if names else f"✅ {team.title()}: completo")
+        lines.append(f"❌ {team_name(team)}: {', '.join(names)}" if names else f"✅ {team_name(team)}: completo")
     for a in alerts:
         rival = away if a["weakened"] == home else home
-        label = f"{rival.title()} gana" if a["market"] in ("home_win", "away_win") else f"Empate o {rival.title()}"
+        label = f"{team_name(rival)} gana" if a["market"] in ("home_win", "away_win") else f"Empate o {team_name(rival)}"
         lines.append(f"• {label}: apuesta si PlayDoit paga <b>{_american(a['min_american'])}</b> o más")
     age = (pd.Timestamp(now) - pd.Timestamp(a0["pin_fetched_at"])).total_seconds() / 60
     if age > 30:
@@ -296,19 +299,38 @@ def load_pick(conn, home: str, away: str, kickoff) -> dict | None:
     return dict(r) if r else None
 
 
-def run_lineup_alerts(engine=None, window_min: tuple = (5, 80), send=None, use_review: bool = True) -> list:
+def load_upcoming_lineups(engine, window_min: tuple = (5, 80)) -> list:
+    """Las alineaciones ya guardadas de los partidos que arrancan en la ventana
+    (minutos): las que capture_upcoming bajó en este mismo closing."""
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT sport_key, kickoff, team, starters FROM lineups
+            WHERE NOT completed AND kickoff BETWEEN NOW() + make_interval(mins => :lo)
+                                                AND NOW() + make_interval(mins => :hi)
+        """), {"lo": window_min[0], "hi": window_min[1]}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def run_lineup_alerts(engine=None, window_min: tuple = (5, 80), send=None, use_review: bool = True,
+                      capture: bool = True) -> list:
     """Closing: lee las alineaciones publicadas, detecta bajas y avisa una sola
     vez por equipo y partido, en un mensaje por partido. Devuelve las alertas
-    nuevas."""
-    from src.features.espn_lineups import capture_upcoming
+    nuevas. capture=False (26-oct-26): las toma de la tabla, guardadas por el
+    paso "Alineaciones publicadas" antes de recalcular los picks, así el
+    mensaje trae el pick que ya vio la alineación."""
     if engine is None:
         from config.database import engine
-    rows = capture_upcoming(window_min, engine)
+    if capture:
+        from src.features.espn_lineups import capture_upcoming
+        rows = capture_upcoming(window_min, engine)
+    else:
+        rows = load_upcoming_lineups(engine, window_min)
     if not rows:
         return []
     by_match = {}
     for r in rows:
-        by_match.setdefault((r["sport_key"], str(r["kickoff"])), {})[r["team"]] = json.loads(r["starters"])
+        xi = r["starters"] if isinstance(r["starters"], list) else json.loads(r["starters"])
+        by_match.setdefault((r["sport_key"], str(r["kickoff"])), {})[r["team"]] = xi
     teams = sorted({t for lu in by_match.values() for t in lu})
     profiles = load_profiles(engine, teams)
     new, absent = [], {}

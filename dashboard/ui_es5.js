@@ -129,6 +129,7 @@ function teamPanel(t){
   var s = t.summary;
   // v2.3: todas las competiciones; los amistosos se ven pero no cuentan en los promedios
   h += formBadges(t.matches) + '<div class="small muted">Goles ' + s.goals_for + ' - ' + s.goals_against +
+       (s.over25 !== undefined ? ' · Más de 2.5: ' + s.over25 + ' de ' + s.n + ' · Ambos anotan: ' + s.btts + ' de ' + s.n : '') +
        (s.corners_for !== null ? ' · Córners ' + s.corners_for + ' - ' + s.corners_against : '') +
        (s.cards !== null ? ' · Tarjetas ' + s.cards : '') + (s.friendlies ? ' · sin amistosos' : '') + '</div>';
   h += '<table><thead><tr><th>Fecha</th><th>Rival</th><th>Res.</th><th class="hide-sm">Comp.</th><th>Córn.</th><th>Tarj.</th></tr></thead><tbody>';
@@ -219,7 +220,7 @@ function upRow(m, i){
             '  ·  Pinnacle: ' + p100(pin[0]) + ' / ' + p100(pin[1]) + ' / ' + p100(pin[2]);
   // v2.2: todos los partidos analizados tienen pick; 🎯 = pasa la regla
   var pick = pk.label ? (pk.rule ? '🎯 ' : '') + famIcon(pk.family) + ' <b>' + esc(pk.label) + '</b>' +
-             (pk.playdoit_us ? ' <span class="muted">' + esc(pk.playdoit_us) + '</span>' : '') + whyTag(pk) :
+             (pk.playdoit_us ? ' <span class="muted">' + esc(pk.playdoit_us) + '</span>' : '') + whyTag(pk) + lineupTag(pk, m.lineups_covered) :
              noPick(pk.reason);
   var tipPick = pk.label ? 'Programa ' + p100(pk.model) + ' · mercado ' + p100(pk.market_prob) + ' · momio PlayDoit aprox.' +
                 (pk.rule ? ' · 🎯 pasa la regla' : (pk.reason ? ' · no pasa la regla: ' + pk.reason : '')) : (pk.reason || '');
@@ -302,6 +303,7 @@ function shortWhy(reason){
   if (/^Sin ventaja/i.test(r)) return 'sin ventaja';
   if (/demasiado/i.test(r)) return 'muy lejos del mercado';
   if (/se movi/i.test(r)) return 'el mercado se movió en contra';
+  if (/^Alineación/i.test(r)) return '⚠️ bajas en la alineación';
   if (/ligas distintas/i.test(r)) return 'ligas distintas';
   if (/momio/i.test(r)) return 'sin momio en rango';
   return r.split(':')[0].toLowerCase();
@@ -311,6 +313,15 @@ function liveTag(lv){
   if (!lv) return '';
   return lv.status === 'live' ? ' <span class="small muted" title="En juego (ESPN)">● ' + esc(lv.clock || 'en vivo') + '</span>' :
          ' <span class="small muted" title="Marcador final de ESPN; se confirma en la corrida de la noche">final</span>';
+}
+// El pick antes o después de la alineación (v2.5.0, 26-oct-26: "ponemos los picks
+// mucho antes de que la lista de alineaciones esté lista"). Sale ~1 h antes y el pick
+// se recalcula con ella: ⏳ todavía no la vio, 📋 ya la vio.
+function lineupTag(pk, covered){
+  if (!pk || !pk.label) return '';
+  if (pk.lineup) return ' <span title="' + esc('El pick ya vio la alineación (' + pk.lineup + ')') + '">📋</span>';
+  if (covered === false) return ' <span class="muted small" title="ESPN no publica alineaciones de esta liga: el pick no las ve. Revisa la alineación antes de apostar.">· sin alineación</span>';
+  return ' <span class="muted" title="Pick antes de la alineación: se recalcula cuando sale (~1 h antes del partido). Para apostar, espera ese pick.">⏳</span>';
 }
 function whyTag(pk){
   return (pk && !pk.rule && pk.reason) ?

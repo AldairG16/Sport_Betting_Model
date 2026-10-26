@@ -178,3 +178,13 @@ def test_rows_without_expected_goals_are_flagged_as_the_old_model():
     assert m["old_model"] is True
     (m,) = V.predictions(pd.DataFrame([_mvs()]), UPCOMING, set())
     assert m["old_model"] is False
+
+
+def test_prediction_says_if_espn_publishes_the_lineups_of_its_league():
+    # v2.5.0: en una liga sin alineaciones de ESPN el pick nunca las ve; no se le dice "espera"
+    (m,) = V.predictions(pd.DataFrame([_mvs()]), UPCOMING, set(), lineup_leagues={"soccer_epl"})
+    assert m["lineups_covered"] is False
+    (m,) = V.predictions(pd.DataFrame([_mvs()]), UPCOMING, set(), lineup_leagues={"soccer_uefa_champs_league"})
+    assert m["lineups_covered"] is True
+    from src.features.espn_lineups import espn_leagues
+    assert "soccer_epl" in espn_leagues()                       # la lista que usa el dashboard

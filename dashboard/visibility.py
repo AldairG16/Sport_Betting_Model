@@ -105,13 +105,16 @@ def saved_pick(p) -> dict:
     if not (isinstance(p.get("market"), str) and p.get("market")):
         return {"label": "", "reason": reason}
     po = _num(p.get("playdoit_odds"))
+    lineup = p.get("lineup") if isinstance(p.get("lineup"), str) else None    # None: aún sin alineación (v2.5.0)
     return {"label": p.get("label"), "family": p.get("family"), "market": p.get("market"),
             "model": _num(p.get("model_prob")), "market_prob": _num(p.get("market_prob")),
-            "playdoit_us": fmt_american(to_american(po)) if po else "", "rule": not reason, "reason": reason}
+            "playdoit_us": fmt_american(to_american(po)) if po else "", "rule": not reason, "reason": reason,
+            "lineup": lineup}
 
 
 def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
-                normalize=None, saved: dict | None = None, bias: dict | None = None) -> list:
+                normalize=None, saved: dict | None = None, bias: dict | None = None,
+                lineup_leagues: set | None = None) -> list:
     """
     mvs: filas de model_vs_sharp de los próximos días. upcoming: la última
     fila de upcoming_matches por partido (nombres, mejores momios y
@@ -119,6 +122,8 @@ def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
     con apuesta real pendiente. normalize: normalize_team (para unir alias).
     saved: {clave del partido: fila de program_picks}. bias: sesgo por lado
     aprendido: la barra del programa es su 1X2 ya corregido, el mismo del pick.
+    lineup_leagues: las ligas de las que ESPN publica alineación (v2.5.0): en
+    las demás el pick nunca la ve.
     """
     from src.models.side_bias import program_probs
     up = {}
@@ -165,6 +170,7 @@ def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
             "old_model": not skipped and not (lam_h and lam_a),
             "skipped": skipped,
             "real_bet": key in pending_matches,
+            "lineups_covered": lineup_leagues is None or r.league in lineup_leagues,
             "key": key,                    # nombres canónicos: /api/match (v1.10.0)
         })
     return out

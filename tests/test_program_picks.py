@@ -90,6 +90,62 @@ def test_the_pick_that_passes_the_rule_wins_over_a_bigger_gap_that_does_not():
     assert pk["market"] == "over25" and why is None
 
 
+# ─── la alineación (v2.5.0, 26-oct-26) ──────────────────────────────────────
+# El dueño: "ponemos los picks mucho antes de que la lista de alineaciones esté
+# lista, no es correcto poner que un equipo ganará cuando no tiene a jugadores
+# importantes o muchas veces sale con equipo suplente".
+
+FIVE_OUT = {"missing": ["A", "B", "C", "D", "E"], "top_out": None, "known": True}
+FULL = {"missing": [], "top_out": None, "known": True}
+
+
+def _home_fav():
+    # el local: programa 51% contra ~44% de Pinnacle (7 pts); más de 2.5: 60% contra ~54% (6 pts)
+    return PP.candidates([0.51, 0.23, 0.26], (1.7, 1.3), 0.60, None, _u(consensus_home_odds=2.20))
+
+
+def test_a_winner_without_four_regular_starters_is_not_the_pick():
+    pk, why = PP.choose(_home_fav())
+    assert pk["market"] == "home_win" and why is None                     # sin alineación: el local
+    weak, note = PP.lineup_check("lafc", "la galaxy", {"home": FIVE_OUT, "away": FULL})
+    assert weak == {"home_win": "Alineación: a LAFC le faltan 5 titulares habituales (A, B, C, D, E)"}
+    assert note == "confirmada: LAFC con 5 fuera"
+    pk, why = PP.choose(_home_fav(), weak=weak)
+    assert pk["market"] == "over25" and why is None                       # pasa a lo mejor que queda
+
+
+def test_if_only_the_weakened_winner_is_left_it_stays_with_the_reason():
+    cs = [c for c in _home_fav() if c["family"] == "Ganador"]
+    weak, _ = PP.lineup_check("lafc", "la galaxy", {"home": FIVE_OUT, "away": FULL})
+    pk, why = PP.choose(cs, weak=weak)
+    assert pk["market"] == "home_win" and why.startswith("Alineación: a LAFC le faltan 5")   # se ve, nunca 🎯
+
+
+def test_the_lineup_note_says_whether_the_pick_saw_the_lineup():
+    assert PP.lineup_check("a", "b", {"home": FULL}) == ({}, None)          # falta la del visitante
+    assert PP.lineup_check("a", "b", None) == ({}, None)
+    assert PP.lineup_check("a", "b", {"home": FULL, "away": FULL}) == ({}, "confirmada")
+    three = {"missing": ["A", "B", "C"], "top_out": None, "known": True}
+    assert PP.lineup_check("a", "b", {"home": three, "away": FULL}) == ({}, "confirmada")   # 3: rotación normal
+    foreign = {"missing": [], "top_out": None, "known": False, "foreign": True}
+    assert PP.lineup_check("a", "b", {"home": foreign, "away": FULL}) == ({}, "confirmada")
+
+
+def test_build_picks_saves_the_pick_that_saw_the_lineup():
+    mv = pd.DataFrame([_mvs(model=(0.51, 0.23, 0.26), pin=(0.43, 0.27, 0.30), over=0.60)])
+    up = pd.DataFrame([{**UP, **PIN_EVEN, "consensus_home_odds": 2.20}])
+    seen = []
+
+    def lineups_for(h, a, k):
+        seen.append((h, a))
+        return PP.lineup_check(h, a, {"home": FIVE_OUT, "away": FULL})
+    (row,) = PP.build_picks(mv, up, lineups_for=lineups_for)
+    assert seen == [("atlas", "club america")]
+    assert row["market"] == "over25" and row["lineup"] == "confirmada: Atlas con 5 fuera"
+    (row,) = PP.build_picks(mv, up)
+    assert row["market"] == "home_win" and row["lineup"] is None          # antes de la alineación
+
+
 def test_a_match_without_saved_odds_still_has_its_winner_pick():
     # antes del 12-oct odds_history no tiene Pinnacle ni promedio: el 1X2
     # contra el Pinnacle de model_vs_sharp, sin precio (cuenta acierto, no unidades)
@@ -123,6 +179,9 @@ def test_the_dashboard_shows_the_saved_pick_or_why_there_is_none():
     out = V.saved_pick({"market": "over25", "label": "Más de 2.5 goles", "reason": PP.TOO_FAR, "playdoit_odds": None})
     assert out["label"] == "Más de 2.5 goles" and out["rule"] is False and out["reason"] == PP.TOO_FAR
     assert V.saved_pick({"market": None, "reason": PP.NO_PRICE}) == {"label": "", "reason": PP.NO_PRICE}
+    # v2.5.0: si el pick ya vio la alineación (None = todavía no; NaN de pandas también)
+    assert shown["lineup"] is None and V.saved_pick({"market": "btts", "label": "x", "lineup": float("nan")})["lineup"] is None
+    assert V.saved_pick({"market": "btts", "label": "x", "lineup": "confirmada"})["lineup"] == "confirmada"
 
 
 # ─── guardar ─────────────────────────────────────────────────────────────────
@@ -210,12 +269,23 @@ def _steps(monkeypatch, fn):
 
 
 @pytest.mark.parametrize("fn,after", [("run_morning", "Predictions"), ("run_evening", "Predictions (mañana)"),
-                                      # el closing lee antes los marcadores del día (v2.4.4)
-                                      ("run_closing", "Marcadores del día (ESPN)")])
+                                      # el closing guarda antes la alineación publicada (v2.5.0)
+                                      ("run_closing", "Alineaciones publicadas")])
 def test_picks_are_saved_after_every_analysis_and_every_closing(monkeypatch, fn, after):
     names, steps, O = _steps(monkeypatch, fn)
     assert names.index("Picks del programa") == names.index(after) + 1
     assert steps["Picks del programa"] is O.step_program_picks
+
+
+def test_the_closing_saves_lineups_then_the_pick_then_the_lineup_alert(monkeypatch):
+    # 26-oct-26, el dueño: "ponemos los picks mucho antes de que la lista de alineaciones esté lista"
+    names, steps, O = _steps(monkeypatch, "run_closing")
+    assert names[names.index("Picks del programa") - 1] == "Alineaciones publicadas"
+    assert names[names.index("Picks del programa") + 1] == "Alertas de alineación"     # el aviso trae el pick nuevo
+    assert steps["Alineaciones publicadas"] is O.step_capture_lineups
+    assert steps["Alertas de alineación"] is O.step_lineup_alerts
+    import inspect
+    assert "run_lineup_alerts" not in inspect.getsource(O.step_pre_kickoff_closing)    # ya no avisa antes del pick
 
 
 def test_picks_are_settled_with_the_shadow_bets(monkeypatch):

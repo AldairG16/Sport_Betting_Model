@@ -230,3 +230,30 @@ def test_no_alert_line_below_the_picks_odds_floor():
     assert [a["market"] for a in fair] == ["home_win"]                         # "empate o local" ~1.37: fuera
     assert all(1 + (a["min_american"] / 100 if a["min_american"] > 0 else 100 / -a["min_american"]) >= LA.MIN_ALERT_ODDS
                for a in fair)
+
+
+# ============================================================
+# 26-oct-26: el aviso sale después del pick, con los nombres bien escritos
+# ============================================================
+
+def test_the_alert_reads_the_lineups_saved_before_the_pick(monkeypatch):
+    def no_capture(*a, **k):
+        raise AssertionError("ya se bajaron en 'Alineaciones publicadas'")
+    monkeypatch.setattr(EL, "capture_upcoming", no_capture)
+    monkeypatch.setattr(LA, "load_upcoming_lineups", lambda engine, window_min=(5, 80): [])
+    assert LA.run_lineup_alerts(engine=object(), capture=False) == []
+
+
+def test_a_pick_that_saw_the_lineup_and_lost_the_rule_says_not_to_bet():
+    alerts = _alerts_alpha_out()
+    pick = {"market": "home_win", "label": "Gana el local", "min_us": 120,
+            "reason": "Alineación: a Alpha le faltan 4 titulares habituales (J7, J8, J9, J10)"}
+    # Claude descarta las bajas, pero la regla del programa ya las contó
+    assert LA.pick_line(pick, alerts, {"verdict": "DESCARTA"}).endswith(
+        "el pick ya vio la alineación y no pasa la regla por las bajas: no lo apuestes.")
+
+
+def test_the_message_writes_team_names_like_the_dashboard():
+    a = {**_alerts_alpha_out()[0], "home": "lafc", "away": "la galaxy", "weakened": "lafc"}
+    msg = LA.format_match([a], now=NOW)
+    assert msg.startswith("📋 <b>LAFC vs LA Galaxy</b>") and "LA Galaxy gana" in msg
