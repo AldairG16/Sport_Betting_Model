@@ -116,7 +116,7 @@ def dash(monkeypatch):
     import dashboard.app as d
     monkeypatch.setitem(d._PAST_CACHE, "rows", None)
 
-    def fake_q(sql, params=None):
+    def fake_q(sql, params=None, optional=False):
         s = " ".join(str(sql).split())
         if "FROM matches" in s and "LOWER(home_team) = :t" in s:
             return MATCHES
@@ -136,6 +136,8 @@ def dash(monkeypatch):
             return pd.DataFrame([{"date": "2026-10-21", "balance": 63.39}])
         if "FROM model_proposals" in s:
             return pd.DataFrame(columns=["match_date", "market", "odds", "result"])
+        if "FROM live_scores" in s:                  # marcadores del día (v2.4.4): ninguno aquí
+            return pd.DataFrame()
         if "FROM espn_matches" in s:                 # copas y amistosos (22-oct-26): ninguno aquí
             return pd.DataFrame()
         raise AssertionError(s[:90])

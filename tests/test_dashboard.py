@@ -39,7 +39,7 @@ BETS = pd.DataFrame([
 def dash(monkeypatch):
     import dashboard.app as dash
 
-    def fake_q(sql, params=None):
+    def fake_q(sql, params=None, optional=False):
         s = " ".join(str(sql).split())
         if "FROM bankroll" in s:
             # la tabla tiene current_bankroll (no bankroll/updated_at)
@@ -205,3 +205,29 @@ def test_dashboard_engine_survives_idle_connections():
 def test_dispatch_needs_a_known_workflow_and_a_token(client):
     assert client.post("/api/gh/dispatch/weekly").status_code == 400      # sin GH_TOKEN
     assert client.post("/api/gh/dispatch/borrar_todo").status_code == 404
+
+
+def test_a_failed_query_does_not_show_a_half_page(monkeypatch):
+    """25-oct-26: la consulta de los picks falló (la base tardó) y Anteriores salió
+    con todos los partidos "Sin análisis". Ahora se reintenta una vez y, si falla
+    igual, la respuesta dice que faltan datos en vez de mostrar la página a medias."""
+    import dashboard.app as A
+    calls = []
+
+    def read_sql(sql, engine, params=None):
+        calls.append(str(sql))
+        if "FROM program_picks" in str(sql):
+            raise A.pd.errors.DatabaseError("OperationalError: timeout")
+        return A.pd.DataFrame({"x": [1]})
+    monkeypatch.setattr(A.pd, "read_sql", read_sql)
+    monkeypatch.setattr(A, "QUERY_RETRY_S", 0)
+
+    with A.app.test_request_context("/api/board/past"):
+        A._q("SELECT 1 FROM matches")
+        A._q("SELECT 1 FROM program_picks")
+        d = A._partial_is_an_error(A.jsonify({"ok": True, "rows": [1]})).get_json()
+    assert d["ok"] is False and ("tardó" in d["msg"] or "conexión" in d["msg"])
+    assert sum("program_picks" in c for c in calls) == 2                       # se reintentó una vez
+    with A.app.test_request_context("/api/narrative"):
+        A._q("SELECT 1 FROM program_picks", optional=True)
+        assert A._partial_is_an_error(A.jsonify({"ok": True})).get_json()["ok"] is True   # opcional: no marca

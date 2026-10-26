@@ -163,7 +163,7 @@ def test_match_endpoint_and_predictions_carry_the_key(monkeypatch):
     import dashboard.app as dash
     seen = []
 
-    def fake_q(sql, params=None):
+    def fake_q(sql, params=None, optional=False):
         s = " ".join(str(sql).split())
         seen.append(params)
         if "FROM matches" in s:

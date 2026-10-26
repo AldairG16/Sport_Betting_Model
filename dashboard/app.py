@@ -152,18 +152,46 @@ WIN_LIKE = ("win", "half_win")
 
 
 DB_DOWN = "Sin conexión con la base de datos — se reintenta sola en el próximo refresco"
+PARTIAL = "No se pudieron leer todos los datos (la base tardó en responder). Recarga en un minuto."
+QUERY_RETRY_S = 1.5
 
 
-def _q(sql: str, params: dict | None = None) -> pd.DataFrame:
-    try:
-        return pd.read_sql(text(sql), engine, params=params or {})
-    except Exception as e:
-        app.logger.warning(f"query falló: {e}")
-        # error de CONEXIÓN (no de datos): la respuesta lo dice en vez de
-        # un "sin datos" que parece que no hay apuestas
-        if "OperationalError" in f"{type(e).__name__} {e}":
-            g.db_down = True
-        return pd.DataFrame()
+def _q(sql: str, params: dict | None = None, optional: bool = False) -> pd.DataFrame:
+    """La consulta como DataFrame. Un error de conexión se reintenta una vez.
+    Si falla igual, la respuesta entera dice que faltan datos (_partial_is_an_error)
+    en vez de mostrar la página a medias: el 25-oct la consulta de los picks
+    falló y "Anteriores" salió con todos los partidos en "Sin análisis".
+    optional: tablas que pueden no existir todavía (no marcan la respuesta)."""
+    import time
+    for attempt in (1, 2):
+        try:
+            return pd.read_sql(text(sql), engine, params=params or {})
+        except Exception as e:
+            err = e
+            transient = "OperationalError" in f"{type(e).__name__} {e}"
+            if transient and attempt == 1:
+                time.sleep(QUERY_RETRY_S)
+                continue
+            break
+    app.logger.warning(f"query falló: {err}")
+    # error de CONEXIÓN (no de datos): la respuesta lo dice en vez de
+    # un "sin datos" que parece que no hay apuestas
+    if "OperationalError" in f"{type(err).__name__} {err}":
+        g.db_down = True
+    if not optional:
+        g.partial = True
+    return pd.DataFrame()
+
+
+@app.after_request
+def _partial_is_an_error(resp):
+    """Una respuesta armada con una consulta que falló no se muestra como si
+    estuviera completa (24-oct-26)."""
+    if g.get("partial") and resp.is_json:
+        data = resp.get_json(silent=True)
+        if isinstance(data, dict) and data.get("ok"):
+            resp.set_data(jsonify({"ok": False, "msg": DB_DOWN if g.get("db_down") else PARTIAL}).get_data())
+    return resp
 
 
 def _no_data(msg: str = "sin datos"):
@@ -671,7 +699,7 @@ def _past_rows() -> list:
     if _PAST_CACHE["rows"] is not None and time.time() - _PAST_CACHE["at"] < PAST_TTL_S:
         return _PAST_CACHE["rows"]
     rows = _load_past_rows()
-    if rows:
+    if rows and not g.get("partial"):        # a medias no se guarda
         _PAST_CACHE.update(at=time.time(), rows=rows)
     return rows
 
@@ -695,12 +723,9 @@ def _load_past_rows() -> list:
     bets = _q("""SELECT match, match_date, market, result, profit FROM bets_history
                  WHERE match_date >= CAST(:s AS date) - 2""", p)
     # marcador de ESPN de los que ya empezaron (v2.4.4): la tabla la llena el closing
-    try:
-        live = _q("""SELECT home, away, kickoff, home_goals, away_goals, home_corners, away_corners,
-                            home_cards, away_cards, status, clock
-                     FROM live_scores WHERE kickoff >= NOW() - INTERVAL '2 days'""")
-    except Exception:
-        live = pd.DataFrame()
+    live = _q("""SELECT home, away, kickoff, home_goals, away_goals, home_corners, away_corners,
+                        home_cards, away_cards, status, clock
+                 FROM live_scores WHERE kickoff >= NOW() - INTERVAL '2 days'""", optional=True)
     return _b.past_matches(matches, mvs, picks, bets, normalize_team, live=live)
 
 
@@ -876,7 +901,7 @@ def api_narrative():
     df = _q("""
         SELECT week_start, narrative, engine, created_at
         FROM weekly_narrative ORDER BY created_at DESC LIMIT 1
-    """)
+    """, optional=True)                          # la tabla todavía no existe en producción
     if df.empty:
         return _no_data()
     r = df.iloc[0]

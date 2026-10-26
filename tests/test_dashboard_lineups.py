@@ -80,7 +80,7 @@ def test_lineups_endpoint_answers_with_synthetic_data(monkeypatch):
     import dashboard.app as dash
     import src.models.lineup_alerts as la
 
-    def fake_q(sql, params=None):
+    def fake_q(sql, params=None, optional=False):
         s = " ".join(str(sql).split())
         if "FROM upcoming_matches" in s:
             return _fixture()
