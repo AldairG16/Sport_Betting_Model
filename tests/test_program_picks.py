@@ -276,7 +276,7 @@ def test_proposal_weeks_split_the_broken_model_from_the_fixed_one():
 def test_dashboard_endpoints_and_tabs(monkeypatch):
     import dashboard.app as dash
 
-    def fake_q(sql, params=None):
+    def fake_q(sql, params=None, optional=False):
         s = " ".join(str(sql).split())
         if "FROM program_picks" in s:
             return pd.DataFrame([_pick_row("win", 0.72)])

@@ -1699,6 +1699,15 @@ de responder "cómo nos fue con los picks".
       `save_bets.resolve_market`), al momio estimado de PlayDoit.
     - Es provisional: no cuenta en los totales hasta que la corrida de la noche lo confirma.
     - El 24-oct se emparejaron los 59 partidos que habían empezado.
+  - **Una consulta que falla no deja la página a medias (v2.4.5, 25-oct-2026).** La consulta de
+    los picks falló (la base tardó, por la VPN de la PC) y Anteriores salió con todos los
+    partidos "Sin análisis" y los totales de picks en "—", sin avisar; además se guardó así en
+    la caché 5 minutos.
+    - Ahora `_q` reintenta una vez un error de conexión.
+    - Si falla igual, toda la respuesta dice "No se pudieron leer todos los datos… recarga"
+      (`_partial_is_an_error`) y no se guarda en la caché.
+    - Las tablas que pueden no existir todavía van con `optional=True` (`live_scores`,
+      `weekly_narrative`).
   - Al 22-oct: 461 partidos jugados con pick (antes 24); 24 pasan la regla; 246 sin precio.
 - **Tiros al arco** no tiene precio en ninguna fuente: no es pick.
 - **El dashboard muestra el pick guardado** (`visibility.saved_pick`), no lo recalcula: lo que

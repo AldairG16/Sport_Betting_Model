@@ -128,7 +128,7 @@ def test_new_endpoints_answer_with_synthetic_data(monkeypatch):
     import dashboard.app as dash
     mvs = pd.DataFrame([_mvs()])
 
-    def fake_q(sql, params=None):
+    def fake_q(sql, params=None, optional=False):
         s = " ".join(str(sql).split())
         if "FROM model_vs_sharp" in s:
             return mvs
