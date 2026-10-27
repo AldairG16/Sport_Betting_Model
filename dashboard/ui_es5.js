@@ -151,12 +151,16 @@ function marketsHtml(d){
   var rows = '';
   for (var i = 0; i < d.markets.length; i++) {
     var m = d.markets[i], picked = d.picked && m.market === d.picked;
+    var us = m.min_us === null || m.min_us === undefined ? '—' : (m.min_us > 0 ? '+' : '') + m.min_us;
     rows += '<tr' + (picked ? ' style="font-weight:bold"' : '') + '><td>' + famIcon(m.family) + ' ' + esc(m.label) +
             (picked ? ' <span class="small">← pick</span>' : '') + '</td><td>' + p100(m.model) + '</td><td>' + p100(m.market_prob) +
-            '</td><td class="' + (m.gap >= 0 ? 'pos' : 'neg') + '">' + (m.gap >= 0 ? '+' : '') + (m.gap * 100).toFixed(1) + ' pt</td></tr>';
+            (m.estimated ? '<span class="muted" title="Sin momio real de esta línea: el mercado sale de su más/menos 2.5">*</span>' : '') +
+            '</td><td class="' + (m.gap >= 0 ? 'pos' : 'neg') + '">' + (m.gap >= 0 ? '+' : '') + (m.gap * 100).toFixed(1) + ' pt</td>' +
+            '<td title="Apuesta solo si PlayDoit paga esto o más">' + us + '</td></tr>';
   }
   return '<div class="small" style="margin-top:8px"><b>Lo que vio el programa</b> <span class="muted">· programa contra el mercado sin margen; ' +
-         'propone solo donde ve más que el mercado</span><table><thead><tr><th>Mercado</th><th>Programa</th><th>Mercado</th><th>Diferencia</th></tr></thead><tbody>' +
+         'propone solo donde ve más que el mercado · * mercado estimado de su 2.5 (sin momio real: no entra al pick)</span>' +
+         '<table><thead><tr><th>Mercado</th><th>Programa</th><th>Mercado</th><th>Diferencia</th><th>PlayDoit mínimo</th></tr></thead><tbody>' +
          rows + '</tbody></table></div>';
 }
 // El ángulo de goles (v2.4.7, 26-oct-26): un equipo que recibe 2+ por partido
