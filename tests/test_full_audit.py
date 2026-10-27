@@ -121,8 +121,9 @@ def test_xg_corners_and_shots_are_judged_only_where_the_league_has_shots():
 
 
 
-def test_the_leagues_with_shots_come_from_matches_and_a_failure_is_an_error(monkeypatch, caplog):
+def test_the_leagues_with_shots_come_from_matches_and_a_failure_is_an_error(monkeypatch):
     import src.features.xg_proxy as xp
+    from src.utils.log import RUN_ISSUES
     monkeypatch.setattr(xp.pd, "read_sql",
                         lambda q, e, params=None: pd.DataFrame({"league": ["soccer_epl", "soccer_spl", None]}))
     xp.leagues_with_shots.cache_clear()
@@ -132,9 +133,10 @@ def test_the_leagues_with_shots_come_from_matches_and_a_failure_is_an_error(monk
         raise RuntimeError("sin conexión")
     monkeypatch.setattr(xp.pd, "read_sql", boom)
     xp.leagues_with_shots.cache_clear()
-    with caplog.at_level("ERROR"):
-        assert xp.leagues_with_shots() is None
-    assert any("Ligas con tiros" in r.getMessage() for r in caplog.records if r.levelname == "ERROR")
+    RUN_ISSUES.reset()
+    assert xp.leagues_with_shots() is None
+    assert any("Ligas con tiros" in e for e in RUN_ISSUES.errors())    # llega a Telegram
+    RUN_ISSUES.reset()
     xp.leagues_with_shots.cache_clear()
 
 def test_data_health_flags_each_known_class_of_bad_data():
