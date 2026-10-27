@@ -721,9 +721,12 @@ def backfill_picks(since: str = "2026-09-01", engine=None, overwrite: bool = Fal
     if engine is None:
         from config.database import engine
     from src.utils.team_normalizer import normalize_team
+    # sin los análisis que ya no valen (skipped_at): los que la última corrida
+    # ya no evaluó y la fecha vieja de un reprogramado (src/models/rescheduled.py)
     mvs = pd.read_sql(text("""
         SELECT * FROM model_vs_sharp
         WHERE match_date >= CAST(:s AS date) AND match_date < NOW() - INTERVAL '3 hours'
+          AND skipped_at IS NULL
     """), engine, params={"s": since})
     snaps = pd.read_sql(text(_SNAPS_SQL), engine, params={
         "a": pd.Timestamp(since, tz="UTC").to_pydatetime(), "b": pd.Timestamp.now(tz="UTC").to_pydatetime()})
