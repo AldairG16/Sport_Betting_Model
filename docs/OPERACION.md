@@ -1786,6 +1786,21 @@ de responder "cómo nos fue con los picks".
       - 🎯 ambos anotan 19/31 (+1.4u);
       - 🎯 goles 11/25 (−5.8u), el más débil. En 153 partidos el mercado predice los goles
         mejor que el programa, y la forma de los últimos 5 sola predice peor que los dos.
+  - **Líneas 1.5 y 3.5 y el momio mínimo en la vista de mercados (v2.5.2, 26-oct-2026).** El
+    dueño, sobre Flamengo vs Atlético-MG: "también se deben valorar el 2.5, ambos anotan o el
+    menos 3.5".
+    - `program_picks.estimated_lines`: más y menos de 1.5 y 3.5 cuando no tienen momio real
+      (la línea principal de Pinnacle sí lo tiene). El programa, con su matriz de marcadores
+      (`goals_matrix`, la misma de los picks); el mercado, estimado de su más/menos 2.5 sin
+      margen (Poisson con el mismo más de 2.5, `_market_goals_lambda`). Se marcan con * y no
+      entran al pick: sin precio real no se puede saber si PlayDoit paga.
+    - Cada fila donde el programa ve más que el mercado trae el momio mínimo de PlayDoit
+      (`min_american`, el mismo margen de 2 pt), para valorar cualquier mercado, no solo el pick.
+    - En ese partido: menos de 3.5, programa 76% contra 62% estimado (+14 pt, PlayDoit −147 o
+      más); terminó con 3 goles al medio tiempo.
+    - Por qué no se compran las líneas alternativas de goles (`alternate_totals`, +1 crédito
+      por evento enriquecido): el 26-oct quedaban ~1,350 créditos para 5 días (el presupuesto
+      llega al 1-nov con la reserva de 600). Se puede reconsiderar con el plan renovado.
   - **Más de 2.5 y ambos anotan por equipo (v2.5.0, 26-oct-2026).** El resumen de cada equipo
     en el detalle dice en cuántos de sus últimos 5 hubo más de 2.5 y ambos anotaron. El dueño
     dudó del "más de 2.5" de Unión vs Estudiantes ("hay demasiados partidos donde no meten

@@ -122,3 +122,29 @@ def test_the_market_view_shows_every_market_the_program_weighed():
     top = next(v for v in view if v["market"] == pick["market"])
     assert top["gap"] == pytest.approx(pick["model"] - pick["market_prob"], abs=1e-3)
     assert PK.market_view({**ROW, "p_home": None}, UP) == []
+
+
+def test_the_view_values_the_1_5_and_3_5_lines_and_the_playdoit_minimum():
+    """26-oct-26 (Flamengo vs Atlético-MG), el dueño: "también se deben valorar el 2.5,
+    ambos anotan o el menos 3.5". Sin momio real de esas líneas, el mercado se estima de
+    su más/menos 2.5 y se marcan: se ven, pero no entran al pick."""
+    view = {v["market"]: v for v in PK.market_view(dict(ROW), UP)}
+    for m in ("over_1.5", "under_1.5", "over_3.5", "under_3.5"):
+        assert view[m]["estimated"] is True
+    assert view["over_3.5"]["model"] + view["under_3.5"]["model"] == pytest.approx(1.0, abs=2e-3)
+    assert view["over_1.5"]["model"] > view["over25"]["model"] > view["over_3.5"]["model"]          # coherente
+    assert view["over_1.5"]["market_prob"] > view["over25"]["market_prob"] > view["over_3.5"]["market_prob"]
+    assert not view["over25"]["estimated"]
+    # el momio mínimo solo donde el programa ve más que el mercado
+    for v in view.values():
+        assert (v["min_us"] is not None) == (v["gap"] > 0)
+    # las estimadas nunca son el pick
+    pick, _ = PK.decide(dict(ROW), UP)
+    assert pick["market"] not in ("over_1.5", "under_1.5", "over_3.5", "under_3.5")
+
+
+def test_the_market_goals_from_its_over_2_5():
+    lam = PK._market_goals_lambda(0.5)
+    assert 1 - PK._poisson_cdf(lam, 2) == pytest.approx(0.5, abs=1e-6)
+    assert 2.6 < lam < 2.7                                        # ~2.67 goles: el 50% clásico
+    assert PK._market_goals_lambda(0.99) is None

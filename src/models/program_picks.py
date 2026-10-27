@@ -376,16 +376,77 @@ def _candidates_of(r: dict, u, props=None, ratio=None, bias=None) -> list | None
     return cs
 
 
+EST_LINES = (1.5, 3.5)
+
+
+def _poisson_cdf(lam: float, k: int) -> float:
+    term = total = math.exp(-lam)
+    for i in range(1, k + 1):
+        term *= lam / i
+        total += term
+    return total
+
+
+def _market_goals_lambda(p_over25: float) -> float | None:
+    """Los goles totales (Poisson) que dan el más de 2.5 del mercado."""
+    if not 0.02 < p_over25 < 0.98:
+        return None
+    lo, hi = 0.1, 9.0
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        if 1 - _poisson_cdf(mid, 2) < p_over25:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
+def estimated_lines(r: dict, u, bias=None, have=()) -> list:
+    """Más y menos de 1.5 y 3.5 sin momio real (26-oct-26, el dueño: "también
+    se deben valorar el 2.5, ambos anotan o el menos 3.5"). El programa, con su
+    matriz de marcadores (la misma de los picks); el mercado, ESTIMADO de su
+    más/menos 2.5 sin margen (Poisson con el mismo más de 2.5). Solo para
+    verlos: sin precio real no son candidatos al pick. have: los mercados que
+    ya tienen momio real (la línea principal de Pinnacle)."""
+    from src.models.side_bias import program_probs
+    probs = program_probs(r, bias)
+    model = [probs["home_win"], probs["draw"], probs["away_win"]]
+    g = (lambda col: getattr(u, col, None) if u is not None else None)
+    mk25 = devig2(g("consensus_over25_odds"), g("consensus_under25_odds")) or devig2(g("over25_odds"), g("under25_odds"))
+    if None in model or probs["over25"] is None or mk25 is None:
+        return []
+    mat = goals_matrix(r.get("lam_home"), r.get("lam_away"), model, probs["over25"])
+    lam_m = _market_goals_lambda(mk25)
+    if mat is None or lam_m is None:
+        return []
+    out = []
+    for line in EST_LINES:
+        if f"over_{line}" in have:
+            continue
+        pov, mov = _over(mat, line), 1 - _poisson_cdf(lam_m, int(line))
+        out += [{"label": f"Más de {line} goles", "family": "Goles", "market": f"over_{line}", "model": pov,
+                 "market_prob": mov, "estimated": True},
+                {"label": f"Menos de {line} goles", "family": "Goles", "market": f"under_{line}", "model": 1 - pov,
+                 "market_prob": 1 - mov, "estimated": True}]
+    return out
+
+
 def market_view(r: dict, u, ratio=None, bias=None) -> list:
     """Lo que vio el programa en cada mercado de un partido (26-oct-26, el
     dueño: "pusiste que ganaba el local… yo hubiera propuesto ambos anotan"):
     programa, mercado sin margen y diferencia, de la más a favor a la más en
-    contra. El pick sale de los que el programa cree (choose); aquí se ven
-    todos, también los que descartó."""
+    contra, con el momio mínimo de PlayDoit donde el programa ve más que el
+    mercado. El pick sale de los que el programa cree (choose); aquí se ven
+    todos, también los que descartó, y las líneas 1.5 y 3.5 estimadas."""
     cs = _candidates_of(r, u, None, ratio, bias) or []
-    out = [{"label": c["label"], "family": c["family"], "market": c["market"],
-            "model": round(float(c["model"]), 3), "market_prob": round(float(c["market_prob"]), 3),
-            "gap": round(float(c["model"]) - float(c["market_prob"]), 3)} for c in cs]
+    cs = cs + estimated_lines(r, u, bias, {c["market"] for c in cs})
+    out = []
+    for c in cs:
+        m, mk = float(c["model"]), float(c["market_prob"])
+        out.append({"label": c["label"], "family": c["family"], "market": c["market"],
+                    "model": round(m, 3), "market_prob": round(mk, 3), "gap": round(m - mk, 3),
+                    "estimated": bool(c.get("estimated")),
+                    "min_us": min_american(m, pin_prob=mk) if m > mk else None})
     return sorted(out, key=lambda c: -c["gap"])
 
 
