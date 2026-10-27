@@ -302,6 +302,46 @@ def test_daily_check_reports_every_problem_as_an_error(monkeypatch):
     RUN_ISSUES.reset()
 
 
+
+def test_the_ok_line_says_how_much_of_lineups_and_espn_it_checked(monkeypatch, capsys):
+    # "un paso OK no prueba que hizo algo" (27-oct-26): el ✅ dice cuántos
+    # picks vieron su alineación y cuántos partidos tienen su final de ESPN
+    import src.utils.output_checks as mod
+    from src.models import lineup_alerts as LA
+    now = pd.Timestamp.now(tz="UTC")
+    xi = [f"p{i}" for i in range(11)]
+
+    def fake_read_sql(sql, con=None, params=None, **kw):
+        s = " ".join(str(sql).split())
+        if s.startswith("SELECT COUNT(*) FROM matches"):
+            return pd.DataFrame([[0]])
+        if s.startswith("SELECT MAX(") and " AS t FROM " in s:
+            return pd.DataFrame([{"t": now}])
+        if "AS bets" in s:
+            return pd.DataFrame([{"bets": 0, "shadow": 0, "props": 0}])
+        if "model_state" in s:
+            return pd.DataFrame([{"key": k, "updated_at": now} for k in oc.WEEKLY_KEYS])
+        if "team_xg_real" in s:
+            return pd.DataFrame([{"m": 2.0}])
+        if "FROM program_picks WHERE match_date BETWEEN GREATEST" in s:
+            return pd.DataFrame([{"match": "aa vs bb", "match_date": now - pd.Timedelta(hours=2),
+                                  "market": "home_win", "reason": None, "lineup": "confirmada"}])
+        if "FROM lineups" in s:
+            return pd.DataFrame([{"team": t, "opponent": o, "is_home": h, "kickoff": now - pd.Timedelta(hours=2),
+                                  "starters": xi} for t, o, h in (("aa", "bb", True), ("bb", "aa", False))])
+        if s.startswith("SELECT LOWER(home_team) AS h"):
+            return pd.DataFrame([{"h": "aa", "a": "bb", "d": (now - pd.Timedelta(days=1)).date(),
+                                  "league": "soccer_epl"}])
+        if "FROM live_scores WHERE status = 'final'" in s:
+            return pd.DataFrame([{"home": "aa", "away": "bb", "kickoff": now - pd.Timedelta(days=1)}])
+        return pd.DataFrame(columns=["id", "match", "match_date", "market", "result", "h", "a", "d",
+                                     "home", "away", "kickoff", "home_goals", "away_goals", "status"])
+    monkeypatch.setattr(pd, "read_sql", fake_read_sql)
+    monkeypatch.setattr(LA, "load_profiles", lambda engine, teams: {})
+    assert mod.run_output_checks(engine=object(), normalize=lambda t: t) == []
+    line = [x for x in capsys.readouterr().out.splitlines() if x.startswith("✅ Chequeo de salidas")][0]
+    assert "alineaciones (1 de 1 picks la vieron)" in line and "finales de ESPN (1 de 1)" in line
+
 def test_evening_runs_the_check_before_the_telegram_summary(monkeypatch):
     from scripts import orchestrator as O
     ran = []

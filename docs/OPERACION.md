@@ -312,6 +312,14 @@ dependencias y el `import` fallaba, el código lo trataba como "no instalado —
 y seguía. Hoy lee Understat directo (`/getLeagueData/<liga>/<temporada>`) y, si no llega
 ninguna liga, registra un **error** que llega a Telegram. Ante un "OK" sospechoso, busca
 en el log qué cargó.
+- Desde el 27-oct-2026 el ✅ del chequeo de salidas dice lo que revisó: cuántos picks vieron
+  su alineación publicada y cuántos partidos jugados tienen su final de ESPN.
+
+**Una cobertura se mide donde la feature puede existir (27-oct-2026).** El chequeo de lo que
+entra al modelo dividía el xG entre todos los partidos evaluados. Una noche con 32 de 42
+partidos de Brasil, MLS, Suecia y Liga MX (ligas sin tiros en `matches`) dio "xG en 10 de
+42", con los 10 de Serie A cubiertos: falsa alarma. Ahora xG, córners y tiros se juzgan
+sobre `with_shots` (ver "Lo que entra al modelo se vigila", más abajo).
 
 **El ajuste Dixon-Coles nunca convergía.** Con ~2,500 parámetros y gradiente por
 diferencias finitas, L-BFGS-B agotaba `MAX_FUN` tras pocos pasos (`converged=False` en
@@ -898,9 +906,18 @@ córners que nadie lee, en una sola transacción de ~70 s. Chocaba con el closin
   monitor de mercado.
 
 **Lo que entra al modelo se vigila (23-oct-2026).**
-- `output_checks.feature_coverage`, al final de cada corrida: ERROR si H2H, xG, córners o
-  tiros llegan a menos del 20-25% de los partidos evaluados, o el xG real a menos del 80% en
-  las 5 grandes. Lo normal: H2H ~98%, córners y tiros ~65%, xG real 100%.
+- `output_checks.feature_coverage`, al final de cada corrida: ERROR si H2H llega a menos del
+  25% de los partidos evaluados, o el xG real a menos del 80% en las 5 grandes.
+- **xG, córners y tiros se miden solo sobre las ligas que traen tiros (27-oct-2026).**
+  `xg_proxy.leagues_with_shots` = las ligas con tiros en `matches` el último año (las 19 de
+  football-data). Brasil, MLS, Suecia, Liga MX, Argentina… nunca los traen.
+  - Medido sobre todos los partidos, la noche del 27-oct marcó "xG en 10 de 42": 32 eran de
+    esas ligas, y los 10 de Serie A tenían todo.
+  - Ahora: ERROR si el xG llega a menos del 60% de los partidos de esas ligas (`with_shots`),
+    o córners o tiros a menos del 50%. Desde agosto: xG 98% (la peor semana 90%), córners 93%
+    (la peor 82%). No se juzga con menos de 10 partidos de esas ligas.
+  - Si la consulta de las ligas falla es ERROR ese mismo día. Si en el estado guardado hay
+    menos partidos de ligas con tiros que de las 5 grandes, también: el conjunto se rompió.
 - `output_checks.data_health`, diario: fechas espejo, resultados con fecha futura, partidos
   repetidos en 120 días, y que cada fuente esté al día (`FEED_MAX_AGE_DAYS`):
   - `upcoming_matches`, `odds_history` y `program_picks`: 1 día;

@@ -14,10 +14,15 @@ Conversion rates basados en datos reales de las 5 grandes ligas:
   - Shot off target: ~8% de probabilidad de gol
 """
 
+from functools import lru_cache
+
 import pandas as pd
 from sqlalchemy import text
 from config.database import engine
+from src.utils.log import get_logger
 from src.utils.team_normalizer import normalize_team
+
+log = get_logger(__name__)
 
 # =========================
 # CONSTANTES
@@ -38,6 +43,29 @@ SHOT_RATE           = 0.03   # Conversión real tiro no a puerta → gol (deflec
 # corta + decay más fuerte para que la forma reciente mande.
 XG_DECAY            = 0.80   # Decay exponencial (recientes pesan más)
 XG_WINDOW           = 10     # Últimos 10 partidos
+
+
+# 27-oct-26: solo las ligas de football-data traen tiros y córners en
+# `matches`; Brasil, MLS, Suecia, Liga MX… nunca. Una noche con 32 de 42
+# partidos de esas ligas marcó "xG en 10 de 42" con los 10 de Serie A
+# cubiertos. La cobertura se mide sobre estas ligas (output_checks).
+SHOTS_LOOKBACK_DAYS = 365
+
+
+@lru_cache(maxsize=1)
+def leagues_with_shots() -> frozenset | None:
+    """Ligas con tiros en `matches` el último año: las únicas donde puede
+    haber xG proxy, córners y tiros. None si la consulta falla."""
+    try:
+        df = pd.read_sql(text("""
+            SELECT DISTINCT league FROM matches
+            WHERE date >= CURRENT_DATE - :days AND home_shots_target > 0
+        """), engine, params={"days": SHOTS_LOOKBACK_DAYS})
+    except Exception as e:
+        log.error(f"❌ Ligas con tiros: la consulta falló ({type(e).__name__}) — "
+                  f"la cobertura de xG, córners y tiros no se mide en esta corrida")
+        return None
+    return frozenset(df["league"].dropna())
 
 
 # =========================

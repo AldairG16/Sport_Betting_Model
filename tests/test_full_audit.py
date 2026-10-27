@@ -95,13 +95,49 @@ def test_a_bankroll_update_that_fails_is_an_error_not_a_fake_balance(monkeypatch
 def test_a_feature_that_stops_arriving_is_an_error():
     from src.utils.output_checks import feature_coverage
     ok = {"evaluated": 136, "h2h_used": 134, "xg_used": 96, "corners_used": 90, "shots_used": 90,
-          "big5": 43, "xg_real_big5": 43}
+          "with_shots": 100, "big5": 43, "xg_real_big5": 43}
     assert feature_coverage(ok) == []
     broken = {**ok, "corners_used": 0, "xg_real_big5": 30}
     msgs = feature_coverage(broken)
-    assert any("córners en 0 de 136" in m for m in msgs) and any("30 de 43" in m for m in msgs)
+    assert any("córners en 0 de 100 partidos de ligas con tiros" in m for m in msgs)
+    assert any("30 de 43" in m for m in msgs)
     assert feature_coverage({"evaluated": 5}) == []                    # corrida chica: sin juicio
 
+
+def test_xg_corners_and_shots_are_judged_only_where_the_league_has_shots():
+    from src.utils.output_checks import feature_coverage
+    # noche del 27-oct-26: 32 de 42 partidos de Brasil, MLS, Suecia, Liga MX
+    # (sin tiros en matches) y los 10 de Serie A con todo
+    night = {"evaluated": 42, "h2h_used": 39, "xg_used": 10, "corners_used": 10, "shots_used": 10,
+             "with_shots": 10, "big5": 10, "xg_real_big5": 10}
+    assert feature_coverage(night) == []
+    names_broke = {**night, "with_shots": 40, "xg_used": 5}            # un nombre que no cuadra
+    assert any("xG en 5 de 40 partidos de ligas con tiros" in m for m in feature_coverage(names_broke))
+    few = {**night, "with_shots": 6, "big5": 0, "xg_used": 0, "corners_used": 0, "shots_used": 0}
+    assert feature_coverage(few) == []                                 # pocas ligas con tiros: sin juicio
+    lost = {**night, "with_shots": 0}                                  # el conjunto de ligas se perdió
+    assert any("leagues_with_shots" in m for m in feature_coverage(lost))
+    assert feature_coverage({k: v for k, v in night.items() if k != "with_shots"}) == []   # estado viejo
+
+
+
+def test_the_leagues_with_shots_come_from_matches_and_a_failure_is_an_error(monkeypatch):
+    import src.features.xg_proxy as xp
+    from src.utils.log import RUN_ISSUES
+    monkeypatch.setattr(xp.pd, "read_sql",
+                        lambda q, e, params=None: pd.DataFrame({"league": ["soccer_epl", "soccer_spl", None]}))
+    xp.leagues_with_shots.cache_clear()
+    assert xp.leagues_with_shots() == frozenset({"soccer_epl", "soccer_spl"})
+
+    def boom(*a, **k):
+        raise RuntimeError("sin conexión")
+    monkeypatch.setattr(xp.pd, "read_sql", boom)
+    xp.leagues_with_shots.cache_clear()
+    RUN_ISSUES.reset()
+    assert xp.leagues_with_shots() is None
+    assert any("Ligas con tiros" in e for e in RUN_ISSUES.errors())    # llega a Telegram
+    RUN_ISSUES.reset()
+    xp.leagues_with_shots.cache_clear()
 
 def test_data_health_flags_each_known_class_of_bad_data():
     from src.utils.output_checks import data_health
@@ -176,8 +212,8 @@ def test_exchange_prices_count_net_of_their_commission():
 def test_the_audit_flags_a_missing_old_or_thin_pipeline_coverage():
     from scripts.system_audit import coverage_problems
     now = pd.Timestamp("2026-10-23 12:00", tz="UTC")
-    ok = {"evaluated": 136, "h2h_used": 134, "xg_used": 96, "corners_used": 90, "shots_used": 90, "big5": 43,
-          "xg_real_big5": 43, "at": "2026-10-23T06:00:00+00:00"}
+    ok = {"evaluated": 136, "h2h_used": 134, "xg_used": 96, "corners_used": 90, "shots_used": 90,
+          "with_shots": 100, "big5": 43, "xg_real_big5": 43, "at": "2026-10-23T06:00:00+00:00"}
     assert coverage_problems(ok, now) == []
     assert coverage_problems(None, now) == ["Cobertura: ninguna corrida del pipeline la guardó todavía"]
     assert any("hace 54 h" in p for p in coverage_problems({**ok, "at": "2026-10-21T06:00:00+00:00"}, now))

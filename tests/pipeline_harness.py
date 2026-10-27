@@ -342,6 +342,7 @@ def run_pipeline(monkeypatch, matches: pd.DataFrame | None = None,
     monkeypatch.setattr(pp, "get_team_xg",
                         lambda team: {"xg_for": 1.8, "xg_against": 1.0,
                                       "source": "proxy"} if team == "alpha" else None)
+    monkeypatch.setattr(pp, "leagues_with_shots", lambda: frozenset({"soccer_epl"}))
     monkeypatch.setattr(pp, "get_lambda_multipliers", lambda league: (1.25, 1.0))
     monkeypatch.setattr(pp, "get_fixture_congestion",
                         lambda team, date: {"attack_multiplier": 1.0,
