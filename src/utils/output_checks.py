@@ -372,6 +372,26 @@ def espn_final_coverage(matches: list, finals: list, leagues: set, normalize=Non
     return out
 
 
+def counted_twice(rows: list, window_days: int = 3) -> list:
+    """Función pura (27-oct-26, PSG vs Lyon pasó del 25 al 26): el mismo
+    partido con fila válida en dos fechas a window_days días o menos, en la
+    misma tabla. rows: [{"table", "match", "match_date"}] liquidadas (o
+    válidas, en model_vs_sharp). bets_history no: dos apuestas son dos."""
+    import pandas as pd
+    by = {}
+    for r in rows:
+        if r.get("table") == "bets_history":
+            continue
+        t = pd.Timestamp(r["match_date"])
+        by.setdefault((r["table"], r["match"]), set()).add(t.tz_convert("UTC") if t.tzinfo else t.tz_localize("UTC"))
+    out = []
+    for (table, match), ds in sorted(by.items()):
+        ds = sorted(ds)
+        if any(b - a <= pd.Timedelta(days=window_days) for a, b in zip(ds, ds[1:])):
+            out.append(f"{table}: {match} ({', '.join(f'{d:%d-%b %H:%M}' for d in ds)})")
+    return out
+
+
 LINEUP_SINCE = "2026-10-27"      # desde aquí el pick se recalcula con la alineación (v2.5.0)
 UNSEEN_MAX = 0.30                # más picks sin ver su alineación publicada que esto: el paso falla
 
@@ -557,6 +577,18 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     except Exception as e:
         if "does not exist" not in str(e):
             problems.append(f"Córners y tarjetas (ESPN): no se pudo revisar ({type(e).__name__})")
+
+    # 10) un partido reprogramado no cuenta dos veces (27-oct-26): la fecha
+    #     vieja se llevaba el resultado del real (src/models/rescheduled.py)
+    try:
+        valid = q("""SELECT match, match_date FROM model_vs_sharp WHERE skipped_at IS NULL
+                     AND match_date >= NOW() - make_interval(days => :d)""", d=days + 3).to_dict("records")
+        twice = counted_twice(rows + [{**r, "table": "model_vs_sharp"} for r in valid])
+        seen.append(f"reprogramados contados doble ({len(twice)})")
+        if twice:
+            problems.append(f"Reprogramados: {len(twice)} partidos cuentan en dos fechas ({'; '.join(twice[:3])})")
+    except Exception as e:
+        problems.append(f"Reprogramados: no se pudo revisar ({type(e).__name__})")
 
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")

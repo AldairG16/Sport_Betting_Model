@@ -452,10 +452,22 @@ def step_results():
     update_bet_results()
 
 
+def _void_rescheduled():
+    """Antes de liquidar (27-oct-26): la fecha vieja de un partido
+    reprogramado se llevaba el resultado del partido real y contaba doble."""
+    try:
+        from src.models.rescheduled import void_rescheduled
+        void_rescheduled()
+    except Exception as e:
+        log.error(f"❌ Partidos reprogramados: no se revisaron ({type(e).__name__}: {e}) — "
+                  f"un partido movido de fecha puede contar doble en picks y sombra")
+
+
 def step_shadow_results():
     """Liquida las candidatas shadow ya jugadas con la MISMA función que las
     apuestas (stake 1, sin bankroll). Solo DB. Es el dato que juzga las
     reglas manuales contra resultados reales (ver step_rule_evidence)."""
+    _void_rescheduled()
     from src.models.save_bets import resolve_shadow_outcomes
     resolve_shadow_outcomes()
     # Las propuestas del modelo se liquidan igual (12-oct-26)
@@ -869,6 +881,7 @@ def step_rule_evidence():
                                           conclusive, format_report as evidence_report)
     from src.models.shade_learner import (run_shade_learning, PRIOR_SCALE,
                                           format_report as scale_report)
+    _void_rescheduled()
     resolve_shadow_outcomes()
     df = read_resolved_shadow()
     evidence = run_rule_evidence(df, verbose=True)

@@ -242,7 +242,7 @@ están todas las clases que ya pasaron, como chequeos que corren igual cada vez:
 
 | Chequeo | Qué revisa | Cuándo corre |
 |---|---|---|
-| Salidas y datos de entrada | Liquidación contra un cálculo independiente; resultados que faltan; pendientes atorados; xG fuera de escala; lo aprendido del weekly; fechas espejo, resultados con fecha futura, repetidos, tablas de otras fuentes viejas; marcador provisional de ESPN contra el oficial | Evening (`output_checks`) |
+| Salidas y datos de entrada | Liquidación contra un cálculo independiente; resultados que faltan; pendientes atorados; xG fuera de escala; lo aprendido del weekly; fechas espejo, resultados con fecha futura, repetidos, tablas de otras fuentes viejas; marcador provisional de ESPN contra el oficial; picks contra alineaciones; finales de ESPN; un partido reprogramado contado en dos fechas | Evening (`output_checks`) |
 | Equipos próximos con historia | Que tengan historia y que no esté partida en dos nombres | Weekly |
 | Nombres de Understat y ESPN | Que cuadren con `matches` | Weekly |
 | Lo que entra al modelo | La cobertura de cada feature en la última corrida (`model_state` `pipeline_coverage`) | Weekly |
@@ -314,6 +314,26 @@ ninguna liga, registra un **error** que llega a Telegram. Ante un "OK" sospechos
 en el log qué cargó.
 - Desde el 27-oct-2026 el ✅ del chequeo de salidas dice lo que revisó: cuántos picks vieron
   su alineación publicada y cuántos partidos jugados tienen su final de ESPN.
+
+**Un partido reprogramado contaba dos o tres veces (27-oct-2026).** Cada tabla guarda por
+(partido, fecha). Cuando el feed cambia el horario, la fecha vieja se quedaba con su pick, sus
+candidatas sombra y su análisis contra Pinnacle. La liquidación busca el resultado a ±1 día y le
+daba el del partido real.
+- Casos: PSG vs Lyon pasó del 25 al 26-oct. América vs Pachuca tenía tres horarios (23:00,
+  01:00 y 01:05); el feed llegó a traer dos en la misma foto y se jugó a la 01:05. Toulouse vs
+  Troyes pasó del 24 al 25.
+- v2.4.3 solo lo escondía de Anteriores.
+- Ahora `src/models/rescheduled.void_rescheduled` corre antes de liquidar, en el evening y en el
+  weekly:
+  - La fecha que vale es la de ESPN (`live_scores`) si la tiene. Si no, la de la fila escrita más
+    recientemente en cualquier tabla, y en empate la más tardía.
+  - Las otras fechas del partido a 3 días o menos quedan así: picks, sombra y propuestas pasan a
+    'stale'; `model_vs_sharp` recibe `skipped_at`.
+- `bets_history` no se toca: dos apuestas al mismo partido a distinta hora son dos apuestas y el
+  bankroll las contó así. Hay 13 pares de abril y mayo.
+- `backfill_picks` ya no reconstruye picks de análisis con `skipped_at`.
+- El chequeo de salidas (sección 10, `counted_twice`) da ERROR si un partido vuelve a contar en
+  dos fechas.
 
 **Una cobertura se mide donde la feature puede existir (27-oct-2026).** El chequeo de lo que
 entra al modelo dividía el xG entre todos los partidos evaluados. Una noche con 32 de 42
