@@ -64,6 +64,34 @@ def _cards(r) -> int | None:
     return int(hy + ay + (_num(r.get("home_red")) or 0) + (_num(r.get("away_red")) or 0))   # roja = 1
 
 
+def fill_from_espn(rows: list, finals: list, canon=None) -> list:
+    """Filas de `matches` con córners y tarjetas de ESPN donde no los tienen
+    (v2.5.1, 26-oct-26, el dueño: "¿por qué solo los de hoy tienen tarjetas y
+    córners? ni los del pasado"). MLS, Liga MX, Argentina, Brasil, Noruega,
+    Suecia, Japón… nunca los traen y las ligas grandes llegan días después.
+    finals: live_scores; mismo partido (±1 día) y mismo marcador. Las tarjetas
+    de ESPN cuentan amarilla o roja = 1, como PlayDoit."""
+    canon = canon or (lambda m: m)
+    idx = _by_match([f for f in finals if f.get("status") == "final"],
+                    key=lambda f: canon(f"{f['home']} vs {f['away']}"))
+    out = []
+    for r in rows:
+        if _corners(r) is not None and _cards(r) is not None:
+            out.append(r)
+            continue
+        e = next((f for f in _near(idx, f"{r['h']} vs {r['a']}", r["date"], "kickoff")
+                  if _num(f.get("home_goals")) == _num(r["home_goals"])
+                  and _num(f.get("away_goals")) == _num(r["away_goals"])), None)
+        if e is not None:
+            r = dict(r)
+            if _corners(r) is None:
+                r["home_corners"], r["away_corners"] = e.get("home_corners"), e.get("away_corners")
+            if _cards(r) is None and _num(e.get("home_cards")) is not None and _num(e.get("away_cards")) is not None:
+                r.update(home_yellow=e["home_cards"], away_yellow=e["away_cards"], home_red=0, away_red=0)
+        out.append(r)
+    return out
+
+
 def _outcome(hg, ag) -> str:
     return "home" if hg > ag else ("draw" if hg == ag else "away")
 
@@ -117,8 +145,9 @@ def past_matches(matches: pd.DataFrame, mvs: pd.DataFrame, picks: pd.DataFrame, 
     mv = _by_match(mvs.to_dict("records") if not mvs.empty else [])
     pk = _by_match(picks.to_dict("records") if not picks.empty else [])
     bt = _by_match(bets.to_dict("records") if not bets.empty else [], key=lambda r: canon(r["match"]))
+    live_rows = live.to_dict("records") if live is not None and not live.empty else []
     out, used = [], set()
-    for r in (matches.to_dict("records") if not matches.empty else []):
+    for r in fill_from_espn(matches.to_dict("records") if not matches.empty else [], live_rows, canon):
         hg, ag = int(r["home_goals"]), int(r["away_goals"])
         key = f"{r['h']} vs {r['a']}"
         res = _outcome(hg, ag)
@@ -157,8 +186,7 @@ def past_matches(matches: pd.DataFrame, mvs: pd.DataFrame, picks: pd.DataFrame, 
                     "fav": fav, "pick": pick, "bets": bets_out})
     now = pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz="UTC")
     now = now.tz_convert("UTC") if now.tzinfo else now.tz_localize("UTC")
-    lv = _by_match((live.to_dict("records") if live is not None and not live.empty else []),
-                   key=lambda r: canon(f"{r['home']} vs {r['away']}"))
+    lv = _by_match(live_rows, key=lambda r: canon(f"{r['home']} vs {r['away']}"))
     for k, ps in pk.items():
         for p in ps:
             when = pd.Timestamp(p["match_date"])

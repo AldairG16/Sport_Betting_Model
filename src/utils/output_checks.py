@@ -333,6 +333,33 @@ def live_score_mismatches(live: list, matches: list, normalize=None) -> list:
     return out
 
 
+ESPN_FINALS_MIN = 0.85          # partidos de ligas de ESPN con su final (córners y tarjetas) guardado
+
+
+def espn_final_coverage(matches: list, finals: list, leagues: set, normalize=None) -> dict:
+    """Función pura (v2.5.1, 26-oct-26, el dueño: "¿por qué solo los de hoy
+    tienen tarjetas y córners?"): de los partidos jugados de las ligas que
+    cubre ESPN, cuántos tienen su final en live_scores (mismo partido ±1 día):
+    de ahí salen los córners y las tarjetas que `matches` no trae."""
+    import pandas as pd
+    norm = normalize or (lambda t: t)
+    have = {}
+    for f in finals:
+        have.setdefault((norm(f["home"]), norm(f["away"])), []).append(pd.Timestamp(f["kickoff"]))
+    out = {"total": 0, "covered": 0, "missing": []}
+    for m in matches:
+        if m.get("league") not in leagues:
+            continue
+        out["total"] += 1
+        d = pd.Timestamp(m["d"]).date()
+        ks = have.get((norm(m["h"]), norm(m["a"])), [])
+        if any(abs(((k.tz_convert("UTC") if k.tzinfo else k).date() - d).days) <= 1 for k in ks):
+            out["covered"] += 1
+        else:
+            out["missing"].append(f"{m['h']} vs {m['a']}")
+    return out
+
+
 LINEUP_SINCE = "2026-10-27"      # desde aquí el pick se recalcula con la alineación (v2.5.0)
 UNSEEN_MAX = 0.30                # más picks sin ver su alineación publicada que esto: el paso falla
 
@@ -499,6 +526,22 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     except Exception as e:
         if "does not exist" not in str(e):        # la tabla y la columna lineup nacen con el closing
             problems.append(f"Picks y alineaciones: no se pudo revisar ({type(e).__name__})")
+
+    # 9) córners y tarjetas de ESPN de lo jugado (v2.5.1): el evening los guarda
+    try:
+        from src.features.espn_lineups import espn_leagues
+        played = q("""SELECT LOWER(home_team) AS h, LOWER(away_team) AS a, date::date AS d, league FROM matches
+                      WHERE home_goals IS NOT NULL AND date BETWEEN CURRENT_DATE - make_interval(days => :d)
+                                                               AND CURRENT_DATE - 1""", d=days).to_dict("records")
+        fin = q("""SELECT home, away, kickoff FROM live_scores WHERE status = 'final'
+                   AND kickoff >= CURRENT_DATE - make_interval(days => :d)""", d=days + 2).to_dict("records")
+        cov = espn_final_coverage(played, fin, set(espn_leagues()), normalize)
+        if cov["total"] >= 10 and cov["covered"] < ESPN_FINALS_MIN * cov["total"]:
+            problems.append(f"Córners y tarjetas (ESPN): solo {cov['covered']} de {cov['total']} partidos jugados "
+                            f"tienen su final de ESPN (p. ej. {', '.join(cov['missing'][:3])})")
+    except Exception as e:
+        if "does not exist" not in str(e):
+            problems.append(f"Córners y tarjetas (ESPN): no se pudo revisar ({type(e).__name__})")
 
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")

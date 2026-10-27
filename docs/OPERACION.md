@@ -652,6 +652,8 @@ evening, antes del resumen de Telegram). Cada problema es un ERROR y llega en "e
 tolerados":
 
 - liquidación de los últimos 3 días contra el cálculo independiente (`settle_independent`);
+- **córners y tarjetas de ESPN** (sección 9, v2.5.1, `espn_final_coverage`): de los partidos de
+  los últimos 3 días en ligas de ESPN, al menos 85% con su final en `live_scores` (10+ partidos);
 - **picks y alineaciones** (sección 8, v2.5.0, `lineup_pick_problems`, desde el 27-oct):
   - ningún 🎯 a que gana un equipo al que le faltaron 4+ titulares habituales;
   - si más del 30% de los picks con las dos alineaciones publicadas no las vio (10+ picks),
@@ -1739,6 +1741,23 @@ de responder "cómo nos fue con los picks".
       pick sale ✅ o ❌ con la misma regla de liquidación (`provisional_result` →
       `save_bets.resolve_market`), al momio estimado de PlayDoit.
     - Es provisional: no cuenta en los totales hasta que la corrida de la noche lo confirma.
+    - **Córners y tarjetas de los partidos pasados (v2.5.1, 26-oct-2026).** El dueño: "¿por qué solo
+      los de hoy tienen tarjetas y córners y los de ayer no? ni los del pasado".
+      - `matches` no los trae en MLS, Liga MX, Argentina, Brasil, Noruega, Suecia, Japón, China ni
+        Champions (football-data no los publica), y en las ligas grandes llegan días después.
+      - `live_scores.backfill_finals`: el final de ESPN (marcador, córners, tarjetas) de lo jugado,
+        con los nombres de `matches` (`system_names`, ±1 día, estricto; sin su partido no se
+        guarda). El evening lo repasa (paso "Córners y tarjetas (ESPN)", últimos 3 días, después
+        de "Fetch results"); la primera carga fue desde el 29-ago (1,350 partidos).
+      - El dashboard los usa donde `matches` no los tiene (`board.fill_from_espn`: mismo partido
+        ±1 día y mismo marcador) en Anteriores, Equipos y el detalle del partido
+        (`merge_history(fill=…)`, solo completa, nunca suma partidos). `matches` no cambia: el
+        modelo y la liquidación siguen igual.
+      - Validado el 26-oct: 0 marcadores distintos del oficial en 1,318; contra football-data,
+        córners iguales en 95% de 586 partidos y tarjetas en 83% (ESPN suele contar una más:
+        64 de 101 diferencias son +1). Desde septiembre: con córners de 1,073 a 1,798 de 2,113
+        partidos; quedan sin ellos las selecciones y la K-League (ESPN no las cubre) y los que
+        ESPN publica con 0-0 en córners (hueco de la fuente).
     - **Lo vigila el chequeo diario de salidas** (sección 7, `output_checks.live_score_mismatches`):
       un marcador final de ESPN distinto del oficial del mismo partido es ERROR, porque sería un
       emparejamiento o un dato malo. Al 26-oct coincidían los 139 que ya tenían oficial.

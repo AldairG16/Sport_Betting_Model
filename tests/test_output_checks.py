@@ -336,3 +336,16 @@ def test_lineup_check_finds_a_star_pick_on_a_weakened_team_and_picks_that_never_
     assert r["unseen"] == ["alpha vs beta"] and r["with_lineup"] == 1
     # sin las dos alineaciones no cuenta
     assert lineup_pick_problems([pick()], lineups[:1], profiles)["with_lineup"] == 0
+
+
+# ─── 9) córners y tarjetas de ESPN (v2.5.1, 26-oct-26) ──────────────────────
+
+def test_espn_final_coverage_counts_only_espn_leagues_and_the_same_match():
+    from src.utils.output_checks import espn_final_coverage
+    played = [{"h": "lafc", "a": "la galaxy", "d": pd.Timestamp("2026-10-26").date(), "league": "soccer_usa_mls"},
+              {"h": "austin fc", "a": "dallas", "d": pd.Timestamp("2026-10-26").date(), "league": "soccer_usa_mls"},
+              {"h": "ulsan", "a": "seoul", "d": pd.Timestamp("2026-10-26").date(), "league": "soccer_korea_kleague1"}]
+    finals = [{"home": "lafc", "away": "la galaxy", "kickoff": pd.Timestamp("2026-10-26 01:00", tz="UTC")},
+              {"home": "austin fc", "away": "dallas", "kickoff": pd.Timestamp("2026-10-20 01:00", tz="UTC")}]   # otra fecha
+    cov = espn_final_coverage(played, finals, {"soccer_usa_mls"})
+    assert (cov["total"], cov["covered"], cov["missing"]) == (2, 1, ["austin fc vs dallas"])   # la K-League no cuenta
