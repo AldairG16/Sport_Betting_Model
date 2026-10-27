@@ -80,12 +80,17 @@ def pipeline_invariants(records: list) -> list:
     return out
 
 
-# Cobertura mínima de cada feature sobre los partidos evaluados (23-oct-26).
-# Normal en producción: H2H ~98%, córners y tiros ~65%, xG ~70%, xG real en
-# las 5 grandes 100%. Por debajo de esto, algo dejó de llegar.
+# Cobertura mínima de cada feature (23-oct-26). Por debajo, algo dejó de
+# llegar. H2H se mide sobre los partidos evaluados (normal ~98%). xG,
+# córners y tiros solo existen en las ligas que traen tiros en `matches`
+# (with_shots, 27-oct-26): medidos sobre todos, una noche de Brasil y MLS
+# daba "xG en 10 de 42" con los 10 de Serie A cubiertos. En esas ligas,
+# desde agosto: xG 98% (la peor semana 90%), córners 93% (la peor 82%).
 MIN_EVALUATED = 20
-MIN_COVERAGE = {"h2h_used": ("H2H", 0.25), "xg_used": ("xG", 0.25),
-                "corners_used": ("córners", 0.20), "shots_used": ("tiros al arco", 0.20)}
+MIN_WITH_SHOTS = 10
+MIN_COVERAGE = {"h2h_used": ("H2H", 0.25), "xg_used": ("xG", 0.60),
+                "corners_used": ("córners", 0.50), "shots_used": ("tiros al arco", 0.50)}
+NEEDS_SHOTS = ("xg_used", "corners_used", "shots_used")
 MIN_XG_REAL_BIG5 = 0.80
 
 
@@ -95,13 +100,20 @@ def feature_coverage(stats: dict) -> list:
     n = int(stats.get("evaluated", 0))
     if n < MIN_EVALUATED:
         return []
+    shots = int(stats.get("with_shots") or 0)
     out = []
     for key, (name, floor) in MIN_COVERAGE.items():
+        base, where = (shots, "partidos de ligas con tiros") if key in NEEDS_SHOTS else (n, "partidos evaluados")
+        if base < (MIN_WITH_SHOTS if key in NEEDS_SHOTS else MIN_EVALUATED):
+            continue
         k = int(stats.get(key, 0))
-        if k < floor * n:
-            out.append(f"Entrada: {name} en {k} de {n} partidos evaluados (lo normal es mucho más) — "
+        if k < floor * base:
+            out.append(f"Entrada: {name} en {k} de {base} {where} (lo normal es mucho más) — "
                        f"revisar su consulta o sus nombres")
     b5 = int(stats.get("big5", 0))
+    if "with_shots" in stats and shots < b5:       # las 5 grandes traen tiros: el conjunto se rompió
+        out.append(f"Entrada: {shots} partidos de ligas con tiros y {b5} de las 5 grandes — "
+                   f"revisar xg_proxy.leagues_with_shots")
     real = int(stats.get("xg_real_big5", 0))
     if b5 >= 10 and real < MIN_XG_REAL_BIG5 * b5:
         out.append(f"Entrada: xG real de Understat en {real} de {b5} partidos de las 5 grandes — "
@@ -507,6 +519,7 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
 
     # 8) el pick con la alineación (v2.5.0): ningún 🎯 a un equipo con 4+
     #    titulares fuera, y los picks ven la alineación cuando ESPN la publica
+    seen = []                                     # lo revisado, para la línea de ✅
     try:
         pk = q("""SELECT match, match_date, market, reason, lineup FROM program_picks
                   WHERE match_date BETWEEN GREATEST(NOW() - make_interval(days => :d), CAST(:since AS timestamptz))
@@ -517,6 +530,7 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
                                         - INTERVAL '3 hours' AND NOW()""", d=days, since=LINEUP_SINCE).to_dict("records")
             from src.models.lineup_alerts import load_profiles
             lp = lineup_pick_problems(pk, lu, load_profiles(engine, sorted({r["team"] for r in lu})))
+            seen.append(f"alineaciones ({lp['with_lineup'] - len(lp['unseen'])} de {lp['with_lineup']} picks la vieron)")
             if lp["weak_rule"]:
                 problems.append(f"Picks y alineaciones: {len(lp['weak_rule'])} 🎯 a que gana un equipo con 4+ "
                                 f"titulares fuera ({'; '.join(lp['weak_rule'][:3])})")
@@ -536,6 +550,7 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
         fin = q("""SELECT home, away, kickoff FROM live_scores WHERE status = 'final'
                    AND kickoff >= CURRENT_DATE - make_interval(days => :d)""", d=days + 2).to_dict("records")
         cov = espn_final_coverage(played, fin, set(espn_leagues()), normalize)
+        seen.append(f"finales de ESPN ({cov['covered']} de {cov['total']})")
         if cov["total"] >= 10 and cov["covered"] < ESPN_FINALS_MIN * cov["total"]:
             problems.append(f"Córners y tarjetas (ESPN): solo {cov['covered']} de {cov['total']} partidos jugados "
                             f"tienen su final de ESPN (p. ej. {', '.join(cov['missing'][:3])})")
@@ -547,5 +562,5 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
         log.error(f"❌ Chequeo de salidas — {p}")
     if not problems:
         print(f"✅ Chequeo de salidas: liquidación ({len(rows)} revisadas), resultados, pendientes, "
-              f"xG, aprendizaje y datos de entrada en orden")
+              f"xG, aprendizaje y datos de entrada en orden" + "".join(f" · {x}" for x in seen))
     return problems

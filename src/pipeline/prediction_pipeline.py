@@ -76,7 +76,7 @@ def _has_coverage(league: str, market_kind: str) -> bool:
 
 from src.features.elo_rating import compute_elo
 from src.features.team_form import get_team_form, KALMAN_BASELINE
-from src.features.xg_proxy import get_team_xg
+from src.features.xg_proxy import get_team_xg, leagues_with_shots
 from src.features.h2h_stats import get_h2h_stats
 from src.features.league_calibration import get_lambda_multipliers
 from src.utils.team_normalizer import normalize_team
@@ -748,10 +748,15 @@ def _stage_team_strengths(row, stats):
     away_xg = _credible_xg(get_real_xg(away)) or _credible_xg(get_team_xg(away))
     _xg_source = "understat" if (home_xg and home_xg.get("source") == "understat"
                                  and away_xg and away_xg.get("source") == "understat") else "proxy"
-    # cobertura del xG real en las 5 grandes (output_checks.feature_coverage)
-    if _row_league_of(row) in BIG5_LEAGUES:
+    # cobertura del xG real en las 5 grandes y del xG/córners/tiros en las
+    # ligas que traen tiros (output_checks.feature_coverage)
+    _league = _row_league_of(row)
+    if _league in BIG5_LEAGUES:
         stats['big5'] += 1
         stats['xg_real_big5'] += _xg_source == "understat"
+    _shot_leagues = leagues_with_shots()
+    if _shot_leagues is not None and _league in _shot_leagues:
+        stats['with_shots'] += 1
 
     if home_xg:
         home_attack  = home_attack  * (1 - XG_WEIGHT) + home_xg["xg_for"]     * XG_WEIGHT
@@ -3123,6 +3128,7 @@ def run_prediction_pipeline(dry_run: bool = False):
     print("Sin Dixon-Coles:    ", stats['no_dc'])
     print("Entre ligas (Elo):  ", stats['clubelo'])
     print("Fallback usados:    ", stats['fallback_used'])
+    print("Ligas con tiros:    ", stats['with_shots'])
     print("xG proxy usado:     ", stats['xg_used'])
     print("H2H usado:          ", stats['h2h_used'])
     print("Corners model:      ", stats['corners_used'])
@@ -3226,8 +3232,8 @@ def run_prediction_pipeline(dry_run: bool = False):
         # para la auditoría del sistema (scripts/system_audit.py)
         try:
             from src.utils.model_state import save_state
-            keys = ("evaluated", "h2h_used", "xg_used", "corners_used", "shots_used", "big5", "xg_real_big5",
-                    "no_dc", "thin_history", "skipped_no_odds", "clubelo")
+            keys = ("evaluated", "h2h_used", "xg_used", "corners_used", "shots_used", "with_shots", "big5",
+                    "xg_real_big5", "no_dc", "thin_history", "skipped_no_odds", "clubelo")
             save_state("pipeline_coverage", {**{k: int(stats.get(k, 0)) for k in keys},
                                              "problems": coverage_problems,
                                              "at": pd.Timestamp.now(tz="UTC").isoformat()}, history=False)
