@@ -95,7 +95,7 @@ def _lineup_for(lineups: list, team: str, when) -> dict | None:
     return None
 
 
-def merge_history(matches: list, extra: list) -> list:
+def merge_history(matches: list, extra: list, fill: list | None = None) -> list:
     """Los partidos de `matches` y los de espn_matches sin repetir: un partido
     de ESPN que ya está en `matches` se descarta (±1 día, mismo marcador y al
     menos un equipo igual: un equipo no juega dos veces el mismo día; el otro
@@ -103,10 +103,14 @@ def merge_history(matches: list, extra: list) -> list:
     porque `matches` trae sus córners y tarjetas de football-data; lo que a
     esa fila le falte (la Champions de The Odds API llega sin córners ni
     tarjetas) se completa con ESPN. Cada fila lleva "label" (la competición)
-    y "kind" ("amistoso", …)."""
+    y "kind" ("amistoso", …). fill: finales de ESPN de las ligas (live_scores,
+    v2.5.1): solo completan córners y tarjetas del mismo partido, nunca suman
+    uno nuevo."""
     out = [{**m, "label": league_name(m.get("league")) if m.get("league") else "", "kind": "liga"} for m in matches]
     seen = [({m["h"], m["a"]}, _ts(m["date"]), (int(m["home_goals"]), int(m["away_goals"]))) for m in matches]
-    for e in extra:
+    for e, only_fill in [(e, False) for e in extra] + [(f, True) for f in (fill or [])]:
+        if e.get("home_goals") is None or e.get("away_goals") is None:
+            continue
         d, score = _ts(e["date"]), (int(e["home_goals"]), int(e["away_goals"]))
         dup = next((k for k, (pair, t, sc) in enumerate(seen)
                     if pair & {e["h"], e["a"]} and abs(d - t) <= pd.Timedelta(days=1) and sc == score), None)
@@ -116,6 +120,8 @@ def merge_history(matches: list, extra: list) -> list:
                 m["home_corners"], m["away_corners"] = e.get("home_corners"), e.get("away_corners")
             if _cards(m, "home") is None and _num(e.get("home_cards")) is not None:
                 m.update(home_yellow=e.get("home_cards"), away_yellow=e.get("away_cards"), home_red=0, away_red=0)
+            continue
+        if only_fill:
             continue
         out.append({**e, "label": e.get("league") or "", "kind": e.get("kind") or "copa",
                     "home_yellow": e.get("home_cards"), "away_yellow": e.get("away_cards"),
@@ -235,12 +241,13 @@ def goals_angle(detail: dict, markets: list, min_gap: float = 0.03) -> dict | No
 
 
 def match_detail(matches: pd.DataFrame, lineups: pd.DataFrame, home: str, away: str, kickoff,
-                 extra: pd.DataFrame | None = None) -> dict:
+                 extra: pd.DataFrame | None = None, fill: pd.DataFrame | None = None) -> dict:
     """Todo lo que muestra el partido abierto. home/away: nombres canónicos
     en minúsculas (los de matches y lineups). extra: espn_matches (copas,
     Europa, amistosos) con las columnas de matches más league y kind."""
     m = merge_history(matches.to_dict("records") if not matches.empty else [],
-                      extra.to_dict("records") if extra is not None and not extra.empty else [])
+                      extra.to_dict("records") if extra is not None and not extra.empty else [],
+                      fill.to_dict("records") if fill is not None and not fill.empty else [])
     lu = lineups.to_dict("records") if not lineups.empty else []
     return {"home": {**team_last(m, lu, home, kickoff), "lineup": match_lineup(lu, home, kickoff)},
             "away": {**team_last(m, lu, away, kickoff), "lineup": match_lineup(lu, away, kickoff)},

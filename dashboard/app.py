@@ -662,7 +662,13 @@ def api_match():
     extra = _espn_history(p)
     if matches.empty and lineups.empty and extra.empty:
         return _no_data("Sin partidos anteriores de estos equipos en la base")
-    detail = _md.match_detail(matches, lineups, home, away, when, extra)
+    fill = _q("""
+        SELECT kickoff AS date, home AS h, away AS a, home_goals, away_goals, home_corners, away_corners,
+               home_cards, away_cards
+        FROM live_scores WHERE status = 'final' AND (home IN (:h, :a) OR away IN (:h, :a)) AND kickoff < :d
+          AND kickoff >= CAST(:d AS timestamptz) - INTERVAL '400 days'
+    """, p, optional=True)
+    detail = _md.match_detail(matches, lineups, home, away, when, extra, fill)
     view = _market_view(home, away, when)
     angle = _md.goals_angle(detail, view["markets"])
     if angle:
@@ -773,10 +779,11 @@ def _load_past_rows() -> list:
                   FROM program_picks WHERE match_date >= CAST(:s AS date) - 2""", p)
     bets = _q("""SELECT match, match_date, market, result, profit FROM bets_history
                  WHERE match_date >= CAST(:s AS date) - 2""", p)
-    # marcador de ESPN de los que ya empezaron (v2.4.4): la tabla la llena el closing
+    # marcador de ESPN (v2.4.4): el de los que ya empezaron y, desde v2.5.1, los
+    # córners y tarjetas que `matches` no tiene (closing y evening la llenan)
     live = _q("""SELECT home, away, kickoff, home_goals, away_goals, home_corners, away_corners,
                         home_cards, away_cards, status, clock
-                 FROM live_scores WHERE kickoff >= NOW() - INTERVAL '2 days'""", optional=True)
+                 FROM live_scores WHERE kickoff >= CAST(:s AS date) - 2""", p, optional=True)
     return _b.past_matches(matches, mvs, picks, bets, normalize_team, live=live)
 
 
@@ -827,6 +834,12 @@ def api_board_team():
     """, p)
     if m.empty and up.empty and extra.empty:
         return _no_data("Sin partidos de este equipo desde septiembre")
+    finals = _q("""SELECT home, away, kickoff, home_goals, away_goals, home_corners, away_corners,
+                          home_cards, away_cards, status
+                   FROM live_scores WHERE status = 'final' AND kickoff >= CAST(:s AS date) - 2
+                     AND (home = :t OR away = :t)""", p, optional=True)
+    if not m.empty and not finals.empty:                      # córners y tarjetas de ESPN (v2.5.1)
+        m = pd.DataFrame(_b.fill_from_espn(m.to_dict("records"), finals.to_dict("records")))
     return jsonify({"ok": True, **_b.team_view(t, m, up, extra)})
 
 

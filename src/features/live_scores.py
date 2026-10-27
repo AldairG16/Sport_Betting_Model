@@ -14,6 +14,15 @@ pick se ganó o se perdió, como resultado provisional (con la misma regla de
 liquidación, save_bets.resolve_market) hasta que la noche lo confirma.
 
 El emparejamiento es el estricto de las alineaciones (espn_lineups.assign_events).
+
+26-oct-26, el dueño: "¿por qué solo los de hoy tienen tarjetas y córners y
+los de ayer no? ni los del pasado". `matches` no los trae en MLS, Liga MX,
+Argentina, Brasil, Noruega, Suecia, Japón, China ni la Champions (football-data
+no los publica) y en las ligas grandes llegan con días de atraso. ESPN sí, en
+todas sus ligas: backfill_finals guarda el final de los partidos ya jugados
+(evening, últimos 3 días; la primera carga desde septiembre) con los nombres de
+`matches`, y el dashboard los usa donde `matches` no los tiene
+(board.fill_from_espn).
 """
 
 from datetime import datetime, timedelta, timezone
@@ -124,23 +133,86 @@ def capture_live_scores(engine=None, get=None, now=None) -> int:
     if asked and not read:
         log.error("❌ Marcadores del día (ESPN): no respondió ninguna liga — el dashboard se queda con ⏳")
         return 0
-    if rows:
-        with engine.begin() as conn:
-            conn.execute(text(DDL))
-            conn.execute(text(f"""
-                INSERT INTO {TABLE} (sport_key, kickoff, home, away, home_goals, away_goals, home_corners,
-                                     away_corners, home_cards, away_cards, status, clock, espn_id)
-                VALUES (:sport_key, :kickoff, :home, :away, :home_goals, :away_goals, :home_corners,
-                        :away_corners, :home_cards, :away_cards, :status, :clock, :espn_id)
-                ON CONFLICT (sport_key, kickoff, home) DO UPDATE SET
-                    away = EXCLUDED.away, home_goals = EXCLUDED.home_goals, away_goals = EXCLUDED.away_goals,
-                    home_corners = EXCLUDED.home_corners, away_corners = EXCLUDED.away_corners,
-                    home_cards = EXCLUDED.home_cards, away_cards = EXCLUDED.away_cards,
-                    status = EXCLUDED.status, clock = EXCLUDED.clock, espn_id = EXCLUDED.espn_id,
-                    fetched_at = NOW()
-            """), rows)
+    _save(engine, rows)
     final = sum(1 for r in rows if r["status"] == "final")
     print(f"⚽ Marcadores del día (ESPN): {len(rows)} partidos ({final} terminados, {len(rows) - final} en juego)")
+    return len(rows)
+
+
+def _save(engine, rows: list) -> None:
+    if not rows:
+        return
+    with engine.begin() as conn:
+        conn.execute(text(DDL))
+        conn.execute(text(f"""
+            INSERT INTO {TABLE} (sport_key, kickoff, home, away, home_goals, away_goals, home_corners,
+                                 away_corners, home_cards, away_cards, status, clock, espn_id)
+            VALUES (:sport_key, :kickoff, :home, :away, :home_goals, :away_goals, :home_corners,
+                    :away_corners, :home_cards, :away_cards, :status, :clock, :espn_id)
+            ON CONFLICT (sport_key, kickoff, home) DO UPDATE SET
+                away = EXCLUDED.away, home_goals = EXCLUDED.home_goals, away_goals = EXCLUDED.away_goals,
+                home_corners = EXCLUDED.home_corners, away_corners = EXCLUDED.away_corners,
+                home_cards = EXCLUDED.home_cards, away_cards = EXCLUDED.away_cards,
+                status = EXCLUDED.status, clock = EXCLUDED.clock, espn_id = EXCLUDED.espn_id,
+                fetched_at = NOW()
+        """), rows)
+
+
+def final_rows(sport_key: str, events: list, candidates: list, have: set, start) -> list:
+    """Función pura: las filas de live_scores de los partidos TERMINADOS de un
+    scoreboard (parse_live) desde `start`, con los nombres de `matches`
+    (candidates: [(fecha, local, visitante)], espn_lineups.system_names: misma
+    fecha ±1 día y los dos nombres parecidos). Sin su partido en matches no se
+    guarda (no se inventan nombres); have: los de ESPN ya guardados."""
+    from src.features.espn_lineups import system_names
+    out = []
+    for e in events:
+        if e["status"] != "final" or e["event"] in have or pd.Timestamp(e["kick"]).date() < start:
+            continue
+        names = system_names(e, candidates)
+        if names is None:
+            continue
+        out.append({"sport_key": sport_key, "kickoff": e["kick"], "home": names[0], "away": names[1],
+                    "espn_id": e["event"], **{c: e[c] for c in ("home_goals", "away_goals", "home_corners",
+                                                                 "away_corners", "home_cards", "away_cards",
+                                                                 "status", "clock")}})
+    return out
+
+
+def backfill_finals(days: int = 3, engine=None, get=None, since=None) -> int:
+    """Evening: el final de ESPN (marcador, córners y tarjetas) de los partidos
+    ya jugados de los últimos `days` días (o desde `since`) que todavía no
+    están en live_scores. Una llamada por liga y mes. Devuelve cuántos guardó."""
+    from src.features.espn_lineups import _get, espn_leagues
+    if engine is None:
+        from config.database import engine
+    today = datetime.now(timezone.utc).date()
+    start = pd.Timestamp(since).date() if since else today - timedelta(days=days)
+    with engine.begin() as conn:
+        conn.execute(text(DDL))
+        have = {r[0] for r in conn.execute(text(f"""
+            SELECT espn_id FROM {TABLE} WHERE status = 'final' AND espn_id IS NOT NULL""")).fetchall()}
+    months = sorted({(start + timedelta(days=i)).strftime("%Y%m") for i in range((today - start).days + 1)})
+    rows, asked, read = [], 0, 0
+    for sport_key, slug in espn_leagues().items():
+        with engine.connect() as conn:
+            cands = [(r[0], r[1], r[2]) for r in conn.execute(text("""
+                SELECT date, LOWER(home_team), LOWER(away_team) FROM matches
+                WHERE league = :lg AND date >= CAST(:s AS date) - 2 AND home_goals IS NOT NULL
+            """), {"lg": sport_key, "s": start}).fetchall()]
+        if not cands:
+            continue
+        for ym in months:
+            asked += 1
+            data = _get(slug, "scoreboard", f"dates={ym}", get)
+            if data is not None:
+                read += 1
+            rows += final_rows(sport_key, parse_live(data), cands, have, start)
+    if asked and not read:
+        log.error("❌ Córners y tarjetas (ESPN): no respondió ninguna liga")
+        return 0
+    _save(engine, rows)
+    print(f"⚽ Córners y tarjetas (ESPN): {len(rows)} partidos terminados nuevos desde {start}")
     return len(rows)
 
 

@@ -646,6 +646,7 @@ def run_evening(logger: Logger):
     run_step(logger, "Closing odds",      step_closing_odds)
     run_step(logger, "Fetch results",     step_fetch_results)
     run_step(logger, "Fetch results (fbdata backup)", step_fetch_results_backup)
+    run_step(logger, "Córners y tarjetas (ESPN)", step_espn_finals)
     run_step(logger, "Results",           step_results)
     run_step(logger, "Shadow results",    step_shadow_results)
     # Resolver bets pending (corners/cards/HT) ANTES del resumen, así el
@@ -1050,6 +1051,13 @@ def run_closing(logger: Logger):
     run_step(logger, "Alineaciones publicadas", step_capture_lineups)
     run_step(logger, "Picks del programa", step_program_picks)
     run_step(logger, "Alertas de alineación", step_lineup_alerts)
+
+
+def step_espn_finals():
+    """Marcador final, córners y tarjetas de ESPN de los últimos 3 días
+    (live_scores): el dashboard los usa donde `matches` no los tiene (v2.5.1)."""
+    from src.features.live_scores import backfill_finals
+    backfill_finals(days=3)
 
 
 def step_capture_lineups():
