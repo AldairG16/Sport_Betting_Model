@@ -392,6 +392,37 @@ def counted_twice(rows: list, window_days: int = 3) -> list:
     return out
 
 
+STAR_MIN_N = 30                  # con menos picks 🎯 liquidados una familia no se juzga
+STAR_SHOW_N = 10                 # desde aquí sale en la línea de ✅
+# desviaciones por debajo de lo que esperaba el mercado. Medido el 28-oct-26
+# sobre toda la historia, el z más bajo con 30+ picks fue +0.35 (Ambos
+# anotan) y +1.18 (Ganador); Goles iba en -0.78 con 28.
+STAR_Z_ALARM = -2.5
+
+
+def star_vs_market(picks: list) -> list:
+    """Función pura (28-oct-26: los goles 🎯 iban 12 de 27 contra 54%
+    esperado y nada lo vigilaba). Por familia, los picks 🎯 liquidados
+    (reason NULL, win/loss) contra la probabilidad del mercado sin margen
+    (market_prob). Devuelve [{"family", "n", "won", "expected", "z"}], de más
+    a menos picks. Un z muy negativo con suficientes picks: el 🎯 de esa
+    familia elige peor que el mercado, o una probabilidad salió volteada."""
+    by = {}
+    for p in picks:
+        mp = _num(p.get("market_prob"))
+        if isinstance(p.get("reason"), str) or p.get("result") not in ("win", "loss") or mp is None:
+            continue
+        s = by.setdefault(p.get("family") or "?", {"n": 0, "won": 0, "expected": 0.0, "var": 0.0})
+        s["n"] += 1
+        s["won"] += p["result"] == "win"
+        s["expected"] += mp
+        s["var"] += mp * (1 - mp)
+    out = [{"family": f, "n": s["n"], "won": s["won"], "expected": s["expected"],
+            "z": (s["won"] - s["expected"]) / math.sqrt(s["var"]) if s["var"] > 0 else 0.0}
+           for f, s in by.items()]
+    return sorted(out, key=lambda s: -s["n"])
+
+
 LINEUP_SINCE = "2026-10-27"      # desde aquí el pick se recalcula con la alineación (v2.5.0)
 UNSEEN_MAX = 0.30                # más picks sin ver su alineación publicada que esto: el paso falla
 
@@ -589,6 +620,24 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
             problems.append(f"Reprogramados: {len(twice)} partidos cuentan en dos fechas ({'; '.join(twice[:3])})")
     except Exception as e:
         problems.append(f"Reprogramados: no se pudo revisar ({type(e).__name__})")
+
+    # 11) el 🎯 contra el mercado (28-oct-26): una familia que gana muy por
+    #     debajo de lo que esperaba el mercado está eligiendo peor que él
+    try:
+        st = star_vs_market(q("""SELECT family, reason, result, market_prob FROM program_picks
+                                 WHERE market IS NOT NULL AND result IN ('win', 'loss')""").to_dict("records"))
+        shown = [f"{s['family']} {s['won']} de {s['n']} (esperado {s['expected']:.1f})"
+                 for s in st if s["n"] >= STAR_SHOW_N]
+        if shown:
+            seen.append("🎯 contra el mercado: " + ", ".join(shown))
+        for s in st:
+            if s["n"] >= STAR_MIN_N and s["z"] <= STAR_Z_ALARM:
+                problems.append(f"🎯 contra el mercado: {s['family']} ganó {s['won']} de {s['n']} y el mercado "
+                                f"esperaba {s['expected']:.1f} ({s['z']:+.1f} desviaciones): el 🎯 de esa familia "
+                                f"elige peor que el mercado")
+    except Exception as e:
+        if "does not exist" not in str(e):        # la tabla nace con el primer pick guardado
+            problems.append(f"🎯 contra el mercado: no se pudo revisar ({type(e).__name__})")
 
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")
