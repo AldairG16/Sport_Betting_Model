@@ -236,6 +236,13 @@ Una auditoría revisa **lo que sale**, no solo que corra: el evening ya lo hace 
 día (`src/utils/output_checks.py`, ver §5 "Auditoría de salidas"). A mano:
 `run_output_checks(days=7)` revisa una semana.
 
+**En los logs de Actions faltan los "7" y los "eu".** GitHub tapa con `***` cualquier texto
+igual al valor de un secret: `ODDS_REGION` vale eu y uno de los secrets numéricos vale 7
+(`FETCH_DAYS_AHEAD` o `API_TTL_HOURS`; el log tapa los dos).
+Por eso "finales de ESPN (87 de 87)" sale como "(8*** de 8***)", "neutral" como "n***tral" y
+"17" como "1***". Telegram y la base no se tapan. Los números se leen de la base o
+corriendo el chequeo a mano, no del log.
+
 **La auditoría del sistema, siempre la misma (`scripts/system_audit.py`, 23-oct-2026).** Cada
 auditoría hecha a mano encontraba una clase de error nueva porque revisaba otra cosa. Aquí
 están todas las clases que ya pasaron, como chequeos que corren igual cada vez:
