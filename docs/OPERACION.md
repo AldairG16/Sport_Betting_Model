@@ -334,6 +334,9 @@ daba el del partido real.
 - `backfill_picks` ya no reconstruye picks de análisis con `skipped_at`.
 - El chequeo de salidas (sección 10, `counted_twice`) da ERROR si un partido vuelve a contar en
   dos fechas.
+- La línea del log dice "N nuevos" (los que tuvieron filas anuladas en esta corrida) y "M ya
+  anulados antes". Un partido anulado se vuelve a ver durante 30 días, y antes del 28-oct se
+  anunciaba cada noche como si fuera nuevo.
 
 **Una cobertura se mide donde la feature puede existir (27-oct-2026).** El chequeo de lo que
 entra al modelo dividía el xG entre todos los partidos evaluados. Una noche con 32 de 42
