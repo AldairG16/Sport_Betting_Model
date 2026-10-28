@@ -91,7 +91,31 @@ def test_void_marks_the_phantom_in_every_table_and_leaves_bets_alone(monkeypatch
     assert any("SET result = 'stale'" in s and "program_picks" in s for s in sqls)
     assert any("SET skipped_at = NOW()" in s for s in sqls)
     assert all(p["match_date"] == pd.Timestamp("2026-10-25 19:45", tz="UTC") for _, p in eng.log)
-    assert "Partidos reprogramados: 1" in capsys.readouterr().out
+    assert out["new"] == [PSG]
+    assert "Partidos reprogramados: 1 nuevos (paris saint germain vs lyon)" in capsys.readouterr().out
+
+
+def test_a_match_voided_in_an_earlier_run_is_not_reported_as_new(monkeypatch, capsys):
+    # evening 28-oct: los 3 del 27 se volvían a anunciar con 0 filas anuladas
+    rows = [_r(PSG, "2026-10-25 19:45", "2026-10-25 19:32"), _r(PSG, "2026-10-26 19:30", "2026-10-26 19:02")]
+    monkeypatch.setattr(R.pd, "read_sql", lambda sql, engine, params=None: (
+        pd.DataFrame(columns=["home", "away", "kickoff"]) if "live_scores" in str(sql)
+        else pd.DataFrame(rows)[["match", "match_date", "written"]]))
+
+    class _Done(_Conn):
+        def execute(self, sql, params=None):
+            self.log.append((str(sql), params))
+            return type("Res", (), {"rowcount": 0})()           # ya estaban anuladas
+
+    class _Eng(_Engine):
+        @contextlib.contextmanager
+        def begin(self):
+            yield _Done(self.log)
+    out = R.void_rescheduled(engine=_Eng())
+    assert out["matches"] == [PSG] and out["new"] == []
+    text = capsys.readouterr().out
+    assert "Partidos reprogramados: 0 nuevos · 1 ya anulados antes" in text
+    assert "filas de la fecha vieja" not in text
 
 
 def test_the_evening_voids_phantoms_before_settling_and_a_failure_is_an_error(monkeypatch):

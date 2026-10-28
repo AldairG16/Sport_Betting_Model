@@ -116,13 +116,20 @@ def void_rescheduled(engine=None, days: int | None = 30) -> dict:
                 raise
     phantoms = phantom_dates(rows, espn)
     out = {t: 0 for t in present}
+    new = set()                                     # los que tenían algo por anular en esta corrida
     if phantoms:
-        params = [{"match": m, "match_date": d.to_pydatetime()} for m, d in sorted(phantoms)]
         with engine.begin() as conn:
-            for table in present:
-                out[table] = sum(conn.execute(text(VOID_SQL[table]), p).rowcount or 0 for p in params)
+            for m, d in sorted(phantoms):
+                p = {"match": m, "match_date": d.to_pydatetime()}
+                for table in present:
+                    n = conn.execute(text(VOID_SQL[table]), p).rowcount or 0
+                    out[table] += n
+                    if n:
+                        new.add(m)
     names = sorted({m for m, _ in phantoms})
-    print(f"🗓️ Partidos reprogramados: {len(names)}"
-          + (f" ({', '.join(names[:3])}) · filas de la fecha vieja anuladas: "
-             + ", ".join(f"{t} {n}" for t, n in out.items()) if names else ""))
-    return {"matches": names, **out}
+    # los de corridas anteriores se vuelven a ver 30 días; no son nuevos
+    print(f"🗓️ Partidos reprogramados: {len(new)} nuevos"
+          + (f" ({', '.join(sorted(new)[:3])}) · filas de la fecha vieja anuladas: "
+             + ", ".join(f"{t} {n}" for t, n in out.items()) if new else "")
+          + (f" · {len(names) - len(new)} ya anulados antes" if len(names) > len(new) else ""))
+    return {"matches": names, "new": sorted(new), **out}

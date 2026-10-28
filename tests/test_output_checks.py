@@ -303,12 +303,9 @@ def test_daily_check_reports_every_problem_as_an_error(monkeypatch):
 
 
 
-def test_the_ok_line_says_how_much_of_lineups_and_espn_it_checked(monkeypatch, capsys):
-    # "un paso OK no prueba que hizo algo" (27-oct-26): el ✅ dice cuántos
-    # picks vieron su alineación y cuántos partidos tienen su final de ESPN
-    import src.utils.output_checks as mod
-    from src.models import lineup_alerts as LA
-    now = pd.Timestamp.now(tz="UTC")
+def _healthy_db(now, star_picks=()):
+    """read_sql falso de una base sana (todas las secciones pasan); star_picks:
+    las filas de program_picks de la sección 11."""
     xi = [f"p{i}" for i in range(11)]
 
     def fake_read_sql(sql, con=None, params=None, **kw):
@@ -334,13 +331,69 @@ def test_the_ok_line_says_how_much_of_lineups_and_espn_it_checked(monkeypatch, c
                                   "league": "soccer_epl"}])
         if "FROM live_scores WHERE status = 'final'" in s:
             return pd.DataFrame([{"home": "aa", "away": "bb", "kickoff": now - pd.Timedelta(days=1)}])
+        if "SELECT family, reason, result, market_prob FROM program_picks" in s:
+            return pd.DataFrame(list(star_picks), columns=["family", "reason", "result", "market_prob"])
         return pd.DataFrame(columns=["id", "match", "match_date", "market", "result", "h", "a", "d",
                                      "home", "away", "kickoff", "home_goals", "away_goals", "status"])
-    monkeypatch.setattr(pd, "read_sql", fake_read_sql)
+    return fake_read_sql
+
+
+def test_the_ok_line_says_how_much_of_lineups_and_espn_it_checked(monkeypatch, capsys):
+    # "un paso OK no prueba que hizo algo" (27-oct-26): el ✅ dice cuántos
+    # picks vieron su alineación y cuántos partidos tienen su final de ESPN
+    import src.utils.output_checks as mod
+    from src.models import lineup_alerts as LA
+    monkeypatch.setattr(pd, "read_sql", _healthy_db(pd.Timestamp.now(tz="UTC")))
     monkeypatch.setattr(LA, "load_profiles", lambda engine, teams: {})
     assert mod.run_output_checks(engine=object(), normalize=lambda t: t) == []
     line = [x for x in capsys.readouterr().out.splitlines() if x.startswith("✅ Chequeo de salidas")][0]
     assert "alineaciones (1 de 1 picks la vieron)" in line and "finales de ESPN (1 de 1)" in line
+
+
+# ─── 11) el 🎯 contra el mercado (28-oct-26) ────────────────────────────────
+
+def _picks(family, won, lost, p, reason=None):
+    return ([{"family": family, "reason": reason, "result": "win", "market_prob": p}] * won
+            + [{"family": family, "reason": reason, "result": "loss", "market_prob": p}] * lost)
+
+
+def test_star_picks_are_measured_against_what_the_market_expected():
+    from src.utils.output_checks import star_vs_market
+    rows = (_picks("Goles", 13, 15, 0.536)
+            + _picks("Goles", 9, 0, 0.5, reason="Sin ventaja: el programa ve lo mismo que el mercado")  # no es 🎯
+            + [{"family": "Goles", "reason": None, "result": "push", "market_prob": 0.5},
+               {"family": "Goles", "reason": None, "result": "win", "market_prob": None}]
+            + _picks("Ganador", 33, 18, 0.486))
+    out = {s["family"]: s for s in star_vs_market(rows)}
+    assert list(out) == ["Ganador", "Goles"]                    # de más a menos picks
+    g = out["Goles"]
+    assert (g["n"], g["won"], round(g["expected"], 1)) == (28, 13, 15.0)
+    assert -1 < g["z"] < 0                                     # 13 contra 15: ruido
+    assert out["Ganador"]["z"] > 2
+
+
+def test_the_daily_check_flags_a_star_family_that_picks_worse_than_the_market(monkeypatch, capsys):
+    import src.utils.output_checks as mod
+    from src.models import lineup_alerts as LA
+    from src.utils.log import RUN_ISSUES
+    monkeypatch.setattr(LA, "load_profiles", lambda engine, teams: {})
+    now = pd.Timestamp.now(tz="UTC")
+    # hoy: Goles 13 de 28 contra 15.0 esperado sale en la línea de ✅, sin alarma
+    monkeypatch.setattr(pd, "read_sql", _healthy_db(now, _picks("Goles", 13, 15, 0.536)))
+    assert mod.run_output_checks(engine=object(), normalize=lambda t: t) == []
+    line = [x for x in capsys.readouterr().out.splitlines() if x.startswith("✅ Chequeo de salidas")][0]
+    assert "🎯 contra el mercado: Goles 13 de 28 (esperado 15.0)" in line
+    # 8 de 30 cuando el mercado esperaba 16 (o una probabilidad volteada): error
+    RUN_ISSUES.reset()
+    monkeypatch.setattr(pd, "read_sql", _healthy_db(now, _picks("Goles", 8, 22, 0.54)))
+    out = mod.run_output_checks(engine=object(), normalize=lambda t: t)
+    assert len(out) == 1 and "Goles ganó 8 de 30 y el mercado esperaba 16.2" in out[0]
+    assert any("🎯 contra el mercado" in e for e in RUN_ISSUES.errors())
+    # con menos de 30 no se juzga
+    monkeypatch.setattr(pd, "read_sql", _healthy_db(now, _picks("Goles", 2, 20, 0.54)))
+    assert mod.run_output_checks(engine=object(), normalize=lambda t: t) == []
+    RUN_ISSUES.reset()
+
 
 def test_evening_runs_the_check_before_the_telegram_summary(monkeypatch):
     from scripts import orchestrator as O

@@ -236,13 +236,20 @@ Una auditoría revisa **lo que sale**, no solo que corra: el evening ya lo hace 
 día (`src/utils/output_checks.py`, ver §5 "Auditoría de salidas"). A mano:
 `run_output_checks(days=7)` revisa una semana.
 
+**En los logs de Actions faltan los "7" y los "eu".** GitHub tapa con `***` cualquier texto
+igual al valor de un secret: `ODDS_REGION` vale eu y uno de los secrets numéricos vale 7
+(`FETCH_DAYS_AHEAD` o `API_TTL_HOURS`; el log tapa los dos).
+Por eso "finales de ESPN (87 de 87)" sale como "(8*** de 8***)", "neutral" como "n***tral" y
+"17" como "1***". Telegram y la base no se tapan. Los números se leen de la base o
+corriendo el chequeo a mano, no del log.
+
 **La auditoría del sistema, siempre la misma (`scripts/system_audit.py`, 23-oct-2026).** Cada
 auditoría hecha a mano encontraba una clase de error nueva porque revisaba otra cosa. Aquí
 están todas las clases que ya pasaron, como chequeos que corren igual cada vez:
 
 | Chequeo | Qué revisa | Cuándo corre |
 |---|---|---|
-| Salidas y datos de entrada | Liquidación contra un cálculo independiente; resultados que faltan; pendientes atorados; xG fuera de escala; lo aprendido del weekly; fechas espejo, resultados con fecha futura, repetidos, tablas de otras fuentes viejas; marcador provisional de ESPN contra el oficial; picks contra alineaciones; finales de ESPN; un partido reprogramado contado en dos fechas | Evening (`output_checks`) |
+| Salidas y datos de entrada | Liquidación contra un cálculo independiente; resultados que faltan; pendientes atorados; xG fuera de escala; lo aprendido del weekly; fechas espejo, resultados con fecha futura, repetidos, tablas de otras fuentes viejas; marcador provisional de ESPN contra el oficial; picks contra alineaciones; finales de ESPN; un partido reprogramado contado en dos fechas; el 🎯 de cada familia contra lo que esperaba el mercado | Evening (`output_checks`) |
 | Equipos próximos con historia | Que tengan historia y que no esté partida en dos nombres | Weekly |
 | Nombres de Understat y ESPN | Que cuadren con `matches` | Weekly |
 | Lo que entra al modelo | La cobertura de cada feature en la última corrida (`model_state` `pipeline_coverage`) | Weekly |
@@ -334,6 +341,9 @@ daba el del partido real.
 - `backfill_picks` ya no reconstruye picks de análisis con `skipped_at`.
 - El chequeo de salidas (sección 10, `counted_twice`) da ERROR si un partido vuelve a contar en
   dos fechas.
+- La línea del log dice "N nuevos" (los que tuvieron filas anuladas en esta corrida) y "M ya
+  anulados antes". Un partido anulado se vuelve a ver durante 30 días, y antes del 28-oct se
+  anunciaba cada noche como si fuera nuevo.
 
 **Una cobertura se mide donde la feature puede existir (27-oct-2026).** El chequeo de lo que
 entra al modelo dividía el xG entre todos los partidos evaluados. Una noche con 32 de 42
@@ -689,7 +699,16 @@ tolerados":
 - partidos analizados que ya se jugaron y no tienen marcador (más del 15%);
 - pendientes atorados más allá de su ventana (reales 8 días, sombra y propuestas 11);
 - xG real de más de 4 por partido;
-- claves del weekly sin actualizar en 9 días o más.
+- claves del weekly sin actualizar en 9 días o más;
+- **el 🎯 contra el mercado** (sección 11, 28-oct-26, `star_vs_market`): por familia, los
+  picks 🎯 liquidados contra la probabilidad del mercado sin margen. Es ERROR con 30+ picks
+  y 2.5 desviaciones o más por debajo: el 🎯 de esa familia elige peor que el mercado, o
+  una probabilidad salió volteada.
+  - La línea de ✅ dice cada familia con 10+ picks, por ejemplo "Goles 13 de 28 (esperado
+    15.0)".
+  - El umbral se midió sobre toda la historia el 28-oct: el z más bajo con 30+ picks fue
+    +0.35 (Ambos anotan) y +1.18 (Ganador). Goles iba en −0.78 con 28 picks, que es ruido.
+  - Solo avisa: no quita el 🎯. Si se apaga solo o no es decisión del dueño.
 
 Al final de cada corrida del pipeline, `pipeline_invariants` revisa los goles esperados en
 el tope (más del 5% de los partidos), los partidos a más de 20 pts de Pinnacle (más del
