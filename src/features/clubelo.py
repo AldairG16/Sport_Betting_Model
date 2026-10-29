@@ -14,8 +14,9 @@ ClubElo pone a todos los clubes de Europa en una sola escala de Elo (Arsenal
   - refresh_clubelo(): una vez por semana, el Elo de los clubes de cada país
     (las páginas públicas https://clubelo.com/<PAÍS>; su API de datos,
     api.clubelo.com, responde 502 desde el 22-oct-26 y la de partidos dice
-    "Fixtures API deactivated"). Sin verificación de bots: una petición por
-    país, con pausa.
+    "Fixtures API deactivated"). Una petición por país, con pausa. Desde el
+    29-oct-26 las páginas piden un reto anti-bots (403): no se salta, sigue
+    la última foto (MAX_AGE_DAYS).
   - match_team(): el club de ClubElo que es cada equipo nuestro.
   - league_strengths(): la fuerza de cada liga, el Elo promedio de sus 5
     mejores clubes (Inglaterra 1965, Noruega 1642, Ucrania 1583).
@@ -39,7 +40,7 @@ import math
 import re
 import time
 import unicodedata
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -57,7 +58,14 @@ COUNTRIES = ("ENG", "ESP", "ITA", "GER", "FRA", "NED", "POR", "BEL", "TUR", "GRE
              "ROU", "BUL", "SVK", "SVN", "FIN", "IRL", "ISL", "NIR", "WAL", "ARM", "GEO", "BIH", "MKD",
              "ALB", "KOS", "MNE", "LUX", "LTU", "LVA", "EST", "FRO", "MLT", "MDA", "BLR", "GIB", "AND", "SMR")
 CROSS_LEAGUE = ("uefa_champs", "uefa_europa", "conference")   # partidos entre ligas de Europa
-MAX_AGE_DAYS = 10                                           # un Elo más viejo no se usa
+# Un Elo más viejo no se usa. 29-oct-26: 10 → 45. Las páginas de ClubElo
+# piden un reto anti-bots de Cloudflare ("Just a moment…", 403) y su API
+# responde 502 desde el 22-oct; no se salta el reto. La fuerza de una liga
+# (Elo promedio de sus 5 mejores clubes) se mueve unos pocos puntos al mes
+# y pesa con GAMMA = 0.2: una foto de semanas sirve.
+MAX_AGE_DAYS = 45
+WARN_DAYS_LEFT = 7                                          # avisa (ERROR) una semana antes de que venza
+BLOCK_PROBE = 3                                             # 403 seguidos para dar por bloqueado
 ELO_HOME_ADV = 80                                           # el del ensemble (ensemble_model.ELO_HOME_ADV)
 BASE_GOALS = 1.35                                           # goles por equipo de un partido promedio
 TOP_N = 5                                                   # clubes que miden la fuerza de una liga
@@ -198,24 +206,32 @@ def _get(url: str) -> str | None:
         return r.read().decode("latin-1")
 
 
-def refresh_clubelo(engine=None, get=None, pause: float = 2.0, countries=COUNTRIES) -> int:
+def refresh_clubelo(engine=None, get=None, pause: float = 2.0, countries=COUNTRIES, last=None) -> int:
     """Guarda el Elo de hoy de los clubes de cada país. Un país que falla se
-    salta; si no se pudo leer ninguno es ERROR (llega a Telegram)."""
+    salta. Si no se pudo leer ninguno: con la foto anterior (`last`) todavía
+    útil por más de WARN_DAYS_LEFT días es WARNING; si vence antes o no hay,
+    ERROR (llega a Telegram). Si los primeros BLOCK_PROBE países responden
+    403, ClubElo está bloqueando las lecturas y no se piden los demás."""
     if engine is None:
         from config.database import engine
     get = get or _get
     today = date.today()
-    rows, failed = [], []
+    rows, failed, blocked = [], [], 0
     for k, code in enumerate(countries):
         try:
             rows += parse_country(get(BASE.format(code=code)) or "", code)
         except Exception as e:
-            failed.append(f"{code} ({type(e).__name__})")
+            status = getattr(e, "code", None)
+            failed.append(f"{code} ({type(e).__name__}{f' {status}' if status else ''})")
+            blocked += status == 403
+        if not rows and blocked >= BLOCK_PROBE:
+            break                                   # reto anti-bots (29-oct-26): no se insiste
         if pause and k < len(countries) - 1:
             time.sleep(pause)
     if not rows:
-        log.error(f"❌ ClubElo: no se pudo leer ningún país ({', '.join(failed[:5])}…) — "
-                  f"los partidos entre ligas se quedan sin ajuste")
+        why = (f"ClubElo bloquea las lecturas automáticas ({', '.join(failed[:BLOCK_PROBE])})"
+               if blocked >= BLOCK_PROBE else f"no se pudo leer ningún país ({', '.join(failed[:5])}…)")
+        _report_stale(why, last, today)
         return 0
     with engine.begin() as conn:
         conn.execute(text(DDL))
@@ -227,6 +243,23 @@ def refresh_clubelo(engine=None, get=None, pause: float = 2.0, countries=COUNTRI
     print(f"🌍 ClubElo: {len(rows)} clubes de {len(countries) - len(failed)} países"
           + (f" (sin leer: {', '.join(failed)})" if failed else ""))
     return len(rows)
+
+
+def _report_stale(why: str, last, today: date) -> None:
+    """Sin foto nueva: WARNING si la anterior sirve todavía más de
+    WARN_DAYS_LEFT días; si no, ERROR, con tiempo para buscar otra fuente."""
+    if last is not None and not pd.isna(last):
+        expires = pd.Timestamp(last).date() + timedelta(days=MAX_AGE_DAYS)
+        left = (expires - today).days
+        if left > WARN_DAYS_LEFT:
+            log.warning(f"⚠️  ClubElo: {why} — sigue la foto del {pd.Timestamp(last):%d-%b}, "
+                        f"que sirve hasta el {expires:%d-%b}")
+            return
+        if left >= 0:
+            log.error(f"❌ ClubElo: {why} — la foto del {pd.Timestamp(last):%d-%b} vence el {expires:%d-%b}: "
+                      f"desde ahí los partidos entre ligas se quedan sin ajuste")
+            return
+    log.error(f"❌ ClubElo: {why} — los partidos entre ligas se quedan sin ajuste")
 
 
 def refresh_if_stale(engine=None, max_age_days: int = 6) -> int:
@@ -241,7 +274,7 @@ def refresh_if_stale(engine=None, max_age_days: int = 6) -> int:
     if last is not None and not pd.isna(last) and (date.today() - pd.Timestamp(last).date()).days <= max_age_days:
         print(f"🌍 ClubElo al día (foto del {pd.Timestamp(last):%d-%b})")
         return 0
-    return refresh_clubelo(engine)
+    return refresh_clubelo(engine, last=last)
 
 
 def load_latest(engine=None) -> list:

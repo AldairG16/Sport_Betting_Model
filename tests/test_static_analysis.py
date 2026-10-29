@@ -43,3 +43,14 @@ def test_production_code_has_no_pyflakes_findings():
             checkPath(str(path), rep)
     assert not rep.found, "pyflakes:\n" + "\n".join(
         f.replace(str(ROOT) + "\\", "").replace(str(ROOT) + "/", "") for f in rep.found)
+
+
+def test_no_test_reads_logs_with_caplog():
+    """caplog no ve los logs del proyecto en CI (src/utils/log.py configura
+    sus propios handlers): dos pruebas pasaron en local y fallaron en CI
+    (PR #85 y #89). Los avisos se leen de RUN_ISSUES.errors() / .warnings(),
+    que es además lo que llega a Telegram."""
+    import re
+    uses = [f"{p.name}: {m.group(1)}" for p in sorted((ROOT / "tests").glob("test_*.py"))
+            for m in re.finditer(r"def (test_\w+)\([^)]*\bcaplog\b", p.read_text(encoding="utf-8"))]
+    assert uses == []

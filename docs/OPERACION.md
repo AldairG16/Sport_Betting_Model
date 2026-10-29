@@ -19,7 +19,7 @@ ver §2.
 | **Telegram** | Único canal de salida: picks, resumen diario, alertas del watchdog. | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`; el analista usa `*_PREKICKOFF` y cae al bot principal si no están. | Gratis. |
 | **football-data.co.uk** | Respaldo de resultados y **única** fuente de córners y tarjetas. Publica con 24-36 h de retraso. Si un archivo no existe, **manda otro parecido** sin avisar (§5). | Ninguna, son CSV públicos. | Gratis. |
 | **OpenWeatherMap** | Clima del partido (`src/features/weather_impact.py`). | `WEATHER_API_KEY` | Gratis, 1000 llamadas/día. |
-| **ClubElo** | Fuerza de cada liga para los partidos entre ligas (§7, "Fuerza de liga"). Su API (`api.clubelo.com`) responde 502; se leen las páginas públicas `clubelo.com/<PAÍS>`, una vez por semana, con pausa de 2 s. | Ninguna. | Gratis. |
+| **ClubElo** | Fuerza de cada liga para los partidos entre ligas (§7, "Fuerza de liga"). Su API (`api.clubelo.com`) responde 502; las páginas públicas `clubelo.com/<PAÍS>` piden un reto anti-bots desde el 29-oct-26: sigue la foto del 22-oct (sirve 45 días). | Ninguna. | Gratis. |
 
 `RAPIDAPI_KEY` solo la usa `test_api.py`, que no forma parte del pipeline.
 
@@ -1521,9 +1521,19 @@ mete 2.3 por partido en Noruega.
 - **Datos.** `refresh_if_stale()` corre en el morning (paso "ClubElo (fuerza de liga)",
   antes de Predictions) y, si la última foto tiene más de 6 días, lee las páginas públicas
   de ClubElo de 53 países (tabla `club_elo`, una foto por fecha). Un país que falla se salta;
-  ninguno → ERROR a Telegram. Una foto de más de 10 días no se usa (`MAX_AGE_DAYS`).
+  ninguno → aviso (ver abajo). Una foto de más de 45 días no se usa (`MAX_AGE_DAYS`).
   - La API de datos de ClubElo responde 502 desde el 22-oct-26 y la de partidos dice
-    "Fixtures API deactivated": por eso las páginas. No tienen verificación de bots.
+    "Fixtures API deactivated": por eso las páginas.
+  - **Desde el 29-oct-26 las páginas piden un reto anti-bots de Cloudflare** ("Just a
+    moment…", 403, `Cf-Mitigated: challenge`). No se salta. Tres 403 seguidos
+    (`BLOCK_PROBE`) dan a ClubElo por bloqueado y no se piden los otros 50 países.
+  - Sin foto nueva sigue la última: la del 22-oct sirve hasta el 6-dic. Es WARNING mientras
+    le queden más de 7 días (`WARN_DAYS_LEFT`) y ERROR a Telegram la última semana, con
+    tiempo para buscar otra fuente. Antes `MAX_AGE_DAYS` era 10: desde el 1-nov los
+    partidos de Champions se habrían quedado sin ajuste, y el morning mandaba un ERROR
+    cada día.
+  - Por qué 45 días sirven: la fuerza de una liga (Elo promedio de sus 5 mejores clubes)
+    se mueve unos pocos puntos al mes, y pesa con `GAMMA` = 0.2.
 - **Fuerza de la liga** = Elo promedio de sus 5 mejores clubes (`league_strengths`; con menos
   de 3 clubes en ClubElo la liga no tiene fuerza). Foto del 22-oct: Inglaterra 1965, España
   1912, Alemania 1891, Italia 1860, Francia 1830 … Noruega 1642, Ucrania 1583.
