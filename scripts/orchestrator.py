@@ -339,21 +339,20 @@ def step_kalshi():
 def step_pre_kickoff_closing():
     """
     Captura de cierres antes del kickoff (corre cada ~30 min).
-    1. Refresco normal por TTL de lo que empieza en las próximas
-       CLOSING_HORIZON_HOURS, con el presupuesto diario de créditos.
-    2. Recarga dirigida: solo ligas/eventos con kickoff en la próxima hora
+    1. Recarga dirigida: solo ligas/eventos con kickoff en la próxima hora
        y bets o candidatas shadow (refresh_for_closing, con tope de créditos).
+    2. Refresco normal por TTL de lo que empieza en las próximas
+       CLOSING_HORIZON_HOURS, con lo que deja libre el presupuesto diario.
     3. update_closing_odds: cierre + hora de descarga para bets y shadow; el
        cierre se reemplaza si llega uno más cercano al kickoff.
     Luego revalidación y confirmaciones oficiales pre-kickoff.
+
+    29-oct-26: los cierres van primero. Con el refresco normal antes, el
+    presupuesto del día se usaba antes de los partidos y del 24 al 28 de
+    octubre solo 0-53% de los partidos tuvo un cierre válido (antes 98-100%).
     """
     from scripts.update_upcoming_matches import update_all, refresh_for_closing
     from scripts.update_closing_odds import update_closing_odds, select_closing_targets
-
-    # Refresco normal por TTL: sin créditos si el caché está vigente. Con el
-    # presupuesto del día y solo lo que empieza pronto (29-oct-26: sin tope
-    # era ~85% del gasto de créditos).
-    update_all(force=False, budgeted=True)
 
     # Recarga DIRIGIDA (22-sep-26): solo las ligas con kickoff en la próxima
     # hora que tengan bets pendientes o candidatas shadow (+ re-enrichment de
@@ -370,6 +369,17 @@ def step_pre_kickoff_closing():
         # el paso termina FALLIDO al final para que se vea (run en rojo).
         refresh_error = e
         log.error(f"   ❌ Recarga dirigida de cierre falló: {type(e).__name__}: {e}")
+
+    # Refresco normal por TTL: sin créditos si el caché está vigente. Solo lo
+    # que empieza pronto y con lo que dejan libre los cierres (29-oct-26: sin
+    # tope era ~85% del gasto de créditos). Después de la recarga dirigida:
+    # si falla, los cierres ya bajados se guardan igual (update_closing_odds).
+    update_error = None
+    try:
+        update_all(force=False, budgeted=True)
+    except Exception as e:
+        update_error = e
+        log.error(f"   ❌ Actualización normal del closing falló: {type(e).__name__}: {e}")
 
     update_closing_odds()
 
@@ -426,6 +436,8 @@ def step_pre_kickoff_closing():
 
     if refresh_error is not None:
         raise RuntimeError(f"recarga dirigida de cierre: {refresh_error}")
+    if update_error is not None:
+        raise RuntimeError(f"actualización normal del closing: {update_error}")
 
 
 def step_fetch_results():

@@ -8,6 +8,8 @@ puesto.
 - Morning, evening y resultados (~200 por día) salían del mismo presupuesto.
 - Los resultados pedían todas las ligas en cada corrida (~114 créditos al día).
 - Con el saldo bajo el umbral, cada corrida mandaba su aviso por Telegram.
+- Los cierres no tenían prioridad: del 24 al 28 de oct solo 0-53% de los
+  partidos tuvo un cierre válido (antes 98-100%).
 """
 
 import sys
@@ -100,7 +102,7 @@ class _Api:
         monkeypatch.setattr(uum, "_preflight_credits_check",
                             lambda: setattr(uum, "_last_known_remaining", remaining) or remaining)
         monkeypatch.setattr(uum, "API_CREDITS_STOP_THRESHOLD", 500)
-        monkeypatch.setattr(uum, "_closing_budget", lambda r: ({"start": r}, float(budget)))
+        monkeypatch.setattr(uum, "_budgets", lambda r, c: ({"start": r}, float(budget), float(budget)))
         for name in ("_cleanup_old_matches", "ensure_schema", "_renormalize_names", "_cleanup_stale_duplicates"):
             monkeypatch.setattr(uum, name, lambda: None)
         monkeypatch.setattr(uum, "load_cache", lambda: cache)
@@ -214,3 +216,79 @@ def test_a_league_misses_a_result_until_matches_has_it(monkeypatch):
         raise RuntimeError("sin base")
     monkeypatch.setattr(pd, "read_sql", broken)
     assert FR.leagues_needing_results(3) is None
+
+
+# ============================================================
+# Los cierres primero (29-oct-26)
+# ============================================================
+
+def test_the_reserve_counts_each_league_kickoff_left_today():
+    from src.utils.credit_budget import capture_reserve
+    now = utc(2026, 10, 24, 12)
+    kickoffs = [("soccer_epl", utc(2026, 10, 24, 14)), ("soccer_epl", utc(2026, 10, 24, 14)),  # mismo horario
+                ("soccer_epl", utc(2026, 10, 24, 16, 30)), ("soccer_spain_la_liga", utc(2026, 10, 24, 14)),
+                ("soccer_usa_mls", utc(2026, 10, 25, 0, 30)),   # su ventana de cierre empieza hoy
+                ("soccer_usa_mls", utc(2026, 10, 25, 2)),       # mañana: otro presupuesto
+                ("soccer_epl", utc(2026, 10, 24, 11))]          # ya empezó
+    assert capture_reserve(kickoffs, now, league_cost=3) == 4 * 2 * 3
+
+
+def test_what_is_not_a_closing_never_eats_the_reserve():
+    from src.utils.credit_budget import extras_budget
+    day = {"day": "2026-10-24", "start": 3510, "allowance": 646.0}
+    assert extras_budget(day, 3510, reserve=264) == pytest.approx(646 - 200 - 264)
+    assert extras_budget(day, 3300, reserve=264) == 0           # el día ya va en 210: nada más que cierres
+
+
+def test_the_morning_leaves_the_closings_their_credits(monkeypatch):
+    """El sábado 24-oct a las 13:30 el closing ya estaba "en pausa, 803 de 364
+    créditos": los mercados por evento se comían el día antes de los partidos."""
+    import scripts.update_upcoming_matches as uum
+    from src.utils import credit_budget as CB
+    real_budgets = uum._budgets
+    now = datetime.now(timezone.utc)
+    events = [{"id": f"ev{i}", "commence_time": (now + timedelta(minutes=15 + 12 * i)).isoformat().replace("+00:00", "Z")}
+              for i in range(15)]                               # 5 en la próxima hora y media, el resto más tarde
+    cache = {"soccer_sat": {"fetched_at": (now - timedelta(hours=13)).isoformat(), "data": events}}
+    api = _Api(monkeypatch, cache, remaining=10_000)
+    monkeypatch.setattr(uum, "_budgets", real_budgets)
+    monkeypatch.setattr(CB, "load_and_update", lambda r, now=None: {"day": "x", "start": 10_000, "allowance": 300.0})
+    reserve = CB.capture_reserve(uum._kickoffs(cache), datetime.now(timezone.utc), 3)
+    api.uum.update_all()                                        # morning: sin budgeted
+    assert api.league_calls == ["soccer_sat"]                   # sus ligas no se frenan
+    assert len(api.event_calls) == int((300 - 200 - reserve) // 7) < 14   # sin reserva habrían sido 14
+
+
+def test_a_saved_event_is_reattached_for_free_and_does_not_use_the_cap(monkeypatch):
+    import scripts.update_upcoming_matches as uum
+    now = datetime.now(timezone.utc)
+    cache = {"soccer_a": _league("soccer_a", 5, 30),
+             "_enrich:soccer_a-0": {"fetched_at": (now - timedelta(hours=20)).isoformat(),   # vigente (48 h)
+                                    "bookmakers": [{"key": "bk", "markets": [{"key": "btts"}]}]}}
+    api = _Api(monkeypatch, cache, budget=0)                    # sin presupuesto para mercados por evento
+    monkeypatch.setattr(uum, "SPORT_KEYS", ["soccer_a"])
+    merged = []
+    monkeypatch.setattr(uum, "merge_specialty", lambda m, extra: merged.append(m["id"]))
+    api.uum.update_all()
+    assert api.event_calls == [] and merged == ["soccer_a-0"]   # antes: un tope de 0 lo dejaba sin mercados
+
+    api = _Api(monkeypatch, cache, budget=7)                    # cabe uno: es el que no estaba guardado
+    monkeypatch.setattr(uum, "SPORT_KEYS", ["soccer_a"])
+    api.uum.update_all()
+    assert api.event_calls == ["soccer_a-1"]
+
+
+def test_the_closing_captures_before_the_normal_update():
+    import inspect
+    import scripts.orchestrator as O
+    src = inspect.getsource(O.step_pre_kickoff_closing)
+    assert src.index("refresh_for_closing(targets)") < src.index("update_all(force=False, budgeted=True)")
+    assert src.index("update_all(force=False, budgeted=True)") < src.index("update_closing_odds()")
+
+
+def test_closings_are_not_cut_by_fixed_floors_at_the_end_of_the_month():
+    import scripts.update_upcoming_matches as uum
+    from src.utils.credit_budget import RESERVE
+    # 1,500 apagaba los cierres los últimos ~2 días de cada mes (27-oct: 17%, 28-oct: 0%)
+    assert uum.CLOSING_MIN_CREDITS <= RESERVE
+    assert uum.ENRICH_CACHE_TTL_HOURS >= uum.ENRICH_DAYS_AHEAD * 24   # un pago por partido antes del cierre

@@ -17,7 +17,8 @@ que lo que sale tenga sentido y avisa como ERROR (llega a Telegram como
   - resultados: partidos analizados que ya se jugaron y no tienen marcador;
   - pendientes atorados más allá de la ventana de 'stale';
   - xG real fuera de escala;
-  - lo aprendido: claves del weekly sin actualizar en 9+ días.
+  - lo aprendido: claves del weekly sin actualizar en 9+ días;
+  - cierres: partidos de ayer con un cierre válido (29-oct-26).
 
 Las funciones de revisión son puras; run_output_checks hace las consultas.
 """
@@ -423,6 +424,21 @@ def star_vs_market(picks: list) -> list:
     return sorted(out, key=lambda s: -s["n"])
 
 
+CLOSING_MIN_SHARE = 0.80         # normal medido: 98-100% (9-23 oct); 24-25 oct cayó a 15-19%
+CLOSING_MIN_N = 10
+
+
+def closing_coverage(rows: list) -> dict:
+    """Partidos sombra jugados con un cierre válido (descargado poco antes del
+    kickoff, closing_quality). `rows`: {match, valid} por candidata; un
+    partido cuenta como cubierto si alguna de sus candidatas lo tiene."""
+    by = defaultdict(bool)
+    for r in rows:
+        by[r["match"]] |= bool(r.get("valid"))
+    missing = sorted(m for m, ok in by.items() if not ok)
+    return {"total": len(by), "covered": len(by) - len(missing), "missing": missing}
+
+
 LINEUP_SINCE = "2026-10-27"      # desde aquí el pick se recalcula con la alineación (v2.5.0)
 UNSEEN_MAX = 0.30                # más picks sin ver su alineación publicada que esto: el paso falla
 
@@ -638,6 +654,31 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     except Exception as e:
         if "does not exist" not in str(e):        # la tabla nace con el primer pick guardado
             problems.append(f"🎯 contra el mercado: no se pudo revisar ({type(e).__name__})")
+
+    # 12) cierres guardados (29-oct-26): del 24 al 28 de oct solo 0-53% de los
+    #     partidos tuvo un cierre válido y nada avisó; sin cierres el
+    #     aprendizaje del peso del modelo no recibe datos
+    try:
+        from src.utils.closing_quality import valid_closing_sql
+        cc = closing_coverage(q(f"""SELECT match, (closing_odds IS NOT NULL AND {valid_closing_sql()}
+                                                   AND closing_fetched_at > created_at) AS valid
+                                    FROM shadow_bets
+                                    WHERE match_date BETWEEN NOW() - INTERVAL '27 hours'
+                                                         AND NOW() - INTERVAL '3 hours'""").to_dict("records"))
+        seen.append(f"cierres ({cc['covered']} de {cc['total']} partidos)")
+        if cc["total"] >= CLOSING_MIN_N and cc["covered"] < CLOSING_MIN_SHARE * cc["total"]:
+            msg = (f"Cierres: solo {cc['covered']} de {cc['total']} partidos de ayer tienen un cierre válido "
+                   f"(p. ej. {', '.join(cc['missing'][:3])})")
+            from src.utils.model_state import load_state
+            from src.utils.credit_budget import ALERT_KEY
+            # sin créditos HOY (el closing manda el aviso desde las 00:00 UTC):
+            # la causa ya se avisó. Un día después de la renovación ya no vale.
+            if (load_state(ALERT_KEY) or {}).get("stop") == datetime.now(timezone.utc).strftime("%Y-%m-%d"):
+                log.warning(f"⚠️  Chequeo de salidas — {msg}: sin créditos de The Odds API (ya avisado)")
+            else:
+                problems.append(msg)
+    except Exception as e:
+        problems.append(f"Cierres: no se pudo revisar ({type(e).__name__})")
 
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")

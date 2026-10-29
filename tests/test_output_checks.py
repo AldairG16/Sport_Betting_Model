@@ -303,9 +303,10 @@ def test_daily_check_reports_every_problem_as_an_error(monkeypatch):
 
 
 
-def _healthy_db(now, star_picks=()):
+def _healthy_db(now, star_picks=(), closings=()):
     """read_sql falso de una base sana (todas las secciones pasan); star_picks:
-    las filas de program_picks de la sección 11."""
+    las filas de program_picks de la sección 11; closings: las de shadow_bets
+    de la 12 ({match, valid})."""
     xi = [f"p{i}" for i in range(11)]
 
     def fake_read_sql(sql, con=None, params=None, **kw):
@@ -331,6 +332,8 @@ def _healthy_db(now, star_picks=()):
                                   "league": "soccer_epl"}])
         if "FROM live_scores WHERE status = 'final'" in s:
             return pd.DataFrame([{"home": "aa", "away": "bb", "kickoff": now - pd.Timedelta(days=1)}])
+        if "closing_fetched_at > created_at" in s:
+            return pd.DataFrame(list(closings), columns=["match", "valid"])
         if "SELECT family, reason, result, market_prob FROM program_picks" in s:
             return pd.DataFrame(list(star_picks), columns=["family", "reason", "result", "market_prob"])
         return pd.DataFrame(columns=["id", "match", "match_date", "market", "result", "h", "a", "d",
@@ -442,3 +445,48 @@ def test_espn_final_coverage_counts_only_espn_leagues_and_the_same_match():
               {"home": "austin fc", "away": "dallas", "kickoff": pd.Timestamp("2026-10-20 01:00", tz="UTC")}]   # otra fecha
     cov = espn_final_coverage(played, finals, {"soccer_usa_mls"})
     assert (cov["total"], cov["covered"], cov["missing"]) == (2, 1, ["austin fc vs dallas"])   # la K-League no cuenta
+
+
+# ─── 12) cierres guardados (29-oct-26) ─────────────────────────────────────
+
+def _closings(valid, invalid):
+    return ([{"match": f"v{i} vs w{i}", "valid": True} for i in range(valid)]
+            + [{"match": f"x{i} vs y{i}", "valid": False} for i in range(invalid)])
+
+
+def test_a_match_has_its_closing_if_any_of_its_candidates_has_one():
+    from src.utils.output_checks import closing_coverage
+    rows = [{"match": "a vs b", "valid": False}, {"match": "a vs b", "valid": True},
+            {"match": "c vs d", "valid": False}, {"match": "e vs f", "valid": None}]
+    cc = closing_coverage(rows)
+    assert (cc["covered"], cc["total"], cc["missing"]) == (1, 3, ["c vs d", "e vs f"])
+
+
+def test_missing_closings_are_an_error_unless_credits_ran_out(monkeypatch, capsys):
+    """24-25 oct: 11 de 73 y 12 de 63 partidos con cierre válido y nada avisó."""
+    import src.utils.output_checks as mod
+    from src.models import lineup_alerts as LA
+    from src.utils import model_state
+    now = pd.Timestamp.now(tz="UTC")
+    monkeypatch.setattr(LA, "load_profiles", lambda engine, teams: {})
+    monkeypatch.setattr(model_state, "load_state", lambda k: None)
+
+    monkeypatch.setattr(pd, "read_sql", _healthy_db(now, closings=_closings(19, 1)))
+    assert mod.run_output_checks(engine=object(), normalize=lambda t: t) == []
+    assert "cierres (19 de 20 partidos)" in capsys.readouterr().out
+
+    monkeypatch.setattr(pd, "read_sql", _healthy_db(now, closings=_closings(11, 62)))
+    problems = mod.run_output_checks(engine=object(), normalize=lambda t: t)
+    assert len(problems) == 1 and problems[0].startswith("Cierres: solo 11 de 73 partidos de ayer")
+
+    # sin créditos (el aviso de parada ya salió hoy): se dice, pero no es otro error
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    monkeypatch.setattr(model_state, "load_state", lambda k: {"stop": today} if k == "odds_credit_alert" else None)
+    RUN_ISSUES.reset()
+    assert mod.run_output_checks(engine=object(), normalize=lambda t: t) == []
+    assert any("sin créditos de The Odds API" in w for w in RUN_ISSUES.warnings())
+
+    # el aviso de parada fue ayer y hoy ya hay créditos: la falla es del closing
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    monkeypatch.setattr(model_state, "load_state", lambda k: {"stop": yesterday} if k == "odds_credit_alert" else None)
+    assert len(mod.run_output_checks(engine=object(), normalize=lambda t: t)) == 1
