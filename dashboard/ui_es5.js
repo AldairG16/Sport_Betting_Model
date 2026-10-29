@@ -65,21 +65,68 @@ function checkServer(){
 }
 setInterval(checkServer, 60000);
 
+// Consultas en curso y la última respuesta de cada una: el botón "Actualizar"
+// sabe cuándo terminó y si algo cambió (v2.5.3)
+var _pending = 0, _lastResp = {}, _changed = 0;
 function getJSON(url, ok, fail){
+  var key = url.replace(/[?&]fresh=1/, ''), sent = false;
   try {
     var x = new XMLHttpRequest();
     x.open('GET', url, true);
     x.onreadystatechange = function(){
       if (x.readyState !== 4) return;
-      if (x.status === 0) { serverDown(); return; }
-      if (x.status !== 200) { if (fail) fail('HTTP ' + x.status); return; }
-      var d;
-      try { d = JSON.parse(x.responseText); } catch(e2) { if (fail) fail('JSON inválido'); return; }
-      if (d.ok === false) { if (fail) fail(d.msg || 'sin datos'); return; }
-      if (ok) ok(d);
+      try {
+        if (x.status === 0) { serverDown(); return; }
+        if (x.status !== 200) { if (fail) fail('HTTP ' + x.status); return; }
+        var d;
+        try { d = JSON.parse(x.responseText); } catch(e2) { if (fail) fail('JSON inválido'); return; }
+        if (d.ok === false) { if (fail) fail(d.msg || 'sin datos'); return; }
+        if (key in _lastResp && _lastResp[key] !== x.responseText) _changed++;
+        _lastResp[key] = x.responseText;
+        if (ok) ok(d);
+      } finally { _pending--; refreshDone(); }     // después de ok(): sus consultas anidadas ya cuentan
     };
+    _pending++; sent = true;
     x.send();
-  } catch(e) { if (fail) fail(e.message); }
+  } catch(e) {
+    if (sent) { _pending--; refreshDone(); }
+    if (fail) fail(e.message);
+  }
+}
+
+// ── Actualizar ahora (v2.5.3, 29-oct-26) ──
+// El dueño: "necesito un botón de refresh para estar monitoreando los
+// resultados cuando cambia algo". Vuelve a leer el encabezado, Próximos y la
+// pestaña abierta (las otras, al abrirlas) y dice a qué hora y si algo cambió.
+// Solo, cada 5 min, hace lo mismo menos Equipos y Gráficas (no cierra lo que
+// se está viendo).
+var _refreshing = false, _firstDone = false;
+function refreshAll(manual){
+  if (_refreshing) return;
+  _refreshing = true; _changed = 0;
+  var b = el('refresh');
+  if (b) { b.disabled = true; b.innerHTML = '⏳ Actualizando…'; }
+  var cur = _storeGet('tab2', 'proximos');
+  for (var t in _loaded) if (t !== cur) _loaded[t] = false;
+  _detCache = {};
+  loadHeader();
+  loadUpcoming();
+  if (cur === 'anteriores') loadPast(true);
+  else if (manual && cur === 'equipos') loadTeams();
+  else if (manual && cur === 'graficas') loadCharts(true);
+  refreshDone();
+}
+function refreshDone(){
+  if (!_refreshing || _pending > 0) return;
+  _refreshing = false;
+  var b = el('refresh'), n = mx(new Date().getTime()), u = el('updated');
+  if (!b || !u) return;                               // HTML anterior a v2.5.3
+  b.disabled = false; b.innerHTML = '🔄 Actualizar';
+  // la primera carga no tiene con qué comparar: solo la hora
+  u.textContent = 'Actualizado ' + p2(n.getUTCHours()) + ':' + p2(n.getUTCMinutes()) +
+                  (!_firstDone ? '' : _changed ? ' · hay cambios' : ' · sin cambios');
+  u.className = 'small ' + (_firstDone && _changed ? 'chg' : 'muted');
+  _firstDone = true;
 }
 
 // ── Pestañas ──
@@ -402,8 +449,8 @@ function openPast(i){
     function(msg){ box.innerHTML = '<div class="muted small">' + esc(msg) + '</div>'; });
 }
 function kpi(v, l, cls){ return '<div class="k"><div class="v ' + (cls || '') + '">' + v + '</div><div class="l">' + l + '</div></div>'; }
-function loadPast(){
-  getJSON('/api/board/past', function(d){
+function loadPast(fresh){
+  getJSON('/api/board/past' + (fresh ? '?fresh=1' : ''), function(d){
     _past = d.rows;
     var s = d.summary;
     el('pkpis').innerHTML = kpi(s.matches, 'Partidos desde ' + shortDate(d.since)) +
@@ -504,8 +551,8 @@ function loadTeam(key){
 }
 
 // ── Gráficas ──
-function loadCharts(){
-  getJSON('/api/board/charts', function(d){
+function loadCharts(fresh){
+  getJSON('/api/board/charts' + (fresh ? '?fresh=1' : ''), function(d){
     var axes = { xAxes: [{ ticks: { maxTicksLimit: 8, fontColor: '#94a3b8' } }], yAxes: [{ ticks: { fontColor: '#94a3b8' } }] };
     var nolegend = { display: false }, legend = { labels: { fontColor: '#94a3b8', boxWidth: 12 } };
     var bl = [];
@@ -561,7 +608,10 @@ if (window.Chart && Chart.defaults && Chart.defaults.global) {
   Chart.defaults.global.responsive = true;
   Chart.defaults.global.elements.line.tension = 0;      // rectas: la curva inventa valores entre puntos
 }
+if (el('refresh')) el('refresh').onclick = function(){ refreshAll(true); };
+_refreshing = true;                                    // la primera carga también deja su hora
 loadHeader();
 loadUpcoming();
 showTab((location.hash || '').replace('#', '') || _storeGet('tab2', 'proximos'));
-setInterval(function(){ loadHeader(); loadUpcoming(); }, 5 * 60000);   // datos cada 5 min
+refreshDone();
+setInterval(function(){ refreshAll(false); }, 5 * 60000);   // datos cada 5 min

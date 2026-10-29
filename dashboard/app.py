@@ -751,9 +751,12 @@ PAST_TTL_S = 300          # ~5 s de consultas; "Anteriores" y "Gráficas" las co
 
 def _past_rows() -> list:
     """Partidos jugados desde SINCE en las ligas que analiza el programa,
-    con lo que dijo el programa, su pick y las apuestas reales (caché de 5 min)."""
+    con lo que dijo el programa, su pick y las apuestas reales (caché de 5 min).
+    `?fresh=1` (el botón "Actualizar", v2.5.3) se la salta: si no, el botón
+    podía devolver lo mismo hasta 5 min."""
     import time
-    if _PAST_CACHE["rows"] is not None and time.time() - _PAST_CACHE["at"] < PAST_TTL_S:
+    fresh = request.args.get("fresh") == "1"
+    if not fresh and _PAST_CACHE["rows"] is not None and time.time() - _PAST_CACHE["at"] < PAST_TTL_S:
         return _PAST_CACHE["rows"]
     rows = _load_past_rows()
     if rows and not g.get("partial"):        # a medias no se guarda
@@ -1003,6 +1006,9 @@ PAGE = """<!DOCTYPE html>
   header h1 { font-size:1.25rem; margin-right:auto; }
   .chip { background:var(--card); border-radius:99px; padding:5px 12px; font-size:.82rem; white-space:nowrap; }
   .chip b { font-weight:700; }
+  .chip.rf { border:1px solid var(--line); color:var(--text); cursor:pointer; font:inherit; font-size:.82rem; }
+  .chip.rf:hover { background:var(--card2); } .chip.rf:disabled { opacity:.6; cursor:default; }
+  #updated.chg { color:var(--green); font-weight:600; }
   .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:14px; overflow-x:auto; }
   .tab { background:none; border:none; color:var(--muted); padding:10px 16px; font-size:.95rem; cursor:pointer;
          border-bottom:3px solid transparent; }
@@ -1073,6 +1079,8 @@ PAGE = """<!DOCTYPE html>
   <h1>⚽ Apuestas <span id="ver" class="muted small"></span></h1>
   <span class="chip" id="chipbank">Bankroll …</span>
   <span class="chip" id="chiptoday">Hoy …</span>
+  <button class="chip rf" id="refresh" title="Vuelve a leer todo ahora (solo se actualiza sola cada 5 min)">🔄 Actualizar</button>
+  <span class="small muted" id="updated"></span>
 </header>
 <div id="err"></div>
 <div class="tabs" id="tabs">
