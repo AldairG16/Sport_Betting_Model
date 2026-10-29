@@ -80,6 +80,9 @@ CLOSING_MIN_REFRESH_MIN     = env_int("CLOSING_MIN_REFRESH_MIN", 20)
 # (src/utils/credit_budget.py) y estas van con lo que sobre.
 CLOSING_MAX_SHADOW_EVENTS_PER_RUN = env_int("CLOSING_MAX_SHADOW_EVENTS_PER_RUN", 2)
 CLOSING_SHADOW_MIN_CREDITS        = env_int("CLOSING_SHADOW_MIN_CREDITS", 3000)
+# La actualización normal del closing (29-oct-26): solo ligas y mercados por
+# evento de lo que empieza en estas horas. Lo demás, morning y evening.
+CLOSING_HORIZON_HOURS             = env_int("CLOSING_HORIZON_HOURS", 6)
 
 # Columnas que llegan por evento (/events/{id}/odds). Su frescura es
 # specialty_fetched_at; la del resto (h2h, totals, spreads), odds_fetched_at.
@@ -209,19 +212,26 @@ def log_credits(sport_key: str, used: str, remaining: str):
                 f"Credit burn ({burn}) exceeded MAX_CREDITS_PER_RUN ({MAX_CREDITS_PER_RUN})"
             )
 
-    # Auto-stop: enviar alerta Telegram cuando se acerca al límite
+    # Auto-stop: aviso por Telegram, una vez al día (29-oct-26)
     if remaining_int <= API_CREDITS_STOP_THRESHOLD:
-        try:
-            from scripts.notify_telegram import send_message
-            send_message(
-                f"🚨 <b>API CREDITS CRÍTICOS</b>\n\n"
-                f"Créditos restantes: <b>{remaining_int}</b>\n"
-                f"Umbral de parada: {API_CREDITS_STOP_THRESHOLD}\n\n"
-                f"⛔ Se detendrán los fetch de ligas restantes.\n"
-                f"Recarga créditos en the-odds-api.com"
-            )
-        except Exception:
-            pass
+        _low_credits_alert(remaining_int)
+
+
+def _low_credits_alert(remaining: int) -> None:
+    """Aviso de que ya no se descargan cuotas hasta la renovación. Una vez
+    por día UTC: con el saldo bajo el umbral, cada corrida del closing (cada
+    30 min) mandaba el suyo."""
+    from src.utils.credit_budget import alert_once, next_reset
+    reset = next_reset(datetime.now(timezone.utc))
+    try:
+        alert_once("stop", (
+            f"⛔ <b>Sin cuotas nuevas: créditos de The Odds API bajos</b>\n\n"
+            f"Quedan <b>{remaining}</b> créditos (umbral {API_CREDITS_STOP_THRESHOLD}). Hasta que el plan "
+            f"se renueve el {reset:%d-%m} no se descargan cuotas: los picks siguen con las últimas "
+            f"guardadas. Los resultados sí siguen llegando.\n\n"
+            f"Este aviso sale una vez al día."))
+    except Exception as e:
+        log.warning(f"⚠️  Aviso de créditos bajos no enviado ({type(e).__name__}: {e})")
 
 
 # ============================================================
@@ -419,7 +429,8 @@ def _event_already_enriched(m: dict) -> bool:
 _enrichments_this_run: int = 0
 
 
-def enrich_events_with_specialty(sport_key: str, events: list, cache: dict) -> int:
+def enrich_events_with_specialty(sport_key: str, events: list, cache: dict,
+                                 max_events: int | None = None, horizon_hours: float | None = None) -> int:
     """
     Para cada evento en 'events' cuyo match comienza dentro de ENRICH_DAYS_AHEAD,
     llama a la API per-event con specialty markets y appendea los bookmakers
@@ -429,20 +440,23 @@ def enrich_events_with_specialty(sport_key: str, events: list, cache: dict) -> i
     Skip si el evento ya viene enriquecido (cache principal caliente).
 
     Respeta MAX_ENRICHMENTS_PER_RUN globalmente (entre sports) para evitar
-    fugas de créditos cuando hay muchos eventos.
+    fugas de créditos cuando hay muchos eventos. El closing (29-oct-26) pasa
+    max_events (lo que cabe en su presupuesto) y horizon_hours (solo lo que
+    empieza pronto, en vez de ENRICH_DAYS_AHEAD).
 
     Retorna el número de eventos enriquecidos.
     """
     global _enrichments_this_run
 
-    if not events:
+    if not events or (max_events is not None and max_events <= 0):
         return 0
 
     # Cap global alcanzado — no hacer más calls
     if _enrichments_this_run >= MAX_ENRICHMENTS_PER_RUN:
         return 0
 
-    cutoff = datetime.now(timezone.utc) + timedelta(days=ENRICH_DAYS_AHEAD)
+    ahead = timedelta(hours=horizon_hours) if horizon_hours is not None else timedelta(days=ENRICH_DAYS_AHEAD)
+    cutoff = datetime.now(timezone.utc) + ahead
     now    = datetime.now(timezone.utc)
     enriched = 0
     skipped_cached = 0
@@ -457,6 +471,8 @@ def enrich_events_with_specialty(sport_key: str, events: list, cache: dict) -> i
         # Cap global
         if _enrichments_this_run >= MAX_ENRICHMENTS_PER_RUN:
             print(f"  ⛔ Cap enrichment alcanzado ({MAX_ENRICHMENTS_PER_RUN}) — parando")
+            break
+        if max_events is not None and enriched >= max_events:
             break
 
         # Solo próximos N días
@@ -1431,11 +1447,31 @@ def refresh_for_closing(targets: list[dict]) -> dict:
           f"con bets + {stats['shadow_events']} shadow (ya frescas: {stats['skipped_fresh']}) "
           f"para {len(targets)} partidos")
     if day:
-        print(f"   💳 Presupuesto del día: ~{day['start'] - remaining + spent} de {day['allowance']:.0f} créditos")
+        from src.utils.credit_budget import MANDATORY_PER_DAY
+        print(f"   💳 Presupuesto del día: ~{day['start'] - remaining + spent} de {day['allowance']:.0f} créditos "
+              f"({MANDATORY_PER_DAY} de ellos para morning, evening y resultados)")
     return stats
 
 
-def update_all(force: bool = False):
+def _kicks_off_within(events: list, hours: float) -> bool:
+    """Algún evento (de la API: commence_time) empieza en las próximas `hours`."""
+    now = datetime.now(timezone.utc)
+    for m in events or []:
+        try:
+            dt = datetime.fromisoformat(str(m.get("commence_time", "")).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if now <= dt <= now + timedelta(hours=hours):
+            return True
+    return False
+
+
+def update_all(force: bool = False, budgeted: bool = False):
+    """Actualiza las cuotas de todas las ligas (caché de API_TTL_HOURS) y los
+    mercados por evento. budgeted (el closing, 29-oct-26): solo lo que empieza
+    en las próximas CLOSING_HORIZON_HOURS y con el presupuesto del día; lo
+    demás lo actualizan el morning y el evening. Antes esta parte del closing
+    no tenía tope y era ~85% del gasto (23-24 oct: ~2,200 créditos)."""
     global _enrichments_this_run, _initial_remaining, _credits_used_this_run
     # Reset contadores de esta invocación (importante si se llama 2×
     # en el mismo proceso — ej. evening cycle).
@@ -1450,16 +1486,7 @@ def update_all(force: bool = False):
     remaining = _preflight_credits_check()
     if remaining is not None and remaining <= API_CREDITS_STOP_THRESHOLD:
         print(f"⛔ Abortando: solo {remaining} créditos, umbral={API_CREDITS_STOP_THRESHOLD}")
-        try:
-            from scripts.notify_telegram import send_message
-            send_message(
-                f"⛔ <b>Pipeline abortado — créditos bajos</b>\n\n"
-                f"Restantes: <b>{remaining}</b>\n"
-                f"Umbral: {API_CREDITS_STOP_THRESHOLD}\n\n"
-                f"Recarga créditos en the-odds-api.com"
-            )
-        except Exception:
-            pass
+        _low_credits_alert(remaining)
         return
 
     _cleanup_old_matches()   # eliminar partidos viejos antes de insertar nuevos
@@ -1467,6 +1494,19 @@ def update_all(force: bool = False):
     cache = load_cache()
     total_rows = 0
     api_calls  = 0
+
+    budget = float("inf")
+    if budgeted:
+        _, budget = _closing_budget(remaining)
+    n_regions = len(str(ODDS_REGION).split(","))
+    league_cost = len(str(ODDS_MARKETS).split(",")) * n_regions
+    event_cost = len(SPECIALTY_MARKETS.split(",")) * n_regions
+
+    def left() -> float:
+        if remaining is None or _last_known_remaining is None:
+            return budget
+        return budget - max(0, remaining - _last_known_remaining)
+    paused = False
 
     for sport in SPORT_KEYS:
         print(f"🔎 {sport}")
@@ -1477,7 +1517,16 @@ def update_all(force: bool = False):
             continue
 
         cached = is_cache_valid(cache, sport) and not force
-        data = fetch_data(sport, cache, force=force)
+        saved = cache.get(sport, {}).get("data", [])
+        if not cached and budgeted and not _kicks_off_within(saved, CLOSING_HORIZON_HOURS):
+            data, cached = saved, True             # nada empieza pronto: lo actualiza el morning o el evening
+        elif not cached and left() < league_cost:
+            if not paused:
+                print("   ⏸ Cuotas en pausa: presupuesto del día usado; siguen las guardadas")
+                paused = True
+            data, cached = saved, True
+        else:
+            data = fetch_data(sport, cache, force=force)
 
         if not cached:
             api_calls += 1
@@ -1485,9 +1534,12 @@ def update_all(force: bool = False):
 
         # ── ENRICH: specialty markets (btts, dnb, dc, h1/h2, corners, cards) ──
         # Solo para soccer (MLB no tiene estos mercados). Solo eventos próximos
-        # a jugarse (ENRICH_DAYS_AHEAD). Con cache 6h.
+        # a jugarse (ENRICH_DAYS_AHEAD; en el closing, CLOSING_HORIZON_HOURS y
+        # con lo que quede del presupuesto). Con cache 6h.
         if sport.startswith("soccer_") and data:
-            n_enr = enrich_events_with_specialty(sport, data, cache)
+            cap = None if left() == float("inf") else int(max(0.0, left()) // event_cost)
+            n_enr = enrich_events_with_specialty(sport, data, cache, max_events=cap,
+                                                 horizon_hours=CLOSING_HORIZON_HOURS if budgeted else None)
             if n_enr > 0:
                 print(f"   ✨ {n_enr} eventos enriquecidos con specialty markets")
 

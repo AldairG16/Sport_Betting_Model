@@ -339,7 +339,8 @@ def step_kalshi():
 def step_pre_kickoff_closing():
     """
     Captura de cierres antes del kickoff (corre cada ~30 min).
-    1. Refresco normal por TTL (sin créditos si el caché está vigente).
+    1. Refresco normal por TTL de lo que empieza en las próximas
+       CLOSING_HORIZON_HOURS, con el presupuesto diario de créditos.
     2. Recarga dirigida: solo ligas/eventos con kickoff en la próxima hora
        y bets o candidatas shadow (refresh_for_closing, con tope de créditos).
     3. update_closing_odds: cierre + hora de descarga para bets y shadow; el
@@ -349,8 +350,10 @@ def step_pre_kickoff_closing():
     from scripts.update_upcoming_matches import update_all, refresh_for_closing
     from scripts.update_closing_odds import update_closing_odds, select_closing_targets
 
-    # Refresco normal por TTL: sin créditos si el caché está vigente.
-    update_all(force=False)
+    # Refresco normal por TTL: sin créditos si el caché está vigente. Con el
+    # presupuesto del día y solo lo que empieza pronto (29-oct-26: sin tope
+    # era ~85% del gasto de créditos).
+    update_all(force=False, budgeted=True)
 
     # Recarga DIRIGIDA (22-sep-26): solo las ligas con kickoff en la próxima
     # hora que tengan bets pendientes o candidatas shadow (+ re-enrichment de
