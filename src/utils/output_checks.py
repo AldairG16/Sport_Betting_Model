@@ -23,6 +23,7 @@ que lo que sale tenga sentido y avisa como ERROR (llega a Telegram como
 Las funciones de revisión son puras; run_output_checks hace las consultas.
 """
 
+import json
 import math
 import re
 from collections import defaultdict
@@ -458,6 +459,8 @@ def credits_out_today(load_state=None, now: datetime | None = None) -> bool:
         return False
 
 
+CREDIT_SHORT_DAYS = 1.0          # cruzar el umbral 1+ días antes de la renovación es ERROR
+
 CLOSING_MIN_SHARE = 0.80         # normal medido: 98-100% (9-23 oct); 24-25 oct cayó a 15-19%
 CLOSING_MIN_N = 10
 
@@ -523,6 +526,15 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
 
     def q(sql, **p):
         return pd.read_sql(text(sql), engine, params=p)
+
+    def state(key):
+        """model_state[key] con esta misma conexión (None si no está o falla)."""
+        try:
+            df = q("SELECT value FROM model_state WHERE key = :k", k=key)
+            v = df.iloc[0]["value"] if len(df) else None
+            return json.loads(v) if isinstance(v, str) else (dict(v) if v is not None else None)
+        except Exception:
+            return None
 
     matches = q("""
         SELECT LOWER(home_team) AS h, LOWER(away_team) AS a, date::date AS d, home_goals, away_goals,
@@ -614,7 +626,7 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
                     ages[table] = None
         found = data_health(counts, ages)
         quiet = [p for p in found if any(f"Datos: {t} sin actualizar" in p for t in ODDS_FEEDS)]
-        if quiet and credits_out_today():         # 29-oct-26: la causa ya se avisó una vez hoy
+        if quiet and credits_out_today(state):         # 29-oct-26: la causa ya se avisó una vez hoy
             for p in quiet:
                 log.warning(f"⚠️  Chequeo de salidas — {p}: sin créditos de The Odds API (ya avisado)")
             found = [p for p in found if p not in quiet]
@@ -719,12 +731,32 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
         if cc["total"] >= CLOSING_MIN_N and cc["covered"] < CLOSING_MIN_SHARE * cc["total"]:
             msg = (f"Cierres: solo {cc['covered']} de {cc['total']} partidos de ayer tienen un cierre válido "
                    f"(p. ej. {', '.join(cc['missing'][:3])})")
-            if credits_out_today():               # el closing manda el aviso desde las 00:00 UTC
+            if credits_out_today(state):               # el closing manda el aviso desde las 00:00 UTC
                 log.warning(f"⚠️  Chequeo de salidas — {msg}: sin créditos de The Odds API (ya avisado)")
             else:
                 problems.append(msg)
     except Exception as e:
         problems.append(f"Cierres: no se pudo revisar ({type(e).__name__})")
+
+    # 13) el ritmo de créditos de The Odds API (29-oct-26): en octubre el saldo
+    #     cruzó el umbral 3.5 días antes de la renovación y nada midió el ritmo
+    try:
+        from src.utils.credit_budget import STATE_KEY, credit_pace
+        pc = credit_pace(state(STATE_KEY), datetime.now(timezone.utc))
+        if pc:
+            y = pc["yesterday"] or {}
+            if y.get("allowance"):
+                seen.append(f"créditos ayer: {y['spent']} de {y['allowance']:.0f}")
+            if pc["short_days"] >= CREDIT_SHORT_DAYS:
+                msg = (f"Créditos: al ritmo de los últimos {pc['days']} días (~{pc['pace']:.0f} por día) el saldo "
+                       f"cruza el umbral de parada {pc['short_days']:.1f} días antes de la renovación "
+                       f"del {pc['reset']:%d-%m}")
+                if credits_out_today(state):
+                    log.warning(f"⚠️  Chequeo de salidas — {msg} (ya sin créditos, ya avisado)")
+                else:
+                    problems.append(msg)
+    except Exception as e:
+        problems.append(f"Créditos: no se pudo revisar el ritmo ({type(e).__name__})")
 
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")

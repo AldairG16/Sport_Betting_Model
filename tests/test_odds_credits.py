@@ -307,3 +307,57 @@ def test_every_run_ends_with_its_warnings_in_one_greppable_line(capsys):
     out = capsys.readouterr().out
     assert "Avisos de la corrida (closing, 2 distintos): ⚠️  Kalshi: Timeout | Presupuesto de créditos ilegible" in out
     RUN_ISSUES.reset()
+
+
+# ============================================================
+# El ritmo de créditos (29-oct-26)
+# ============================================================
+
+def test_each_day_keeps_what_it_spent_and_skips_the_renewal_day():
+    from src.utils.credit_budget import day_state
+    d = day_state(None, 12_000, utc(2026, 10, 14, 0, 5))
+    d = day_state(d, 11_500, utc(2026, 10, 14, 20))                   # mismo día: nada se mide aún
+    assert d["history"] == {}
+    d = day_state(d, 11_050, utc(2026, 10, 15, 0, 5))
+    assert d["history"] == {"2026-10-14": {"spent": 950, "allowance": d["history"]["2026-10-14"]["allowance"]}}
+    d = day_state(d, 19_950, utc(2026, 11, 1, 3, 10))                 # el saldo subió: renovación, no se mide
+    assert list(d["history"]) == ["2026-10-14"]
+    for i in range(20):
+        d = day_state(d, 19_000 - 500 * i, utc(2026, 11, 2 + i, 0, 5))
+    assert len(d["history"]) == 14
+
+
+def test_the_pace_would_have_warned_on_october_15():
+    """Octubre: ~950 por día desde el 9; el saldo cruzó el umbral el 28, 3.5 días antes de la renovación."""
+    from src.utils.credit_budget import credit_pace
+    hist = {f"2026-10-{d}": {"spent": s, "allowance": 600.0} for d, s in (("12", 572), ("13", 980), ("14", 1290))}
+    pc = credit_pace({"start": 11_050, "history": hist}, utc(2026, 10, 15, 3, 5), stop=500)
+    assert pc["pace"] == pytest.approx(947.3, abs=0.1)
+    assert 5 < pc["short_days"] < 7                                      # avisa ~6 días de más
+    assert pc["yesterday"]["spent"] == 1290
+    ok = credit_pace({"start": 11_050, "history": {k: {"spent": 450} for k in hist}}, utc(2026, 10, 15, 3, 5), stop=500)
+    assert ok["short_days"] == 0
+    assert credit_pace({"start": 11_050, "history": {"2026-10-14": {"spent": 900}}}, utc(2026, 10, 15)) is None
+
+
+def test_the_daily_check_errors_when_the_pace_runs_out_before_the_renewal(monkeypatch, capsys):
+    import src.utils.output_checks as mod
+    from src.models import lineup_alerts as LA
+    from src.utils.credit_budget import next_reset
+    from tests.test_output_checks import _healthy_db
+    monkeypatch.setattr(LA, "load_profiles", lambda engine, teams: {})
+    now = pd.Timestamp.now(tz="UTC")
+    days = [(now - pd.Timedelta(days=i)).strftime("%Y-%m-%d") for i in (3, 2, 1)]
+    # en el umbral a 900 por día: le falta todo lo que queda hasta la renovación
+    fast = {"day": now.strftime("%Y-%m-%d"), "start": 500, "allowance": 600.0,
+            "history": {d: {"spent": 900, "allowance": 600.0} for d in days}}
+    monkeypatch.setattr(pd, "read_sql", _healthy_db(now, states={"odds_credit_day": fast}))
+    problems = mod.run_output_checks(engine=object(), normalize=lambda t: t)
+    if (next_reset(now.to_pydatetime()) - now.to_pydatetime()).total_seconds() >= 86400:   # no el último día del mes
+        assert len(problems) == 1 and problems[0].startswith("Créditos: al ritmo de los últimos 3 días (~900 por día)")
+
+    calm = {**fast, "start": 19_000, "history": {d: {"spent": 500, "allowance": 600.0} for d in days}}
+    monkeypatch.setattr(pd, "read_sql", _healthy_db(now, states={"odds_credit_day": calm}))
+    capsys.readouterr()
+    assert mod.run_output_checks(engine=object(), normalize=lambda t: t) == []
+    assert "créditos ayer: 500 de 600" in capsys.readouterr().out

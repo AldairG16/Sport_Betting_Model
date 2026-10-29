@@ -724,6 +724,11 @@ tolerados":
 - **sin créditos de The Odds API** (29-oct-26, `credits_out_today`): si hoy ya salió el aviso
   de "sin créditos", que `upcoming_matches` u `odds_history` no se actualicen es WARNING y no
   ERROR. La causa ya se avisó una vez y no debe llegar como errores nuevos cada día.
+- **ritmo de créditos** (sección 13, 29-oct-26, `credit_budget.credit_pace`): cada día UTC guarda lo
+  que bajó el saldo en `model_state.odds_credit_day.history` (14 días; el día de la renovación no
+  se mide). El ✅ dice "créditos ayer: X de Y". Si al ritmo de los últimos 3 días el saldo cruza
+  el umbral de parada 1+ días antes de la renovación, es ERROR. En octubre habría avisado el 15,
+  cuando faltaban ~6 días de créditos. Sin créditos (aviso de hoy), es WARNING.
 - **cierres guardados** (sección 12, 29-oct-26, `closing_coverage`): de los partidos sombra
   jugados entre 27 y 3 horas antes, al menos 80% con un cierre válido (10+ partidos). Lo
   normal es 98-100%. Si el aviso de "sin créditos" salió hoy, es WARNING y no ERROR.
