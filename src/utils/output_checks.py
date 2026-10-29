@@ -240,6 +240,23 @@ def missing_results(analyzed: list, matches: list, normalize=None) -> list:
     return [a for a in analyzed if _find(idx, a["match"], a["match_date"], normalize) is None]
 
 
+LEAGUE_MISSING_MIN_N = 4
+LEAGUE_MISSING_SHARE = 0.50
+
+
+def leagues_without_results(analyzed: list, missing: list) -> list:
+    """Ligas a las que les falta la mitad o más de los marcadores (29-oct-26):
+    el total puede pasar con una liga entera sin resultados (si se cae su
+    fuente) porque las demás la diluyen. Devuelve [(liga, faltan, total)]."""
+    total, miss = defaultdict(int), defaultdict(int)
+    for a in analyzed:
+        total[a.get("league")] += 1
+    for m in missing:
+        miss[m.get("league")] += 1
+    return sorted((lg, miss[lg], n) for lg, n in total.items()
+                  if n >= LEAGUE_MISSING_MIN_N and miss[lg] >= LEAGUE_MISSING_SHARE * n)
+
+
 def stale_learning(updated: dict, now: datetime | None = None) -> list:
     """{clave: updated_at} → claves del weekly sin actualizar en 9+ días."""
     now = now or datetime.now(timezone.utc)
@@ -424,6 +441,23 @@ def star_vs_market(picks: list) -> list:
     return sorted(out, key=lambda s: -s["n"])
 
 
+ODDS_FEEDS = ("upcoming_matches", "odds_history")   # se quedan quietas sin créditos de The Odds API
+
+
+def credits_out_today(load_state=None, now: datetime | None = None) -> bool:
+    """¿Ya salió hoy el aviso de "sin créditos" (credit_budget.alert_once)?
+    Lo que falta por eso (cuotas, cierres) ya se avisó: no es otro error.
+    Un día después de la renovación ya no vale."""
+    try:
+        if load_state is None:
+            from src.utils.model_state import load_state
+        from src.utils.credit_budget import ALERT_KEY
+        now = now or datetime.now(timezone.utc)
+        return (load_state(ALERT_KEY) or {}).get("stop") == now.strftime("%Y-%m-%d")
+    except Exception:
+        return False
+
+
 CLOSING_MIN_SHARE = 0.80         # normal medido: 98-100% (9-23 oct); 24-25 oct cayó a 15-19%
 CLOSING_MIN_N = 10
 
@@ -516,13 +550,15 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
 
     # 2) resultados que faltan
     try:
-        an = q("""SELECT match, match_date FROM model_vs_sharp
+        an = q("""SELECT match, match_date, league FROM model_vs_sharp
                   WHERE match_date BETWEEN NOW() - make_interval(days => :d) AND NOW() - INTERVAL '8 hours'""",
                d=days).to_dict("records")
         miss = missing_results(an, matches, normalize)
         if len(an) >= MIN_ROWS and len(miss) / len(an) > MAX_MISSING_RESULTS:
             problems.append(f"Resultados: {len(miss)} de {len(an)} partidos analizados sin marcador "
                             f"({', '.join(m['match'] for m in miss[:3])}…)")
+        for lg, n_miss, n in leagues_without_results(an, miss):
+            problems.append(f"Resultados: a {lg} le faltan {n_miss} de {n} marcadores (¿se cayó su fuente?)")
     except Exception as e:
         problems.append(f"Resultados: no se pudo revisar ({type(e).__name__})")
 
@@ -539,6 +575,14 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
                 problems.append(f"Pendientes: {int(n)} {name} atoradas más allá de su ventana")
     except Exception as e:
         problems.append(f"Pendientes: no se pudo revisar ({type(e).__name__})")
+    try:                                          # los picks también pasan a 'stale' a los 10 días (29-oct-26)
+        n = int(q("""SELECT COUNT(*) AS n FROM program_picks WHERE result IS NULL AND market IS NOT NULL
+                     AND match_date < NOW() - INTERVAL '11 days'""").iloc[0]["n"] or 0)
+        if n > 0:
+            problems.append(f"Pendientes: {n} picks del programa atorados más allá de su ventana")
+    except Exception as e:
+        if "does not exist" not in str(e):        # la tabla nace con el primer pick guardado
+            problems.append(f"Pendientes: no se pudo revisar los picks ({type(e).__name__})")
 
     # 4) xG real fuera de escala
     try:
@@ -568,7 +612,13 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
             except Exception as e:
                 if "does not exist" not in str(e):     # la tabla nace con su primera corrida
                     ages[table] = None
-        problems += data_health(counts, ages)
+        found = data_health(counts, ages)
+        quiet = [p for p in found if any(f"Datos: {t} sin actualizar" in p for t in ODDS_FEEDS)]
+        if quiet and credits_out_today():         # 29-oct-26: la causa ya se avisó una vez hoy
+            for p in quiet:
+                log.warning(f"⚠️  Chequeo de salidas — {p}: sin créditos de The Odds API (ya avisado)")
+            found = [p for p in found if p not in quiet]
+        problems += found
     except Exception as e:
         problems.append(f"Datos: no se pudo revisar ({type(e).__name__})")
 
@@ -669,11 +719,7 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
         if cc["total"] >= CLOSING_MIN_N and cc["covered"] < CLOSING_MIN_SHARE * cc["total"]:
             msg = (f"Cierres: solo {cc['covered']} de {cc['total']} partidos de ayer tienen un cierre válido "
                    f"(p. ej. {', '.join(cc['missing'][:3])})")
-            from src.utils.model_state import load_state
-            from src.utils.credit_budget import ALERT_KEY
-            # sin créditos HOY (el closing manda el aviso desde las 00:00 UTC):
-            # la causa ya se avisó. Un día después de la renovación ya no vale.
-            if (load_state(ALERT_KEY) or {}).get("stop") == datetime.now(timezone.utc).strftime("%Y-%m-%d"):
+            if credits_out_today():               # el closing manda el aviso desde las 00:00 UTC
                 log.warning(f"⚠️  Chequeo de salidas — {msg}: sin créditos de The Odds API (ya avisado)")
             else:
                 problems.append(msg)

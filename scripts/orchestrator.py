@@ -1301,6 +1301,7 @@ def main():
         _release_lock()
 
     _report_tolerated_errors(args.mode)
+    _report_warnings(args.mode)
 
     # Un paso fallido deja el run en ROJO en Actions. Antes salía verde
     # aunque fallara ("un fallo verde se ve igual que un día normal",
@@ -1363,6 +1364,22 @@ def _report_tolerated_errors(mode: str) -> None:
         )
     except Exception:
         pass
+
+
+
+def _report_warnings(mode: str) -> None:
+    """Los avisos (WARNING) no van a Telegram y se pierden entre miles de
+    líneas: el de "presupuesto en pausa" que dejó sin cierres del 24 al 28 de
+    octubre era uno más. Al final de cada corrida salen juntos y sin repetir,
+    con un prefijo fijo para que una auditoría de logs los encuentre todos
+    (29-oct-26)."""
+    from src.utils.log import RUN_ISSUES
+    seen = list(dict.fromkeys(m.strip() for m in RUN_ISSUES.warnings()))
+    if seen:
+        print(f"Avisos de la corrida ({mode}, {len(seen)} distintos): " + " | ".join(m[:160] for m in seen[:10])
+              + (" | …" if len(seen) > 10 else ""))
+    else:
+        print(f"Avisos de la corrida ({mode}): ninguno")
 
 
 if __name__ == "__main__":

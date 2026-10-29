@@ -292,3 +292,18 @@ def test_closings_are_not_cut_by_fixed_floors_at_the_end_of_the_month():
     # 1,500 apagaba los cierres los últimos ~2 días de cada mes (27-oct: 17%, 28-oct: 0%)
     assert uum.CLOSING_MIN_CREDITS <= RESERVE
     assert uum.ENRICH_CACHE_TTL_HOURS >= uum.ENRICH_DAYS_AHEAD * 24   # un pago por partido antes del cierre
+
+
+def test_every_run_ends_with_its_warnings_in_one_greppable_line(capsys):
+    import scripts.orchestrator as O
+    from src.utils.log import RUN_ISSUES, get_logger
+    RUN_ISSUES.reset()
+    O._report_warnings("closing")
+    assert "Avisos de la corrida (closing): ninguno" in capsys.readouterr().out
+    lg = get_logger("tests.avisos")
+    for msg in ("⚠️  Kalshi: Timeout", "Presupuesto de créditos ilegible", "⚠️  Kalshi: Timeout"):
+        lg.warning(msg)
+    O._report_warnings("closing")
+    out = capsys.readouterr().out
+    assert "Avisos de la corrida (closing, 2 distintos): ⚠️  Kalshi: Timeout | Presupuesto de créditos ilegible" in out
+    RUN_ISSUES.reset()
