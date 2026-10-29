@@ -1690,6 +1690,15 @@ lo compila `release.yml`:
 El `.exe` lleva dentro el JS, Chart.js y `VERSION`. Una copia de `ui_es5.js` junto al
 `.exe` tiene prioridad, para arreglos en vivo sin recompilar.
 
+**Botón "🔄 Actualizar" (v2.5.3, 29-oct-26).** El dueño: "necesito un botón de refresh para estar
+monitoreando los resultados cuando cambia algo". Vuelve a leer el encabezado, Próximos y la
+pestaña abierta (las otras, al abrirlas) y dice "Actualizado HH:MM · hay cambios / sin cambios"
+(compara cada respuesta con la anterior; en verde si cambió algo). Pide `/api/board/past` y
+`/api/board/charts` con `?fresh=1`, que se salta la caché de 5 min del servidor; sin eso el botón
+devolvía lo mismo. Solo, cada 5 min, hace lo mismo menos Equipos y Gráficas. Los marcadores
+en vivo salen de `live_scores`, que llena el closing cada 30 min: el botón no puede verlos más
+frescos que eso.
+
 **Se mantiene abierto solo (v1.6.0).** El `.exe` es un supervisor
 (`dashboard/supervisor.py`): lanza el servidor (el mismo `.exe` con `--serve`), le
 pregunta cada 15 s a `/api/health` y lo vuelve a abrir si se cierra (esperas de 5, 15,

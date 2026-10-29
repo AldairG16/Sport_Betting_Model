@@ -164,3 +164,23 @@ def test_the_page_is_never_cached_and_carries_its_version(dash):
     assert f'window.APP_V = "{dash._app_version()}"' in html                 # la recarga sola al cambiar
     for tab in ("proximos", "anteriores", "equipos", "graficas"):
         assert f'data-tab="{tab}"' in html
+
+
+def test_the_refresh_button_reads_past_results_again_without_the_5_min_cache(dash, monkeypatch):
+    """v2.5.3: "necesito un botón de refresh para estar monitoreando los resultados
+    cuando cambia algo". Sin saltarse la caché, el botón devolvía lo mismo hasta 5 min."""
+    calls = []
+    real = dash._load_past_rows
+    monkeypatch.setattr(dash, "_load_past_rows", lambda: calls.append(1) or real())
+    c = dash.app.test_client()
+    c.get("/api/board/past"); c.get("/api/board/past")
+    assert len(calls) == 1                                    # la recarga sola de 5 min usa la caché
+    c.get("/api/board/past?fresh=1"); c.get("/api/board/charts?fresh=1")
+    assert len(calls) == 3                                    # el botón lee otra vez
+
+    html = c.get("/").get_data(as_text=True)
+    assert 'id="refresh"' in html and 'id="updated"' in html
+    from pathlib import Path
+    js = (Path(dash.__file__).parent / "ui_es5.js").read_text(encoding="utf-8")
+    assert "refreshAll(true)" in js and "'/api/board/past' + (fresh ? '?fresh=1' : '')" in js
+    assert "hay cambios" in js and "sin cambios" in js
