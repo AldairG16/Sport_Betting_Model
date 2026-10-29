@@ -139,7 +139,7 @@ class _Blocked(Exception):
 
 
 @pytest.mark.parametrize("age,level", [(7, "warning"), (40, "error"), (50, "error"), (None, "error")])
-def test_when_clubelo_blocks_the_old_snapshot_is_used_and_it_warns_before_it_expires(age, level, caplog):
+def test_when_clubelo_blocks_the_old_snapshot_is_used_and_it_warns_before_it_expires(age, level):
     # 29-oct-26: las páginas de ClubElo piden un reto anti-bots de Cloudflare (403)
     RUN_ISSUES.reset()
     asked = []
@@ -148,10 +148,10 @@ def test_when_clubelo_blocks_the_old_snapshot_is_used_and_it_warns_before_it_exp
         asked.append(url)
         raise _Blocked()
     last = None if age is None else date.today() - timedelta(days=age)
-    with caplog.at_level("WARNING"):
-        assert CE.refresh_clubelo(FakeEngine(), get, pause=0, last=last) == 0
+    assert CE.refresh_clubelo(FakeEngine(), get, pause=0, last=last) == 0
     assert len(asked) == CE.BLOCK_PROBE                       # tres 403 seguidos: no se piden los otros 50
-    msg = " ".join(r.getMessage() for r in caplog.records)
+    # RUN_ISSUES y no caplog: caplog no ve el log en CI (PR #85)
+    msg = " ".join(m for m in RUN_ISSUES.warnings() + RUN_ISSUES.errors() if "ClubElo" in m)
     assert "bloquea las lecturas automáticas" in msg and "403" in msg
     errors = [e for e in RUN_ISSUES.errors() if "ClubElo" in e]
     assert bool(errors) is (level == "error")                 # el ERROR llega a Telegram una semana antes
