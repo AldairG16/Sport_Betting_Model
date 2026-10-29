@@ -30,9 +30,21 @@ renovación, con el presupuesto puesto. Dos huecos:
 Ahora todo el closing gasta del presupuesto, y el presupuesto del closing es
 el del día menos MANDATORY_PER_DAY. Los avisos de créditos van una vez por
 día (alert_once): antes cada corrida del closing mandaba el suyo, cada 30 min.
+
+29-oct-26 (2): los cierres primero. Desde el 24-oct casi no se guardaban
+cierres válidos (24-25 oct: 15-19% de los partidos; antes 98-100%): a las
+13:30 UTC del sábado el closing ya estaba "en pausa, 803 de 364 créditos",
+porque los mercados por evento (morning, evening y la actualización normal
+del closing) se comían el día antes de que empezaran los partidos. En un
+fin de semana completo los cierres por liga cuestan ~300 (2 recargas por
+horario de liga, medido 10-20 oct) y todo lo demás pedía ~1,200. Ahora:
+  - capture_reserve: lo que todavía necesitan hoy los cierres por liga;
+  - extras_budget: lo único que pueden gastar los mercados por evento (en
+    cualquier modo), la actualización normal del closing y los mercados por
+    evento de las candidatas sombra. Nunca toca la reserva de los cierres.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from config.settings import env_int
 
@@ -43,6 +55,10 @@ RESERVE = env_int("ODDS_API_RESERVE", 600)             # nunca se presupuesta po
 # (medido 23-28 oct: ~60 + ~66 + ~114 antes de pedir solo las ligas que faltan)
 MANDATORY_PER_DAY = env_int("ODDS_API_MANDATORY_PER_DAY", 200)
 ALERT_KEY = "odds_credit_alert"
+# recargas de liga por horario (liga + hora de inicio) en su ventana de cierre:
+# 2.0-2.2 medido 10-20 oct (91 recargas para 42 horarios el 17-oct)
+CAPTURES_PER_SLOT = env_int("ODDS_API_CAPTURES_PER_SLOT", 2)
+CAPTURE_LEAD_MIN = 80          # la recarga dirigida mira hasta 80 min adelante (CLOSING_WINDOW_MIN)
 
 
 def next_reset(now: datetime, reset_day: int = RESET_DAY) -> datetime:
@@ -77,6 +93,22 @@ def run_budget(state: dict, remaining: int, mandatory: int = MANDATORY_PER_DAY) 
     ya gastado y menos lo que morning, evening y resultados necesitan."""
     spent = max(0, state["start"] - remaining)
     return max(0.0, state["allowance"] - mandatory - spent)
+
+
+def capture_reserve(kickoffs, now: datetime, league_cost: int, per_slot: int = CAPTURES_PER_SLOT) -> float:
+    """Créditos que todavía necesitan hoy los cierres por liga: cada horario
+    (liga, hora de inicio) cuya ventana de cierre cae antes de que acabe el
+    día UTC se recarga ~per_slot veces. `kickoffs`: pares (liga, datetime)."""
+    end = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    end += timedelta(minutes=CAPTURE_LEAD_MIN)
+    slots = {(sport, ko) for sport, ko in kickoffs if now < ko <= end}
+    return float(len(slots) * per_slot * league_cost)
+
+
+def extras_budget(state: dict, remaining: int, reserve: float, mandatory: int = MANDATORY_PER_DAY) -> float:
+    """Lo que pueden gastar hoy los mercados por evento y las recargas que no
+    son cierres: lo del closing menos la reserva de los cierres que faltan."""
+    return max(0.0, run_budget(state, remaining, mandatory) - reserve)
 
 
 def load_and_update(remaining: int | None, now: datetime | None = None) -> dict | None:

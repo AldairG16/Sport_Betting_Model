@@ -176,7 +176,7 @@ class _FakeApi:
                     "btts_yes_odds": 1.8 if has_btts else None}
 
         monkeypatch.setattr(uum, "_preflight_credits_check", lambda: remaining)
-        monkeypatch.setattr(uum, "_closing_budget", lambda r: (None, float("inf")))   # sin tope diario
+        monkeypatch.setattr(uum, "_budgets", lambda r, c: (None, float("inf"), float("inf")))   # sin tope diario
         monkeypatch.setattr(uum, "ensure_schema", lambda: None)
         monkeypatch.setattr(uum, "load_cache", lambda: cache)
         monkeypatch.setattr(uum, "save_cache", lambda c: None)
@@ -241,7 +241,7 @@ def test_shadow_refresh_needs_spare_credits_and_has_its_own_cap(monkeypatch):
     both = [_target("soccer_epl", "arsenal", "chelsea", specialty=True),
             _target("soccer_epl", "everton", "fulham", shadow_specialty=True)]
 
-    api = _FakeApi(monkeypatch, cache={}, remaining=2_500)     # > mínimo del closing, < el de shadow
+    api = _FakeApi(monkeypatch, cache={}, remaining=1_000)     # > mínimo del closing, < el de shadow
     stats = api.uum.refresh_for_closing(both)
     assert api.event_calls == ["soccer_epl-1"]                 # la bet sí; el shadow no
     assert (stats["events"], stats["shadow_events"]) == (1, 0)
@@ -254,7 +254,7 @@ def test_shadow_refresh_needs_spare_credits_and_has_its_own_cap(monkeypatch):
 
 def _with_budget(monkeypatch, api, budget):
     day = {"day": "2026-10-20", "start": 6000, "allowance": float(budget)}
-    monkeypatch.setattr(api.uum, "_closing_budget", lambda r: (day, float(budget)))
+    monkeypatch.setattr(api.uum, "_budgets", lambda r, c: (day, float(budget), float(budget)))
 
 
 def test_daily_budget_stops_shadow_only_leagues_but_not_real_bets(monkeypatch):

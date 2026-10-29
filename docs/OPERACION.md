@@ -710,6 +710,9 @@ tolerados":
   - El umbral se midió sobre toda la historia el 28-oct: el z más bajo con 30+ picks fue
     +0.35 (Ambos anotan) y +1.18 (Ganador). Goles iba en −0.78 con 28 picks, que es ruido.
   - Solo avisa: no quita el 🎯. Si se apaga solo o no es decisión del dueño.
+- **cierres guardados** (sección 12, 29-oct-26, `closing_coverage`): de los partidos sombra
+  jugados entre 27 y 3 horas antes, al menos 80% con un cierre válido (10+ partidos). Lo
+  normal es 98-100%. Si el aviso de "sin créditos" salió hoy, es WARNING y no ERROR.
 
 Al final de cada corrida del pipeline, `pipeline_invariants` revisa los goles esperados en
 el tope (más del 5% de los partidos), los partidos a más de 20 pts de Pinnacle (más del
@@ -752,12 +755,12 @@ del kickoff (y después de la apertura): `src/utils/closing_quality.py`. El clos
 recarga de forma dirigida las ligas con kickoff en 10-80 min que tengan bets o
 shadow (`refresh_for_closing`), con topes por corrida: `CLOSING_MAX_LEAGUES_PER_RUN`
 (6 × 3 créditos), `CLOSING_MAX_EVENTS_PER_RUN` (5 × ~7) y `CLOSING_MIN_CREDITS`
-(1500). Los mercados por evento (btts, DNB, DC, 1T/2T, córners, tarjetas) se recargan
+(600 desde el 29-oct; antes 1500). Los mercados por evento (btts, DNB, DC, 1T/2T, córners, tarjetas) se recargan
 en **cada** corrida para los eventos con **bets** en ellos. Para los que solo tienen
 candidatas **shadow** en esos mercados, desde el 24-sep-2026 hay **una** recarga por
 evento: si su último enrichment ya cae en la ventana de cierre no paga otra vez. Tiene
 tope propio (`CLOSING_MAX_SHADOW_EVENTS_PER_RUN`, 2 desde el 20-oct; antes 6) y solo corre
-con más de `CLOSING_SHADOW_MIN_CREDITS` (3000) créditos. Antes quedaban sin cierre válido: el
+con más de `CLOSING_SHADOW_MIN_CREDITS` (1500 desde el 29-oct; antes 3000) créditos. Antes quedaban sin cierre válido: el
 24-sep, ambos anotan y empate anulado de Seattle–Salt Lake tenían "cierre" de 12 h
 antes, y así el aprendizaje de esas familias nunca recibía datos. El costo estimado eran
 8-12 eventos por día de fin de semana; medido del 10 al 20 de octubre fueron 55-78 (× 7).
@@ -801,6 +804,41 @@ Ahora:
   en `model_state.odds_credit_alert`).
 - El comentario de costo en `.github/workflows/late_results.yml` quedó viejo. No se editó
   porque un push a ese YAML dispara una corrida.
+
+**Los cierres primero (29-oct-2026).** Del 24 al 28 de octubre casi no se guardaron cierres
+válidos, y nada avisó: 15% de los partidos el 24, 19% el 25, 53% el 26, 17% el 27 y 0% el
+28. Del 9 al 23 eran 98-100%. Sin cierres, el aprendizaje del peso del modelo no recibe
+datos.
+- El sábado 24 a las 13:30 UTC, antes de los partidos de la tarde, el closing ya decía
+  "Recarga de cierre en pausa: presupuesto del día usado (803 de 364 créditos)". Los
+  mercados por evento del morning, el evening y la actualización normal del closing se
+  comían el día antes de los partidos.
+- `CLOSING_MIN_CREDITS` (1500) apagaba los cierres con menos de 1,500 créditos: los últimos
+  ~2 días de cada mes, aunque el presupuesto alcanzara (27 y 28 de octubre).
+- Cada partido pagaba sus mercados por evento hasta 4 veces: caché de 12 h dentro de las
+  48 h previas.
+- Medido en un fin de semana completo (10-11 y 17-18 oct): los cierres por liga cuestan
+  270-325 por día (2.0-2.2 recargas por horario de liga) y los mercados por evento de las
+  candidatas sombra al cierre 460-550. El plan da ~645 por día.
+
+Ahora (`credit_budget.capture_reserve` y `extras_budget`, `update_upcoming_matches._budgets`):
+- La reserva de cierres es cada horario (liga, hora de inicio) cuya ventana de cierre cae
+  antes de que acabe el día UTC, × 2 recargas × 3 créditos. Sale de la caché de cuotas.
+- Los mercados por evento (en todos los modos), la actualización normal del closing y la
+  sombra por evento solo gastan lo que queda libre: lo del closing menos esa reserva. Las
+  ligas del morning y el evening no se frenan.
+- El closing hace primero la recarga dirigida y después la actualización normal.
+- `ENRICH_CACHE_TTL_HOURS` pasó de 12 a 48: un pago por partido antes del cierre. La cuota
+  cerca del kickoff es la de la recarga de cierre (bets en cada corrida, sombra una vez), que
+  no usa ese TTL. Lo vigente en la caché se vuelve a pegar gratis y no cuenta para los topes.
+- `CLOSING_MIN_CREDITS` bajó a 600 (la reserva) y `CLOSING_SHADOW_MIN_CREDITS` a 1500.
+- Consecuencia esperada: en fin de semana menos partidos tienen mercados por evento (ambos
+  anotan, córners, tarjetas) y menos candidatas sombra de esos mercados tienen cierre. Los
+  picks salen igual (nunca se ocultan); los que no tienen esos mercados no se comparan con
+  ellos.
+- El ✅ del "Chequeo de salidas" dice "cierres (N de M partidos)" de ayer (sección 12,
+  `closing_coverage`). Con menos de 80% y 10+ partidos es ERROR. Si el aviso de "sin
+  créditos" salió hoy, es solo WARNING: la causa ya se avisó.
 
 **Cuotas de cierre: mismo mercado, misma línea.** Hay UN mapeo mercado → cierre
 (`_closing_odds_for` en `src/models/save_bets.py`) para apuestas y shadow. Si la línea
