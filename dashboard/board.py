@@ -295,6 +295,85 @@ def summary(rows: list) -> dict:
             "bets": len(bets), "bets_profit": round(sum(b["profit"] or 0 for b in bets), 2)}
 
 
+RESULTS_MIN_N = 5          # con menos picks, un tipo o una liga sale como "pocos datos"
+WIN_LIKE = ("win", "half_win")
+LOSS_LIKE = ("loss", "half_loss")
+
+
+def _american(profit) -> str | None:
+    """Momio americano de un acierto a 1u desde lo que ganó (decimal = 1 + ganancia)."""
+    from src.utils.min_odds import fmt_american, to_american
+    p = _num(profit)
+    return fmt_american(to_american(1 + p)) if p and p > 0 else None
+
+
+def _record(items: list) -> dict:
+    won = sum(1 for i in items if i["result"] in WIN_LIKE)
+    lost = sum(1 for i in items if i["result"] in LOSS_LIKE)
+    priced = [i["profit"] for i in items if i["profit"] is not None]
+    units = round(sum(priced), 2)
+    return {"n": len(items), "won": won, "lost": lost, "push": len(items) - won - lost,
+            "hit": round(won / (won + lost), 3) if won + lost else None,
+            "units": units, "roi": round(units / len(priced), 3) if priced else None,
+            "few": len(items) < RESULTS_MIN_N}
+
+
+def _ranked(items: list, key) -> list:
+    groups = {}
+    for i in items:
+        groups.setdefault(key(i), []).append(i)
+    return sorted(({"name": k, **_record(v)} for k, v in groups.items()), key=lambda g: (-g["units"], -g["n"]))
+
+
+def results_board(rows: list) -> dict:
+    """Ganadas y perdidas (v2.5.3, 29-oct-26). El dueño: "necesito gráficas y
+    datos de ganadas y perdidas, ver los picks más ganadores y perdedores, y las
+    ligas, cómo van en las apuestas, si se ganan bien ahí o no".
+
+    Tres grupos: los picks del modelo corregido (desde el 22-oct), los que pasan
+    la regla (🎯) y las apuestas reales. Mismo criterio que `summary`: solo lo ya
+    liquidado (no el provisional de ESPN) y sin los de poca historia. Por grupo:
+    totales, ganadas/perdidas por día con las unidades acumuladas, el ranking por
+    tipo de pick y por liga, los mejores aciertos y los fallos en los que el
+    programa estaba más seguro."""
+    done = [r for r in rows if not r.get("started")]
+    picks, bets = [], []
+    for r in done:
+        base = {"date": r["date"], "league": r.get("league") or "", "match": f"{r['home']} vs {r['away']}"}
+        p = r.get("pick") or {}
+        if p.get("result") in PLAYED and not p.get("old_model") and not p.get("low") and p.get("label"):
+            picks.append({**base, "type": p["label"], "family": p.get("family"), "result": p["result"],
+                          "profit": p.get("profit"), "model": p.get("model"), "rule": bool(p.get("rule"))})
+        for b in r.get("bets") or []:
+            if b["result"] in PLAYED:
+                bets.append({**base, "type": b["market"], "family": None, "result": b["result"],
+                             "profit": b.get("profit"), "model": None, "rule": False})
+
+    def group(items: list) -> dict:
+        days = sorted({i["date"] for i in items})
+        won = [sum(1 for i in items if i["date"] == d and i["result"] in WIN_LIKE) for d in days]
+        lost = [sum(1 for i in items if i["date"] == d and i["result"] in LOSS_LIKE) for d in days]
+        cum, total = [], 0.0
+        for d in days:
+            total += sum(i["profit"] for i in items if i["date"] == d and i["profit"] is not None)
+            cum.append(round(total, 2))
+        wins = sorted((i for i in items if (i["profit"] or 0) > 0), key=lambda i: -i["profit"])[:8]
+        # el fallo que más pesa: donde el programa estaba más seguro (o el que más costó)
+        misses = sorted((i for i in items if i["result"] in LOSS_LIKE),
+                        key=lambda i: (-(i["model"] or 0), i["profit"] or 0, i["date"]))[:8]
+        row = lambda i: {k: i[k] for k in ("date", "league", "match", "type", "profit", "model")}
+        return {"total": _record(items),
+                "daily": {"dates": days, "won": won, "lost": lost, "units": cum},
+                "by_type": _ranked(items, lambda i: i["type"]),
+                "by_league": _ranked(items, lambda i: i["league"]),
+                "best": [{**row(i), "odds": _american(i["profit"])} for i in wins],
+                "worst": [row(i) for i in misses]}
+
+    return {"groups": {"picks": group(picks), "rule": group([p for p in picks if p["rule"]]),
+                       "bets": group(bets)},
+            "min_n": RESULTS_MIN_N}
+
+
 def team_list(matches: pd.DataFrame) -> list:
     """Equipos con partidos desde SINCE: nombre canónico, visible, su liga y cuántos."""
     if matches.empty:

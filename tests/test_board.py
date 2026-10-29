@@ -184,3 +184,46 @@ def test_the_refresh_button_reads_past_results_again_without_the_5_min_cache(das
     js = (Path(dash.__file__).parent / "ui_es5.js").read_text(encoding="utf-8")
     assert "refreshAll(true)" in js and "'/api/board/past' + (fresh ? '?fresh=1' : '')" in js
     assert "hay cambios" in js and "sin cambios" in js
+
+
+# ─── Ganadas y perdidas (v2.5.3) ─────────────────────────────────────────────
+
+def _row(date, league, home, away, label=None, result=None, profit=None, model=None, rule=True, old=False,
+         low=False, started=False, bets=()):
+    pick = {"label": label, "family": "Ganador", "result": result, "profit": profit, "model": model,
+            "rule": rule, "old_model": old, "low": low} if label else {"none": True, "result": "none"}
+    return {"date": date, "league": league, "home": home, "away": away, "pick": pick,
+            "started": started, "bets": list(bets)}
+
+
+def test_wins_and_losses_by_day_type_and_league():
+    rows = [_row("2026-10-24", "Premier League", "A", "B", "Gana el local", "win", 0.9, 0.55),
+            _row("2026-10-24", "Premier League", "C", "D", "Gana el local", "loss", -1.0, 0.70),
+            _row("2026-10-25", "La Liga", "E", "F", "Ambos anotan", "win", 1.5, 0.48, rule=False),
+            _row("2026-10-25", "La Liga", "G", "H", "Ambos anotan", "push", 0.0, 0.50),
+            _row("2026-10-25", "La Liga", "I", "J", "Gana el local", "loss", -1.0, 0.62, low=True),     # poca historia: no cuenta
+            _row("2026-10-20", "La Liga", "K", "L", "Gana el local", "win", 0.8, 0.6, old=True),       # modelo con error
+            _row("2026-10-26", "Serie A", "M", "N", "Gana el local", "win", 0.7, 0.6, started=True),   # provisional
+            _row("2026-10-25", "La Liga", "O", "P", bets=[{"market": "Gana el local", "result": "loss", "profit": -2.0}])]
+    out = B.results_board(rows)
+    g = out["groups"]["picks"]
+    assert g["total"] == {"n": 4, "won": 2, "lost": 1, "push": 1, "hit": round(2 / 3, 3), "units": 1.4,
+                          "roi": 0.35, "few": True}
+    assert g["daily"] == {"dates": ["2026-10-24", "2026-10-25"], "won": [1, 1], "lost": [1, 0], "units": [-0.1, 1.4]}
+    assert [(t["name"], t["units"]) for t in g["by_type"]] == [("Ambos anotan", 1.5), ("Gana el local", -0.1)]
+    assert [(lg["name"], lg["won"], lg["lost"]) for lg in g["by_league"]] == [("La Liga", 1, 0), ("Premier League", 1, 1)]
+    assert g["best"][0]["match"] == "E vs F" and g["best"][0]["odds"] == "+150"     # americano, nunca decimal
+    assert [w["match"] for w in g["worst"]] == ["C vs D"] and g["worst"][0]["model"] == 0.70
+    assert out["groups"]["rule"]["total"]["n"] == 3                                  # sin el que no pasa la regla
+    bets = out["groups"]["bets"]
+    assert bets["total"]["lost"] == 1 and bets["by_league"][0]["name"] == "La Liga" and bets["worst"][0]["profit"] == -2.0
+
+
+def test_results_endpoint_and_tab(dash):
+    c = dash.app.test_client()
+    r = c.get("/api/board/results").get_json()
+    assert r["ok"] and set(r["groups"]) == {"picks", "rule", "bets"} and r["min_n"] == B.RESULTS_MIN_N
+    html = c.get("/").get_data(as_text=True)
+    for el_id in ('data-tab="resultados"', 'id="cdaily"', 'id="rtypes"', 'id="rleagues"', 'id="cleagues"',
+                  'id="rbest"', 'id="rworst"'):
+        assert el_id in html
