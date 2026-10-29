@@ -686,6 +686,13 @@ del modelo partido por partido.
   - Se re-liquidaron 3 apuestas reales (−0.57u, con `fix_stat_settlements.py` y nota en
     `bankroll_history`) y 12 de sombra.
 
+**Avisos de cada corrida (29-oct-26).** Los WARNING no van a Telegram. Al final de cada corrida
+el orchestrator imprime una línea `Avisos de la corrida (modo, N distintos): …` con todos,
+sin repetir (`_report_warnings`). Para auditar desde los logs, busca esa línea: un aviso que
+se repite corrida tras corrida es una falla silenciosa candidata. El "⏸ en pausa" que dejó sin
+cierres del 24 al 28 de octubre era un `print`, ni siquiera un aviso. Lo que importa de esos
+casos se mide por su consecuencia (sección 12).
+
 **Chequeo diario de salidas** (`src/utils/output_checks.py`, paso "Chequeo de salidas" del
 evening, antes del resumen de Telegram). Cada problema es un ERROR y llega en "errores
 tolerados":
@@ -697,8 +704,12 @@ tolerados":
   - ningún 🎯 a que gana un equipo al que le faltaron 4+ titulares habituales;
   - si más del 30% de los picks con las dos alineaciones publicadas no las vio (10+ picks),
     el closing no los está recalculando;
-- partidos analizados que ya se jugaron y no tienen marcador (más del 15%);
-- pendientes atorados más allá de su ventana (reales 8 días, sombra y propuestas 11);
+- partidos analizados que ya se jugaron y no tienen marcador (más del 15%), y desde el
+  29-oct-26 también por liga (`leagues_without_results`): una liga con 4+ partidos a la que le
+  falta la mitad o más es ERROR aunque el total pase (si se cae la fuente de una sola liga,
+  las demás la diluían);
+- pendientes atorados más allá de su ventana (reales 8 días, sombra, propuestas y, desde el
+  29-oct-26, los picks del programa con mercado: 11);
 - xG real de más de 4 por partido;
 - claves del weekly sin actualizar en 9 días o más;
 - **el 🎯 contra el mercado** (sección 11, 28-oct-26, `star_vs_market`): por familia, los
@@ -710,6 +721,9 @@ tolerados":
   - El umbral se midió sobre toda la historia el 28-oct: el z más bajo con 30+ picks fue
     +0.35 (Ambos anotan) y +1.18 (Ganador). Goles iba en −0.78 con 28 picks, que es ruido.
   - Solo avisa: no quita el 🎯. Si se apaga solo o no es decisión del dueño.
+- **sin créditos de The Odds API** (29-oct-26, `credits_out_today`): si hoy ya salió el aviso
+  de "sin créditos", que `upcoming_matches` u `odds_history` no se actualicen es WARNING y no
+  ERROR. La causa ya se avisó una vez y no debe llegar como errores nuevos cada día.
 - **cierres guardados** (sección 12, 29-oct-26, `closing_coverage`): de los partidos sombra
   jugados entre 27 y 3 horas antes, al menos 80% con un cierre válido (10+ partidos). Lo
   normal es 98-100%. Si el aviso de "sin créditos" salió hoy, es WARNING y no ERROR.
