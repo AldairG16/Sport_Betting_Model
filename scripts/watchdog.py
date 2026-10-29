@@ -5,7 +5,8 @@ Monitoreo de ausencia del pipeline. Corre cada 6 horas vía watchdog.yml.
 
 Detecta silenciosamente y alerta SOLO si algo está mal:
   1. DB inaccesible (causa raíz del silencio apr-jun 2026: contraseña expirada)
-  2. upcoming_matches sin actualizar en >26h (morning/evening no corrió)
+  2. cuotas sin actualizar en >26h sin que falten créditos (29-oct-26: morning y
+     evening se miden en pipeline_runs, CHECK 7-8)
   3. Apuestas reales sin liquidar: 'pending' de hace más de 4 días
   4. Analyst heartbeat con gap largo durante ventana activa
   5-6. Sin partidos cargados / sin candidatas nuevas en 4 días
@@ -83,6 +84,20 @@ DIAS_SIN_CANDIDATAS_ALERTA = 4
 DIAS_PENDING_ATASCADA = 4
 
 
+def _credits_out_today(now_utc) -> bool:
+    """¿El closing ya avisó hoy que no hay créditos de The Odds API?"""
+    try:
+        import json
+        import pandas as pd
+        from config.database import engine
+        r = pd.read_sql("SELECT value FROM model_state WHERE key = 'odds_credit_alert'", engine)
+        v = r.iloc[0]["value"] if not r.empty else None
+        state = json.loads(v) if isinstance(v, str) else (dict(v) if v is not None else {})
+        return state.get("stop") == now_utc.strftime("%Y-%m-%d")
+    except Exception:
+        return False                     # ante la duda, avisar
+
+
 def run_watchdog() -> int:
     """0 = sano o alerta entregada; 1 = DB caída o alerta NO entregada (la
     corrida queda en rojo y GitHub avisa por correo: segundo canal)."""
@@ -115,9 +130,12 @@ def run_watchdog() -> int:
         print(f"  ❌ DB inaccesible: {e}")
         return 1
 
-    # ── CHECK 2: upcoming_matches actualizado en las últimas 26 horas ────────
-    # update_upcoming_matches corre en morning (06:00 MX) y evening (07:30 MX).
-    # 26h da margen para días con retrasos o runs lentos.
+    # ── CHECK 2: cuotas actualizadas en las últimas 26 horas ─────────────────
+    # 29-oct-26: decía "PIPELINE SIN CORRER" con el pipeline sano. Sin créditos
+    # de The Odds API, update_upcoming_matches no escribe y esta marca se queda
+    # quieta aunque morning y evening corran. Que corran lo mide pipeline_runs
+    # (CHECK 7-8); aquí solo las cuotas. Sin créditos no se repite: el closing
+    # ya manda ese aviso una vez al día (credit_budget.alert_once).
     try:
         r = pd.read_sql(
             "SELECT MAX(updated_at) AS last_update FROM upcoming_matches",
@@ -127,15 +145,18 @@ def run_watchdog() -> int:
         age_h = _hours_ago(last_update)
         print(f"  upcoming_matches última actualización: {age_h:.1f}h atrás")
 
-        if age_h > 26:
-            issues.append(
-                f"🔴 <b>PIPELINE SIN CORRER</b>\n"
-                f"upcoming_matches no se actualiza hace {age_h:.0f}h "
-                f"(umbral: 26h).\n"
-                f"→ Verifica que morning.yml y evening.yml corran en GH Actions."
-            )
+        if age_h <= 26:
+            print("  ✅ Cuotas actualizadas")
+        elif _credits_out_today(now_utc):
+            print(f"  ⏸ Cuotas sin actualizar hace {age_h:.0f}h: sin créditos de The Odds API (ya avisado hoy)")
         else:
-            print("  ✅ Pipeline corrió recientemente")
+            issues.append(
+                f"🔴 <b>CUOTAS SIN ACTUALIZAR</b>\n"
+                f"Las cuotas no se actualizan hace {age_h:.0f}h (umbral: 26h) y no "
+                f"es por falta de créditos.\n"
+                f"→ Revisa el paso \"Fetch odds\" en el log del morning o del evening "
+                f"(clave de The Odds API, errores de la API)."
+            )
     except Exception as e:
         issues.append(f"⚠️ No se pudo leer upcoming_matches: {e}")
 
