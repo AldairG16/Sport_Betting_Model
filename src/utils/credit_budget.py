@@ -59,6 +59,8 @@ ALERT_KEY = "odds_credit_alert"
 # 2.0-2.2 medido 10-20 oct (91 recargas para 42 horarios el 17-oct)
 CAPTURES_PER_SLOT = env_int("ODDS_API_CAPTURES_PER_SLOT", 2)
 CAPTURE_LEAD_MIN = 80          # la recarga dirigida mira hasta 80 min adelante (CLOSING_WINDOW_MIN)
+STOP_THRESHOLD = env_int("API_CREDITS_STOP_THRESHOLD", 500)   # el mismo umbral de parada de update_upcoming_matches
+HISTORY_DAYS = 14
 
 
 def next_reset(now: datetime, reset_day: int = RESET_DAY) -> datetime:
@@ -80,12 +82,40 @@ def daily_allowance(start_remaining: int, now: datetime, reserve: int = RESERVE,
 
 
 def day_state(previous: dict | None, remaining: int, now: datetime) -> dict:
-    """Estado del día: si cambió el día UTC, el saldo actual es el inicial."""
+    """Estado del día: si cambió el día UTC, el saldo actual es el inicial y
+    lo que bajó el saldo del día anterior queda en `history` (29-oct-26, para
+    medir el ritmo: credit_pace)."""
     today = now.strftime("%Y-%m-%d")
     prev = previous or {}
+    hist = dict(prev.get("history") or {})
     if prev.get("day") == today and isinstance(prev.get("start"), int) and "allowance" in prev:
-        return {"day": today, "start": prev["start"], "allowance": prev["allowance"]}   # fijo todo el día
-    return {"day": today, "start": remaining, "allowance": round(daily_allowance(remaining, now), 1)}
+        return {"day": today, "start": prev["start"], "allowance": prev["allowance"], "history": hist}  # fijo todo el día
+    # si el saldo subió, se renovó el plan en medio: ese día no se puede medir
+    if prev.get("day") and isinstance(prev.get("start"), int) and remaining <= prev["start"]:
+        hist[prev["day"]] = {"spent": prev["start"] - remaining, "allowance": prev.get("allowance")}
+    hist = dict(sorted(hist.items())[-HISTORY_DAYS:])
+    return {"day": today, "start": remaining, "allowance": round(daily_allowance(remaining, now), 1),
+            "history": hist}
+
+
+def credit_pace(state: dict | None, now: datetime, stop: int = STOP_THRESHOLD, last: int = 3) -> dict | None:
+    """Al ritmo de los últimos `last` días medidos, ¿cuándo cruza el saldo el
+    umbral de parada? None sin estado o con menos de 2 días medidos. El 28-oct
+    lo cruzó 3.5 días antes de la renovación y nada lo midió antes."""
+    if not state or not isinstance(state.get("start"), int):
+        return None
+    days = [v["spent"] for _, v in sorted((state.get("history") or {}).items())[-last:]
+            if isinstance(v, dict) and isinstance(v.get("spent"), (int, float))]
+    if len(days) < 2:
+        return None
+    pace = sum(days) / len(days)
+    reset = next_reset(now)
+    days_left = (reset - now).total_seconds() / 86400.0
+    lasts = (state["start"] - stop) / pace if pace > 0 else float("inf")
+    hist = state.get("history") or {}
+    yesterday = hist[max(hist)] if hist else None
+    return {"pace": pace, "days": len(days), "lasts_days": lasts, "days_left": days_left,
+            "short_days": max(0.0, days_left - lasts), "reset": reset, "yesterday": yesterday}
 
 
 def run_budget(state: dict, remaining: int, mandatory: int = MANDATORY_PER_DAY) -> float:

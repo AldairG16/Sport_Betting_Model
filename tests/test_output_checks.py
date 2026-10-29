@@ -305,7 +305,7 @@ def test_daily_check_reports_every_problem_as_an_error(monkeypatch):
 
 
 
-def _healthy_db(now, star_picks=(), closings=(), stuck_picks=0):
+def _healthy_db(now, star_picks=(), closings=(), stuck_picks=0, states=None):
     """read_sql falso de una base sana (todas las secciones pasan); star_picks:
     las filas de program_picks de la sección 11; closings: las de shadow_bets
     de la 12 ({match, valid})."""
@@ -321,6 +321,9 @@ def _healthy_db(now, star_picks=(), closings=(), stuck_picks=0):
             return pd.DataFrame([{"bets": 0, "shadow": 0, "props": 0}])
         if "AS n FROM program_picks" in s:
             return pd.DataFrame([{"n": stuck_picks}])
+        if s.startswith("SELECT value FROM model_state"):      # estado (créditos): states={clave: valor}
+            v = (states or {}).get((params or {}).get("k"))
+            return pd.DataFrame([{"value": v}] if v is not None else [], columns=["value"])
         if "model_state" in s:
             return pd.DataFrame([{"key": k, "updated_at": now} for k in oc.WEEKLY_KEYS])
         if "team_xg_real" in s:
@@ -470,10 +473,8 @@ def test_missing_closings_are_an_error_unless_credits_ran_out(monkeypatch, capsy
     """24-25 oct: 11 de 73 y 12 de 63 partidos con cierre válido y nada avisó."""
     import src.utils.output_checks as mod
     from src.models import lineup_alerts as LA
-    from src.utils import model_state
     now = pd.Timestamp.now(tz="UTC")
     monkeypatch.setattr(LA, "load_profiles", lambda engine, teams: {})
-    monkeypatch.setattr(model_state, "load_state", lambda k: None)
 
     monkeypatch.setattr(pd, "read_sql", _healthy_db(now, closings=_closings(19, 1)))
     assert mod.run_output_checks(engine=object(), normalize=lambda t: t) == []
@@ -485,14 +486,16 @@ def test_missing_closings_are_an_error_unless_credits_ran_out(monkeypatch, capsy
 
     # sin créditos (el aviso de parada ya salió hoy): se dice, pero no es otro error
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    monkeypatch.setattr(model_state, "load_state", lambda k: {"stop": today} if k == "odds_credit_alert" else None)
+    monkeypatch.setattr(pd, "read_sql", _healthy_db(now, closings=_closings(11, 62),
+                                                    states={"odds_credit_alert": {"stop": today}}))
     RUN_ISSUES.reset()
     assert mod.run_output_checks(engine=object(), normalize=lambda t: t) == []
     assert any("sin créditos de The Odds API" in w for w in RUN_ISSUES.warnings())
 
     # el aviso de parada fue ayer y hoy ya hay créditos: la falla es del closing
     yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
-    monkeypatch.setattr(model_state, "load_state", lambda k: {"stop": yesterday} if k == "odds_credit_alert" else None)
+    monkeypatch.setattr(pd, "read_sql", _healthy_db(now, closings=_closings(11, 62),
+                                                    states={"odds_credit_alert": {"stop": yesterday}}))
     assert len(mod.run_output_checks(engine=object(), normalize=lambda t: t)) == 1
 
 
@@ -523,23 +526,24 @@ def test_stale_odds_while_credits_are_out_are_said_once_not_as_new_errors(monkey
     como 2 errores más por la misma causa que ya avisó el closing."""
     import src.utils.output_checks as mod
     from src.models import lineup_alerts as LA
-    from src.utils import model_state
     now = pd.Timestamp.now(tz="UTC")
-    healthy = _healthy_db(now)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    def stale_odds(sql, con=None, params=None, **kw):
-        s = " ".join(str(sql).split())
-        if s.startswith("SELECT MAX(") and ("FROM upcoming_matches" in s or "FROM odds_history" in s):
-            return pd.DataFrame([{"t": now - pd.Timedelta(days=2, hours=12)}])
-        return healthy(sql, con, params, **kw)
-    monkeypatch.setattr(pd, "read_sql", stale_odds)
+    def stale_odds(states):
+        healthy = _healthy_db(now, states=states)
+
+        def read(sql, con=None, params=None, **kw):
+            s = " ".join(str(sql).split())
+            if s.startswith("SELECT MAX(") and ("FROM upcoming_matches" in s or "FROM odds_history" in s):
+                return pd.DataFrame([{"t": now - pd.Timedelta(days=2, hours=12)}])
+            return healthy(sql, con, params, **kw)
+        return read
     monkeypatch.setattr(LA, "load_profiles", lambda engine, teams: {})
 
-    monkeypatch.setattr(model_state, "load_state", lambda k: None)
+    monkeypatch.setattr(pd, "read_sql", stale_odds({}))
     assert len(mod.run_output_checks(engine=object(), normalize=lambda t: t)) == 2   # con créditos: error
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    monkeypatch.setattr(model_state, "load_state", lambda k: {"stop": today} if k == "odds_credit_alert" else None)
+    monkeypatch.setattr(pd, "read_sql", stale_odds({"odds_credit_alert": {"stop": today}}))
     RUN_ISSUES.reset()
     assert mod.run_output_checks(engine=object(), normalize=lambda t: t) == []
     assert sum("sin créditos de The Odds API" in w for w in RUN_ISSUES.warnings()) == 2
