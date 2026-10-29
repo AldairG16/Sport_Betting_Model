@@ -800,6 +800,16 @@ def api_board_past():
                     "weekly": _b.weekly_accuracy(rows)})
 
 
+@app.route("/api/board/results")
+def api_board_results():
+    """Ganadas y perdidas por día, por tipo de pick y por liga (v2.5.3)."""
+    from dashboard import board as _b
+    rows = _past_rows()
+    if not rows:
+        return _no_data("Sin partidos jugados desde septiembre")
+    return jsonify({"ok": True, "since": _since(), **_b.results_board(rows)})
+
+
 @app.route("/api/board/teams")
 def api_board_teams():
     from dashboard import board as _b
@@ -1065,6 +1075,10 @@ PAGE = """<!DOCTYPE html>
   .cb { background:var(--card); border-radius:10px; padding:10px 12px; height:260px; position:relative; }
   .cb h3 { font-size:.85rem; color:var(--muted); margin-bottom:6px; font-weight:600; }
   .cb canvas { width:100%!important; height:215px!important; }
+  .cb.wide { height:300px; margin:12px 0; } .cb.wide canvas { height:255px!important; }
+  .cb.free { height:auto; margin:12px 0; } .chartbox { position:relative; height:300px; }
+  .chartbox canvas { height:100%!important; }
+  tr.few td { color:var(--muted); } td.nw { white-space:nowrap; color:var(--muted); }
   #err { color:var(--red); font-size:.85rem; margin:8px 0; display:none; }
   @media (max-width:900px) {
     body { padding:10px; }
@@ -1086,6 +1100,7 @@ PAGE = """<!DOCTYPE html>
 <div class="tabs" id="tabs">
   <button class="tab" data-tab="proximos">Próximos</button>
   <button class="tab" data-tab="anteriores">Anteriores</button>
+  <button class="tab" data-tab="resultados">Ganadas y perdidas</button>
   <button class="tab" data-tab="equipos">Equipos</button>
   <button class="tab" data-tab="graficas">Gráficas</button>
 </div>
@@ -1098,6 +1113,28 @@ PAGE = """<!DOCTYPE html>
     <span class="small muted" style="margin-left:auto"><span style="color:var(--home)">■</span> local <span style="color:var(--draw)">■</span> empate <span style="color:var(--away)">■</span> visitante · programa (arriba) y Pinnacle (abajo)</span>
   </div>
   <div id="uplist" class="muted">Cargando…</div>
+</div>
+
+<div class="pane" id="tab-resultados">
+  <div class="bar" id="rgroups">
+    <span class="pill on" data-g="picks" title="Todos los picks del modelo corregido (desde el 22 oct)">🤖 Todos los picks</span>
+    <span class="pill" data-g="rule" title="Solo los picks que pasan la regla">🎯 Pasan la regla</span>
+    <span class="pill" data-g="bets" title="Las apuestas reales registradas">💰 Apuestas reales</span>
+    <span class="small muted" style="margin-left:auto">Solo lo ya liquidado · unidades a 1u por pick, al momio mínimo de PlayDoit</span>
+  </div>
+  <div class="kpis" id="rkpis"></div>
+  <div class="cb wide"><h3>Ganadas y perdidas por día · unidades acumuladas</h3><canvas id="cdaily"></canvas></div>
+  <div class="grid2">
+    <div class="tbl"><table><thead><tr><th>Tipo de pick</th><th>G-P</th><th>Acierto</th><th>Unidades</th><th class="hide-sm" title="Lo que se gana por cada unidad apostada">Rendimiento</th></tr></thead>
+      <tbody id="rtypes"></tbody></table></div>
+    <div class="tbl"><table><thead><tr><th>Liga</th><th>G-P</th><th>Acierto</th><th>Unidades</th><th class="hide-sm" title="Lo que se gana por cada unidad apostada">Rendimiento</th></tr></thead>
+      <tbody id="rleagues"></tbody></table></div>
+  </div>
+  <div class="cb free"><h3>Unidades por liga</h3><div class="chartbox" id="cleaguesbox"><canvas id="cleagues"></canvas></div></div>
+  <div class="grid2">
+    <div class="tbl"><table><thead><tr><th colspan="4">✅ Mejores aciertos</th></tr></thead><tbody id="rbest"></tbody></table></div>
+    <div class="tbl"><table><thead><tr><th colspan="4">❌ Fallos en los que el programa estaba más seguro</th></tr></thead><tbody id="rworst"></tbody></table></div>
+  </div>
 </div>
 
 <div class="pane" id="tab-anteriores">

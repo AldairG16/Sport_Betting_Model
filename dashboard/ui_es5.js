@@ -112,6 +112,7 @@ function refreshAll(manual){
   loadHeader();
   loadUpcoming();
   if (cur === 'anteriores') loadPast(true);
+  else if (cur === 'resultados') loadResults(true);
   else if (manual && cur === 'equipos') loadTeams();
   else if (manual && cur === 'graficas') loadCharts(true);
   refreshDone();
@@ -130,7 +131,7 @@ function refreshDone(){
 }
 
 // ── Pestañas ──
-var TABS = ['proximos', 'anteriores', 'equipos', 'graficas'], _loaded = {};
+var TABS = ['proximos', 'anteriores', 'resultados', 'equipos', 'graficas'], _loaded = {};
 function showTab(name){
   if (TABS.indexOf(name) < 0) name = 'proximos';
   var b = el('tabs').getElementsByTagName('button');
@@ -140,6 +141,7 @@ function showTab(name){
   if (_loaded[name]) return;
   _loaded[name] = true;
   if (name === 'anteriores') loadPast();
+  else if (name === 'resultados') loadResults();
   else if (name === 'equipos') loadTeams();
   else if (name === 'graficas') loadCharts();
 }
@@ -473,6 +475,87 @@ el('pleague').onchange = function(){ _pastShown = 150; renderPast(); };
 el('pteam').onkeyup = function(){ _pastShown = 150; renderPast(); };
 el('ponly').onclick = function(){ _pastOnly = !_pastOnly; this.className = 'pill' + (_pastOnly ? ' on' : ''); _pastShown = 150; renderPast(); };
 el('pmore').onclick = function(){ _pastShown += 150; renderPast(); };
+
+// ── Ganadas y perdidas (v2.5.3, 29-oct-26) ──
+// El dueño: "necesito gráficas y datos de ganadas y perdidas, ver los picks más
+// ganadores y perdedores, y las ligas, cómo van en las apuestas, si se ganan
+// bien ahí o no". Tres grupos: todos los picks, los 🎯 y las apuestas reales.
+var _res = null, _resGroup = _storeGet('rgroup', 'picks');
+function _units(v){ return '<span class="' + (v >= 0 ? 'pos' : 'neg') + '">' + money(v) + '</span>'; }
+// ROI: lo que se gana por cada unidad apostada, en % (0.002 → +0.2%)
+function _roi(v){ return v === null || v === undefined ? '—' :
+  '<span class="' + (v >= 0 ? 'pos' : 'neg') + '">' + (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%</span>'; }
+function resRow(g, minN){
+  return '<tr' + (g.few ? ' class="few" title="Pocos datos: menos de ' + minN + ' picks, todavía no dice mucho"' : '') + '>' +
+    '<td>' + esc(g.name || '—') + '</td><td class="sc">' + g.won + '-' + g.lost + '</td><td>' + p100(g.hit) + '</td>' +
+    '<td>' + _units(g.units) + '</td><td class="hide-sm">' + _roi(g.roi) + '</td></tr>';
+}
+function renderResults(){
+  if (!_res) return;
+  var g = _res.groups[_resGroup], t = g.total, i, h;
+  var pills = el('rgroups').getElementsByTagName('span');
+  for (i = 0; i < pills.length; i++) if (pills[i].getAttribute('data-g'))
+    pills[i].className = 'pill' + (pills[i].getAttribute('data-g') === _resGroup ? ' on' : '');
+  el('rkpis').innerHTML = kpi(t.won, '✅ Ganadas', 'pos') + kpi(t.lost, '❌ Perdidas', 'neg') +
+    kpi(t.push, '↔️ Empates / anuladas') + kpi(p100(t.hit), 'Acierto (ganadas entre ganadas y perdidas)') +
+    kpi(money(t.units), 'Unidades', t.units >= 0 ? 'pos' : 'neg') +
+    kpi(t.roi === null ? '—' : (t.roi >= 0 ? '+' : '') + (t.roi * 100).toFixed(1) + '%', 'Rendimiento (ROI)', t.roi >= 0 ? 'pos' : 'neg');
+  var labels = [], lost = [];
+  for (i = 0; i < g.daily.dates.length; i++) { labels.push(shortDate(g.daily.dates[i])); lost.push(-g.daily.lost[i]); }
+  var tick = { fontColor: '#94a3b8' };
+  chart('cdaily', { type: 'bar', data: { labels: labels, datasets: [
+      { label: '✅ Ganadas', data: g.daily.won, backgroundColor: '#22c55e', stack: 'gp', yAxisID: 'n' },
+      { label: '❌ Perdidas', data: lost, backgroundColor: '#ef4444', stack: 'gp', yAxisID: 'n' },
+      { label: 'Unidades acumuladas', data: g.daily.units, type: 'line', borderColor: '#60a5fa', fill: false, yAxisID: 'u' }] },
+    options: { legend: { labels: { fontColor: '#94a3b8', boxWidth: 12 } },
+      scales: { xAxes: [{ stacked: true, ticks: { maxTicksLimit: 12, fontColor: '#94a3b8' } }],
+                yAxes: [{ id: 'n', stacked: true, position: 'left', ticks: { fontColor: '#94a3b8', callback: function(v){ return Math.abs(v); } } },
+                        { id: 'u', position: 'right', gridLines: { drawOnChartArea: false },
+                          ticks: { fontColor: '#60a5fa', callback: function(v){ return v + 'u'; } } }] },
+      tooltips: { callbacks: { label: function(it, data){
+        var ds = data.datasets[it.datasetIndex];
+        return ds.label + ': ' + (ds.yAxisID === 'u' ? money(it.yLabel) : Math.abs(it.yLabel)); } } } } });
+  h = '';
+  for (i = 0; i < g.by_type.length; i++) h += resRow(g.by_type[i], _res.min_n);
+  el('rtypes').innerHTML = h || '<tr><td colspan="5" class="muted">Sin datos todavía.</td></tr>';
+  h = '';
+  var ll = [], lu = [], lc = [];
+  for (i = 0; i < g.by_league.length; i++) {
+    var lg = g.by_league[i];
+    h += resRow(lg, _res.min_n);
+    ll.push(lg.name + ' (' + lg.won + '-' + lg.lost + ')'); lu.push(lg.units);
+    lc.push(lg.few ? (lg.units >= 0 ? 'rgba(34,197,94,.35)' : 'rgba(239,68,68,.35)') : (lg.units >= 0 ? '#22c55e' : '#ef4444'));
+  }
+  el('rleagues').innerHTML = h || '<tr><td colspan="5" class="muted">Sin datos todavía.</td></tr>';
+  el('cleaguesbox').style.height = Math.max(160, 40 + 22 * ll.length) + 'px';   // una barra por liga
+  chart('cleagues', { type: 'horizontalBar', data: { labels: ll, datasets: [{ data: lu, backgroundColor: lc }] },
+    options: { legend: { display: false }, scales: { xAxes: [{ ticks: tick }], yAxes: [{ ticks: tick }] },
+               tooltips: { callbacks: { label: function(it){ var x = g.by_league[it.index];
+                 return money(x.units) + ' · acierto ' + p100(x.hit) + (x.few ? ' · pocos datos' : ''); } } } } });
+  h = '';
+  for (i = 0; i < g.best.length; i++) {
+    var b = g.best[i];
+    h += '<tr><td class="nw">' + shortDate(b.date) + '</td><td>' + esc(b.match) + '<div class="small muted">' + esc(b.league) + '</div></td>' +
+         '<td>' + esc(b.type) + (b.odds ? ' <span class="muted">' + b.odds + '</span>' : '') + '</td><td>' + _units(b.profit) + '</td></tr>';
+  }
+  el('rbest').innerHTML = h || '<tr><td colspan="4" class="muted">Sin aciertos todavía.</td></tr>';
+  h = '';
+  for (i = 0; i < g.worst.length; i++) {
+    var w = g.worst[i];
+    h += '<tr><td class="nw">' + shortDate(w.date) + '</td><td>' + esc(w.match) + '<div class="small muted">' + esc(w.league) + '</div></td>' +
+         '<td>' + esc(w.type) + '</td><td class="nw">' + (w.model !== null && w.model !== undefined ? '🤖 ' + p100(w.model) : _units(w.profit || 0)) + '</td></tr>';
+  }
+  el('rworst').innerHTML = h || '<tr><td colspan="4" class="muted">Sin fallos todavía.</td></tr>';
+}
+function loadResults(fresh){
+  getJSON('/api/board/results' + (fresh ? '?fresh=1' : ''), function(d){ _res = d; renderResults(); },
+    function(msg){ el('rkpis').innerHTML = '<div class="muted">' + esc(msg) + '</div>'; });
+}
+(function(){
+  var pills = el('rgroups').getElementsByTagName('span');
+  for (var i = 0; i < pills.length; i++) if (pills[i].getAttribute('data-g'))
+    pills[i].onclick = function(){ _resGroup = this.getAttribute('data-g'); _storeSet('rgroup', _resGroup); renderResults(); };
+})();
 
 // ── Equipos ──
 var _teams = [], _charts = {};

@@ -1699,6 +1699,25 @@ devolvía lo mismo. Solo, cada 5 min, hace lo mismo menos Equipos y Gráficas. L
 en vivo salen de `live_scores`, que llena el closing cada 30 min: el botón no puede verlos más
 frescos que eso.
 
+**Pestaña "Ganadas y perdidas" (v2.5.3, 29-oct-26).** El dueño: "necesito gráficas y datos de
+ganadas y perdidas, ver los picks más ganadores y perdedores, y las ligas, cómo van en las
+apuestas, si se ganan bien ahí o no". `/api/board/results` → `board.results_board`, sobre las
+mismas filas de Anteriores (`_past_rows`, con `?fresh=1` del botón). Tres grupos:
+- todos los picks del modelo corregido (desde el 22-oct);
+- los 🎯 (pasan la regla);
+- las apuestas reales.
+
+Mismo criterio que `summary`: solo lo liquidado (no el provisional de ESPN) y sin los de poca
+historia. Por grupo muestra:
+- indicadores: ganadas, perdidas, empates, acierto, unidades y rendimiento en %;
+- ganadas y perdidas por día con las unidades acumuladas;
+- ranking por tipo de pick y por liga (con menos de 5 picks, en gris, "pocos datos");
+- gráfica de unidades por liga;
+- mejores aciertos, con su momio americano;
+- fallos donde el programa estaba más seguro.
+
+Con 192 picks (29-oct) cada liga tiene 3-29: el ranking describe lo que pasó, no predice.
+
 **Se mantiene abierto solo (v1.6.0).** El `.exe` es un supervisor
 (`dashboard/supervisor.py`): lanza el servidor (el mismo `.exe` con `--serve`), le
 pregunta cada 15 s a `/api/health` y lo vuelve a abrir si se cierra (esperas de 5, 15,
