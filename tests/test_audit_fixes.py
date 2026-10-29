@@ -54,8 +54,8 @@ def test_the_day_keeps_its_start_and_allowance_until_utc_midnight():
     assert morning["start"] == 6600 and morning["day"] == "2026-10-20"
     later = day_state(morning, 6300, utc(2026, 10, 20, 20))
     assert later == morning                                    # el saldo bajó, el presupuesto no se recalcula
-    assert run_budget(later, 6300) == pytest.approx(morning["allowance"] - 300)
-    assert run_budget(later, 5000) == 0                        # se pasó: nada más hoy
+    assert run_budget(later, 6300, mandatory=0) == pytest.approx(morning["allowance"] - 300)
+    assert run_budget(later, 5000, mandatory=0) == 0           # se pasó: nada más hoy
     tomorrow = day_state(later, 6000, utc(2026, 10, 21, 0, 7))
     assert tomorrow["day"] == "2026-10-21" and tomorrow["start"] == 6000
 

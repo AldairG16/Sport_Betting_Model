@@ -18,6 +18,18 @@ por día. El día se mide en UTC y su saldo inicial se guarda en model_state
 del morning, del evening o del closing. Lo que no se gasta un día queda para
 los siguientes (el presupuesto se recalcula cada día con el saldo real).
 Morning y evening no se frenan: sin sus cuotas no hay predicciones.
+
+29-oct-26: el saldo cruzó el umbral de parada el 28-oct, 3.5 días antes de la
+renovación, con el presupuesto puesto. Dos huecos:
+  - el presupuesto solo frenaba la recarga dirigida del closing; su
+    actualización normal (ligas cada 12 h y mercados por evento de las
+    próximas 48 h) no tenía tope y era ~85% del gasto (23-24 oct: ~2,200);
+  - lo que no se frena (morning, evening y resultados, ~200 por día) salía
+    del mismo presupuesto, así que el último día el saldo terminaba ~200 por
+    debajo de la reserva, bajo el umbral de parada.
+Ahora todo el closing gasta del presupuesto, y el presupuesto del closing es
+el del día menos MANDATORY_PER_DAY. Los avisos de créditos van una vez por
+día (alert_once): antes cada corrida del closing mandaba el suyo, cada 30 min.
 """
 
 from datetime import datetime, timezone
@@ -27,6 +39,10 @@ from config.settings import env_int
 STATE_KEY = "odds_credit_day"
 RESET_DAY = env_int("ODDS_API_RESET_DAY", 1)          # día del mes en que se renueva el plan
 RESERVE = env_int("ODDS_API_RESERVE", 600)             # nunca se presupuesta por debajo de esto
+# lo que gastan cada día morning, evening y resultados, que no se frenan
+# (medido 23-28 oct: ~60 + ~66 + ~114 antes de pedir solo las ligas que faltan)
+MANDATORY_PER_DAY = env_int("ODDS_API_MANDATORY_PER_DAY", 200)
+ALERT_KEY = "odds_credit_alert"
 
 
 def next_reset(now: datetime, reset_day: int = RESET_DAY) -> datetime:
@@ -56,10 +72,11 @@ def day_state(previous: dict | None, remaining: int, now: datetime) -> dict:
     return {"day": today, "start": remaining, "allowance": round(daily_allowance(remaining, now), 1)}
 
 
-def run_budget(state: dict, remaining: int) -> float:
-    """Créditos que todavía puede gastar el closing hoy."""
+def run_budget(state: dict, remaining: int, mandatory: int = MANDATORY_PER_DAY) -> float:
+    """Créditos que todavía puede gastar el closing hoy: lo del día menos lo
+    ya gastado y menos lo que morning, evening y resultados necesitan."""
     spent = max(0, state["start"] - remaining)
-    return max(0.0, state["allowance"] - spent)
+    return max(0.0, state["allowance"] - mandatory - spent)
 
 
 def load_and_update(remaining: int | None, now: datetime | None = None) -> dict | None:
@@ -72,3 +89,28 @@ def load_and_update(remaining: int | None, now: datetime | None = None) -> dict 
     state = day_state(load_state(STATE_KEY), remaining, now)
     save_state(STATE_KEY, state, history=False)
     return state
+
+
+def alert_once(kind: str, html: str, now: datetime | None = None, send=None) -> bool:
+    """Manda el aviso de créditos `kind` una sola vez por día UTC (29-oct-26:
+    con el saldo bajo el umbral, cada corrida mandaba el suyo, ~50 al día).
+    Si la base no se puede leer, lo manda: mejor repetido que callado.
+    Devuelve True si lo mandó."""
+    from src.utils.model_state import load_state, save_state
+    now = now or datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    try:
+        sent = load_state(ALERT_KEY) or {}
+    except Exception:
+        sent = {}
+    if sent.get(kind) == today:
+        print(f"   (aviso de créditos '{kind}' ya enviado hoy)")
+        return False
+    if send is None:
+        from scripts.notify_telegram import send_message as send
+    send(html)
+    try:
+        save_state(ALERT_KEY, {**sent, kind: today}, history=False)
+    except Exception:
+        pass
+    return True

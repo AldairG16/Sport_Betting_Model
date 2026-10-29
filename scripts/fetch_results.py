@@ -32,17 +32,25 @@ log = get_logger(__name__)
 SCORES_URL = "https://api.the-odds-api.com/v4/sports/{sport}/scores/"
 
 
+COST_WITH_DAYS_FROM = 2          # lo que cobra /scores con daysFrom (sin el header x-requests-last)
+_last_cost = 0
+
+
 def fetch_scores_for_league(sport_key: str, days_from: int = 2) -> tuple[list, bool]:
     """
     Descarga resultados completados para una liga.
     Returns (lista de dicts, ok) — ok=False si la API rechazó la petición.
     """
+    global _last_cost
     url = SCORES_URL.format(sport=sport_key)
+    _last_cost = 0
     try:
         r = requests.get(url, params={
             "apiKey":    ODDS_API_KEY,
             "daysFrom":  days_from,
         }, timeout=15)
+        last = r.headers.get("x-requests-last", "")
+        _last_cost = int(last) if last.isdigit() else COST_WITH_DAYS_FROM
         r.raise_for_status()
         data = r.json()
     except Exception as e:
@@ -119,10 +127,38 @@ def insert_results(results: list) -> tuple[int, int]:
     return inserted, skipped
 
 
+def leagues_needing_results(days_from: int = 2) -> set | None:
+    """Las ligas con algún partido ya jugado (empezó hace 2 h o más, en los
+    últimos days_from días) que se analizó o tiene apuesta pendiente y todavía
+    no tiene marcador en `matches` (29-oct-26: se pedían todas las ligas en
+    cada corrida, 2 créditos cada una, ~114 al día, y en las de las 6:00 y las
+    12:30 casi todas ya estaban). None si no se pudo leer: se piden todas."""
+    import pandas as pd
+    from src.utils.output_checks import missing_results
+    window = {"d": days_from}
+    try:
+        played = pd.read_sql(text("""
+            SELECT match, match_date, league FROM model_vs_sharp
+            WHERE match_date BETWEEN NOW() - make_interval(days => :d) AND NOW() - INTERVAL '2 hours'
+            UNION ALL
+            SELECT match, match_date, league FROM bets_history
+            WHERE result = 'pending'
+              AND match_date BETWEEN NOW() - make_interval(days => :d) AND NOW() - INTERVAL '2 hours'
+        """), engine, params=window).to_dict("records")
+        have = pd.read_sql(text("""
+            SELECT LOWER(home_team) AS h, LOWER(away_team) AS a, date::date AS d, home_goals, away_goals
+            FROM matches WHERE home_goals IS NOT NULL AND date >= CURRENT_DATE - make_interval(days => :d)
+        """), engine, params={"d": days_from + 2}).to_dict("records")
+    except Exception as e:
+        log.warning(f"   ⚠️  No se pudo ver qué ligas faltan ({type(e).__name__}: {e}) — se piden todas")
+        return None
+    return {p["league"] for p in missing_results(played, have, normalize_team)}
+
+
 def fetch_all_results(days_from: int = 2, verbose: bool = True) -> int:
     """
-    Descarga e inserta resultados de todas las ligas configuradas.
-    Returns total de nuevos resultados insertados.
+    Descarga e inserta resultados de las ligas a las que les falta alguno
+    (leagues_needing_results). Returns total de nuevos resultados insertados.
     """
     if verbose:
         print(f"\n📡 DESCARGANDO RESULTADOS (últimas {days_from*24}h)...\n")
@@ -131,9 +167,14 @@ def fetch_all_results(days_from: int = 2, verbose: bool = True) -> int:
     credits_used   = 0
     leagues_ok     = 0
     leagues_err    = 0
+    needed = leagues_needing_results(days_from)
+    asked = [k for k in SPORT_KEYS if needed is None or k in needed]
+    if verbose and needed is not None:
+        print(f"   Ligas con marcadores pendientes: {len(asked)} de {len(SPORT_KEYS)}")
 
-    for sport_key in SPORT_KEYS:
+    for sport_key in asked:
         results, ok = fetch_scores_for_league(sport_key, days_from)
+        credits_used += _last_cost
         if not ok:
             leagues_err += 1
             continue
@@ -143,7 +184,6 @@ def fetch_all_results(days_from: int = 2, verbose: bool = True) -> int:
 
         inserted, skipped = insert_results(results)
         total_inserted += inserted
-        credits_used   += 1  # 1 crédito por liga
 
         if verbose and (inserted > 0 or skipped > 0):
             completed = len(results)
@@ -155,14 +195,14 @@ def fetch_all_results(days_from: int = 2, verbose: bool = True) -> int:
 
     if verbose:
         print(f"\n✅ Total nuevos resultados: {total_inserted}")
-        print(f"   Créditos API usados: {credits_used} (1 por liga)")
+        print(f"   Créditos API usados: {credits_used}")
         print(f"   Ligas OK: {leagues_ok}  |  Ligas con error API: {leagues_err}")
 
     # Si TODAS las ligas fallaron, no es un problema de datos — es un bug de
     # configuración (param inválido, API key, rate limit). Levantar excepción
     # para que el orchestrator marque el step como fallido en vez de seguir
     # con `matches` vacío y dejar todas las bets `pending` silenciosamente.
-    if leagues_err > 0 and leagues_ok == 0 and len(SPORT_KEYS) > 0:
+    if leagues_err > 0 and leagues_ok == 0 and len(asked) > 0:
         raise RuntimeError(
             f"fetch_all_results: TODAS las {leagues_err} ligas fallaron contra "
             f"la API. Probable bug de configuración (daysFrom inválido, API key, "

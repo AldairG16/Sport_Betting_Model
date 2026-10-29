@@ -236,12 +236,13 @@ Una auditoría revisa **lo que sale**, no solo que corra: el evening ya lo hace 
 día (`src/utils/output_checks.py`, ver §5 "Auditoría de salidas"). A mano:
 `run_output_checks(days=7)` revisa una semana.
 
-**En los logs de Actions faltan los "7" y los "eu".** GitHub tapa con `***` cualquier texto
-igual al valor de un secret: `ODDS_REGION` vale eu y uno de los secrets numéricos vale 7
-(`FETCH_DAYS_AHEAD` o `API_TTL_HOURS`; el log tapa los dos).
-Por eso "finales de ESPN (87 de 87)" sale como "(8*** de 8***)", "neutral" como "n***tral" y
-"17" como "1***". Telegram y la base no se tapan. Los números se leen de la base o
-corriendo el chequeo a mano, no del log.
+**En los logs de Actions faltan los "7", los "12" y los "eu".** GitHub tapa con `***`
+cualquier texto igual al valor de un secret: `ODDS_REGION` vale eu, `FETCH_DAYS_AHEAD` 7 y
+`API_TTL_HOURS` 12. Por eso "finales de ESPN (87 de 87)" sale como "(8*** de 8***)",
+"neutral" como "n***tral" y un saldo de 1912 créditos como "19***". Telegram y la base no se
+tapan. Los números se leen de la base o corriendo el chequeo a mano, no del log. Para el
+saldo de créditos, cada línea "usados: U | restantes: R" suma 20,000: con eso se recupera
+qué tapó cada `***`.
 
 **La auditoría del sistema, siempre la misma (`scripts/system_audit.py`, 23-oct-2026).** Cada
 auditoría hecha a mano encontraba una clase de error nueva porque revisaba otra cosa. Aquí
@@ -775,6 +776,32 @@ aunque el presupuesto del día ya se haya usado (marca `bet` de `plan_closing_ta
 Morning y evening no se frenan: sin sus cuotas no hay predicciones. Variables:
 `ODDS_API_RESET_DAY` (1) y `ODDS_API_RESERVE` (600).
 
+**El presupuesto no cubría lo que más gastaba (29-oct-2026).** El saldo cruzó el umbral de
+parada (500) el 28-oct a las 14:30 UTC, 3.5 días antes de la renovación, con el presupuesto
+puesto. Desde ahí no se descargaron cuotas, y cada corrida mandaba su aviso por Telegram
+(cada 30 min).
+- El presupuesto solo frenaba la recarga dirigida. La actualización normal del closing
+  (`update_all`: ligas cuando vence su caché de 12 h y mercados por evento de las próximas
+  48 h) no tenía tope. El 23 y 24-oct fue ~85% del gasto (~2,200 créditos, ~60% en mercados
+  por evento), contra ~440 por día de presupuesto.
+- Morning, evening y resultados (~200 por día) salían del mismo presupuesto, así que el
+  último día el saldo terminaba ~200 por debajo de la reserva, bajo el umbral.
+- `fetch_results` pedía las 19 ligas en cada corrida (2 créditos cada una con `daysFrom`,
+  ~38 por corrida, ~114 al día) y contaba 1 por liga con resultados.
+
+Ahora:
+- El closing llama `update_all(budgeted=True)`: solo ligas y eventos que empiezan en las
+  próximas `CLOSING_HORIZON_HOURS` (6), y con el presupuesto del día. Lo demás lo
+  actualizan el morning y el evening, sin cambios.
+- El presupuesto del closing es el del día menos `ODDS_API_MANDATORY_PER_DAY` (200).
+- `fetch_results` pide solo las ligas con un partido analizado (o una apuesta pendiente) ya
+  jugado y sin marcador en `matches` (`leagues_needing_results`). Si no puede leer la base,
+  pide todas, como antes. Cuenta los créditos con el header `x-requests-last`.
+- Los avisos de créditos bajos van una vez por día UTC (`credit_budget.alert_once`, estado
+  en `model_state.odds_credit_alert`).
+- El comentario de costo en `.github/workflows/late_results.yml` quedó viejo. No se editó
+  porque un push a ese YAML dispara una corrida.
+
 **Cuotas de cierre: mismo mercado, misma línea.** Hay UN mapeo mercado → cierre
 (`_closing_odds_for` en `src/models/save_bets.py`) para apuestas y shadow. Si la línea
 se movió (AH −0.5 → −0.75, córners 9.5 → 10.5) no hay cierre comparable y devuelve
@@ -843,9 +870,9 @@ del cargador internacional conservan sus mayúsculas: "China PR"). Un desajuste 
 en `pending` para siempre aunque `fetch_results` haya corrido, o duplica el partido con
 otro nombre. Todo `INSERT` en `matches` usa `normalize_team`.
 
-**`fetch_results.py` no tiene guarda de créditos.** Los cuenta pero no se detiene por
-umbral, a diferencia de `update_upcoming_matches`. Con 15 ligas son hasta 15 créditos
-por corrida.
+**`fetch_results.py` no tiene umbral de créditos**, pero desde el 29-oct-2026 solo pide las
+ligas a las que les falta un marcador (`leagues_needing_results`); ver "El presupuesto no
+cubría lo que más gastaba".
 
 **Un análisis viejo no es un análisis (22-oct-2026).** `model_vs_sharp` guarda una fila por
 partido y solo la pisa un análisis nuevo. Si una corrida ya no evalúa el partido (historia
