@@ -117,14 +117,14 @@ def test_orchestrator_records_runs_without_ever_breaking_them(monkeypatch):
 # ============================================================
 
 def _fake_world(monkeypatch, closing_runs, first_ever, last_weekly, last_run=None,
-                daily=None, stuck=0, delivered=True):
+                daily=None, stuck=0, delivered=True, odds_age=timedelta(hours=1), credit_alert=None):
     import config.database as cdb
     import scripts.watchdog as wd
     from tests.fake_db import FakeEngine
     now = pd.Timestamp.now(tz="UTC")
     last_run = last_run if last_run is not None else min(closing_runs)
-    daily = daily if daily is not None else {"results": timedelta(hours=6),
-                                             "resolve_pending": timedelta(hours=8)}
+    daily = daily if daily is not None else {"results": timedelta(hours=6), "resolve_pending": timedelta(hours=8),
+                                             "morning": timedelta(hours=10), "evening": timedelta(hours=19)}
 
     def fake_read_sql(sql, con=None, params=None, **kw):
         s = " ".join(str(sql).split())
@@ -134,10 +134,12 @@ def _fake_world(monkeypatch, closing_runs, first_ever, last_weekly, last_run=Non
             return pd.DataFrame([{"first_ever": now - first_ever, "last_run": now - last_run}])
         if "GREATEST(" in s:
             return pd.DataFrame([{"last_weekly": now - last_weekly}])
-        if "WHERE mode IN ('results', 'resolve_pending')" in s:
+        if "WHERE mode IN ('results', 'resolve_pending', 'morning', 'evening')" in s:
             return pd.DataFrame([{"mode": m, "last_run": now - d} for m, d in daily.items()])
         if "AS last_update" in s:
-            return pd.DataFrame([{"last_update": now - timedelta(hours=1)}])
+            return pd.DataFrame([{"last_update": now - odds_age}])
+        if "key = 'odds_credit_alert'" in s:
+            return pd.DataFrame([{"value": credit_alert}] if credit_alert else [], columns=["value"])
         if "analyst_heartbeat" in s:
             return pd.DataFrame([{"last_ran": now - timedelta(minutes=10)}])
         if "COUNT(*) AS n FROM bets_history WHERE result = 'pending'" in s:
@@ -247,3 +249,35 @@ def test_watchdog_warns_when_the_weekly_stops(monkeypatch):
     wd.run_watchdog()
     (msg,) = alerts
     assert "WEEKLY SIN CORRER" in msg and "CLOSING" not in msg
+
+
+
+# ============================================================
+# Cuotas viejas sin créditos ≠ pipeline caído (29-oct-26)
+# ============================================================
+
+def test_stale_odds_without_credits_is_not_a_stopped_pipeline(monkeypatch):
+    """29-oct: "PIPELINE SIN CORRER — upcoming_matches no se actualiza hace 31h"
+    cada corrida del watchdog, con morning y evening sanos: sin créditos de The
+    Odds API la tabla no se escribe. El closing ya avisa eso una vez al día."""
+    import json
+    today = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d")
+    wd, alerts = _fake_world(monkeypatch, HEALTHY_CLOSING, timedelta(days=3), timedelta(days=2),
+                             odds_age=timedelta(hours=31), credit_alert=json.dumps({"stop": today}))
+    assert wd.run_watchdog() == 0 and alerts == []
+
+
+def test_stale_odds_with_credits_is_reported_as_odds_not_as_the_pipeline(monkeypatch):
+    wd, alerts = _fake_world(monkeypatch, HEALTHY_CLOSING, timedelta(days=3), timedelta(days=2),
+                             odds_age=timedelta(hours=31))
+    wd.run_watchdog()
+    assert len(alerts) == 1 and "CUOTAS SIN ACTUALIZAR" in alerts[0] and "PIPELINE SIN CORRER" not in alerts[0]
+
+
+def test_a_morning_that_stops_is_reported_by_its_runs(monkeypatch):
+    daily = {"results": timedelta(hours=6), "resolve_pending": timedelta(hours=8),
+             "morning": timedelta(hours=30), "evening": timedelta(hours=19)}
+    wd, alerts = _fake_world(monkeypatch, HEALTHY_CLOSING, timedelta(days=3), timedelta(days=2), daily=daily)
+    wd.run_watchdog()
+    assert len(alerts) == 1 and "MORNING SIN CORRER" in alerts[0] and "morning.yml" in alerts[0]
+    assert "debe correr 1 vez al día" in alerts[0] and "cron-job.org" in alerts[0]

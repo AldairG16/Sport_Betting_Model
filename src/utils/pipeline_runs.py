@@ -41,15 +41,24 @@ CLOSING_WINDOW_H = 6.0
 CLOSING_MIN_RUNS = 6
 # El weekly corre los lunes; un día de holgura.
 WEEKLY_MAX_GAP_D = 8.0
-# Corren dos veces al día, disparados desde el latido del closing
-# (scripts/heartbeat_dispatch.py). El resolvedor pasó del 11-may al 1-oct-26
-# sin correr una sola vez y nada lo detectó.
-DAILY_MAX_GAP_H = {"results": 30.0, "resolve_pending": 30.0}
-DAILY_LABELS = {
+# Resultados y resolvedor corren dos veces al día, disparados desde el latido
+# del closing (scripts/heartbeat_dispatch.py). El resolvedor pasó del 11-may al
+# 1-oct-26 sin correr una sola vez y nada lo detectó.
+# Morning y evening (29-oct-26), una vez al día cada uno. Antes el watchdog lo
+# medía con upcoming_matches.updated_at, que también se queda quieto si el
+# pipeline corre sin créditos de The Odds API: "PIPELINE SIN CORRER" falso el
+# 29-oct, con las dos corridas sanas.
+DAILY_MAX_GAP_H = {"results": 30.0, "resolve_pending": 30.0, "morning": 26.0, "evening": 26.0}
+_HEARTBEAT = ("Lo dispara el closing cada 30 min (heartbeat_dispatch.py): revisa {wf} y el paso "
+              "del closing que lo dispara.")
+_DISPATCH = "Lo dispara cron-job.org (workflow_dispatch contra master): revisa {wf} en GitHub Actions."
+DAILY_LABELS = {      # título, workflow, sin él…, quién lo dispara, veces al día
     "results": ("REINTENTO DE RESULTADOS", "late_results.yml",
-                "los partidos que terminan tarde no se liquidan hasta el día siguiente"),
+                "los partidos que terminan tarde no se liquidan hasta el día siguiente", _HEARTBEAT, 2),
     "resolve_pending": ("RESOLVEDOR DE PENDIENTES", "resolve_pending.yml",
-                        "las apuestas sin marcador en la API quedan sin resultado"),
+                        "las apuestas sin marcador en la API quedan sin resultado", _HEARTBEAT, 2),
+    "morning": ("MORNING", "morning.yml", "no salen los picks ni el resumen de la mañana", _DISPATCH, 1),
+    "evening": ("EVENING", "evening.yml", "no se liquida el día ni corre el chequeo de salidas", _DISPATCH, 1),
 }
 
 
@@ -111,9 +120,9 @@ def weekly_issue(last_weekly, now) -> str | None:
 
 
 def daily_issue(mode: str, last_run, now) -> str | None:
-    """Corridas de dos veces al día: None = sano. Sin ninguna corrida
-    registrada también es problema: así se escondió el resolvedor."""
-    title, workflow, consequence = DAILY_LABELS[mode]
+    """Corridas diarias: None = sano. Sin ninguna corrida registrada también
+    es problema: así se escondió el resolvedor."""
+    title, workflow, consequence, trigger, per_day = DAILY_LABELS[mode]
     max_h = DAILY_MAX_GAP_H[mode]
     if last_run is not None and not pd.isna(last_run):
         age = _hours(now, pd.Timestamp(last_run))
@@ -122,10 +131,10 @@ def daily_issue(mode: str, last_run, now) -> str | None:
         when = f"Última corrida hace {age:.0f} h"
     else:
         when = "No hay ninguna corrida registrada"
+    veces = "1 vez" if per_day == 1 else f"{per_day} veces"
     return (f"🟡 <b>{title} SIN CORRER</b>\n"
-            f"{when} (debe correr 2 veces al día).\n"
-            f"→ Lo dispara el closing cada 30 min (heartbeat_dispatch.py): revisa "
-            f"{workflow} y el paso del closing que lo dispara. Sin él {consequence}.")
+            f"{when} (debe correr {veces} al día).\n"
+            f"→ {trigger.format(wf=workflow)} Sin él {consequence}.")
 
 
 def _ts(v):
@@ -159,7 +168,7 @@ def check_scheduled_runs(engine, now: datetime | None = None) -> list[str]:
     """), engine)
     daily = pd.read_sql(text("""
         SELECT mode, MAX(ran_at) AS last_run FROM pipeline_runs
-        WHERE mode IN ('results', 'resolve_pending') GROUP BY mode
+        WHERE mode IN ('results', 'resolve_pending', 'morning', 'evening') GROUP BY mode
     """), engine)
     last_daily = {r["mode"]: _ts(r["last_run"]) for _, r in daily.iterrows()}
     first_ever = _ts(span.iloc[0]["first_ever"]) if not span.empty else None

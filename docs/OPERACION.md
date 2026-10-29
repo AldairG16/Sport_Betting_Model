@@ -283,7 +283,7 @@ texto plano): el correo de GitHub es el segundo canal.
 | Check | Qué mira |
 |---|---|
 | 1 | La DB responde. |
-| 2 | `MAX(updated_at)` de `upcoming_matches` es reciente. |
+| 2 | Las cuotas (`MAX(updated_at)` de `upcoming_matches`) tienen menos de 26 h. Si hoy ya salió el aviso de "sin créditos" (`model_state.odds_credit_alert`), no avisa: sin créditos la tabla no se escribe aunque todo corra. |
 | 3 | Alguna apuesta real sigue `pending` 4+ días después del partido: la liquidación no corre (su timeout la pasa a `unresolved` a los 3). |
 | 4 | Gap del `analyst_heartbeat` — **se omite** si `PRE_KICKOFF_ANALYST_ENABLED=false`. |
 | 5 | Hay partidos futuros cargados. |
@@ -291,6 +291,7 @@ texto plano): el correo de GitHub es el segundo canal.
 | 7 | El **closing** corre: alerta si la última corrida tiene más de 2 h, o si hubo menos de 6 en las últimas 6 h (se esperan ~12). |
 | 8 | El **weekly** corre: alerta si la última corrida tiene más de 8 días. |
 | 9-10 | El **reintento de resultados** y el **resolvedor** corren: alerta si pasan 30 h sin una corrida, o si no hay ninguna registrada. |
+| 11-12 | El **morning** y el **evening** corren (`pipeline_runs`): alerta si pasan 26 h sin una corrida. Antes se medía con el 2 y, sin créditos de The Odds API, el 29-oct mandó "PIPELINE SIN CORRER" cada corrida con los dos sanos. |
 
 Una apuesta que termina sin resultado (`stale`) no se repite aquí cada 6 horas: avisa
 **una vez**, como ERROR, en la corrida que la marca.
