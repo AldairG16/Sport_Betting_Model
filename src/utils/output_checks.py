@@ -259,7 +259,7 @@ def stale_learning(updated: dict, now: datetime | None = None) -> list:
 MAX_MIRROR_PAIRS = 3          # 2 partidos reales con fechas espejo y mismo marcador pasan (Belgica 2023)
 FEED_MAX_AGE_DAYS = {         # tabla: (columna de fecha, días)
     "team_xg_real": ("updated_at", 9),      # Understat, weekly
-    "club_elo": ("fetched_on", 10),         # ClubElo, semanal (refresh_if_stale)
+    "club_elo": ("fetched_on", 45),         # ClubElo, semanal; bloqueado desde el 29-oct (clubelo.MAX_AGE_DAYS)
     "espn_matches": ("fetched_at", 3),      # copas, Europa, amistosos: evening
     # lo que producen las corridas de cada día (morning, evening, closing)
     "upcoming_matches": ("updated_at", 1),  # momios, cada closing

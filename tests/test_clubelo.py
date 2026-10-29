@@ -127,9 +127,39 @@ def test_the_snapshot_is_renewed_once_a_week(monkeypatch, last, refresh):
         return pd.DataFrame({"d": [date.today() - timedelta(days=last)]})
     called = []
     monkeypatch.setattr(CE.pd, "read_sql", read_sql)
-    monkeypatch.setattr(CE, "refresh_clubelo", lambda engine=None: called.append(1) or 5)
+    monkeypatch.setattr(CE, "refresh_clubelo", lambda engine=None, **kw: called.append(kw) or 5)
     CE.refresh_if_stale(engine=FakeEngine())
     assert bool(called) is refresh
+    if called and last is not None:
+        assert called[0]["last"] == date.today() - timedelta(days=last)   # para saber cuánto sirve la foto
+
+
+class _Blocked(Exception):
+    code = 403                                     # urllib.error.HTTPError lleva el estado en .code
+
+
+@pytest.mark.parametrize("age,level", [(7, "warning"), (40, "error"), (50, "error"), (None, "error")])
+def test_when_clubelo_blocks_the_old_snapshot_is_used_and_it_warns_before_it_expires(age, level, caplog):
+    # 29-oct-26: las páginas de ClubElo piden un reto anti-bots de Cloudflare (403)
+    RUN_ISSUES.reset()
+    asked = []
+
+    def get(url):
+        asked.append(url)
+        raise _Blocked()
+    last = None if age is None else date.today() - timedelta(days=age)
+    with caplog.at_level("WARNING"):
+        assert CE.refresh_clubelo(FakeEngine(), get, pause=0, last=last) == 0
+    assert len(asked) == CE.BLOCK_PROBE                       # tres 403 seguidos: no se piden los otros 50
+    msg = " ".join(r.getMessage() for r in caplog.records)
+    assert "bloquea las lecturas automáticas" in msg and "403" in msg
+    errors = [e for e in RUN_ISSUES.errors() if "ClubElo" in e]
+    assert bool(errors) is (level == "error")                 # el ERROR llega a Telegram una semana antes
+    if age == 7:
+        assert "sirve hasta el" in msg
+    if age == 40:
+        assert "vence el" in errors[0]
+    RUN_ISSUES.reset()
 
 
 # ─── el pipeline ─────────────────────────────────────────────────────────────

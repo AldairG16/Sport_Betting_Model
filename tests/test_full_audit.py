@@ -145,7 +145,9 @@ def test_data_health_flags_each_known_class_of_bad_data():
              "kalshi_history": 1, "model_vs_sharp": 0, "program_picks": 0}
     assert data_health({"mirror": 0, "future": 0, "duplicate": 0}, fresh) == []
     assert data_health({"mirror": 3, "future": 0, "duplicate": 0}, fresh) == []   # coincidencias reales
-    msgs = data_health({"mirror": 40, "future": 2, "duplicate": 5}, {**fresh, "club_elo": 15, "espn_matches": None})
+    # club_elo: la foto sirve 45 días desde que ClubElo bloquea las lecturas (29-oct-26)
+    assert data_health({"mirror": 0, "future": 0, "duplicate": 0}, {**fresh, "club_elo": 15}) == []
+    msgs = data_health({"mirror": 40, "future": 2, "duplicate": 5}, {**fresh, "club_elo": 46, "espn_matches": None})
     assert len(msgs) == 5
     assert any("día y el mes cruzados" in m for m in msgs) and any("club_elo sin actualizar" in m for m in msgs)
 
