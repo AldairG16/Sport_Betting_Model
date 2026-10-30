@@ -1079,6 +1079,7 @@ def run_closing(logger: Logger):
     run_step(logger, "Alineaciones publicadas", step_capture_lineups)
     run_step(logger, "Picks del programa", step_program_picks)
     run_step(logger, "Alertas de alineación", step_lineup_alerts)
+    run_step(logger, "Partidos de hoy (Telegram)", step_today_board)
 
 
 def step_espn_finals():
@@ -1101,6 +1102,14 @@ def step_lineup_alerts():
     con la alineación). Falla = paso en rojo: es un aviso al dueño."""
     from src.models.lineup_alerts import run_lineup_alerts
     run_lineup_alerts(capture=False)
+
+
+def step_today_board():
+    """El mensaje "Partidos de hoy" de Telegram (30-oct-26): hora de inicio, pick,
+    de cuándo son sus cuotas y si cambió. Se edita en cada closing; un aviso
+    aparte si cambia el pick de algo que empieza pronto (src/models/today_board.py)."""
+    from src.models.today_board import run_today_board
+    run_today_board()
 
 
 def run_weekly(logger: Logger):

@@ -92,7 +92,12 @@ PICKS_ALTERS = ("ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS source TEXT"
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS family TEXT",
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS reason TEXT",
                 "ALTER TABLE program_picks ALTER COLUMN market DROP NOT NULL",
-                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS lineup TEXT")
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS lineup TEXT",
+                # el pick cambió al recalcularse (30-oct-26): cuál era y cuándo
+                # cambió, para el aviso de Telegram (src/models/today_board.py)
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS prev_label TEXT",
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS prev_star BOOLEAN",
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS changed_at TIMESTAMPTZ")
 _COLS = ("match", "match_date", "league", "display", "market", "label", "family", "reason", "model_prob",
          "market_prob", "lean", "min_us", "best_odds", "playdoit_odds", "value", "lineup")
 
@@ -595,7 +600,19 @@ def _ratio(engine):
         return None                       # sin capturas todavía: el promedio tal cual
 
 
-def _upsert(conn, rows: list, where: str) -> None:
+# 🎯 = pasa la regla (reason vacío) y hay pick
+_STAR_OLD = "(program_picks.reason IS NULL AND program_picks.market IS NOT NULL)"
+_STAR_NEW = "(EXCLUDED.reason IS NULL AND EXCLUDED.market IS NOT NULL)"
+_CHANGED = f"(program_picks.label IS DISTINCT FROM EXCLUDED.label OR {_STAR_OLD} IS DISTINCT FROM {_STAR_NEW})"
+# en ON CONFLICT DO UPDATE, program_picks.* es la fila de antes del cambio
+_CHANGE_SETS = (f"prev_label = CASE WHEN {_CHANGED} THEN program_picks.label ELSE program_picks.prev_label END, "
+                f"prev_star = CASE WHEN {_CHANGED} THEN {_STAR_OLD} ELSE program_picks.prev_star END, "
+                f"changed_at = CASE WHEN {_CHANGED} THEN NOW() ELSE program_picks.changed_at END")
+
+
+def _upsert(conn, rows: list, where: str, track_changes: bool = False) -> None:
+    """track_changes: el pick en vivo (snapshot_picks) anota cuándo cambió;
+    la reconstrucción de picks pasados no."""
     cols = _COLS + ("source",)
     for i in range(0, len(rows), 200):
         part = rows[i:i + 200]
@@ -606,7 +623,7 @@ def _upsert(conn, rows: list, where: str) -> None:
         sets = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols if c not in ("match", "match_date"))
         conn.execute(text(f"""
             INSERT INTO program_picks ({", ".join(cols)}) VALUES {", ".join(values)}
-            ON CONFLICT (match, match_date) DO UPDATE SET {sets}, picked_at = NOW(),
+            ON CONFLICT (match, match_date) DO UPDATE SET {_CHANGE_SETS + ", " if track_changes else ""}{sets}, picked_at = NOW(),
                 result = NULL, profit = NULL, resolved_at = NULL
             WHERE {where}
         """), params)
@@ -641,7 +658,7 @@ def snapshot_picks(hours: int = SNAPSHOT_HOURS, engine=None) -> int:
             return 0
         with engine.begin() as conn:
             _ensure(conn)
-            _upsert(conn, rows, "program_picks.result IS NULL AND program_picks.match_date > NOW()")
+            _upsert(conn, rows, "program_picks.result IS NULL AND program_picks.match_date > NOW()", track_changes=True)
     except Exception as e:
         log.error(f"❌ Picks del programa no guardados: {type(e).__name__}: {str(e)[:200]}")
         return 0
