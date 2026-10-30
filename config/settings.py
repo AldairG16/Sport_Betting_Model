@@ -229,7 +229,7 @@ if not WORLD_CUP_BETTING_ENABLED:
 SPORT_KEYS = [
     # ── Tier 1: Ligas RENTABLES (walk-forward ROI positivo) ──────────
     "soccer_brazil_campeonato",           # +53.7% ROI, mejor liga del modelo
-    # "soccer_efl_champ",                 # QUITADA 30-oct-26 (ver abajo, "Quitadas por el dueño")
+    "soccer_efl_champ",                   # SOLO SHADOW: bloqueada desde 15-jun (BLOCKED_LEAGUES)
     "soccer_mexico_ligamx",               # +39.7% ROI, mercado menos eficiente
     "soccer_germany_bundesliga",          # +38.6% ROI, datos muy buenos
     "soccer_argentina_primera_division",  # +10.3% ROI, alta varianza
@@ -259,7 +259,7 @@ SPORT_KEYS = [
     # "soccer_china_superleague",         # BLOQUEADA 06-may-26: -1.12u/5 bets en 60d (-22% ROI), liga lejana → ahorra créditos API
 
     # ── Americas extra ──────────────────────────────────────────────
-    # "soccer_usa_mls",                   # QUITADA 30-oct-26 (ver abajo, "Quitadas por el dueño")
+    "soccer_usa_mls",                     # -44% ROI, tough league (monitoreando)
 
     # ── RE-HABILITADAS 17-sep-26 (experimento controlado, modelo anclado) ─
     # Fallaban con el modelo viejo inflado; ahora con anclaje al mercado,
@@ -290,19 +290,11 @@ SPORT_KEYS = [
     # • UECL (Conference League) existe como "soccer_uefa_europa_conference_league"
     #   pero no se agrega aún — sin backtest histórico con muestra suficiente.
 
-    # ── Quitadas por el dueño 30-oct-26 (ahorro de créditos) ──────────
-    # El dueño: "quiero tener ahorro de créditos para poder valorar más
-    # mercados de picks". Picks liquidados del 26-sep al 29-oct:
-    #   MLS:          92 picks, 39 ganados de 53 esperados (z −3.1), −20.1u;
-    #                 debajo de lo esperado las 5 semanas; 🎯 8 de 12.7.
-    #   Championship: 49 picks, 19 de 25.5 (z −1.9), −6.9u; ya bloqueada
-    #                 para apuestas desde el 15-jun (−31.9% en 67 bets).
-    # Juntas eran ~17% de los partidos (~3,000 créditos al mes). Lo que ya
-    # se analizó se sigue liquidando: fetch_results pide los marcadores de
-    # una liga quitada mientras le falte alguno. Brasil, Bélgica y Turquía
-    # se quedan (parejo, muy pocos datos y ganando).
-    # "soccer_usa_mls",
-    # "soccer_efl_champ",
+    # 30-oct-26: MLS y Championship se quitaron (PR #97) y el dueño las
+    # regresó el mismo día: primero medir el gasto real con las reglas de
+    # créditos del 29-oct y después decidir si sobran créditos o se recorta.
+    # Sus números (26-sep..29-oct): MLS 39 ganados de 53 esperados (z −3.1,
+    # −20.1u); Championship 19 de 25.5 (−6.9u). Ver docs/OPERACION.md.
 
     # ── REMOVIDAS (ahorro de creditos API) ──────────────────────────
     # ROI negativo confirmado en walk-forward de 332 bets.

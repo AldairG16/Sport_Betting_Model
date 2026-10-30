@@ -862,7 +862,12 @@ Ahora (`credit_budget.capture_reserve` y `extras_budget`, `update_upcoming_match
 
 **Ligas fuera y líneas 1.5 / 3.5 de goles (30-oct-2026).** El dueño: "quiero tener ahorro
 de créditos para poder valorar más varios mercados de picks".
-- **MLS y Championship salieron de `SPORT_KEYS`.** Sus picks del 26-sep al 29-oct:
+- **MLS y Championship salieron de `SPORT_KEYS` (PR #97) y regresaron el mismo día.** El
+  dueño: "hay que ver cómo funciona con las nuevas reglas y vemos cómo se va gastando los
+  créditos para ver si aumentamos las descargas o nos alcanza justo". Primero se mide el
+  gasto real de noviembre; con las 19 ligas, la simulación de abajo daba ~6,500 de sobra.
+  Las protecciones de una liga quitada (sus marcadores y sus filas viejas) se quedan.
+  Sus picks del 26-sep al 29-oct:
   - MLS: 92 picks, 39 ganados de 53 esperados (z −3.1) y −20.1u. Quedó debajo de lo
     esperado las 5 semanas.
   - Championship: 49 picks, 19 de 25.5 esperados y −6.9u. Ya estaba bloqueada para
@@ -870,7 +875,7 @@ de créditos para poder valorar más varios mercados de picks".
   - Brasil, Bélgica y Turquía, que el dueño también propuso, se quedaron: van parejo, tienen
     muy pocos datos y van ganando, respectivamente.
   - Las dos eran ~17% de los partidos.
-- **Lo ya analizado se sigue liquidando.**
+- **Si se quita una liga, lo ya analizado se sigue liquidando.**
   - `fetch_results` también pide una liga fuera de `SPORT_KEYS` mientras le falte un
     marcador.
   - El pipeline ya no analiza sus filas viejas de `upcoming_matches`
