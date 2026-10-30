@@ -310,6 +310,11 @@ def run_pipeline(monkeypatch, matches: pd.DataFrame | None = None,
             return pd.DataFrame({"d": list(pend.keys()), "s": list(pend.values())})
         raise AssertionError(f"SQL inesperado en el arnés: {s[:120]}")
 
+    # las ligas del escenario se descargan (30-oct-26: el pipeline descarta las
+    # que salieron de SPORT_KEYS; M4 sigue probando la liga bloqueada para apostar)
+    import config.settings as cfg
+    monkeypatch.setattr(cfg, "SPORT_KEYS", list(cfg.SPORT_KEYS) + sorted(set(df.get("sport_key", [])) - set(cfg.SPORT_KEYS)))
+
     # DB / estado persistido
     monkeypatch.setattr(pp.pd, "read_sql", fake_read_sql)
     monkeypatch.setattr(pp, "ensure_bankroll_schema", lambda: None)

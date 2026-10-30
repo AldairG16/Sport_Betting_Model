@@ -13,7 +13,7 @@ ver §2.
 
 | Servicio | Para qué | Credencial | Coste |
 |---|---|---|---|
-| **The Odds API** | Cuotas (`/odds`) y resultados (`/scores`). Es la fuente crítica: sin ella no hay apuestas ni resolución. | `ODDS_API_KEY` | Plan de pago de 20,000 créditos que se renueva el **día 1** de cada mes (medido: 9,548 → 19,958 el 1-oct-26 a las 03:06 UTC). Una liga cuesta 3 (h2h, totals, spreads) y un evento 7. El closing tiene presupuesto diario (§5, "Presupuesto diario de créditos"). |
+| **The Odds API** | Cuotas (`/odds`) y resultados (`/scores`). Es la fuente crítica: sin ella no hay apuestas ni resolución. | `ODDS_API_KEY` | Plan de pago de 20,000 créditos que se renueva el **día 1** de cada mes (medido: 9,548 → 19,958 el 1-oct-26 a las 03:06 UTC). Una liga cuesta 3 (h2h, totals, spreads) y un evento hasta 8 (cobra solo los mercados que devuelve). El closing tiene presupuesto diario (§5, "Presupuesto diario de créditos"). |
 | **PostgreSQL** | Todo el estado: `matches`, `upcoming_matches`, `bets_history`, `shadow_bets`, `bankroll`, `pre_kickoff_analyses`, `analyst_heartbeat`, `anthropic_usage`, y lo aprendido en `model_state` (§7). | `DB_URL` | Alojada fuera del repo. Ver §7. |
 | **Anthropic** | Los dos agentes LLM: analista pre-kickoff y resolver de pendientes. | `ANTHROPIC_API_KEY` | ~$0.014-0.020 por llamada. Ver §6. |
 | **Telegram** | Único canal de salida: picks, resumen diario, alertas del watchdog. | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`; el analista usa `*_PREKICKOFF` y cae al bot principal si no están. | Gratis. |
@@ -859,6 +859,40 @@ Ahora (`credit_budget.capture_reserve` y `extras_budget`, `update_upcoming_match
 - El ✅ del "Chequeo de salidas" dice "cierres (N de M partidos)" de ayer (sección 12,
   `closing_coverage`). Con menos de 80% y 10+ partidos es ERROR. Si el aviso de "sin
   créditos" salió hoy, es solo WARNING: la causa ya se avisó.
+
+**Ligas fuera y líneas 1.5 / 3.5 de goles (30-oct-2026).** El dueño: "quiero tener ahorro
+de créditos para poder valorar más varios mercados de picks".
+- **MLS y Championship salieron de `SPORT_KEYS`.** Sus picks del 26-sep al 29-oct:
+  - MLS: 92 picks, 39 ganados de 53 esperados (z −3.1) y −20.1u. Quedó debajo de lo
+    esperado las 5 semanas.
+  - Championship: 49 picks, 19 de 25.5 esperados y −6.9u. Ya estaba bloqueada para
+    apuestas desde junio.
+  - Brasil, Bélgica y Turquía, que el dueño también propuso, se quedaron: van parejo, tienen
+    muy pocos datos y van ganando, respectivamente.
+  - Las dos eran ~17% de los partidos.
+- **Lo ya analizado se sigue liquidando.**
+  - `fetch_results` también pide una liga fuera de `SPORT_KEYS` mientras le falte un
+    marcador.
+  - El pipeline ya no analiza sus filas viejas de `upcoming_matches`
+    (`prediction_pipeline.only_fetched_leagues`). Esas filas duran 7 días después de su
+    fecha.
+- **El mercado por evento `alternate_totals` trae el más/menos 1.5 y 3.5 con precio real.**
+  - Se guarda el mejor momio y el promedio de las casas que dan los dos lados:
+    `over15_odds`, `consensus_under35_odds`, etc. (`GOAL_LINE_COLS`).
+  - Antes esas líneas solo se estimaban del 2.5 (`estimated_lines`) y nunca eran pick.
+    Ahora son candidatas (`program_picks.candidates`): mercado sin margen del promedio, y
+    momio de PlayDoit = promedio × la razón de PlayDoit.
+  - Si la línea principal de Pinnacle es 1.5 o 3.5, manda Pinnacle.
+- **Costo.** El endpoint por evento cobra solo los mercados que devuelve (guía v4, "usage
+  quota costs"). Un evento cuesta hasta 8, y `alternate_totals` no cuesta nada donde ninguna
+  casa lo da.
+- **Simulación** con el calendario de octubre y el presupuesto de 20,000:
+
+  | | Antes | Ahora |
+  |---|---|---|
+  | Partidos con mercados por evento | 94% | 99% |
+  | Mercados por evento con cierre | 43% | 56% |
+  | Saldo de sobra al final del mes | ~6,500 | ~7,600 |
 
 **Cuotas de cierre: mismo mercado, misma línea.** Hay UN mapeo mercado → cierre
 (`_closing_odds_for` en `src/models/save_bets.py`) para apuestas y shadow. Si la línea

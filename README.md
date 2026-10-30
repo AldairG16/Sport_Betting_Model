@@ -199,11 +199,14 @@ python -m pytest tests/ -v
 
 | Tier | Ligas |
 |------|-------|
-| **Tier 1** (ROI positivo confirmado) | Brasil, EFL Championship, México, Bundesliga, Argentina, Portugal, La Liga, Escocia |
+| **Tier 1** (ROI positivo confirmado) | Brasil, México, Bundesliga, Argentina, Portugal, La Liga |
 | **Tier 2** (Monitoreando) | Premier League, Ligue 1, Serie A |
 | **Tier 3** (Mercados blandos) | Turquía, Bélgica, Grecia |
-| **Tier 4** (Asia/Escandinavia) | Japón, Corea, Noruega, Suecia, China |
-| **Américas** | MLS |
+| **Tier 4** (Asia/Escandinavia) | Corea, Suecia, Noruega (solo observación) |
+| **Europa** | Champions League, Eredivisie (solo observación) |
+| **Quitadas el 30-oct-26** | MLS y Championship: perdían; sus créditos van a más mercados por partido |
+
+La lista vigente es `SPORT_KEYS` en `config/settings.py`.
 
 ---
 

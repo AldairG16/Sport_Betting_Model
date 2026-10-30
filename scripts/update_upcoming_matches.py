@@ -89,9 +89,16 @@ CLOSING_SHADOW_MIN_CREDITS        = env_int("CLOSING_SHADOW_MIN_CREDITS", 1500)
 # evento de lo que empieza en estas horas. Lo demás, morning y evening.
 CLOSING_HORIZON_HOURS             = env_int("CLOSING_HORIZON_HOURS", 6)
 
+# Más/menos 1.5 y 3.5 goles con precio real (30-oct-26), del mercado por
+# evento alternate_totals: mejor momio y promedio de las casas que dan los dos
+# lados. Antes solo se estimaban del 2.5 y por eso nunca podían ser el pick.
+GOAL_LINES = {1.5: "15", 3.5: "35"}
+GOAL_LINE_COLS = tuple(f"{p}{side}{k}_odds" for k in GOAL_LINES.values()
+                       for p in ("", "consensus_") for side in ("over", "under"))
+
 # Columnas que llegan por evento (/events/{id}/odds). Su frescura es
 # specialty_fetched_at; la del resto (h2h, totals, spreads), odds_fetched_at.
-SPECIALTY_ODDS_COLS = (
+SPECIALTY_ODDS_COLS = GOAL_LINE_COLS + (
     "btts_yes_odds", "btts_no_odds", "dnb_home_odds", "dnb_away_odds",
     "dc_1x_odds", "dc_x2_odds", "dc_12_odds",
     "h1_home_odds", "h1_draw_odds", "h1_away_odds",
@@ -317,10 +324,13 @@ def fetch_data(sport_key: str, cache: dict, force: bool = False) -> list:
 # Importante: btts y draw_no_bet TAMBIÉN son specialty markets — el endpoint
 # /odds los rechaza con 422 INVALID_MARKET (verificado 26-abr-26 con la API
 # en producción). Por eso van aquí, no en ODDS_MARKETS.
-# Total: 7 markets × 1 region = 7 créditos por evento enriquecido.
+# Total: 8 markets × 1 region = hasta 8 créditos por evento enriquecido. El
+# endpoint por evento cobra solo los mercados que DEVUELVE (guía v4, "usage
+# quota costs"): alternate_totals (30-oct-26, líneas 1.5 y 3.5 de goles) no
+# cuesta nada en los partidos donde ninguna casa lo da.
 SPECIALTY_MARKETS = (
     "btts,draw_no_bet,double_chance,h2h_h1,h2h_h2,"
-    "alternate_totals_corners,alternate_totals_cards"
+    "alternate_totals_corners,alternate_totals_cards,alternate_totals"
 )
 ENRICH_DAYS_AHEAD = env_int("ENRICH_DAYS_AHEAD", 2)
 # 29-oct-26: 12 → 48. Con 12 h cada partido se pagaba hasta 4 veces dentro
@@ -412,7 +422,7 @@ _SPECIALTY_KEYS = {
     "btts", "draw_no_bet",
     "double_chance",
     "h2h_h1", "h2h_h2", "h2h_3_way_h1", "h2h_3_way_h2",
-    "alternate_totals_corners", "alternate_totals_cards",
+    "alternate_totals_corners", "alternate_totals_cards", "alternate_totals",
 }
 
 
@@ -606,6 +616,7 @@ def parse_match(m: dict, sport: str) -> dict | None:
         cards_over_odds = cards_under_odds = cards_line = None
         all_corners_data = []   # lista de (line, over_price, under_price)
         all_cards_data = []     # lista de (line, over_price, under_price)
+        all_goal_lines = {line: [] for line in GOAL_LINES}   # línea → [(over, under)] por casa
         CORNERS_TARGET_LINE = 9.5
         CARDS_TARGET_LINE   = 4.5
 
@@ -793,6 +804,23 @@ def parse_match(m: dict, sport: str) -> dict | None:
                         bk_cl_c = min(_common_c, key=lambda p: abs(p - CARDS_TARGET_LINE))
                         all_cards_data.append((bk_cl_c, _ov_c[bk_cl_c], _un_c[bk_cl_c]))
 
+                elif market["key"] == "alternate_totals":
+                    _ov_g: dict = {}
+                    _un_g: dict = {}
+                    for o in market["outcomes"]:
+                        price = o.get("price")
+                        point = o.get("point")
+                        name  = o.get("name", "").lower()
+                        if price is None or point is None:
+                            continue
+                        if name == "over":
+                            _ov_g[point] = max(_ov_g.get(point, 0), price)
+                        elif name == "under":
+                            _un_g[point] = max(_un_g.get(point, 0), price)
+                    for line in GOAL_LINES:
+                        if line in _ov_g and line in _un_g:
+                            all_goal_lines[line].append((_ov_g[line], _un_g[line]))
+
             if bk_o25 and bk_u25:
                 all_over25_prices.append(bk_o25)
                 all_under25_prices.append(bk_u25)
@@ -854,6 +882,16 @@ def parse_match(m: dict, sport: str) -> dict | None:
         consensus_under25_odds = _avg(all_under25_prices)
         h2h_spread_pct      = _spread_pct(all_home_prices)   # spread del local como proxy
 
+        # ── Líneas 1.5 y 3.5 de goles: mejor momio + promedio ────────────────
+        goal_lines = dict.fromkeys(GOAL_LINE_COLS)
+        for line, k in GOAL_LINES.items():
+            pairs = all_goal_lines[line]
+            if pairs:
+                goal_lines.update({f"over{k}_odds": max(ov for ov, _ in pairs),
+                                   f"under{k}_odds": max(un for _, un in pairs),
+                                   f"consensus_over{k}_odds": _avg([ov for ov, _ in pairs]),
+                                   f"consensus_under{k}_odds": _avg([un for _, un in pairs])})
+
         return {
             "fixture_id":           m["id"],
             "match_date":           match_date,
@@ -900,6 +938,7 @@ def parse_match(m: dict, sport: str) -> dict | None:
             "cards_over_odds":      cards_over_odds,
             "cards_under_odds":     cards_under_odds,
             "cards_line":           cards_line,
+            **goal_lines,
             # Referencia sharp (24-sep-26): las cuotas de Pinnacle, que ya
             # vienen en esta descarga. Solo miden (src/features/pinnacle.py).
             **extract_pinnacle(m.get("bookmakers", []), home, away),
@@ -1013,6 +1052,9 @@ def ensure_schema():
         # ── Referencia Pinnacle (24-sep-26, src/features/pinnacle.py) ───────
         for col in PIN_COLS:
             conn.execute(text(f"ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS {col} FLOAT"))
+        # ── Líneas 1.5 y 3.5 de goles (30-oct-26, alternate_totals) ─────────
+        for col in GOAL_LINE_COLS:
+            conn.execute(text(f"ALTER TABLE upcoming_matches ADD COLUMN IF NOT EXISTS {col} FLOAT"))
 
 
 # ============================================================
@@ -1027,7 +1069,7 @@ def upsert_matches(rows: list[dict]):
             # precio de Pinnacle
             r = {"odds_fetched_at": None, "specialty_fetched_at": None,
                  "consensus_over25_odds": None, "consensus_under25_odds": None,
-                 **dict.fromkeys(PIN_COLS), **r}
+                 **dict.fromkeys(PIN_COLS), **dict.fromkeys(GOAL_LINE_COLS), **r}
             conn.execute(text("""
                 INSERT INTO upcoming_matches (
                     match_key, match_date, league, sport_key,
@@ -1046,6 +1088,8 @@ def upsert_matches(rows: list[dict]):
                     h2_home_odds, h2_draw_odds, h2_away_odds,
                     corners_over_odds, corners_under_odds, corners_line,
                     cards_over_odds, cards_under_odds, cards_line,
+                    over15_odds, under15_odds, consensus_over15_odds, consensus_under15_odds,
+                    over35_odds, under35_odds, consensus_over35_odds, consensus_under35_odds,
                     odds_fetched_at, specialty_fetched_at,
                     pin_home_odds, pin_draw_odds, pin_away_odds,
                     pin_over25_odds, pin_under25_odds,
@@ -1068,6 +1112,8 @@ def upsert_matches(rows: list[dict]):
                     :h2_home_odds, :h2_draw_odds, :h2_away_odds,
                     :corners_over_odds, :corners_under_odds, :corners_line,
                     :cards_over_odds, :cards_under_odds, :cards_line,
+                    :over15_odds, :under15_odds, :consensus_over15_odds, :consensus_under15_odds,
+                    :over35_odds, :under35_odds, :consensus_over35_odds, :consensus_under35_odds,
                     CAST(:odds_fetched_at AS timestamptz), CAST(:specialty_fetched_at AS timestamptz),
                     :pin_home_odds, :pin_draw_odds, :pin_away_odds,
                     :pin_over25_odds, :pin_under25_odds,
@@ -1121,6 +1167,15 @@ def upsert_matches(rows: list[dict]):
                     cards_over_odds    = COALESCE(EXCLUDED.cards_over_odds,    upcoming_matches.cards_over_odds),
                     cards_under_odds   = COALESCE(EXCLUDED.cards_under_odds,   upcoming_matches.cards_under_odds),
                     cards_line         = COALESCE(EXCLUDED.cards_line,         upcoming_matches.cards_line),
+                    -- Líneas 1.5 y 3.5 de goles (por evento, como córners y tarjetas)
+                    over15_odds  = COALESCE(EXCLUDED.over15_odds,  upcoming_matches.over15_odds),
+                    under15_odds = COALESCE(EXCLUDED.under15_odds, upcoming_matches.under15_odds),
+                    consensus_over15_odds  = COALESCE(EXCLUDED.consensus_over15_odds,  upcoming_matches.consensus_over15_odds),
+                    consensus_under15_odds = COALESCE(EXCLUDED.consensus_under15_odds, upcoming_matches.consensus_under15_odds),
+                    over35_odds  = COALESCE(EXCLUDED.over35_odds,  upcoming_matches.over35_odds),
+                    under35_odds = COALESCE(EXCLUDED.under35_odds, upcoming_matches.under35_odds),
+                    consensus_over35_odds  = COALESCE(EXCLUDED.consensus_over35_odds,  upcoming_matches.consensus_over35_odds),
+                    consensus_under35_odds = COALESCE(EXCLUDED.consensus_under35_odds, upcoming_matches.consensus_under35_odds),
                     -- Frescura: la hora viaja con las cuotas que se escriben. Si
                     -- esta fila no trae mercados por evento, se conservan los
                     -- anteriores (COALESCE arriba) y con ellos su hora.
