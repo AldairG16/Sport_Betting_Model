@@ -4,9 +4,11 @@ tests/test_goal_lines_and_leagues.py
 Ligas fuera y líneas 1.5 / 3.5 de goles con precio real (30-oct-26).
 
 El dueño, después de ver qué ligas pierden: "quiero tener ahorro de créditos
-para poder valorar más varios mercados de picks". MLS y Championship dejan de
-descargarse; el mercado por evento alternate_totals trae las líneas 1.5 y 3.5
-de goles, que antes solo se estimaban del 2.5 y por eso nunca eran pick.
+para poder valorar más varios mercados de picks". El mercado por evento
+alternate_totals trae las líneas 1.5 y 3.5 de goles, que antes solo se
+estimaban del 2.5 y por eso nunca eran pick. MLS y Championship salieron y
+el mismo día regresaron (medir el gasto real primero); lo que protege a una
+liga quitada (sus marcadores, sus filas viejas) se queda para la próxima vez.
 """
 
 import inspect
@@ -132,12 +134,11 @@ def test_the_view_stops_estimating_a_line_that_has_a_real_price():
 
 # ─── las ligas ───────────────────────────────────────────────────────────────
 
-def test_mls_and_championship_are_no_longer_downloaded():
+def test_mls_and_championship_came_back_to_measure_the_credits_first():
+    """El mismo 30-oct el dueño las regresó: "hay que ver cómo funciona con las
+    nuevas reglas y vemos cómo se va gastando los créditos"."""
     from config.settings import SPORT_KEYS
-    assert "soccer_usa_mls" not in SPORT_KEYS and "soccer_efl_champ" not in SPORT_KEYS
-    # el dueño las propuso, pero no pierden: se quedan
-    for kept in ("soccer_brazil_campeonato", "soccer_belgium_first_div", "soccer_turkey_super_league"):
-        assert kept in SPORT_KEYS
+    assert "soccer_usa_mls" in SPORT_KEYS and "soccer_efl_champ" in SPORT_KEYS
 
 
 def test_a_removed_league_still_gets_the_results_its_picks_need(monkeypatch, capsys):
