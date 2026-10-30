@@ -212,16 +212,27 @@ def candidates(model: list, lam: tuple, p_over25, p_btts, u, props: dict | None 
                          playdoit_estimate(g("consensus_over25_odds"), ratio)))
         out.append(_cand("under25", "Menos de 2.5 goles", "Goles", 1 - po, 1 - mk, g("under25_odds"),
                          playdoit_estimate(g("consensus_under25_odds"), ratio)))
-    line = _num(g("pin_total_line"))
-    if line in (1.5, 3.5):
-        mk = devig2(g("pin_total_over_odds"), g("pin_total_under_odds"))
-        mat = goals_matrix(lam[0], lam[1], model, po)
-        if mk is not None and mat is not None:
-            pov = _over(mat, line)
-            est = lambda o: _num(o) * TWO_WAY_AVG_RATIO if _num(o) else None
-            out.append(_cand(f"over_{line}", f"Más de {line} goles", "Goles", pov, mk, None, est(g("pin_total_over_odds"))))
-            out.append(_cand(f"under_{line}", f"Menos de {line} goles", "Goles", 1 - pov, 1 - mk, None,
-                             est(g("pin_total_under_odds"))))
+    # 1.5 y 3.5: la línea principal de Pinnacle si es esa; si no (30-oct-26),
+    # la línea alterna de las casas (alternate_totals, sin margen del promedio)
+    pin_line, mat = _num(g("pin_total_line")), None
+    est = lambda o: _num(o) * TWO_WAY_AVG_RATIO if _num(o) else None
+    for line, k in ((1.5, "15"), (3.5, "35")):
+        mk = devig2(g("pin_total_over_odds"), g("pin_total_under_odds")) if pin_line == line else None
+        if mk is not None:
+            best, pdo = (None, None), (est(g("pin_total_over_odds")), est(g("pin_total_under_odds")))
+        else:
+            cons = (g(f"consensus_over{k}_odds"), g(f"consensus_under{k}_odds"))
+            best = (g(f"over{k}_odds"), g(f"under{k}_odds"))
+            mk = devig2(*cons) or devig2(*best)
+            pdo = tuple(playdoit_estimate(c, ratio) or est(b) for c, b in zip(cons, best))
+        if mk is None:
+            continue
+        mat = goals_matrix(lam[0], lam[1], model, po) if mat is None else mat
+        if mat is None:
+            break
+        pov = _over(mat, line)
+        out.append(_cand(f"over_{line}", f"Más de {line} goles", "Goles", pov, mk, best[0], pdo[0]))
+        out.append(_cand(f"under_{line}", f"Menos de {line} goles", "Goles", 1 - pov, 1 - mk, best[1], pdo[1]))
     pb = _num(p_btts)
     mk = devig2(g("btts_yes_odds"), g("btts_no_odds"))
     if pb is not None and mk is not None:
@@ -412,7 +423,8 @@ def estimated_lines(r: dict, u, bias=None, have=()) -> list:
     matriz de marcadores (la misma de los picks); el mercado, ESTIMADO de su
     más/menos 2.5 sin margen (Poisson con el mismo más de 2.5). Solo para
     verlos: sin precio real no son candidatos al pick. have: los mercados que
-    ya tienen momio real (la línea principal de Pinnacle)."""
+    ya tienen momio real (la línea principal de Pinnacle o, desde el 30-oct-26,
+    la alterna de las casas)."""
     from src.models.side_bias import program_probs
     probs = program_probs(r, bias)
     model = [probs["home_win"], probs["draw"], probs["away_win"]]

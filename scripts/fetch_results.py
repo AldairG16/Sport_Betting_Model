@@ -169,6 +169,9 @@ def fetch_all_results(days_from: int = 2, verbose: bool = True) -> int:
     leagues_err    = 0
     needed = leagues_needing_results(days_from)
     asked = [k for k in SPORT_KEYS if needed is None or k in needed]
+    # 30-oct-26: una liga quitada de SPORT_KEYS (MLS, Championship) con
+    # partidos ya analizados sin marcador también se pide: sus picks se liquidan
+    asked += sorted((needed or set()) - set(SPORT_KEYS))
     if verbose and needed is not None:
         print(f"   Ligas con marcadores pendientes: {len(asked)} de {len(SPORT_KEYS)}")
 

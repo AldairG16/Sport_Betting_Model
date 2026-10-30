@@ -144,6 +144,22 @@ from config.settings import PAPER_ONLY_LEAGUES
 from collections import Counter
 
 
+def only_fetched_leagues(df: pd.DataFrame, keys=None) -> pd.DataFrame:
+    """Solo los partidos de las ligas de SPORT_KEYS (30-oct-26). Una liga
+    quitada (MLS, Championship) deja sus filas en upcoming_matches hasta 7
+    días después de su fecha: sin esto se seguía analizando con las últimas
+    cuotas que se le descargaron."""
+    if keys is None:
+        from config.settings import SPORT_KEYS as keys
+    if df.empty or "sport_key" not in df.columns:
+        return df
+    out = df[df["sport_key"].isin(keys)].reset_index(drop=True)
+    if len(out) < len(df):
+        gone = sorted(set(df["sport_key"]) - set(keys))
+        print(f"   Ligas quitadas de SPORT_KEYS, no se analizan: {', '.join(gone)} ({len(df) - len(out)} partidos)")
+    return out
+
+
 # Torneos donde la mayoría de partidos se juegan en sede neutral.
 # Se usa para anular el `home_adv` del MLE en estos partidos — sin esto,
 # el modelo aplica una ventaja artificial al "local" del bracket que no
@@ -2972,6 +2988,7 @@ def run_prediction_pipeline(dry_run: bool = False):
         ) t
         ORDER BY match_date
     """, engine)
+    df = only_fetched_leagues(df)
 
     total_matches = len(df)
     print(f"📊 Matches encontrados: {total_matches}")

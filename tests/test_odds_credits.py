@@ -256,7 +256,7 @@ def test_the_morning_leaves_the_closings_their_credits(monkeypatch):
     reserve = CB.capture_reserve(uum._kickoffs(cache), datetime.now(timezone.utc), 3)
     api.uum.update_all()                                        # morning: sin budgeted
     assert api.league_calls == ["soccer_sat"]                   # sus ligas no se frenan
-    assert len(api.event_calls) == int((300 - 200 - reserve) // 7) < 14   # sin reserva habrían sido 14
+    assert len(api.event_calls) == int((300 - 200 - reserve) // uum._costs()[1]) < 12   # sin reserva habrían sido 12
 
 
 def test_a_saved_event_is_reattached_for_free_and_does_not_use_the_cap(monkeypatch):
@@ -272,7 +272,7 @@ def test_a_saved_event_is_reattached_for_free_and_does_not_use_the_cap(monkeypat
     api.uum.update_all()
     assert api.event_calls == [] and merged == ["soccer_a-0"]   # antes: un tope de 0 lo dejaba sin mercados
 
-    api = _Api(monkeypatch, cache, budget=7)                    # cabe uno: es el que no estaba guardado
+    api = _Api(monkeypatch, cache, budget=uum._costs()[1])      # cabe uno: es el que no estaba guardado
     monkeypatch.setattr(uum, "SPORT_KEYS", ["soccer_a"])
     api.uum.update_all()
     assert api.event_calls == ["soccer_a-1"]
