@@ -1400,6 +1400,28 @@ tarjetas para PlayDoit espera a que salga ✅.
   partidos desde 2015). Alcanza para los últimos 20 partidos de cada equipo. Para
   investigar el pasado se usan los CSV.
 
+### "Partidos de hoy" en Telegram (30-oct-2026)
+
+El dueño quiere ver en el teléfono los partidos del día, con su hora, y notar si un pick
+cambia. `src/models/today_board.py`, paso "Partidos de hoy (Telegram)" del closing (después
+de los picks y las alertas de alineación):
+- **Un mensaje que se edita** en cada closing (`notify_telegram.edit_or_send`, sin sonar): los
+  partidos de hoy (hora de México) que no han empezado.
+  - Cada uno con su hora de inicio, su pick (🎯 si pasa la regla), el momio mínimo de PlayDoit,
+    de cuándo son sus cuotas (`cuotas 13:00`, o `28 oct 03:31` si son de otro día) y
+    "alineación ✓" si el pick ya la vio.
+  - Al empezar el día va uno nuevo, fijado arriba del chat (`pin_message`, mejor esfuerzo). Si
+    no cabe (3,800 caracteres), va en varios.
+  - Estado en `model_state.telegram_today` (día e ids).
+- **🔄** en la lista si el pick cambió en las últimas 24 h, con "cambió HH:MM · antes: …".
+  `snapshot_picks` anota el cambio (`program_picks.prev_label`, `prev_star`, `changed_at`):
+  cambia el texto del pick o gana/pierde el 🎯. La reconstrucción de picks pasados no lo
+  anota (`_upsert(track_changes=False)`).
+- **Un aviso aparte, con sonido**, cuando cambia el pick de un partido que empieza en las
+  próximas 6 h (`CHANGE_ALERT_HOURS`). Cada cambio sale una vez (`model_state.telegram_pick_changes`).
+
+"Actualizar" es abrir el chat: el pick no cambia más rápido que el closing (cada 30 min).
+
 ### Alineaciones: el momio final ya las cuenta (20-oct-2026)
 
 Se probaron las alineaciones de ESPN (API pública, titulares, formación y goles por

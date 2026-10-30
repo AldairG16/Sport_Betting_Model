@@ -177,6 +177,63 @@ def send_message(text: str) -> bool:
     return _send_to_bot(text, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Telegram")
 
 
+def edit_or_send(text: str, message_id: int | None = None, silent: bool = True) -> int | None:
+    """Edita el mensaje `message_id` del bot principal con `text` (un solo
+    fragmento, < TELEGRAM_MAX_CHARS) o, si no hay o ya no se puede editar
+    (borrado, de hace más de 48 h), manda uno nuevo. Devuelve el id del mensaje
+    que quedó, o None si no se pudo (30-oct-26: "Partidos de hoy", que se
+    actualiza en cada closing sin mandar un mensaje nuevo cada vez)."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        log.error("❌ Telegram no configurado (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID): mensaje no enviado")
+        SEND_FAILURES.append("Telegram: sin configurar")
+        return None
+    base = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML",
+               "disable_web_page_preview": True}
+    if message_id:
+        try:
+            r = requests.post(f"{base}/editMessageText", json={**payload, "message_id": message_id}, timeout=10)
+            if r.status_code == 200 or "message is not modified" in r.text:
+                return message_id
+            print(f"   (no se pudo editar el mensaje {message_id}: {r.status_code} {r.text[:120]}; va uno nuevo)")
+        except requests.RequestException as e:
+            print(f"   (no se pudo editar el mensaje {message_id}: {e}; va uno nuevo)")
+    for attempt in range(3):
+        try:
+            r = requests.post(f"{base}/sendMessage", json={**payload, "disable_notification": silent}, timeout=10)
+            if r.status_code == 200:
+                return int(r.json()["result"]["message_id"])
+            print(f"❌ Telegram error {r.status_code} (intento {attempt + 1}/3): {r.text[:200]}")
+        except (requests.RequestException, KeyError, ValueError) as e:
+            print(f"❌ Error de red Telegram (intento {attempt + 1}/3): {e}")
+        if attempt < 2:
+            import time
+            time.sleep(2 ** (attempt + 1))
+    log.error("❌ Telegram: mensaje no enviado tras 3 intentos")
+    SEND_FAILURES.append(f"Telegram: {text[:60]!r}")
+    return None
+
+
+def pin_message(message_id: int, unpin: list | None = None) -> bool:
+    """Fija `message_id` arriba del chat (sin sonido) y quita el de `unpin`.
+    Mejor esfuerzo: si Telegram no deja, el mensaje sigue igual."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+    base = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+    try:
+        for old in unpin or []:
+            requests.post(f"{base}/unpinChatMessage", json={"chat_id": TELEGRAM_CHAT_ID, "message_id": old},
+                          timeout=10)
+        r = requests.post(f"{base}/pinChatMessage", json={"chat_id": TELEGRAM_CHAT_ID, "message_id": message_id,
+                                                          "disable_notification": True}, timeout=10)
+        if r.status_code != 200:
+            print(f"   (no se pudo fijar el mensaje {message_id}: {r.status_code} {r.text[:120]})")
+        return r.status_code == 200
+    except requests.RequestException as e:
+        print(f"   (no se pudo fijar el mensaje {message_id}: {e})")
+        return False
+
+
 def send_message_prekickoff(text: str) -> bool:
     """
     Envia un mensaje al bot DEDICADO de pre-kickoff.
