@@ -64,6 +64,7 @@ def test_below_the_stop_threshold_the_runs_do_not_spam_telegram(monkeypatch):
     monkeypatch.setattr(uum, "_preflight_credits_check", lambda: 381)
     monkeypatch.setattr(uum, "API_CREDITS_STOP_THRESHOLD", 500)
     monkeypatch.setattr(CB, "alert_once", lambda kind, html, **kw: sent.append((kind, html)))
+    monkeypatch.setattr(CB, "in_reset_grace", lambda now: False)      # no depende de la hora del test
     uum.update_all()
     assert len(sent) == 1 and sent[0][0] == "stop"
     assert "Quedan <b>381</b>" in sent[0][1] and "se renueve el" in sent[0][1]
@@ -361,3 +362,78 @@ def test_the_daily_check_errors_when_the_pace_runs_out_before_the_renewal(monkey
     capsys.readouterr()
     assert mod.run_output_checks(engine=object(), normalize=lambda t: t) == []
     assert "créditos ayer: 500 de 600" in capsys.readouterr().out
+
+
+# ============================================================
+# La renovación (1-nov-26): a las 00:00:52 UTC la API todavía daba 349
+# créditos, el closing mandó el aviso de parada y su marca dejó "sin
+# créditos" todo el día para output_checks y el watchdog, con 20,000.
+# ============================================================
+
+def _alert_store(monkeypatch, value):
+    from src.utils import credit_budget as CB
+    from src.utils import model_state
+    store = {CB.ALERT_KEY: value}
+    monkeypatch.setattr(model_state, "load_state", lambda k: store.get(k))
+    monkeypatch.setattr(model_state, "save_state", lambda k, v, **kw: store.__setitem__(k, v) or True)
+    return store
+
+
+def test_the_first_hour_after_the_renewal_is_a_grace_period():
+    from src.utils.credit_budget import last_reset, in_reset_grace
+    assert last_reset(utc(2026, 11, 1, 0, 0, 52)) == utc(2026, 11, 1)
+    assert last_reset(utc(2026, 10, 31, 23)) == utc(2026, 10, 1)
+    assert last_reset(utc(2027, 1, 1)) == utc(2027, 1, 1)                    # el mismo instante ya cuenta
+    assert last_reset(utc(2026, 1, 15), reset_day=20) == utc(2025, 12, 20)
+    assert in_reset_grace(utc(2026, 11, 1, 0, 0, 52))
+    assert in_reset_grace(utc(2026, 11, 1, 0, 59))
+    assert not in_reset_grace(utc(2026, 11, 1, 1, 0))
+    assert not in_reset_grace(utc(2026, 10, 31, 23, 59))
+
+
+def test_no_stop_alert_right_after_the_renewal(monkeypatch, capsys):
+    import scripts.update_upcoming_matches as uum
+    from src.utils import credit_budget as CB
+    sent = []
+    monkeypatch.setattr(CB, "alert_once", lambda kind, html, **kw: sent.append(kind))
+    uum._low_credits_alert(349, now=utc(2026, 11, 1, 0, 0, 52))
+    assert sent == [] and "la API tarda unos minutos en renovar" in capsys.readouterr().out
+    uum._low_credits_alert(349, now=utc(2026, 11, 1, 1, 0))                  # a la hora sigue sin créditos: avisa
+    uum._low_credits_alert(381, now=utc(2026, 10, 30, 0, 31))                # a mitad de mes, como siempre
+    assert sent == ["stop", "stop"]
+
+
+def test_credits_back_clear_the_stop_mark(monkeypatch):
+    from src.utils import credit_budget as CB
+    from src.utils.output_checks import credits_out_today
+    from src.utils import model_state
+    store = _alert_store(monkeypatch, {"stop": "2026-11-01"})
+    out = lambda: credits_out_today(load_state=model_state.load_state, now=utc(2026, 11, 1, 3, 5))
+    assert not CB.clear_stop(349, stop=500) and out()                       # sigue sin créditos
+    assert CB.clear_stop(19_988, stop=500)
+    assert store[CB.ALERT_KEY] == {} and not out()                          # los chequeos vuelven a ser ERROR
+    assert not CB.clear_stop(19_950, stop=500)                              # sin marca: no escribe nada
+    assert not CB.clear_stop(None, stop=500)
+
+
+def test_the_preflight_clears_the_mark_when_credits_are_back(monkeypatch, capsys):
+    import scripts.update_upcoming_matches as uum
+    from src.utils import credit_budget as CB
+    store = _alert_store(monkeypatch, {"stop": "2026-11-01"})
+    monkeypatch.setattr(uum, "API_CREDITS_STOP_THRESHOLD", 500)
+    monkeypatch.setattr(uum, "_last_known_remaining", None)
+    monkeypatch.setattr(uum, "_initial_remaining", None)
+
+    class _R:
+        def __init__(self, rem):
+            self.headers = {"x-requests-remaining": rem}
+    for rem, mark in (("349", {"stop": "2026-11-01"}), ("19988", {})):      # 00:00:52 y 00:32 UTC del 1-nov
+        monkeypatch.setattr(uum.requests, "get", lambda url, params=None, timeout=None, rem=rem: _R(rem))
+        assert uum._preflight_credits_check() == int(rem)
+        assert store[CB.ALERT_KEY] == mark
+    assert "Créditos de vuelta (19988)" in capsys.readouterr().out
+
+    def broken(k):
+        raise RuntimeError("sin base")
+    monkeypatch.setattr(CB, "clear_stop", lambda r, stop: broken(r))
+    assert uum._preflight_credits_check() == 19_988                         # sin base: el preflight sigue

@@ -85,7 +85,8 @@ DIAS_PENDING_ATASCADA = 4
 
 
 def _credits_out_today(now_utc) -> bool:
-    """¿El closing ya avisó hoy que no hay créditos de The Odds API?"""
+    """¿El closing ya avisó hoy que no hay créditos de The Odds API? Con el
+    saldo de vuelta arriba del umbral, el preflight borra la marca."""
     try:
         import json
         import pandas as pd

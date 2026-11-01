@@ -229,12 +229,18 @@ def log_credits(sport_key: str, used: str, remaining: str):
         _low_credits_alert(remaining_int)
 
 
-def _low_credits_alert(remaining: int) -> None:
+def _low_credits_alert(remaining: int, now: datetime | None = None) -> None:
     """Aviso de que ya no se descargan cuotas hasta la renovación. Una vez
     por día UTC: con el saldo bajo el umbral, cada corrida del closing (cada
-    30 min) mandaba el suyo."""
-    from src.utils.credit_budget import alert_once, next_reset
-    reset = next_reset(datetime.now(timezone.utc))
+    30 min) mandaba el suyo. En la primera hora después de la renovación no
+    sale (1-nov-26: a las 00:00:52 UTC la API todavía no renovaba)."""
+    from src.utils.credit_budget import alert_once, next_reset, in_reset_grace, RESET_GRACE_MIN
+    now = now or datetime.now(timezone.utc)
+    if in_reset_grace(now):
+        print(f"   ⏸ {remaining} créditos recién pasada la renovación: la API tarda unos minutos "
+              f"en renovar. Sin aviso los primeros {RESET_GRACE_MIN} min.")
+        return
+    reset = next_reset(now)
     try:
         alert_once("stop", (
             f"⛔ <b>Sin cuotas nuevas: créditos de The Odds API bajos</b>\n\n"
@@ -1348,10 +1354,23 @@ def _preflight_credits_check() -> int | None:
             _last_known_remaining = rem
             _initial_remaining    = rem
             print(f"💳 Preflight: {rem} créditos disponibles")
+            _credits_back(rem)
             return rem
     except Exception as e:
         log.error(f"⚠️  Preflight falló: {e}")
     return None
+
+
+def _credits_back(remaining: int) -> None:
+    """Con el saldo arriba del umbral, quita la marca del aviso de parada
+    (1-nov-26): si no, output_checks y el watchdog seguían en "sin créditos"
+    el resto del día UTC con el plan ya renovado."""
+    from src.utils.credit_budget import clear_stop
+    try:
+        if clear_stop(remaining, stop=API_CREDITS_STOP_THRESHOLD):
+            print(f"✅ Créditos de vuelta ({remaining}): se quita la marca del aviso de parada")
+    except Exception as e:
+        log.warning(f"⚠️  Marca del aviso de créditos sin revisar ({type(e).__name__}: {e})")
 
 
 def _age_minutes(iso_ts) -> float | None:
