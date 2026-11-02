@@ -615,6 +615,7 @@ def run_morning(logger: Logger, force_fetch: bool = False):
         log.error(f"⚠️  odds_history falló: {e}")
     run_step(logger, "Precios Kalshi (referencia)", step_kalshi)
 
+    run_step(logger, "xG real (si el weekly no pudo)", step_understat_retry)
     run_step(logger, "ClubElo (fuerza de liga)", step_clubelo)
     predict_ok = run_step(logger, "Predictions", step_predict)
     run_step(logger, "Picks del programa", step_program_picks)
@@ -820,15 +821,18 @@ def step_collect_events():
 
 def step_soccerdata_refresh():
     """xG real + goleadores de clubes (Understat, directo). Guarda en Neon;
-    el pipeline solo lee. Si no llega nada, es un ERROR visible: hasta el
-    25-sep-26 este paso decía OK sin haber cargado nunca un dato."""
-    from src.features.soccerdata_feed import refresh_understat
-    res = refresh_understat(verbose=True)
-    if res.get("status") == "failed":
-        log.error(f"xG real NO disponible (Understat): el modelo usa el xG sustituto "
-                  f"esta semana — {'; '.join(res.get('errors') or [])}")
-    elif res.get("status") == "partial":
-        log.warning(f"xG real incompleto (Understat): {'; '.join(res.get('errors') or [])}")
+    el pipeline solo lee. Si no llega nada se avisa, y es ERROR cuando el
+    xG anterior está por vencer: hasta el 25-sep-26 este paso decía OK sin
+    haber cargado nunca un dato. Ver soccerdata_feed.report_stale."""
+    from src.features.soccerdata_feed import refresh_if_stale
+    refresh_if_stale(force=True)
+
+
+def step_understat_retry():
+    """Si el weekly no pudo leer Understat, el morning reintenta cada día
+    (2-nov-26); con el xG al día no pide nada."""
+    from src.features.soccerdata_feed import refresh_if_stale
+    refresh_if_stale()
 
 
 def step_fit_dc_mle():

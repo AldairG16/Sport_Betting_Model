@@ -164,3 +164,36 @@ def test_xg_check_uses_both_sides_against_real_goals():
 def test_xg_check_flags_a_real_inflation():
     _, _, ratio = sa.xg_proxy_vs_goals(hsot=6.5, asot=5.5, hsh=18, ash=16, hg=1.3, ag=1.1)
     assert ratio > sa.XG_RATIO_BAND[1]
+
+
+# ============================================================
+# Calibración rodante (2-nov-26)
+# ============================================================
+
+def _picks(n, prob, wins, market=None):
+    return pd.DataFrame({"probability": [prob] * n, "market_prob": [market] * n,
+                         "result": ["win"] * wins + ["loss"] * (n - wins)})
+
+
+def test_calibration_reads_the_program_picks_not_the_frozen_bets(monkeypatch):
+    # bets_history no recibe apuestas desde el 25-sep: el 🚨 de cada lunes era
+    # de las del 19 al 22 de septiembre
+    seen = []
+
+    def read_sql(sql, con=None, **kw):
+        seen.append(str(sql))
+        return _picks(100, 0.608, 53, 0.55)                     # los últimos 100 del 2-nov
+    monkeypatch.setattr(sa.pd, "read_sql", read_sql)
+    status, msg = sa.audit_calibration()
+    assert "FROM program_picks" in seen[0] and "bets_history" not in seen[0]
+    assert status == "ok" and "53.0%" in msg and "el mercado decía 55.0%" in msg
+
+
+@pytest.mark.parametrize("prob,wins,status,says", [
+    (0.60, 47, "alerta", "sobreconfianza"),
+    (0.45, 60, "alerta", "subconfianza"),          # antes decía "sobreconfianza" también aquí
+    (0.55, 52, "ok", "✓")])
+def test_calibration_verdict(prob, wins, status, says):
+    got, msg = sa.calibration_verdict(_picks(100, prob, wins))
+    assert got == status and says in msg and "mercado" not in msg
+    assert sa.calibration_verdict(_picks(20, prob, 5))[0] == "ok"          # muestra chica: sin opinión

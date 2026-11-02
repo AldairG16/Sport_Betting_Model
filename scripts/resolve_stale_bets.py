@@ -11,7 +11,8 @@ Flujo:
   3. Las recuperables vuelven a 'pending' → update_bet_results() las resuelve
      con la MISMA lógica probada de producción
   4. Las que siguen sin datos fuente quedan en 'stale' (honesto: sin datos
-     no se inventa resultado)
+     no se inventa resultado); si el partido se jugó días después (pospuesto),
+     se dice así: la apuesta queda anulada
 
 Las CANCELADAS antes del kickoff también son 'stale' y no se tocan: no se
 apostaron (src/utils/bet_status.py).
@@ -31,6 +32,41 @@ from config.database import engine
 from src.models.save_bets import _market_required_match_fields
 from src.utils.bet_status import CANCELLED_SQL
 from src.utils.team_normalizer import normalize_team
+
+
+POSTPONED_MAX_DAYS = 180        # hasta dónde se busca la fecha nueva de un partido pospuesto
+
+
+def same_pair(matches: pd.DataFrame, home_raw: str, away_raw: str) -> pd.DataFrame:
+    """Función pura. Las filas de matches del mismo local y visitante. El
+    nombre en bets viene normalizado por el pipeline; matches puede tener el
+    nombre crudo → se comparan los dos lados en Python."""
+    if matches.empty:
+        return matches
+    h, a = home_raw.lower().strip(), away_raw.lower().strip()
+    return matches[matches.apply(lambda r: (
+        (r["home_l"] == h or r["home_c"] == normalize_team(home_raw)) and
+        (r["away_l"] == a or r["away_c"] == normalize_team(away_raw))
+    ), axis=1)]
+
+
+def _played_later(home_raw: str, away_raw: str, md: pd.Timestamp):
+    """La fecha en que se jugó un partido pospuesto (más de 2 días después),
+    o None. 2-nov-26: Mjällby vs Djurgården (31-may) se jugó el 3-sep y el
+    weekly lo reportaba cada lunes como "partido no está en matches"; la
+    apuesta queda anulada (stale, profit 0) como en la casa."""
+    later = pd.read_sql(text("""
+        SELECT LOWER(home_team) AS home_l, LOWER(away_team) AS away_l,
+               LOWER(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(home_team,'[.,\\-_]',' ','g'),'\\s+',' ','g'))) AS home_c,
+               LOWER(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(away_team,'[.,\\-_]',' ','g'),'\\s+',' ','g'))) AS away_c,
+               date
+        FROM matches
+        WHERE date > :d_from AND date <= :d_to AND home_goals IS NOT NULL
+        ORDER BY date
+    """), engine, params={"d_from": (md + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
+                          "d_to": (md + pd.Timedelta(days=POSTPONED_MAX_DAYS)).strftime("%Y-%m-%d")})
+    rows = same_pair(later, home_raw, away_raw)
+    return None if rows.empty else pd.Timestamp(rows.iloc[0]["date"])
 
 
 def resolve_stale_bets(apply: bool = True, verbose: bool = True) -> dict:
@@ -63,7 +99,7 @@ def resolve_stale_bets(apply: bool = True, verbose: bool = True) -> dict:
         WHERE date BETWEEN :d_from AND :d_to
     """), engine, params={"d_from": _min, "d_to": _max})
 
-    recovered, still_stale = [], []
+    recovered, still_stale, postponed = [], [], []
     for _, b in bets.iterrows():
         try:
             home_raw, away_raw = str(b["match"]).split(" vs ")
@@ -71,22 +107,23 @@ def resolve_stale_bets(apply: bool = True, verbose: bool = True) -> dict:
             still_stale.append((b["match"], b["market"], "nombre inválido"))
             continue
 
-        # El nombre en bets viene normalizado por el pipeline; matches puede
-        # tener el nombre crudo → normalizamos ambos lados en Python.
         md = pd.to_datetime(b["match_date"])
-        cands = matches[
-            matches.apply(lambda r: (
-                (r["home_l"] == home_raw.lower().strip() or r["home_c"] == normalize_team(home_raw)) and
-                (r["away_l"] == away_raw.lower().strip() or r["away_c"] == normalize_team(away_raw))
-            ), axis=1)
-        ]
+        cands = same_pair(matches, home_raw, away_raw)
         if cands.empty:
-            still_stale.append((b["match"], b["market"], "partido no está en matches"))
+            later = _played_later(home_raw, away_raw, md)
+            if later is not None:
+                postponed.append((b["match"], b["market"], later))
+            else:
+                still_stale.append((b["match"], b["market"], "partido no está en matches"))
             continue
         cands = cands.assign(_d=(pd.to_datetime(cands["date"]) - md).abs())
         row = cands.sort_values("_d").iloc[0]
         if row["_d"] > pd.Timedelta(days=2):
-            still_stale.append((b["match"], b["market"], "fecha no coincide"))
+            later = _played_later(home_raw, away_raw, md)
+            if later is not None:
+                postponed.append((b["match"], b["market"], later))
+            else:
+                still_stale.append((b["match"], b["market"], "fecha no coincide"))
             continue
 
         required = _market_required_match_fields(str(b["market"]))
@@ -107,6 +144,9 @@ def resolve_stale_bets(apply: bool = True, verbose: bool = True) -> dict:
                 reasons[why] = reasons.get(why, 0) + 1
             for why, n in sorted(reasons.items(), key=lambda x: -x[1]):
                 print(f"      · {why}: {n}")
+        if postponed:
+            print(f"   🗓️  Pospuestos (la apuesta queda anulada): {len(postponed)} — "
+                  + "; ".join(f"{m} se jugó el {d:%d-%b}" for m, _, d in postponed[:3]))
 
     if apply and recovered:
         with engine.begin() as conn:
@@ -120,7 +160,8 @@ def resolve_stale_bets(apply: bool = True, verbose: bool = True) -> dict:
         from src.models.save_bets import update_bet_results
         update_bet_results()
 
-    return {"total": len(bets), "recovered": len(recovered), "still_stale": len(still_stale)}
+    return {"total": len(bets), "recovered": len(recovered), "still_stale": len(still_stale),
+            "postponed": len(postponed)}
 
 
 if __name__ == "__main__":

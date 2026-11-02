@@ -13,7 +13,8 @@ Cada chequeo existe porque un bug real pasó a producción:
                                 (real: ~1.40) → +35% inflación → overs
                                 sobrevalorados en TODO el sistema
   3. CALIBRACIÓN RODANTE     ← predicción media 57.3% vs acierto real 44.4%
-                                = sobreconfianza sistematica (ROI -7.7%)
+                                = sobreconfianza sistematica (ROI -7.7%);
+                                mide los picks del programa (2-nov-26)
   4. BETS DOBLES             ← mismo partido+mercado en el mismo día con
                                 2+ filas (por cambios de horario del kickoff)
   5. RESOLUCIÓN ESTANCADA    ← bets pending con partido jugado hace >36h
@@ -253,24 +254,40 @@ def audit_xg_sanity() -> tuple[str, str]:
     return "ok", msg + " ✓"
 
 
+CALIBRATION_MAX_GAP = 0.08
+
+
+def calibration_verdict(df: pd.DataFrame) -> tuple[str, str]:
+    """Función pura. df: probability (la del modelo), result ('win'/'loss')
+    y, si hay, market_prob. Brecha entre lo que predice y lo que acierta."""
+    if len(df) < 30:
+        return "ok", f"muestra chica ({len(df)} < 30) — sin opinión"
+    pred = df["probability"].astype(float).mean()
+    real = (df["result"] == "win").mean()
+    gap = pred - real
+    mkt = df["market_prob"].dropna().astype(float) if "market_prob" in df else pd.Series(dtype=float)
+    tail = f"; el mercado decía {mkt.mean():.1%}" if len(mkt) else ""
+    if abs(gap) > CALIBRATION_MAX_GAP:
+        kind = "sobreconfianza" if gap > 0 else "subconfianza"
+        return "alerta", (f"{kind}: predice {pred:.1%}, acierta {real:.1%} "
+                          f"(brecha {gap:+.1%} en los últimos {len(df)} picks{tail})")
+    return "ok", f"predicción {pred:.1%} vs real {real:.1%} (brecha {gap:+.1%}, {len(df)} picks{tail}) ✓"
+
+
 def audit_calibration() -> tuple[str, str]:
+    """Los picks del programa (program_picks), que se liquidan cada noche.
+    Hasta el 2-nov-26 medía las últimas 100 de bets_history, que no recibe
+    apuestas desde el modo recolección (25-sep-26): eran las del 19 al
+    22-sep y el mismo 🚨 llegaba cada lunes desde el 5-oct; la semana
+    siguiente el chequeo se habría quedado sin opinión para siempre."""
     df = pd.read_sql(text("""
-        SELECT probability, result
-        FROM bets_history
-        WHERE result IN ('win','loss','half_win','half_loss')
-          AND probability IS NOT NULL
+        SELECT model_prob AS probability, market_prob, result
+        FROM program_picks
+        WHERE result IN ('win','loss') AND model_prob IS NOT NULL AND market IS NOT NULL
           AND match_date >= CURRENT_DATE - 45
         ORDER BY match_date DESC LIMIT 100
     """), engine)
-    if len(df) < 30:
-        return "ok", f"muestra chica ({len(df)} < 30) — sin opinión"
-    pred = df["probability"].mean()
-    real = df["result"].isin(["win", "half_win"]).mean()
-    gap = pred - real
-    if abs(gap) > 0.08:
-        return "alerta", (f"sobreconfianza: predice {pred:.1%}, acierta {real:.1%} "
-                          f"(brecha {gap:+.1%} en últimas {len(df)})")
-    return "ok", f"predicción {pred:.1%} vs real {real:.1%} (brecha {gap:+.1%}) ✓"
+    return calibration_verdict(df)
 
 
 def audit_double_bets() -> tuple[str, str]:
