@@ -73,12 +73,36 @@ un momio, no lo inventes: omite ese momio. Si la imagen no es de momios, respond
 # Telegram
 # ─────────────────────────────────────────────────────────────────────────────
 
+TG_MAX_WAIT_S = 120
+
+
+class TelegramError(RuntimeError):
+    """Error de la API de Telegram; retry_after: los segundos que pide esperar (429)."""
+
+    def __init__(self, msg: str, retry_after=None):
+        super().__init__(msg)
+        self.retry_after = retry_after
+
+
 def _tg(method: str, token: str, http=requests, **params):
     r = http.post(f"https://api.telegram.org/bot{token}/{method}", json=params, timeout=70)
     data = r.json()
     if not data.get("ok"):
-        raise RuntimeError(f"Telegram {method}: {data.get('description')}")
+        raise TelegramError(f"Telegram {method}: {data.get('description')}",
+                            retry_after=(data.get("parameters") or {}).get("retry_after"))
     return data["result"]
+
+
+def _retry_wait(e: Exception, failures: int) -> float:
+    """Cuánto esperar tras un getUpdates fallido: lo que pida Telegram (429,
+    retry_after); si no pide nada, 5 s que crecen con los fallos seguidos
+    (5, 10, 20, 40, 60). Hasta el 2-nov-26 eran siempre 5 s: el 2-nov a las
+    01:10 UTC Telegram falló ~3 min (429, Bad Gateway) y un retry_after más
+    largo que 5 s se habría seguido pidiendo antes de tiempo."""
+    wait = getattr(e, "retry_after", None)
+    if wait:
+        return min(float(wait) + 1, TG_MAX_WAIT_S)
+    return min(5 * 2 ** max(failures - 1, 0), 60)
 
 
 def download_photo(message: dict, token: str, http=requests) -> tuple[bytes, str] | None:
@@ -234,7 +258,7 @@ def dispatch_successor(http=requests) -> bool:
 
 
 def listen(minutes: float, token: str, owner_chat: str, http=requests, clock=time.time,
-           successor: bool = True) -> int:
+           successor: bool = True, sleep=time.sleep) -> int:
     """Long polling hasta `minutes`; devuelve los mensajes procesados."""
     from src.utils.model_state import load_state, save_state
     hook = _tg("getWebhookInfo", token, http)
@@ -243,16 +267,18 @@ def listen(minutes: float, token: str, owner_chat: str, http=requests, clock=tim
         return 0
     deadline = clock() + minutes * 60
     offset = int((load_state(OFFSET_KEY) or {}).get("offset", 0))
-    handled = 0
+    handled, failures = 0, 0
     print(f"👂 Revisor PlayDoit escuchando {minutes:.0f} min")
     while clock() < deadline - 75:
         try:
             updates = _tg("getUpdates", token, http, offset=offset, timeout=50,
                           allowed_updates=["message"])
         except Exception as e:
+            failures += 1
             log.warning(f"⚠️  getUpdates: {type(e).__name__}: {str(e)[:120]}")
-            time.sleep(5)
+            sleep(_retry_wait(e, failures))
             continue
+        failures = 0
         for u in updates:
             offset = int(u["update_id"]) + 1
             save_state(OFFSET_KEY, {"offset": offset}, history=False)   # nunca se procesa dos veces

@@ -118,6 +118,30 @@ def test_undelivered_telegram_message_is_recorded(monkeypatch):
     assert len(nt.SEND_FAILURES) == 1 and _errors("mensaje no enviado tras 3 intentos")
 
 
+class _Resp429(_Resp):
+    """429 de Telegram: la espera viene en el JSON, no en un encabezado."""
+
+    def __init__(self, retry_after):
+        super().__init__(429)
+        self._retry_after = retry_after
+
+    def json(self):
+        return {"ok": False, "error_code": 429, "parameters": {"retry_after": self._retry_after}}
+
+
+def test_a_telegram_429_waits_what_the_json_says(monkeypatch):
+    # 2-nov-26: solo se leía el encabezado Retry-After; sin él, 5 s
+    import time
+    import scripts.notify_telegram as nt
+    monkeypatch.setattr(nt, "SEND_FAILURES", [])
+    waits, answers = [], [_Resp429(17), _Resp(200)]
+    monkeypatch.setattr(time, "sleep", waits.append)
+    monkeypatch.setattr(nt.requests, "post", lambda *a, **k: answers.pop(0))
+    assert nt._send_to_bot("hola", "token", "chat") is True and waits == [17]
+    assert nt._retry_after(_Resp429(3600)) == nt.MAX_RETRY_AFTER_S
+    assert nt._retry_after(_Resp(429)) == 5                         # sin JSON ni encabezado
+
+
 def test_unconfigured_telegram_is_recorded(monkeypatch):
     import scripts.notify_telegram as nt
     monkeypatch.setattr(nt, "SEND_FAILURES", [])

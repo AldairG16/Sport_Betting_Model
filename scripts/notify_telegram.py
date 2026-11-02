@@ -100,6 +100,26 @@ def _set_last_picks_shown(n: int) -> None:
 TELEGRAM_MAX_CHARS = 4000   # límite real de Telegram es 4096, dejamos margen
 
 
+MAX_RETRY_AFTER_S = 60
+
+
+def _retry_after(r) -> int:
+    """Segundos que pide esperar un 429 de Telegram. Telegram los manda en el
+    JSON (parameters.retry_after); hasta el 2-nov-26 solo se leía el
+    encabezado Retry-After y, sin él, se esperaban 5 s."""
+    wait = None
+    try:
+        wait = (r.json().get("parameters") or {}).get("retry_after")
+    except (ValueError, AttributeError):
+        pass
+    if wait is None:
+        wait = (getattr(r, "headers", None) or {}).get("Retry-After", 5)
+    try:
+        return max(1, min(int(wait), MAX_RETRY_AFTER_S))
+    except (TypeError, ValueError):
+        return 5
+
+
 def _send_to_bot(text: str, bot_token: str, chat_id: str, label: str = "Telegram") -> bool:
     """
     Implementación interna que manda un texto a (bot_token, chat_id) específicos.
@@ -140,7 +160,7 @@ def _send_to_bot(text: str, bot_token: str, chat_id: str, label: str = "Telegram
                     sent = True
                     break
                 elif r.status_code == 429:
-                    retry_after = int(r.headers.get("Retry-After", 5))
+                    retry_after = _retry_after(r)
                     print(f"⏳ {label} rate-limited, esperando {retry_after}s...")
                     import time
                     time.sleep(retry_after)
@@ -199,16 +219,19 @@ def edit_or_send(text: str, message_id: int | None = None, silent: bool = True) 
         except requests.RequestException as e:
             print(f"   (no se pudo editar el mensaje {message_id}: {e}; va uno nuevo)")
     for attempt in range(3):
+        wait = 2 ** (attempt + 1)
         try:
             r = requests.post(f"{base}/sendMessage", json={**payload, "disable_notification": silent}, timeout=10)
             if r.status_code == 200:
                 return int(r.json()["result"]["message_id"])
+            if r.status_code == 429:
+                wait = _retry_after(r)
             print(f"❌ Telegram error {r.status_code} (intento {attempt + 1}/3): {r.text[:200]}")
         except (requests.RequestException, KeyError, ValueError) as e:
             print(f"❌ Error de red Telegram (intento {attempt + 1}/3): {e}")
         if attempt < 2:
             import time
-            time.sleep(2 ** (attempt + 1))
+            time.sleep(wait)
     log.error("❌ Telegram: mensaje no enviado tras 3 intentos")
     SEND_FAILURES.append(f"Telegram: {text[:60]!r}")
     return None
