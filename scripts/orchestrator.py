@@ -698,6 +698,7 @@ def run_evening(logger: Logger):
     run_step(logger, "Fetch results (fbdata backup)", step_fetch_results_backup)
     run_step(logger, "Fetch results (TheSportsDB)", step_fetch_results_tsdb)
     run_step(logger, "Córners y tarjetas (ESPN)", step_espn_finals)
+    run_step(logger, "Tiros y córners (ESPN)", step_espn_stats)
     run_step(logger, "Results",           step_results)
     run_step(logger, "Shadow results",    step_shadow_results)
     # Resolver bets pending (corners/cards/HT) ANTES del resumen, así el
@@ -1114,6 +1115,15 @@ def step_espn_finals():
     (live_scores): el dashboard los usa donde `matches` no los tiene (v2.5.1)."""
     from src.features.live_scores import backfill_finals
     backfill_finals(days=3)
+
+
+def step_espn_stats():
+    """Tiros, tiros a puerta y córners de ESPN para la MLS, Argentina, Brasil,
+    México y otras ligas que football-data no los publica (2-nov-26): con
+    ellos esas ligas tienen xG estimado, tiros y córners en el modelo. Antes
+    de liquidar, para que un pick de córners encuentre su dato."""
+    from src.features.espn_stats import load_espn_stats
+    load_espn_stats()
 
 
 def step_capture_lineups():

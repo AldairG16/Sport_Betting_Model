@@ -333,6 +333,26 @@ def data_health(counts: dict, ages: dict) -> list:
     return out
 
 
+# Las ligas que toman tiros y córners de ESPN (src/features/espn_stats.py,
+# 2-nov-26): hasta entonces la MLS no tenía un tiro en un año y nada lo decía.
+ESPN_SHOTS_DAYS = 30
+ESPN_SHOTS_MIN_SHARE = 0.5
+ESPN_SHOTS_MIN_ROWS = 10
+
+
+def espn_shots_gaps(rows: list) -> list:
+    """Función pura. rows: [{league, n, with_shots}] de los partidos jugados
+    en ESPN_SHOTS_DAYS días. Avisos de las ligas donde menos de la mitad
+    tiene tiros (vacío = en orden)."""
+    out = []
+    for r in rows:
+        n, k = int(r.get("n") or 0), int(r.get("with_shots") or 0)
+        if n >= ESPN_SHOTS_MIN_ROWS and k < ESPN_SHOTS_MIN_SHARE * n:
+            out.append(f"Datos: {r['league']} con tiros en {k} de {n} partidos de {ESPN_SHOTS_DAYS} días — "
+                       f"el paso 'Tiros y córners (ESPN)' no los está llenando")
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Corrida diaria (evening)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -635,6 +655,17 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
         problems += found
     except Exception as e:
         problems.append(f"Datos: no se pudo revisar ({type(e).__name__})")
+
+    # 6b) tiros de las ligas que los toman de ESPN (2-nov-26)
+    try:
+        from src.features.espn_stats import STATS_LEAGUES
+        sh = q("""SELECT league, COUNT(*) AS n, SUM((home_shots_target > 0)::int) AS with_shots FROM matches
+                  WHERE league = ANY(:l) AND home_goals IS NOT NULL
+                    AND date BETWEEN CURRENT_DATE - make_interval(days => :d) AND CURRENT_DATE - 1
+                  GROUP BY league""", l=list(STATS_LEAGUES), d=ESPN_SHOTS_DAYS).to_dict("records")
+        problems += espn_shots_gaps(sh)
+    except Exception as e:
+        problems.append(f"Tiros de ESPN: no se pudo revisar ({type(e).__name__})")
 
     # 7) el marcador provisional del dashboard (ESPN) contra el oficial
     try:
