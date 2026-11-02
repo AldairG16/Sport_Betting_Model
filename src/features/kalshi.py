@@ -260,7 +260,11 @@ def price_mismatches(rows: list, pinnacle: dict) -> set:
 
 
 def _pinnacle_1x2(conn, horizon_hours: float) -> dict:
-    """{(liga, local, visitante, inicio ISO): 1X2 de Pinnacle sin margen} de upcoming_matches."""
+    """{(liga, local, visitante, inicio ISO): 1X2 de Pinnacle sin margen} de
+    upcoming_matches, solo si se descargó hace PIN_MAX_LAG_S o menos. 2-nov-26:
+    FC Seoul–Incheon, Kalshi bajó al local de 56% a 45% una hora antes del
+    partido y el Pinnacle guardado era de 5.5 h antes (el cierre solo recarga
+    las ligas con apuestas o candidatas): se tiró su precio como "otro partido"."""
     from src.features.market_odds import market_probabilities
     out = {}
     for lg, h, a, k, ph, pd_, pa in conn.execute(text("""
@@ -268,8 +272,9 @@ def _pinnacle_1x2(conn, horizon_hours: float) -> dict:
                sport_key, home_team_norm, away_team_norm, match_date, pin_home_odds, pin_draw_odds, pin_away_odds
         FROM upcoming_matches
         WHERE match_date BETWEEN NOW() AND NOW() + make_interval(hours => :h) AND pin_home_odds IS NOT NULL
-        ORDER BY sport_key, home_team_norm, away_team_norm, match_date, updated_at DESC NULLS LAST
-    """), {"h": int(horizon_hours)}).fetchall():
+          AND odds_fetched_at >= NOW() - make_interval(secs => :lag)
+        ORDER BY sport_key, home_team_norm, away_team_norm, match_date, odds_fetched_at DESC
+    """), {"h": int(horizon_hours), "lag": PIN_MAX_LAG_S}).fetchall():
         try:
             p = market_probabilities(float(ph), float(pd_), float(pa))
         except (TypeError, ValueError):
