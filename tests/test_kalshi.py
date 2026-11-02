@@ -184,3 +184,22 @@ def test_the_weekly_check_compares_kalshi_with_pinnacle_at_the_same_hour():
     assert K.snapshot_mismatches(kalshi, pin) == []
     assert len(K.snapshot_mismatches(kalshi, pin[1:])) == 1                             # a 1.5 h y otro precio: otro partido
     assert K.snapshot_mismatches(kalshi, pin[1:], max_lag_s=3600) == []                 # sin foto cercana no se juzga
+
+
+def test_the_capture_judges_only_with_a_fresh_pinnacle():
+    """2-nov-26: FC Seoul–Incheon. Kalshi bajó al local de 56% a 45% una hora
+    antes y el Pinnacle guardado era de 5.5 h antes: el closing tiró su precio
+    de cierre como "otro partido". Pinnacle viejo no juzga, igual que el weekly."""
+    seen = []
+    ko = datetime(2026, 11, 1, 7, 30, tzinfo=timezone.utc)
+
+    class Conn:
+        def execute(self, sql, params=None):
+            seen.append((str(sql), params))
+            return type("R", (), {"fetchall": lambda self: [
+                ("soccer_korea_kleague1", "fc seoul", "incheon united", ko, 1.83, 3.88, 4.41)]})()
+    pin = K._pinnacle_1x2(Conn(), 96)
+    sql, params = seen[0]
+    assert "odds_fetched_at >= NOW() - make_interval(secs => :lag)" in sql
+    assert params == {"h": 96, "lag": K.PIN_MAX_LAG_S}
+    assert pin[("soccer_korea_kleague1", "fc seoul", "incheon united", ko.isoformat())][0] > 0.5
