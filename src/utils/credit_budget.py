@@ -42,6 +42,14 @@ horario de liga, medido 10-20 oct) y todo lo demás pedía ~1,200. Ahora:
   - extras_budget: lo único que pueden gastar los mercados por evento (en
     cualquier modo), la actualización normal del closing y los mercados por
     evento de las candidatas sombra. Nunca toca la reserva de los cierres.
+
+1-nov-26: la renovación tarda unos minutos en llegar a la API. El closing de
+las 00:00 UTC todavía vio 349 créditos a las 00:00:52 y mandó el aviso de
+parada; a las 00:32 ya había 19,988 (en octubre: 0 usados a las 00:02). La
+marca de ese aviso dejaba a output_checks y al watchdog en "sin créditos" todo
+el día, con 20,000. Ahora:
+  - in_reset_grace: la primera hora después de la renovación no se avisa;
+  - clear_stop: con el saldo de nuevo arriba del umbral se borra la marca.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -61,6 +69,8 @@ CAPTURES_PER_SLOT = env_int("ODDS_API_CAPTURES_PER_SLOT", 2)
 CAPTURE_LEAD_MIN = 80          # la recarga dirigida mira hasta 80 min adelante (CLOSING_WINDOW_MIN)
 STOP_THRESHOLD = env_int("API_CREDITS_STOP_THRESHOLD", 500)   # el mismo umbral de parada de update_upcoming_matches
 HISTORY_DAYS = 14
+# minutos después de la renovación en que un saldo bajo todavía no es "sin créditos"
+RESET_GRACE_MIN = env_int("ODDS_API_RESET_GRACE_MIN", 60)
 
 
 def next_reset(now: datetime, reset_day: int = RESET_DAY) -> datetime:
@@ -71,6 +81,22 @@ def next_reset(now: datetime, reset_day: int = RESET_DAY) -> datetime:
         y, m = (y + 1, 1) if m == 12 else (y, m + 1)
         candidate = datetime(y, m, reset_day, tzinfo=timezone.utc)
     return candidate
+
+
+def last_reset(now: datetime, reset_day: int = RESET_DAY) -> datetime:
+    """Última renovación (00:00 UTC del día `reset_day`), `now` incluido."""
+    y, m = now.year, now.month
+    candidate = datetime(y, m, reset_day, tzinfo=timezone.utc)
+    if candidate > now:
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+        candidate = datetime(y, m, reset_day, tzinfo=timezone.utc)
+    return candidate
+
+
+def in_reset_grace(now: datetime, grace_min: int = RESET_GRACE_MIN) -> bool:
+    """¿Es la primera hora después de la renovación? Un saldo bajo todavía no
+    quiere decir que no hay créditos: la API tarda unos minutos en renovar."""
+    return now - last_reset(now) < timedelta(minutes=grace_min)
 
 
 def daily_allowance(start_remaining: int, now: datetime, reserve: int = RESERVE,
@@ -175,4 +201,18 @@ def alert_once(kind: str, html: str, now: datetime | None = None, send=None) -> 
         save_state(ALERT_KEY, {**sent, kind: today}, history=False)
     except Exception:
         pass
+    return True
+
+
+def clear_stop(remaining: int | None, stop: int = STOP_THRESHOLD) -> bool:
+    """Con el saldo de nuevo arriba del umbral, borra la marca del aviso de
+    parada: "sin créditos" vale solo mientras de verdad no hay (1-nov-26).
+    Devuelve True si había marca."""
+    if remaining is None or remaining <= stop:
+        return False
+    from src.utils.model_state import load_state, save_state
+    sent = load_state(ALERT_KEY) or {}
+    if "stop" not in sent:
+        return False
+    save_state(ALERT_KEY, {k: v for k, v in sent.items() if k != "stop"}, history=False)
     return True

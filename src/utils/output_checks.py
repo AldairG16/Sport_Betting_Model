@@ -448,7 +448,9 @@ ODDS_FEEDS = ("upcoming_matches", "odds_history")   # se quedan quietas sin cré
 def credits_out_today(load_state=None, now: datetime | None = None) -> bool:
     """¿Ya salió hoy el aviso de "sin créditos" (credit_budget.alert_once)?
     Lo que falta por eso (cuotas, cierres) ya se avisó: no es otro error.
-    Un día después de la renovación ya no vale."""
+    Un día después de la renovación ya no vale, y en cuanto el saldo vuelve
+    arriba del umbral el preflight borra la marca (credit_budget.clear_stop,
+    1-nov-26)."""
     try:
         if load_state is None:
             from src.utils.model_state import load_state

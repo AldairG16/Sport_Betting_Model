@@ -13,7 +13,7 @@ ver §2.
 
 | Servicio | Para qué | Credencial | Coste |
 |---|---|---|---|
-| **The Odds API** | Cuotas (`/odds`) y resultados (`/scores`). Es la fuente crítica: sin ella no hay apuestas ni resolución. | `ODDS_API_KEY` | Plan de pago de 20,000 créditos que se renueva el **día 1** de cada mes (medido: 9,548 → 19,958 el 1-oct-26 a las 03:06 UTC). Una liga cuesta 3 (h2h, totals, spreads) y un evento hasta 8 (cobra solo los mercados que devuelve). El closing tiene presupuesto diario (§5, "Presupuesto diario de créditos"). |
+| **The Odds API** | Cuotas (`/odds`) y resultados (`/scores`). Es la fuente crítica: sin ella no hay apuestas ni resolución. | `ODDS_API_KEY` | Plan de pago de 20,000 créditos que se renueva el **día 1** de cada mes a las 00:00 UTC (6:00 pm del último día del mes en México). La API tarda unos minutos: el 1-oct a las 00:02 UTC ya marcaba 0 usados; el 1-nov a las 00:00:52 todavía daba 349 y a las 00:32, 19,988. Una liga cuesta 3 (h2h, totals, spreads) y un evento hasta 8 (cobra solo los mercados que devuelve). El closing tiene presupuesto diario (§5, "Presupuesto diario de créditos"). |
 | **PostgreSQL** | Todo el estado: `matches`, `upcoming_matches`, `bets_history`, `shadow_bets`, `bankroll`, `pre_kickoff_analyses`, `analyst_heartbeat`, `anthropic_usage`, y lo aprendido en `model_state` (§7). | `DB_URL` | Alojada fuera del repo. Ver §7. |
 | **Anthropic** | Los dos agentes LLM: analista pre-kickoff y resolver de pendientes. | `ANTHROPIC_API_KEY` | ~$0.014-0.020 por llamada. Ver §6. |
 | **Telegram** | Único canal de salida: picks, resumen diario, alertas del watchdog. | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`; el analista usa `*_PREKICKOFF` y cae al bot principal si no están. | Gratis. |
@@ -283,7 +283,7 @@ texto plano): el correo de GitHub es el segundo canal.
 | Check | Qué mira |
 |---|---|
 | 1 | La DB responde. |
-| 2 | Las cuotas (`MAX(updated_at)` de `upcoming_matches`) tienen menos de 26 h. Si hoy ya salió el aviso de "sin créditos" (`model_state.odds_credit_alert`), no avisa: sin créditos la tabla no se escribe aunque todo corra. |
+| 2 | Las cuotas (`MAX(updated_at)` de `upcoming_matches`) tienen menos de 26 h. Si hoy ya salió el aviso de "sin créditos" (`model_state.odds_credit_alert`), no avisa: sin créditos la tabla no se escribe aunque todo corra. La marca se borra cuando el saldo vuelve arriba del umbral. |
 | 3 | Alguna apuesta real sigue `pending` 4+ días después del partido: la liquidación no corre (su timeout la pasa a `unresolved` a los 3). |
 | 4 | Gap del `analyst_heartbeat` — **se omite** si `PRE_KICKOFF_ANALYST_ENABLED=false`. |
 | 5 | Hay partidos futuros cargados. |
@@ -724,7 +724,9 @@ tolerados":
   - Solo avisa: no quita el 🎯. Si se apaga solo o no es decisión del dueño.
 - **sin créditos de The Odds API** (29-oct-26, `credits_out_today`): si hoy ya salió el aviso
   de "sin créditos", que `upcoming_matches` u `odds_history` no se actualicen es WARNING y no
-  ERROR. La causa ya se avisó una vez y no debe llegar como errores nuevos cada día.
+  ERROR. La causa ya se avisó una vez y no debe llegar como errores nuevos cada día. Cuando
+  el saldo vuelve arriba del umbral, el preflight borra la marca y todo vuelve a ser ERROR
+  (`credit_budget.clear_stop`, 1-nov-26).
 - **ritmo de créditos** (sección 13, 29-oct-26, `credit_budget.credit_pace`): cada día UTC guarda lo
   que bajó el saldo en `model_state.odds_credit_day.history` (14 días; el día de la renovación no
   se mide). El ✅ dice "créditos ayer: X de Y". Si al ritmo de los últimos 3 días el saldo cruza
@@ -859,6 +861,22 @@ Ahora (`credit_budget.capture_reserve` y `extras_budget`, `update_upcoming_match
 - El ✅ del "Chequeo de salidas" dice "cierres (N de M partidos)" de ayer (sección 12,
   `closing_coverage`). Con menos de 80% y 10+ partidos es ERROR. Si el aviso de "sin
   créditos" salió hoy, es solo WARNING: la causa ya se avisó.
+
+**La renovación tarda unos minutos en llegar a la API (1-nov-2026).** El plan se renueva a
+las 00:00 UTC del día 1, pero el closing de las 00:00 UTC del 1-nov todavía vio 349 créditos
+a las 00:00:52. Abortó, como debía, y mandó el aviso de "sin créditos" por Telegram. A las
+00:32 ya había 19,988.
+- El aviso era falso: salió un minuto antes de que la renovación llegara.
+- Su marca (`model_state.odds_credit_alert`, "stop" = hoy) dejaba a `output_checks` y al
+  watchdog en "sin créditos" todo el día UTC, con 20,000 créditos. Cierres faltantes y
+  cuotas viejas habrían salido como WARNING en vez de ERROR hasta el día siguiente.
+
+Ahora:
+- En la primera hora después de la renovación (`credit_budget.in_reset_grace`,
+  `ODDS_API_RESET_GRACE_MIN` = 60) una corrida con saldo bajo aborta igual, pero sin aviso.
+  Si a la hora sigue sin créditos, la siguiente corrida lo manda.
+- Cada preflight con el saldo arriba del umbral borra la marca (`credit_budget.clear_stop`):
+  "sin créditos" vale solo mientras de verdad no hay.
 
 **Ligas fuera y líneas 1.5 / 3.5 de goles (30-oct-2026).** El dueño: "quiero tener ahorro
 de créditos para poder valorar más varios mercados de picks".
