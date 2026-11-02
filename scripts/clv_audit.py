@@ -41,7 +41,7 @@ def audit_clv() -> dict:
     """), engine)
 
     if df.empty or len(df) < MIN_SAMPLE:
-        return {"status": "insufficient_sample", "n": len(df)}
+        return {"status": "insufficient_sample", "n": len(df), "lookback_days": LOOKBACK_DAYS}
 
     pos = df[df["clv"] > 0]
     neg = df[df["clv"] < 0]

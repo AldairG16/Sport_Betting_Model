@@ -9,7 +9,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from datetime import datetime, timedelta, timezone
+
+import src.features.soccerdata_feed as sf
 from src.features.soccerdata_feed import current_season, parse_understat
+from src.utils.log import RUN_ISSUES
 
 import pandas as pd
 import pytest
@@ -63,23 +67,87 @@ class TestUnderstat:
                                LEAGUE_DATA if league == "EPL" else {"teams": {}})
         assert res["status"] == "partial" and res["team_rows"] == 2
 
-    def test_weekly_step_raises_an_error_when_nothing_loads(self, monkeypatch):
-        import scripts.orchestrator as orch
-        import src.features.soccerdata_feed as sf
-        calls = []
+    def test_a_site_that_does_not_connect_is_asked_once(self, monkeypatch):
+        # 2-nov-26: Understat no respondía; el weekly esperó 30 s por cada liga
+        import requests
+        asked = []
 
-        class FakeLog:
-            def error(self, msg):
-                calls.append(("error", msg))
+        def down(league, season):
+            asked.append(league)
+            raise requests.exceptions.ConnectTimeout("understat.com")
+        res, eng = self._refresh(monkeypatch, down)
+        assert asked == ["EPL"] and res["status"] == "failed" and not eng.executed
+        assert "sin conexión" in " ".join(res["errors"])
 
-            def warning(self, msg):
-                calls.append(("warning", msg))
+    def test_after_one_league_loads_the_others_are_still_tried(self, monkeypatch):
+        import requests
 
-        monkeypatch.setattr(orch, "log", FakeLog())
-        monkeypatch.setattr(sf, "refresh_understat",
-                            lambda verbose=True: {"status": "failed", "errors": ["EPL/2026: 403"]})
-        orch.step_soccerdata_refresh()
-        assert calls and calls[0][0] == "error" and "xG real NO disponible" in calls[0][1]
+        def flaky(league, season):
+            if league == "La_liga":
+                raise requests.exceptions.ConnectionError("reset")
+            return LEAGUE_DATA
+        res, _ = self._refresh(monkeypatch, flaky)
+        assert res["status"] == "partial" and res["team_rows"] == 8      # 4 ligas de 5
+
+
+# ─── sin xG nuevo: qué se avisa y el reintento del morning (2-nov-26) ────────
+
+NOW = datetime(2026, 11, 2, 19, 12, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("age,level,says", [
+    (7, "warning", "sirve hasta el"),
+    (sf.STALE_DAYS - 5, "error", "vence el"),
+    (sf.STALE_DAYS + 5, "error", "NO disponible"),
+    (None, "error", "NO disponible")])
+def test_without_new_xg_it_warns_and_errors_only_before_it_expires(age, level, says):
+    # el weekly del 2-nov decía "el modelo usa el xG sustituto esta semana"
+    # con el xG del 26-oct todavía al día: sirve 21 días
+    RUN_ISSUES.reset()
+    last = None if age is None else NOW - timedelta(days=age)
+    sf.report_stale({"status": "failed", "errors": ["EPL/2026: ConnectTimeout"]}, last, NOW)
+    # RUN_ISSUES y no caplog: caplog no ve el log en CI (PR #85)
+    errors = [e for e in RUN_ISSUES.errors() if "xG real" in e]
+    warnings = [w for w in RUN_ISSUES.warnings() if "xG real" in w]
+    assert bool(errors) is (level == "error") and bool(warnings) is (level == "warning")
+    msg = (errors or warnings)[0]
+    assert says in msg and "ConnectTimeout" in msg
+    if age == 7:
+        assert "esta semana" not in msg and "16-Nov" in msg      # 26-oct + 21 días
+    RUN_ISSUES.reset()
+
+
+@pytest.mark.parametrize("age,force,asks", [(3, False, False), (sf.RETRY_AFTER_DAYS + 1, False, True),
+                                            (None, False, True), (3, True, True)])
+def test_the_morning_retries_only_when_the_weekly_could_not(monkeypatch, age, force, asks):
+    RUN_ISSUES.reset()
+    last = None if age is None else NOW - timedelta(days=age)
+    monkeypatch.setattr(sf, "last_refresh", lambda: last)
+    called = []
+    monkeypatch.setattr(sf, "refresh_understat",
+                        lambda verbose=True: called.append(1) or {"status": "failed", "errors": ["x"]})
+    res = sf.refresh_if_stale(now=NOW, force=force)
+    assert bool(called) is asks and (res is None) is (not asks)
+    if asks:
+        assert any("xG real" in m for m in RUN_ISSUES.warnings() + RUN_ISSUES.errors())   # lo que falló se avisa
+    RUN_ISSUES.reset()
+
+
+def test_the_weekly_forces_the_read_and_the_morning_retries_before_the_picks(monkeypatch):
+    from tests.test_program_picks import _steps
+    names, steps, O = _steps(monkeypatch, "run_morning")
+    assert names.index("xG real (si el weekly no pudo)") < names.index("Predictions")
+    assert steps["xG real (si el weekly no pudo)"] is O.step_understat_retry
+    calls = []
+    monkeypatch.setattr(sf, "refresh_if_stale", lambda **kw: calls.append(kw))
+    O.step_soccerdata_refresh()
+    O.step_understat_retry()
+    assert calls == [{"force": True}, {}]
+
+
+def test_the_daily_data_check_waits_as_long_as_the_xg_lasts():
+    from src.utils.output_checks import FEED_MAX_AGE_DAYS
+    assert FEED_MAX_AGE_DAYS["team_xg_real"][1] == sf.STALE_DAYS
 
 
 class TestSeason:

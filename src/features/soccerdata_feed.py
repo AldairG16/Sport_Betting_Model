@@ -18,14 +18,15 @@ nada lo dijera. Understat publica sus datos por liga y temporada en
 Club Elo se retiró: se descargaba pero nada leía su tabla.
 
 DISEÑO:
-  - La descarga corre SOLO en el weekly y guarda en tablas de Neon.
+  - La descarga corre en el weekly y guarda en tablas de Neon; si el weekly
+    no pudo, el morning reintenta cada día (refresh_if_stale).
   - El pipeline jamás descarga: lee las tablas (lectura barata).
   - Si la fuente falla o el dato está viejo (>21 días), las lecturas
     devuelven None y el pipeline usa sus proxies — y el weekly lo AVISA.
 """
 
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -34,8 +35,13 @@ from sqlalchemy import text
 sys.path.append(str(Path(__file__).parent.parent))
 
 from config.database import engine
+from src.utils.log import get_logger
+
+log = get_logger(__name__)
 
 STALE_DAYS = 21
+WARN_DAYS_LEFT = 7          # avisa (ERROR) una semana antes de que el xG venza
+RETRY_AFTER_DAYS = 6        # el morning reintenta si el último xG tiene más que esto
 
 # Mapeo sport_key (The Odds API) → liga en Understat
 UNDERSTAT_LEAGUES = {
@@ -130,58 +136,116 @@ def refresh_understat(seasons: list[str] | None = None, verbose: bool = True) ->
     xG por equipo y goles por jugador de las 5 grandes ligas → tablas
     team_xg_real y player_club_goals en Neon. Corre en el weekly.
     status: "ok" (todas las ligas), "partial" o "failed" (ninguna).
+    Si la primera liga no conecta, el sitio no responde y no se piden las
+    demás: van al mismo servidor (2-nov-26: cinco esperas de 30 s).
     """
+    import requests
     seasons = seasons or [current_season()]
-    teams_up, players_up = 0, 0
+    wanted = [(sk, lg, s) for sk, lg in UNDERSTAT_LEAGUES.items() for s in seasons]
+    teams_up, players_up, loaded = 0, 0, 0
     errors = []
 
-    for sport_key, league in UNDERSTAT_LEAGUES.items():
-        for season in seasons:
-            try:
-                teams, players = parse_understat(fetch_understat(league, season))
-            except Exception as e:
-                errors.append(f"{league}/{season}: {type(e).__name__}")
-                continue
-            if not teams:
-                errors.append(f"{league}/{season}: sin equipos")
-                continue
+    for sport_key, league, season in wanted:
+        try:
+            teams, players = parse_understat(fetch_understat(league, season))
+        except Exception as e:
+            errors.append(f"{league}/{season}: {type(e).__name__}")
+            if not loaded and isinstance(e, requests.exceptions.ConnectionError):
+                errors.append("sin conexión: no se pidieron las demás ligas")
+                break
+            continue
+        if not teams:
+            errors.append(f"{league}/{season}: sin equipos")
+            continue
 
-            with engine.begin() as conn:
-                _ensure_tables(conn)
-                for t in teams:
-                    conn.execute(text("""
-                        INSERT INTO team_xg_real
-                            (team, league, season, xg_for, xg_against, matches, source)
-                        VALUES (:team, :league, :season, :xg_for, :xg_against, :matches, 'understat')
-                        ON CONFLICT (team, league, season) DO UPDATE SET
-                            xg_for = EXCLUDED.xg_for,
-                            xg_against = EXCLUDED.xg_against,
-                            matches = EXCLUDED.matches,
-                            source = 'understat',
-                            updated_at = NOW()
-                    """), {**t, "league": sport_key, "season": season})
-                    teams_up += 1
-                for p in players:
-                    conn.execute(text("""
-                        INSERT INTO player_club_goals
-                            (player, team, league, season, goals, matches, xg)
-                        VALUES (:player, :team, :league, :season, :goals, :matches, :xg)
-                        ON CONFLICT (player, team, season) DO UPDATE SET
-                            goals = EXCLUDED.goals,
-                            matches = EXCLUDED.matches,
-                            xg = EXCLUDED.xg,
-                            updated_at = NOW()
-                    """), {**p, "league": sport_key, "season": season})
-                    players_up += 1
+        with engine.begin() as conn:
+            _ensure_tables(conn)
+            for t in teams:
+                conn.execute(text("""
+                    INSERT INTO team_xg_real
+                        (team, league, season, xg_for, xg_against, matches, source)
+                    VALUES (:team, :league, :season, :xg_for, :xg_against, :matches, 'understat')
+                    ON CONFLICT (team, league, season) DO UPDATE SET
+                        xg_for = EXCLUDED.xg_for,
+                        xg_against = EXCLUDED.xg_against,
+                        matches = EXCLUDED.matches,
+                        source = 'understat',
+                        updated_at = NOW()
+                """), {**t, "league": sport_key, "season": season})
+                teams_up += 1
+            for p in players:
+                conn.execute(text("""
+                    INSERT INTO player_club_goals
+                        (player, team, league, season, goals, matches, xg)
+                    VALUES (:player, :team, :league, :season, :goals, :matches, :xg)
+                    ON CONFLICT (player, team, season) DO UPDATE SET
+                        goals = EXCLUDED.goals,
+                        matches = EXCLUDED.matches,
+                        xg = EXCLUDED.xg,
+                        updated_at = NOW()
+                """), {**p, "league": sport_key, "season": season})
+                players_up += 1
+        loaded += 1
 
-    wanted = len(UNDERSTAT_LEAGUES) * len(seasons)
-    status = "ok" if not errors else ("failed" if len(errors) >= wanted else "partial")
+    status = "ok" if loaded == len(wanted) else ("failed" if not loaded else "partial")
     result = {"status": status, "team_rows": teams_up, "player_rows": players_up,
               "errors": errors[:5]}
     if verbose:
         print(f"   📊 Understat: {teams_up} equipos, {players_up} jugadores · "
               f"errores: {len(errors)}" + (f" ({'; '.join(errors[:3])})" if errors else ""))
     return result
+
+
+def last_refresh() -> datetime | None:
+    """Cuándo se guardó el último xG de Understat (UTC), o None."""
+    try:
+        t = pd.read_sql(text("SELECT MAX(updated_at) AS t FROM team_xg_real"), engine).iloc[0]["t"]
+    except Exception:
+        return None                                 # la tabla nace con la primera carga
+    if t is None or pd.isna(t):
+        return None
+    t = pd.Timestamp(t)
+    return (t if t.tzinfo else t.tz_localize("UTC")).to_pydatetime()
+
+
+def report_stale(res: dict, last: datetime | None, now: datetime) -> None:
+    """Sin xG nuevo: WARNING mientras el último sirve todavía más de
+    WARN_DAYS_LEFT días; si vence antes o no hay, ERROR (llega a Telegram).
+    Hasta el 2-nov-26 el weekly decía siempre "el modelo usa el xG sustituto
+    esta semana", y no era cierto: el del lunes anterior sirve STALE_DAYS días."""
+    why = "; ".join(res.get("errors") or []) or "sin datos"
+    if res.get("status") == "partial":
+        log.warning(f"xG real incompleto (Understat): {why}")
+        return
+    if last is not None:
+        expires = last + timedelta(days=STALE_DAYS)
+        left = (expires - now).days
+        if left > WARN_DAYS_LEFT:
+            log.warning(f"⚠️  xG real sin actualizar (Understat: {why}) — sigue el del {last:%d-%b}, "
+                        f"que sirve hasta el {expires:%d-%b}; el morning reintenta cada día")
+            return
+        if left >= 0:
+            log.error(f"❌ xG real sin actualizar (Understat: {why}) — el del {last:%d-%b} vence el "
+                      f"{expires:%d-%b}: desde ahí el modelo usa el xG sustituto")
+            return
+    log.error(f"❌ xG real NO disponible (Understat: {why}): el modelo usa el xG sustituto")
+
+
+def refresh_if_stale(now: datetime | None = None, force: bool = False,
+                     max_age_days: int = RETRY_AFTER_DAYS) -> dict | None:
+    """El weekly lee Understat cada lunes (force). Si no pudo (2-nov-26: el
+    sitio no respondía ni desde GitHub ni desde la PC), el morning reintenta
+    cada día hasta lograrlo; antes la siguiente oportunidad era el lunes
+    siguiente. None si el xG está al día."""
+    now = now or datetime.now(timezone.utc)
+    last = last_refresh()
+    if not force and last is not None and now - last <= timedelta(days=max_age_days):
+        print(f"   📊 xG real al día (Understat, {last:%d-%b})")
+        return None
+    res = refresh_understat(verbose=True)
+    if res["status"] != "ok":
+        report_stale(res, last, now)
+    return res
 
 
 # xG por partido más alto que esto es un dato roto, no un equipo.
@@ -237,4 +301,4 @@ def get_real_xg(team: str) -> dict | None:
 
 
 if __name__ == "__main__":
-    print(refresh_understat())
+    print(refresh_if_stale(force=True))

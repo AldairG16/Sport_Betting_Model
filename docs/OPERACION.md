@@ -7,7 +7,7 @@ Todo lo que hace falta saber para trabajar en este repo sin romper producción.
 
 ## 1. Servicios externos
 
-El modelo no funciona solo: depende de siete servicios de terceros. Si uno se cae,
+El modelo no funciona solo: depende de servicios de terceros. Si uno se cae,
 el pipeline **sigue saliendo verde en Actions** y deja de producir en silencio —
 ver §2.
 
@@ -21,6 +21,7 @@ ver §2.
 | **OpenWeatherMap** | Clima del partido (`src/features/weather_impact.py`). | `WEATHER_API_KEY` | Gratis, 1000 llamadas/día. |
 | **TheSportsDB** | Marcadores de respaldo de las ligas que ni ESPN ni football-data tienen: hoy solo la K-League (`scripts/fetch_results_tsdb.py`, 2-nov-26). The Odds API dejó sin marcador su jornada 34. Corre en el evening y en resultados (solo partidos analizados sin marcador) y en el weekly (las jornadas de la última semana completas). La historia 2023-2026 se cargó una vez con `--history`. Con la clave libre: ~10 llamadas seguidas y luego 429 con `Retry-After` de 120 s, que se respeta. | `THESPORTSDB_KEY` opcional; sin ella usa la clave pública de prueba `123`. | Gratis. |
 | **ClubElo** | Fuerza de cada liga para los partidos entre ligas (§7, "Fuerza de liga"). Su API (`api.clubelo.com`) responde 502; las páginas públicas `clubelo.com/<PAÍS>` piden un reto anti-bots desde el 29-oct-26: sigue la foto del 22-oct (sirve 120 días, hasta el 19-feb). | Ninguna. | Gratis. |
+| **Understat** | xG real de las 5 grandes y goleadores de clubes (`src/features/soccerdata_feed.py`). Lo lee el weekly; si no pudo, el morning reintenta cada día. El xG sirve 21 días: mientras quede más de una semana es aviso, después ERROR. El 2-nov-26 el sitio no respondía (ni desde GitHub ni desde la PC): siguió el xG del 26-oct. | Ninguna. | Gratis. |
 
 `RAPIDAPI_KEY` solo la usa `test_api.py`, que no forma parte del pipeline.
 
@@ -320,8 +321,17 @@ Mientras el weekly no tenga su primera fila, sirve de respaldo la hora de
 17 hasta el 25-sep-2026 sin cargar nunca un dato: `soccerdata` se instalaba sin sus
 dependencias y el `import` fallaba, el código lo trataba como "no instalado — omitido"
 y seguía. Hoy lee Understat directo (`/getLeagueData/<liga>/<temporada>`) y, si no llega
-ninguna liga, registra un **error** que llega a Telegram. Ante un "OK" sospechoso, busca
+ninguna liga, lo avisa: es **error** (llega a Telegram) cuando al xG anterior le queda
+una semana o menos, y el morning reintenta cada día. Ante un "OK" sospechoso, busca
 en el log qué cargó.
+
+**`bets_history` está congelada desde el modo recolección (25-sep-2026).** Lo que mide al
+modelo debe leer `program_picks`, que se liquida cada noche. La calibración rodante del
+weekly (`scripts/weekly_sanity_audit.py`) medía las últimas 100 de `bets_history`: del 5-oct
+al 2-nov mandó el mismo 🚨 cada lunes con apuestas del 19 al 22-sep, y se habría quedado sin
+opinión para siempre. Desde el 2-nov-2026 mide los picks del programa y dice qué esperaba el
+mercado. Siguen sobre `bets_history` el backtest walk-forward, el CLV audit y los chequeos de
+apuestas (dobles, rezago, integridad), que solo cuentan si se vuelve a apostar.
 - Desde el 27-oct-2026 el ✅ del chequeo de salidas dice lo que revisó: cuántos picks vieron
   su alineación publicada y cuántos partidos jugados tienen su final de ESPN.
 
@@ -1105,8 +1115,8 @@ córners que nadie lee, en una sola transacción de ~70 s. Chocaba con el closin
   - `upcoming_matches`, `odds_history` y `program_picks`: 1 día;
   - `model_vs_sharp` y `kalshi_history`: 2 días;
   - `espn_matches`: 3 días;
-  - `team_xg_real`: 9 días;
-  - `club_elo`: 10 días.
+  - `team_xg_real`: 21 días, lo que sirve el xG (`soccerdata_feed.STALE_DAYS`);
+  - `club_elo`: 120 días, lo que sirve la foto (`clubelo.MAX_AGE_DAYS`).
 
   Una tabla que todavía no existe (instalación nueva) no cuenta.
 
