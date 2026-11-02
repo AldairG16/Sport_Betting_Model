@@ -229,7 +229,12 @@ def audit_xg_sanity() -> tuple[str, str]:
     más que el visitante) y un rango fijo 1.35-1.45: alertaba "1.63" semana
     tras semana por la ventaja de local, no por el proxy. Ahora compara
     ambos lados contra los goles de los mismos partidos.
+
+    Desde el 2-nov-26 sin las ligas cuyos tiros vienen de ESPN: cada una se
+    calibra con su propia relación (xg_proxy.espn_league_factors); este
+    chequeo vigila las tasas fijas, que salieron de las de football-data.
     """
+    from src.features.espn_stats import STATS_LEAGUES
     df = pd.read_sql(text("""
         SELECT AVG(home_shots_target) AS hsot, AVG(away_shots_target) AS asot,
                AVG(home_shots) AS hsh, AVG(away_shots) AS ash,
@@ -239,7 +244,8 @@ def audit_xg_sanity() -> tuple[str, str]:
           AND home_shots_target IS NOT NULL AND away_shots_target IS NOT NULL
           AND home_shots IS NOT NULL AND away_shots IS NOT NULL
           AND home_goals IS NOT NULL AND away_goals IS NOT NULL
-    """), engine)
+          AND NOT (league = ANY(:espn))
+    """), engine, params={"espn": list(STATS_LEAGUES)})
     if df.empty or not int(df.iloc[0]["n"] or 0):
         return "ok", "sin datos de tiros recientes"
     r = df.iloc[0]

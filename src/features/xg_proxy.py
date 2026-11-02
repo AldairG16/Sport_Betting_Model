@@ -68,6 +68,51 @@ def leagues_with_shots() -> frozenset | None:
     return frozenset(df["league"].dropna())
 
 
+# 2-nov-26: las ligas cuyos tiros vienen de ESPN (src/features/espn_stats.py).
+# Con las tasas de arriba su xG estimado no coincide con sus goles: Argentina
+# 1.31 veces los goles reales, Brasil 1.19, Suecia 1.10, la MLS 1.02. En esas
+# ligas se tira mucho y se anota poco, y el xG entra al ataque y la defensa
+# como goles por partido: inflado, sobrevalora los overs (el sesgo de sep-26).
+# Su xG se divide por la relación de su liga; sin historia suficiente para
+# medirla, sus tiros no entran al xG. Las ligas de football-data no se tocan
+# (0.98-1.14): de ellas salieron las tasas.
+MIN_FACTOR_MATCHES = 100
+
+
+@lru_cache(maxsize=1)
+def espn_league_factors() -> dict:
+    """{liga de ESPN: xG estimado / goles reales del último año}. {} si la
+    consulta falla (y sus tiros no entran al xG en esta corrida)."""
+    from src.features.espn_stats import STATS_LEAGUES
+    try:
+        df = pd.read_sql(text(f"""
+            SELECT league, COUNT(*) AS n,
+                   SUM(home_shots_target + away_shots_target) * {SHOT_ON_TARGET_RATE}
+                   + SUM(GREATEST(home_shots - home_shots_target, 0)
+                         + GREATEST(away_shots - away_shots_target, 0)) * {SHOT_RATE} AS xg,
+                   SUM(home_goals + away_goals) AS goals
+            FROM matches
+            WHERE league = ANY(:leagues) AND date >= CURRENT_DATE - :days
+              AND home_shots_target > 0 AND away_shots_target > 0
+              AND home_shots IS NOT NULL AND away_shots IS NOT NULL AND home_goals IS NOT NULL
+            GROUP BY league
+        """), engine, params={"leagues": list(STATS_LEAGUES), "days": SHOTS_LOOKBACK_DAYS})
+    except Exception as e:
+        log.error(f"❌ xG de las ligas de ESPN: la consulta falló ({type(e).__name__}) — "
+                  f"sus tiros no entran al xG en esta corrida")
+        return {}
+    return {r.league: float(r.xg) / float(r.goals) for r in df.itertuples()
+            if int(r.n) >= MIN_FACTOR_MATCHES and r.goals and float(r.goals) > 0}
+
+
+def _xg_factor(league) -> float | None:
+    """Por cuánto dividir el xG de un partido de esta liga; None si no se puede usar."""
+    from src.features.espn_stats import STATS_LEAGUES
+    if league not in STATS_LEAGUES:
+        return 1.0
+    return espn_league_factors().get(league)
+
+
 # =========================
 # MAIN FUNCTION
 # =========================
@@ -89,7 +134,7 @@ def get_team_xg(team: str) -> dict | None:
 
     df = pd.read_sql(
         text("""
-            SELECT home_team, away_team,
+            SELECT home_team, away_team, league,
                    home_shots, away_shots,
                    home_shots_target, away_shots_target,
                    date
@@ -106,6 +151,9 @@ def get_team_xg(team: str) -> dict | None:
         params={"team": team, "window": XG_WINDOW}
     )
 
+    if not df.empty:
+        df["factor"] = df["league"].map(_xg_factor)
+        df = df[df["factor"].notna()]
     if df.empty or len(df) < 3:
         return None
 
@@ -128,8 +176,8 @@ def get_team_xg(team: str) -> dict | None:
             sot_ag      = row.home_shots_target or 0
             shots_ag    = max(0, (row.home_shots or 0) - sot_ag)
 
-        xg_for     = sot_for   * SHOT_ON_TARGET_RATE + shots_for * SHOT_RATE
-        xg_against = sot_ag    * SHOT_ON_TARGET_RATE + shots_ag  * SHOT_RATE
+        xg_for     = (sot_for * SHOT_ON_TARGET_RATE + shots_for * SHOT_RATE) / row.factor
+        xg_against = (sot_ag  * SHOT_ON_TARGET_RATE + shots_ag  * SHOT_RATE) / row.factor
 
         xg_for_w     += xg_for     * weight
         xg_against_w += xg_against * weight

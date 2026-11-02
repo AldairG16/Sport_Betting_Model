@@ -395,7 +395,8 @@ partidos desde 2015-16. Bélgica, Países Bajos, Portugal, Grecia y Turquía no 
 segunda división en football-data: sus ascendidos siguen con poca historia, y el weekly
 lo avisa como WARNING. MLS, Liga MX, Brasil y Argentina solo tenían los marcadores de
 The Odds API, desde abril de 2026 y con huecos: la MLS no tenía ni un partido de 2025.
-Ahora salen de football-data (`/new/USA.csv`, `MEX`, `BRA`, `ARG`). Se agregaron 6,016
+Ahora salen de football-data (`/new/USA.csv`, `MEX`, `BRA`, `ARG`), sin tiros ni córners:
+desde el 2-nov-2026 esos salen de ESPN (ver "Tiros y córners de ESPN"). Se agregaron 6,016
 partidos de la MLS y 6,085 de Argentina. Esos archivos traen la fecha local y The Odds API
 la de UTC: un partido ya guardado con los mismos equipos a ±1 día no se repite
 (`already_stored`). La K-League no está en football-data: solo tiene los marcadores de la
@@ -1101,8 +1102,9 @@ córners que nadie lee, en una sola transacción de ~70 s. Chocaba con el closin
 - `output_checks.feature_coverage`, al final de cada corrida: ERROR si H2H llega a menos del
   25% de los partidos evaluados, o el xG real a menos del 80% en las 5 grandes.
 - **xG, córners y tiros se miden solo sobre las ligas que traen tiros (27-oct-2026).**
-  `xg_proxy.leagues_with_shots` = las ligas con tiros en `matches` el último año (las 19 de
-  football-data). Brasil, MLS, Suecia, Liga MX, Argentina… nunca los traen.
+  `xg_proxy.leagues_with_shots` = las ligas con tiros en `matches` el último año: las 19 de
+  football-data y, desde el 2-nov-2026, las 8 que los toman de ESPN (ver "Tiros y córners de
+  ESPN", abajo).
   - Medido sobre todos los partidos, la noche del 27-oct marcó "xG en 10 de 42": 32 eran de
     esas ligas, y los 10 de Serie A tenían todo.
   - Ahora: ERROR si el xG llega a menos del 60% de los partidos de esas ligas (`with_shots`),
@@ -1119,6 +1121,31 @@ córners que nadie lee, en una sola transacción de ~70 s. Chocaba con el closin
   - `club_elo`: 120 días, lo que sirve la foto (`clubelo.MAX_AGE_DAYS`).
 
   Una tabla que todavía no existe (instalación nueva) no cuenta.
+- `output_checks.espn_shots_gaps`, diario: ERROR si una de las ligas que toman tiros de ESPN
+  tiene tiros en menos de la mitad de sus partidos de los últimos 30 días (con 10 o más).
+
+**Tiros y córners de ESPN (2-nov-2026).** La MLS no tenía un tiro en 512 partidos del último
+año, Argentina el 5%, y Brasil y México solo ceros (0 tiros, 0 a puerta y 0 córners de los dos
+equipos, de un cargador viejo; xG, tiros y córners filtran `> 0`, así que eran inertes). Suecia,
+Noruega, Japón y China, nada. Sin tiros el modelo no tenía xG estimado, tiros ni córners en
+esas ligas, y ahí el 🎯 perdía: MLS 8 de 23 (−10.03u), Argentina −2.30u, México −1.35u, contra
++5u de la EPL y de la Serie A.
+- `src/features/espn_stats.py` lee el scoreboard mensual de ESPN de `STATS_LEAGUES`
+  (`totalShots`, `shotsOnTarget`, `wonCorners`) y completa las filas de `matches` sin tiros
+  (NULL o los cuatro en 0). Empareja por fecha ±1 día, mismo marcador y los dos nombres
+  parecidos; si dos filas se parecen casi igual, no adivina. Nunca pisa un dato, y copia antes
+  cada fila a `matches_identity_backup` (acción `espn_stats`).
+- El evening refresca los dos últimos meses (paso "Tiros y córners (ESPN)", antes de
+  "Results"). La historia (26 meses) se carga una vez: `python -m src.features.espn_stats
+  --months 26 --apply`; sin `--apply`, en seco.
+- **El xG de esas ligas se calibra con sus goles.** Con las tasas de football-data, el xG
+  estimado daba 1.31 veces los goles reales en Argentina, 1.19 en Brasil y 1.10 en Suecia (la
+  MLS 1.02); entra al ataque y la defensa como goles por partido, e inflado sobrevalora los
+  overs (el sesgo de sep-26). `xg_proxy.espn_league_factors` mide esa relación por liga en el
+  último año y divide su xG por ella; sin 100 partidos para medirla, sus tiros no entran al
+  xG. Las ligas de football-data no se tocan (0.98-1.14), y el chequeo semanal del xG
+  (`weekly_sanity_audit.audit_xg_sanity`) las mide solo a ellas.
+- La K-League no está en ESPN: sigue sin tiros.
 
 **Nombres de otra fuente: siempre por `normalize_team` (23-oct-2026).** `team_xg_real` guarda el
 nombre de Understat ("Bayern Munich", "VfB Stuttgart") y `get_real_xg` lo comparaba tal cual con
