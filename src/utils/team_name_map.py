@@ -55,6 +55,14 @@ TEAM_NAME_MAP = {
     "atletico": "ath madrid",
     "new york rb": "ny red bulls",
     "jeju sk": "jeju united fc",
+    # K-League en TheSportsDB (2-nov-26, scripts/fetch_results_tsdb.py): los
+    # nombres de hoy y de antes contra los de The Odds API
+    "ulsan hd": "ulsan hyundai fc",
+    "daejeon hana citizen": "daejeon citizen",
+    "gimcheon sangmu": "sangju sangmu fc",
+    "sangju sangmu": "sangju sangmu fc",
+    "incheon united fc": "incheon united",
+    "anyang": "fc anyang",
     # segunda de Holanda en ESPN (24-oct-26): los nombres de football-data en matches
     "rkc waalwijk": "waalwijk",
     "de graafschap": "graafschap",

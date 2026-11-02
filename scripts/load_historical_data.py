@@ -120,6 +120,10 @@ def load_historical_data():
                 "HR":"home_red",
                 "AR":"away_red",
             })
+            # solo lo que se guarda: con las ~100 columnas de momios del CSV,
+            # agregar league y season daba PerformanceWarning en cada liga
+            df = df[[c for c in ["date", "home_team", "away_team", "home_goals", "away_goals", *STAT_COLS]
+                     if c in df.columns]].copy()
 
             df["league"] = league
             df["season"] = int(s[:2]) + 2000

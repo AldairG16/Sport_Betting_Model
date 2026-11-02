@@ -138,7 +138,8 @@ class _Blocked(Exception):
     code = 403                                     # urllib.error.HTTPError lleva el estado en .code
 
 
-@pytest.mark.parametrize("age,level", [(7, "warning"), (40, "error"), (50, "error"), (None, "error")])
+@pytest.mark.parametrize("age,level", [(7, "warning"), (CE.MAX_AGE_DAYS - 5, "error"), (CE.MAX_AGE_DAYS + 5, "error"),
+                                       (None, "error")])
 def test_when_clubelo_blocks_the_old_snapshot_is_used_and_it_warns_before_it_expires(age, level):
     # 29-oct-26: las páginas de ClubElo piden un reto anti-bots de Cloudflare (403)
     RUN_ISSUES.reset()
@@ -157,7 +158,7 @@ def test_when_clubelo_blocks_the_old_snapshot_is_used_and_it_warns_before_it_exp
     assert bool(errors) is (level == "error")                 # el ERROR llega a Telegram una semana antes
     if age == 7:
         assert "sirve hasta el" in msg
-    if age == 40:
+    if age == CE.MAX_AGE_DAYS - 5:
         assert "vence el" in errors[0]
     RUN_ISSUES.reset()
 

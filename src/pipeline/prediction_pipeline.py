@@ -730,8 +730,12 @@ def _stage_team_strengths(row, stats):
         stats['thin_history'] += 1
         low_history = (f"{home} con {home_form['matches']} y {away} con {away_form['matches']} partidos "
                        f"en la base (mínimo {MIN_FORM_MATCHES})")
-        log.warning(f"⚠️  Historia corta: {home} ({home_form['matches']}) vs "
-                    f"{away} ({away_form['matches']}) — menos de {MIN_FORM_MATCHES} partidos: solo pick informativo")
+        # print y no WARNING (2-nov-26): es lo esperado en las copas con
+        # equipos de ligas que no se cargan, y ya queda en el pick (low_history)
+        # y en "Historia corta" del resumen. Como WARNING llenaba "Avisos de la
+        # corrida" con 5 líneas iguales en cada morning y evening.
+        print(f"   ℹ️  Historia corta: {home} ({home_form['matches']}) vs "
+              f"{away} ({away_form['matches']}) — menos de {MIN_FORM_MATCHES} partidos: solo pick informativo")
     # 🔥 CONFIDENCE
     min_matches = min(home_form["matches"], away_form["matches"])
     confidence  = min(1.0, min_matches / 10)

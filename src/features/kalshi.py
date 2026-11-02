@@ -383,37 +383,57 @@ def capture_kalshi(horizon_hours: float = 96, every: bool = False, verbose: bool
     return inserted
 
 
-def stored_mismatches(engine, days: int = 7) -> list:
-    """Partidos de kalshi_history de los últimos `days` días cuyo 1X2 está a más
-    de MAX_PIN_GAP de Pinnacle (la última foto de odds_history): emparejados con
-    otro partido. [(liga, local, visitante, inicio, kalshi local, pinnacle local)]."""
+PIN_MAX_LAG_S = 3 * 3600    # la foto de Pinnacle con que se compara una de Kalshi: a 3 h o menos
+
+
+def snapshot_mismatches(kalshi: list, pin: list, max_lag_s: float = PIN_MAX_LAG_S) -> list:
+    """Función pura. kalshi: (liga, local, visitante, inicio, mercado, prob,
+    capturado) de la última foto de cada mercado; pin: (liga, match_key, inicio,
+    momio local, empate, visitante, capturado) de todas las fotos. Cada partido
+    se compara con la foto de Pinnacle más cercana a la hora de la de Kalshi
+    (2-nov-26: con la última, Panathinaikos–AEK salía "otro partido": Kalshi de
+    las 17:02 en 46%, igual que Pinnacle a esa hora, contra el 74% de Pinnacle
+    de las 18:32). Sin foto de Pinnacle a max_lag_s o menos no se juzga.
+    [(liga, local, visitante, inicio, kalshi local, pinnacle local)]."""
     from src.features.market_odds import market_probabilities
-    with engine.connect() as conn:
-        if conn.execute(text("SELECT to_regclass('kalshi_history')")).scalar() is None:
-            return []
-        k = conn.execute(text("""
-            SELECT DISTINCT ON (league, home, away, kickoff, market) league, home, away, kickoff, market, prob
-            FROM kalshi_history WHERE market IN ('home_win', 'away_win')
-              AND kickoff >= NOW() - make_interval(days => :d)
-            ORDER BY league, home, away, kickoff, market, captured_at DESC"""), {"d": days}).fetchall()
-        pin = conn.execute(text("""
-            SELECT DISTINCT ON (league, match_key, kickoff) league, match_key, kickoff,
-                   pin_home_odds, pin_draw_odds, pin_away_odds
-            FROM odds_history WHERE pin_home_odds IS NOT NULL AND kickoff >= NOW() - make_interval(days => :d)
-            ORDER BY league, match_key, kickoff, captured_at DESC"""), {"d": days + 1}).fetchall()
-    fair = {}
-    for lg, mk, kick, ph, pdr, pa in pin:
+    snaps = {}
+    for lg, mk, kick, ph, pdr, pa, at in pin:
         p = market_probabilities(float(ph), float(pdr), float(pa))
-        if p and p[0] is not None:
-            fair[(lg, str(mk).rsplit("_", 1)[0], kick)] = p        # match_key = local_visitante_fecha
-    game = {}
-    for lg, h, a, kick, market, prob in k:
+        if p and p[0] is not None:                                  # match_key = local_visitante_fecha
+            snaps.setdefault((lg, str(mk).rsplit("_", 1)[0], kick), []).append((at, p))
+    game, seen = {}, {}
+    for lg, h, a, kick, market, prob, at in kalshi:
         game.setdefault((lg, h, a, kick), {})[market] = float(prob)
+        seen[(lg, h, a, kick)] = max(at, seen.get((lg, h, a, kick), at))
     out = []
     for (lg, h, a, kick), g in game.items():
-        p = fair.get((lg, f"{h}_{a}", kick))
-        if p is None or len(g) < 2:
+        cand = snaps.get((lg, f"{h}_{a}", kick))
+        if not cand or len(g) < 2:
+            continue
+        at = seen[(lg, h, a, kick)]
+        lag, p = min(((abs((s_at - at).total_seconds()), p) for s_at, p in cand), key=lambda x: x[0])
+        if lag > max_lag_s:
             continue
         if abs(g["home_win"] - p[0]) > MAX_PIN_GAP or abs(g["away_win"] - p[2]) > MAX_PIN_GAP:
             out.append((lg, h, a, kick, g["home_win"], float(p[0])))
     return out
+
+
+def stored_mismatches(engine, days: int = 7) -> list:
+    """Partidos de kalshi_history de los últimos `days` días cuyo 1X2 está a más
+    de MAX_PIN_GAP de Pinnacle a la misma hora (odds_history): emparejados con
+    otro partido. [(liga, local, visitante, inicio, kalshi local, pinnacle local)]."""
+    with engine.connect() as conn:
+        if conn.execute(text("SELECT to_regclass('kalshi_history')")).scalar() is None:
+            return []
+        k = conn.execute(text("""
+            SELECT DISTINCT ON (league, home, away, kickoff, market) league, home, away, kickoff, market, prob,
+                   captured_at
+            FROM kalshi_history WHERE market IN ('home_win', 'away_win')
+              AND kickoff >= NOW() - make_interval(days => :d)
+            ORDER BY league, home, away, kickoff, market, captured_at DESC"""), {"d": days}).fetchall()
+        pin = conn.execute(text("""
+            SELECT league, match_key, kickoff, pin_home_odds, pin_draw_odds, pin_away_odds, captured_at
+            FROM odds_history WHERE pin_home_odds IS NOT NULL AND kickoff >= NOW() - make_interval(days => :d)
+            """), {"d": days + 1}).fetchall()
+    return snapshot_mismatches(k, pin)

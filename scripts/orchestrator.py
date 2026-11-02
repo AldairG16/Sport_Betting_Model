@@ -462,6 +462,28 @@ def step_fetch_results_backup():
         log.warning(f"⚠️  fbdata backup skipped: {e}")
 
 
+def step_fetch_results_tsdb():
+    """Respaldo de TheSportsDB para las ligas sin ESPN ni football-data
+    (K-League, 2-nov-26): The Odds API dejó sin marcador su jornada 34.
+    Solo los partidos analizados que siguen sin marcador. Si TheSportsDB no
+    responde es WARNING: el chequeo de salidas ya avisa la liga sin marcadores."""
+    try:
+        from scripts.fetch_results_tsdb import fetch_tsdb_backup
+        fetch_tsdb_backup(days=10)
+    except Exception as e:
+        log.warning(f"⚠️  TheSportsDB sin respuesta ({type(e).__name__}: {e})")
+
+
+def step_tsdb_history():
+    """Las jornadas de la última semana de las ligas de TheSportsDB completas
+    en `matches`: el respaldo diario solo trae los partidos analizados."""
+    try:
+        from scripts.fetch_results_tsdb import load_recent
+        load_recent()
+    except Exception as e:
+        log.warning(f"⚠️  Historial de TheSportsDB sin actualizar ({type(e).__name__}: {e})")
+
+
 def step_results():
     from src.models.save_bets import update_bet_results
     update_bet_results()
@@ -673,6 +695,7 @@ def run_evening(logger: Logger):
     run_step(logger, "Closing odds",      step_closing_odds)
     run_step(logger, "Fetch results",     step_fetch_results)
     run_step(logger, "Fetch results (fbdata backup)", step_fetch_results_backup)
+    run_step(logger, "Fetch results (TheSportsDB)", step_fetch_results_tsdb)
     run_step(logger, "Córners y tarjetas (ESPN)", step_espn_finals)
     run_step(logger, "Results",           step_results)
     run_step(logger, "Shadow results",    step_shadow_results)
@@ -1138,6 +1161,7 @@ def run_weekly(logger: Logger):
     run_step(logger, "Collect match events",     step_collect_events)
     run_step(logger, "Load extra leagues",       step_load_extra_leagues)
     run_step(logger, "Segundas divisiones (ESPN)", step_second_divisions)
+    run_step(logger, "Historial K-League (TheSportsDB)", step_tsdb_history)
     run_step(logger, "Momios históricos",        step_historical_odds)
     run_step(logger, "Alineaciones (ESPN)",      step_lineup_history)
     run_step(logger, "Buscador de ventajas",     step_edge_finder)
@@ -1164,6 +1188,7 @@ def run_results_only(logger: Logger):
     # pero nunca tocaba fbdata → corners/cards se quedaban unresolved.
     run_step(logger, "Fetch results",                  step_fetch_results)
     run_step(logger, "Fetch results (fbdata backup)",  step_fetch_results_backup)
+    run_step(logger, "Fetch results (TheSportsDB)",    step_fetch_results_tsdb)
     run_step(logger, "Results",                        step_results)
     run_step(logger, "Shadow results",                 step_shadow_results)
     run_step(logger, "CLV update",                     step_clv)
