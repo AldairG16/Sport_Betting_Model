@@ -169,3 +169,18 @@ def test_a_kalshi_price_far_from_pinnacle_is_another_match():
     assert K.price_mismatches(rows, {key: (0.59, 0.25, 0.16)}) == {key}                 # 19 pt: otro partido
     assert K.price_mismatches(rows, {key: (0.76, 0.16, 0.08)}) == set()                 # 2 pt: el mismo
     assert K.price_mismatches(rows, {}) == set()                                        # sin Pinnacle no se juzga
+
+
+def test_the_weekly_check_compares_kalshi_with_pinnacle_at_the_same_hour():
+    """2-nov-26: Panathinaikos–AEK. Kalshi de las 17:02 en 46%, igual que
+    Pinnacle a esa hora; Pinnacle de las 18:32 en 74%. Con la última foto de
+    Pinnacle salía "otro partido", y el script de limpieza lo habría borrado."""
+    lg, ko = "soccer_greece_super_league", datetime(2026, 11, 1, 19, tzinfo=timezone.utc)
+    at = lambda h, m: datetime(2026, 11, 1, h, m, tzinfo=timezone.utc)
+    kalshi = [(lg, "panathinaikos", "aek athens", ko, "home_win", 0.4627, at(17, 2)),
+              (lg, "panathinaikos", "aek athens", ko, "away_win", 0.2637, at(17, 2))]
+    pin = [(lg, "panathinaikos_aek athens_2026-11-01", ko, 2.14, 3.44, 3.58, at(16, 32)),
+           (lg, "panathinaikos_aek athens_2026-11-01", ko, 1.30, 4.73, 12.20, at(18, 32))]
+    assert K.snapshot_mismatches(kalshi, pin) == []
+    assert len(K.snapshot_mismatches(kalshi, pin[1:])) == 1                             # a 1.5 h y otro precio: otro partido
+    assert K.snapshot_mismatches(kalshi, pin[1:], max_lag_s=3600) == []                 # sin foto cercana no se juzga

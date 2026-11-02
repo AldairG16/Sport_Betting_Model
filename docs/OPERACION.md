@@ -19,7 +19,8 @@ ver §2.
 | **Telegram** | Único canal de salida: picks, resumen diario, alertas del watchdog. | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`; el analista usa `*_PREKICKOFF` y cae al bot principal si no están. | Gratis. |
 | **football-data.co.uk** | Respaldo de resultados y **única** fuente de córners y tarjetas. Publica con 24-36 h de retraso. Si un archivo no existe, **manda otro parecido** sin avisar (§5). | Ninguna, son CSV públicos. | Gratis. |
 | **OpenWeatherMap** | Clima del partido (`src/features/weather_impact.py`). | `WEATHER_API_KEY` | Gratis, 1000 llamadas/día. |
-| **ClubElo** | Fuerza de cada liga para los partidos entre ligas (§7, "Fuerza de liga"). Su API (`api.clubelo.com`) responde 502; las páginas públicas `clubelo.com/<PAÍS>` piden un reto anti-bots desde el 29-oct-26: sigue la foto del 22-oct (sirve 45 días). | Ninguna. | Gratis. |
+| **TheSportsDB** | Marcadores de respaldo de las ligas que ni ESPN ni football-data tienen: hoy solo la K-League (`scripts/fetch_results_tsdb.py`, 2-nov-26). The Odds API dejó sin marcador su jornada 34. Corre en el evening y en resultados (solo partidos analizados sin marcador) y en el weekly (las jornadas de la última semana completas). La historia 2023-2026 se cargó una vez con `--history`. Con la clave libre: ~10 llamadas seguidas y luego 429 con `Retry-After` de 120 s, que se respeta. | `THESPORTSDB_KEY` opcional; sin ella usa la clave pública de prueba `123`. | Gratis. |
+| **ClubElo** | Fuerza de cada liga para los partidos entre ligas (§7, "Fuerza de liga"). Su API (`api.clubelo.com`) responde 502; las páginas públicas `clubelo.com/<PAÍS>` piden un reto anti-bots desde el 29-oct-26: sigue la foto del 22-oct (sirve 120 días, hasta el 19-feb). | Ninguna. | Gratis. |
 
 `RAPIDAPI_KEY` solo la usa `test_api.py`, que no forma parte del pipeline.
 
@@ -259,7 +260,7 @@ están todas las clases que ya pasaron, como chequeos que corren igual cada vez:
 | Sesgo del modelo | Lo que queda de sesgo después de la corrección (`side_bias.residuals`), global y por región, en el 1X2, más de 2.5 y ambos anotan: avisa si pasa de 3 pt a 3 errores estándar (n ≥ 30). También si lo aprendido tiene más de 8 días | Weekly |
 | Alineaciones de ESPN | Que cada alineación sea de su partido y su equipo (`espn_lineups.identity_problems`): un partido de ESPN guardado con más de dos equipos, o alineaciones que no comparten jugadores con su equipo | Weekly |
 | Dixon-Coles al día | Que ningún equipo de los próximos 3 días con la historia que pide el ajuste (8+ partidos en 3 años) falte del ajuste Dixon-Coles: si falta, el ajuste es más viejo que la historia y sus partidos se saltan | Weekly |
-| Kalshi con su partido | Que el 1X2 guardado de Kalshi no esté a más de 10 pt del de Pinnacle (`kalshi.stored_mismatches`): si lo está, es otro partido. Se limpia con `scripts/fix_kalshi_mismatches.py --apply` | Weekly |
+| Kalshi con su partido | Que el 1X2 guardado de Kalshi no esté a más de 10 pt del de Pinnacle a la misma hora (`kalshi.stored_mismatches`, la foto de Pinnacle más cercana, a 3 h o menos): si lo está, es otro partido. Antes comparaba con la última foto de Pinnacle: Panathinaikos–AEK (1-nov) salía como otro partido porque Pinnacle se movió de +114 a -333 después de la última foto de Kalshi. Se limpia con `scripts/fix_kalshi_mismatches.py --apply` | Weekly |
 | Nombres de los próximos partidos | Que ninguna fila de `upcoming_matches` siga con el nombre normalizado de antes de un alias (`update_upcoming_matches.stale_norms`): sería el mismo partido dos veces. Cada recarga de momios los re-normaliza antes de limpiar duplicados | Weekly |
 
 - Corre en el weekly (paso "Auditoría del sistema", después del ajuste Dixon-Coles); las
@@ -1658,19 +1659,24 @@ mete 2.3 por partido en Noruega.
 - **Datos.** `refresh_if_stale()` corre en el morning (paso "ClubElo (fuerza de liga)",
   antes de Predictions) y, si la última foto tiene más de 6 días, lee las páginas públicas
   de ClubElo de 53 países (tabla `club_elo`, una foto por fecha). Un país que falla se salta;
-  ninguno → aviso (ver abajo). Una foto de más de 45 días no se usa (`MAX_AGE_DAYS`).
+  ninguno → aviso (ver abajo). Una foto de más de 120 días no se usa (`MAX_AGE_DAYS`; el
+  chequeo de datos `FEED_MAX_AGE_DAYS["club_elo"]` usa el mismo número).
   - La API de datos de ClubElo responde 502 desde el 22-oct-26 y la de partidos dice
     "Fixtures API deactivated": por eso las páginas.
   - **Desde el 29-oct-26 las páginas piden un reto anti-bots de Cloudflare** ("Just a
     moment…", 403, `Cf-Mitigated: challenge`). No se salta. Tres 403 seguidos
     (`BLOCK_PROBE`) dan a ClubElo por bloqueado y no se piden los otros 50 países.
-  - Sin foto nueva sigue la última: la del 22-oct sirve hasta el 6-dic. Es WARNING mientras
+  - Sin foto nueva sigue la última: la del 22-oct sirve hasta el 19-feb. Es WARNING mientras
     le queden más de 7 días (`WARN_DAYS_LEFT`) y ERROR a Telegram la última semana, con
     tiempo para buscar otra fuente. Antes `MAX_AGE_DAYS` era 10: desde el 1-nov los
     partidos de Champions se habrían quedado sin ajuste, y el morning mandaba un ERROR
     cada día.
-  - Por qué 45 días sirven: la fuerza de una liga (Elo promedio de sus 5 mejores clubes)
-    se mueve unos pocos puntos al mes, y pesa con `GAMMA` = 0.2.
+  - Por qué 120 días sirven (2-nov-26; antes 45): la fuerza de una liga (Elo promedio de sus
+    5 mejores clubes) se mueve unos pocos puntos al mes, y pesa con `GAMMA` = 0.2. Un club
+    grande cambia 50-100 puntos en un año (FootballDatabase, 1-nov-26); el promedio de 5,
+    menos. En 4 meses son ~15 puntos, que con `GAMMA` pesan 3: los goles esperados cambian
+    menos de 0.5%. El 2-nov la API seguía en 502 y las páginas en 403; con 45 días la foto
+    vencía el 6-dic y desde el 29-nov salía un ERROR diario sin nada que hacer.
 - **Fuerza de la liga** = Elo promedio de sus 5 mejores clubes (`league_strengths`; con menos
   de 3 clubes en ClubElo la liga no tiene fuerza). Foto del 22-oct: Inglaterra 1965, España
   1912, Alemania 1891, Italia 1860, Francia 1830 … Noruega 1642, Ucrania 1583.

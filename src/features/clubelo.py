@@ -63,7 +63,12 @@ CROSS_LEAGUE = ("uefa_champs", "uefa_europa", "conference")   # partidos entre l
 # responde 502 desde el 22-oct; no se salta el reto. La fuerza de una liga
 # (Elo promedio de sus 5 mejores clubes) se mueve unos pocos puntos al mes
 # y pesa con GAMMA = 0.2: una foto de semanas sirve.
-MAX_AGE_DAYS = 45
+# 2-nov-26: 45 → 120. La API seguía en 502 y las páginas en 403; la foto del
+# 22-oct vencía el 6-dic y desde el 29-nov habría un ERROR diario sin nada
+# que hacer. Un club grande cambia 50-100 puntos en un AÑO (FootballDatabase,
+# 1-nov-26); el promedio de 5 de una liga, menos. En 4 meses son ~15 puntos,
+# y con GAMMA = 0.2 pesan 3: los goles esperados cambian menos de 0.5%.
+MAX_AGE_DAYS = 120
 WARN_DAYS_LEFT = 7                                          # avisa (ERROR) una semana antes de que venza
 BLOCK_PROBE = 3                                             # 403 seguidos para dar por bloqueado
 ELO_HOME_ADV = 80                                           # el del ensemble (ensemble_model.ELO_HOME_ADV)

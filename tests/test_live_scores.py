@@ -160,5 +160,8 @@ def test_the_match_detail_fills_its_last_five_without_adding_matches():
 def test_the_evening_saves_espn_finals_after_the_results(monkeypatch):
     from tests.test_program_picks import _steps
     names, steps, O = _steps(monkeypatch, "run_evening")
-    assert names.index("Córners y tarjetas (ESPN)") == names.index("Fetch results (fbdata backup)") + 1
+    assert names.index("Córners y tarjetas (ESPN)") == names.index("Fetch results (TheSportsDB)") + 1
+    assert names.index("Fetch results (TheSportsDB)") == names.index("Fetch results (fbdata backup)") + 1
     assert steps["Córners y tarjetas (ESPN)"] is O.step_espn_finals
+    assert steps["Fetch results (TheSportsDB)"] is O.step_fetch_results_tsdb
+    assert names.index("Fetch results (TheSportsDB)") < names.index("Results")       # antes de liquidar
