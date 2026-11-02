@@ -120,6 +120,13 @@ LOW_HISTORY = "Poca historia para apostar"
 # ese pick no es 🎯 y el pick pasa a lo mejor que quede de lo que el programa cree.
 WEAKENED = "Alineación: a {team} le faltan {n} titulares habituales ({names})"
 LINEUP_OK = "confirmada"
+# 2-nov-26, el dueño: "haz el filtro aprendido por región para América". Los
+# 🎯 de América iban 25 de 59 contra 31.1 que esperaba el mercado (−14.15u)
+# y perdían con cualquier ventaja (3-4 pt, 5-6, 6-8): pedir más ventaja no
+# los arreglaba. Mientras el filtro está prendido (src/models/filter_learner.py,
+# lo decide el weekly con resultados), el pick se ve igual, nunca 🎯.
+REGION_PAUSED = "Región {region} en pausa: sus 🎯 pierden contra el mercado (filtro aprendido)"
+REGION_NAMES = {"america": "América"}
 
 
 def _num(v):
@@ -357,11 +364,12 @@ def model_1x2(r: dict, bias: dict | None = None) -> list:
     return [p["home_win"], p["draw"], p["away_win"]]
 
 
-def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=None) -> tuple:
+def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=None, paused=()) -> tuple:
     """(pick, motivo) para una fila de model_vs_sharp con los momios de ahora
     (u) y los de cuando se analizó (then_snap). bias: sesgo por lado aprendido.
-    weak: los ganadores con la alineación debilitada (lineup_check)."""
-    from src.models.side_bias import is_skipped
+    weak: los ganadores con la alineación debilitada (lineup_check). paused:
+    regiones (side_bias.region_of) con el 🎯 en pausa por el filtro aprendido."""
+    from src.models.side_bias import is_skipped, region_of
     if is_skipped(r):                  # la última corrida ya no lo evaluó (22-oct-26)
         return None, STALE
     cs = _candidates_of(r, u, props, ratio, bias)
@@ -372,6 +380,9 @@ def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=N
     low = r.get("low_history")
     if pick and low and not (isinstance(low, float) and pd.isna(low)):
         why = f"{LOW_HISTORY}: {low}"                     # se ve el pick, nunca 🎯
+    region = region_of(r.get("league"))
+    if pick and why is None and region in paused:         # pasa la regla: se ve igual, sin 🎯
+        why = REGION_PAUSED.format(region=REGION_NAMES.get(region, region))
     return pick, why
 
 
@@ -484,13 +495,14 @@ def _snap_before(idx: dict, key: str, kick, before) -> dict | None:
 
 
 def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame | None = None, ratio=None,
-                normalize=None, props_for=None, bias=None, lineups_for=None) -> list:
+                normalize=None, props_for=None, bias=None, lineups_for=None, paused=()) -> list:
     """Función pura: el pick (o "sin pick" con su motivo) de cada partido de
     model_vs_sharp (la fila más reciente) con la última fila de
     upcoming_matches. snaps: odds_history, para los momios de cuando se
     analizó. props_for(home, away, league, kickoff) → {prop: fn(línea)}.
     bias: sesgo aprendido (side_bias: por lado, región y goles).
-    lineups_for(home, away, kickoff) → (weak, nota) de lineup_check."""
+    lineups_for(home, away, kickoff) → (weak, nota) de lineup_check.
+    paused: regiones con el 🎯 en pausa (filter_learner.paused_regions)."""
     up = {match_key(r.home_team_norm, r.away_team_norm, normalize): r for r in upcoming.itertuples(index=False)}
     idx = _snap_index(snaps if snaps is not None else pd.DataFrame(), normalize)
     latest = {}
@@ -505,7 +517,7 @@ def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame |
         h, _, a = key.partition(" vs ")
         props = props_for(h, a, r.get("league"), r["match_date"]) if props_for else None
         weak, lineup = lineups_for(h, a, r["match_date"]) if lineups_for else ({}, None)
-        pk, why = decide(r, u, then, props, ratio, bias, weak)
+        pk, why = decide(r, u, then, props, ratio, bias, weak, paused)
         rows.append(_row(r, r["match_date"], f"{u.home_team} vs {u.away_team}" if u is not None else None, pk, why,
                          lineup=lineup))
     return rows
@@ -664,8 +676,9 @@ def snapshot_picks(hours: int = SNAPSHOT_HOURS, engine=None) -> int:
         now = pd.Timestamp.now(tz="UTC")
         snaps = pd.read_sql(text(_SNAPS_SQL), engine, params={"a": now.to_pydatetime(),
                                                                "b": (now + pd.Timedelta(hours=hours)).to_pydatetime()})
+        from src.models.filter_learner import paused_regions
         rows = build_picks(mvs, up, snaps, _ratio(engine), normalize_team, _props_for(engine), load_bias(engine),
-                           _lineups_for(engine, normalize_team))
+                           _lineups_for(engine, normalize_team), paused_regions(engine))
         if not rows:
             return 0
         with engine.begin() as conn:

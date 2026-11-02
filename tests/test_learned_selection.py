@@ -31,7 +31,8 @@ def _evidence(**filters):
 def test_filters_stay_on_without_enough_data():
     st = FL.learn_filters(_evidence(entre_semana=_gd(-0.10, 0.01, n=MIN_N - 1),
                                     liga_dura=_gd(-0.10, 0.01, clusters=MIN_CLUSTERS - 1)))
-    assert all(node["on"] for node in st["filters"].values()) and st["off"] == []
+    assert all(st["filters"][n]["on"] for n in FL.FILTERS) and st["off"] == []
+    assert st["paused"] == []                                       # el de región nace apagado (2-nov-26)
     assert FL.learn_filters(None)["off"] == []                      # sin evidencia: como se diseñaron
 
 

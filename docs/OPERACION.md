@@ -1226,7 +1226,7 @@ fuente de verdad; los archivos de `config/` y `data/` son espejo local.
 | `shadow_reactivation` | `clv_gate.run_shadow_reactivation` | `away_win`, AH con local favorito y grupos `sinref:*` |
 | `shade_scales` | `shade_learner.run_shade_learning` | **escala de los ajustes manuales** (FLB, tabla, empates) |
 | `rule_evidence` | `rule_evidence.run_rule_evidence` | veredicto de cada regla contra resultados (reporte; los filtros lo usan abajo) |
-| `filter_switches` | `filter_learner.run_filter_learning` | filtros de selección prendidos/apagados (entre semana, rango de cuota, ligas difíciles) |
+| `filter_switches` | `filter_learner.run_filter_learning` | filtros de selección prendidos/apagados (entre semana, rango de cuota, ligas difíciles) y regiones con el 🎯 en pausa (`paused`) |
 | `timing_windows` | `timing_learner.run_timing_learning` | horarios antes del kickoff sin dinero real |
 | `edge_finder` | `edge_finder.run_edge_finder` | solo reporte: qué ideas le ganan al momio histórico en los tres periodos |
 | `sharp_reference` | `sharp_reference.run_sharp_reference` | solo reporte: apuestas y modelo contra Pinnacle |
@@ -1299,6 +1299,24 @@ y **sin escalar**), y el evening la liquida (`result`, `profit` por unidad).
   Nunca agrega ni endurece un filtro. El filtro Pinnacle sigue igual. Al 12-oct ninguno
   tenía datos suficientes (ligas difíciles 57-63, entre semana 31-36 apostables).
   Telegram solo cuando uno cambia.
+- **Filtro por región del 🎯** (`filter_learner.REGION_FILTERS`, hoy solo `america`; 2-nov-2026,
+  el dueño: "haz el filtro aprendido por región para América"). Los 🎯 de América (MLS, Liga MX,
+  Brasil, Argentina, Libertadores; `side_bias.region_of`) iban 25 de 59 contra 31.1 que
+  esperaba el mercado (−10.3 pt, −14.15u); las 5 grandes +15.1 pt y el resto de Europa +1.9.
+  Perdían con cualquier ventaja (3-4 pt, 5-6, 6-8), así que pedir más ventaja no servía.
+  - Se mide con los picks del programa, no con la sombra: brecha = acierto − probabilidad del
+    mercado de los picks que pasan la regla (los 🎯 y los que el filtro pausó, que se liquidan
+    igual), de los últimos 90 días; diferencia = la del resto − la de la región.
+  - Nace de los datos, al revés que los tres de arriba: apagado, se **prende** solo si la región
+    pierde contra el resto con el IC 95% entero > 0 (50+ picks en 15+ partidos por grupo);
+    prendido, se **apaga** en cuanto deja de perder en promedio; con menos datos se queda como
+    estaba.
+  - Prendido: el pick de la región se ve igual, nunca 🎯, con el motivo "Región América en
+    pausa…" (`program_picks.decide`, solo en los picks en vivo de `snapshot_picks`).
+  - Si el estado no se lee, ninguna región en pausa: el 🎯 sale con la regla de siempre.
+  - Al prenderse (2-nov): América −10.3 pt contra el resto +8.6 pt, diferencia +18.9 ± 15.2.
+    Coincide con los tiros que no tenía (ver "Tiros y córners de ESPN"); con ellos, el filtro
+    dirá solo si América deja de perder.
 
 Llega a Telegram en el weekly solo si algún veredicto ya tiene datos suficientes o si
 la escala se movió. Push y medias (AH de cuarto, DNB con empate) cuentan en el ROI pero
