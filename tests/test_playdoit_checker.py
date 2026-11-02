@@ -195,3 +195,39 @@ def test_listener_keeps_the_offset_and_hands_over_before_the_time_limit(checker,
     n = C.listen(5, "TOKEN", "555", http=http, clock=clock)
     assert n == 1 and store[C.OFFSET_KEY] == {"offset": 42}
     assert any("api.github.com" in u and "playdoit_checker.yml" in u for u, _ in http.posts)   # relevo
+
+
+class FlakyTelegram(FakeHttp):
+    """getUpdates responde primero con errores de Telegram y luego normal."""
+
+    def __init__(self, errors):
+        super().__init__()
+        self.errors = list(errors)
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        if url.endswith("/getUpdates") and self.errors:
+            err = self.errors.pop(0)
+            return SimpleNamespace(status_code=200, json=lambda e=err: {"ok": False, **e})
+        return super().post(url, json=json, headers=headers, timeout=timeout)
+
+
+@pytest.mark.parametrize("errors,waits", [
+    # 429 con retry_after: se espera lo que pide Telegram (antes, siempre 5 s)
+    ([{"error_code": 429, "description": "Too Many Requests: retry after 30",
+       "parameters": {"retry_after": 30}}], [31]),
+    # 2-nov-26 01:10 UTC: Bad Gateway seguidos → espera creciente
+    ([{"error_code": 502, "description": "Bad Gateway"}] * 3, [5, 10, 20]),
+    ([{"error_code": 429, "description": "Too Many Requests", "parameters": {"retry_after": 900}}], [120])])
+def test_the_listener_waits_what_telegram_asks_and_backs_off(checker, monkeypatch, errors, waits):
+    C, _ = checker
+    import src.utils.model_state as ms
+    monkeypatch.setattr(ms, "load_state", lambda k: None)
+    monkeypatch.setattr(ms, "save_state", lambda k, v, history=True: None)
+    t = {"now": 0.0}
+
+    def clock():
+        t["now"] += 60
+        return t["now"]
+    slept = []
+    C.listen(10, "TOKEN", "555", http=FlakyTelegram(errors), clock=clock, successor=False, sleep=slept.append)
+    assert slept == waits
