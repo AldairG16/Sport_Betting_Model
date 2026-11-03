@@ -325,6 +325,15 @@ ninguna liga, lo avisa: es **error** (llega a Telegram) cuando al xG anterior le
 una semana o menos, y el morning reintenta cada día. Ante un "OK" sospechoso, busca
 en el log qué cargó.
 
+**Una sola causa, un solo aviso, con la causa correcta (3-nov-2026).** Con el xG de
+Understat vencido, `get_real_xg` devuelve None para todos y el modelo usa el xG estimado con
+tiros. La cobertura de cada corrida (`output_checks.feature_coverage`) habría dicho en cada
+morning y evening "xG real de Understat en 0 de N partidos de las 5 grandes — nombres de
+team_xg_real o la carga semanal", que manda a buscar donde no está el problema. Ahora el
+pipeline guarda `xg_real_expired` (`soccerdata_feed.is_expired`, más de 21 días o sin carga)
+y la cobertura no juzga el xG real vencido. El vencimiento lo siguen avisando
+`report_stale` en el morning y `FEED_MAX_AGE_DAYS["team_xg_real"]` en el chequeo de salidas.
+
 **`bets_history` está congelada desde el modo recolección (25-sep-2026).** Lo que mide al
 modelo debe leer `program_picks`, que se liquida cada noche. La calibración rodante del
 weekly (`scripts/weekly_sanity_audit.py`) medía las últimas 100 de `bets_history`: del 5-oct

@@ -3246,7 +3246,9 @@ def run_prediction_pipeline(dry_run: bool = False):
         # Lo que ENTRA al modelo (23-oct-26): una feature que de pronto no
         # aporta en ningún partido (una consulta rota, un nombre que no cuadra)
         # devolvía "sin dato" para todos sin que nada fallara.
+        from src.features.soccerdata_feed import is_expired
         from src.utils.output_checks import feature_coverage
+        stats['xg_real_expired'] = is_expired()
         coverage_problems = feature_coverage(stats)
         for problem in coverage_problems:
             log.error(f"❌ {problem}")
@@ -3254,7 +3256,7 @@ def run_prediction_pipeline(dry_run: bool = False):
         try:
             from src.utils.model_state import save_state
             keys = ("evaluated", "h2h_used", "xg_used", "corners_used", "shots_used", "with_shots", "big5",
-                    "xg_real_big5", "no_dc", "thin_history", "skipped_no_odds", "clubelo")
+                    "xg_real_big5", "xg_real_expired", "no_dc", "thin_history", "skipped_no_odds", "clubelo")
             save_state("pipeline_coverage", {**{k: int(stats.get(k, 0)) for k in keys},
                                              "problems": coverage_problems,
                                              "at": pd.Timestamp.now(tz="UTC").isoformat()}, history=False)

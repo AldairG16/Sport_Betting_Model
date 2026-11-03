@@ -116,8 +116,11 @@ def feature_coverage(stats: dict) -> list:
     if "with_shots" in stats and shots < b5:       # las 5 grandes traen tiros: el conjunto se rompió
         out.append(f"Entrada: {shots} partidos de ligas con tiros y {b5} de las 5 grandes — "
                    f"revisar xg_proxy.leagues_with_shots")
+    # Con el xG de Understat vencido (3-nov-26: el sitio no responde desde el
+    # 31-oct), 0 de N es lo esperado y la causa no son los nombres ni la
+    # carga: la avisan report_stale y FEED_MAX_AGE_DAYS["team_xg_real"].
     real = int(stats.get("xg_real_big5", 0))
-    if b5 >= 10 and real < MIN_XG_REAL_BIG5 * b5:
+    if b5 >= 10 and real < MIN_XG_REAL_BIG5 * b5 and not stats.get("xg_real_expired"):
         out.append(f"Entrada: xG real de Understat en {real} de {b5} partidos de las 5 grandes — "
                    f"nombres de team_xg_real o la carga semanal")
     return out
