@@ -400,7 +400,7 @@ function pastRow(r, i){
               (pk.winner ? ' · tuvo razón el ' + pk.winner : '') + (pk.old_model ? ' · modelo con error (antes del 22 oct)' : '') +
               (pk.rule ? ' · 🎯 pasa la regla' : (pk.reason ? ' · no pasa la regla: ' + pk.reason : '')) +
               (pk.rebuilt ? ' · reconstruido con la predicción guardada antes del partido' : '') +
-              (pk.provisional ? ' · provisional: con el marcador de ESPN, se confirma en la noche' : '')) + '">' + (pk.rebuilt ? '↺ ' : '') +
+              (pk.provisional ? ' · provisional: con el marcador final, cuenta en los totales cuando se liquide' : '')) + '">' + (pk.rebuilt ? '↺ ' : '') +
               (played ? ok(pk.result === 'win' || pk.result === 'half_win') : '⏳') + ' ' + (pk.rule ? '🎯 ' : '') + famIcon(pk.family) + ' ' + esc(pk.label) +
               (pk.profit !== null && played ? ' <span class="' + (pk.profit >= 0 ? 'pos' : 'neg') + '">' + money(pk.profit) + '</span>' : '') + '</span>' +
               whyTag(pk);

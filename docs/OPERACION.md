@@ -2060,6 +2060,18 @@ de responder "cómo nos fue con los picks".
       pick sale ✅ o ❌ con la misma regla de liquidación (`provisional_result` →
       `save_bets.resolve_market`), al momio estimado de PlayDoit.
     - Es provisional: no cuenta en los totales hasta que la corrida de la noche lo confirma.
+    - **También con el marcador oficial (v2.5.4, 3-nov-2026).** El dueño: "¿por qué todavía no
+      tenemos ni tarjetas ni algunos resultados?". El evening carga el marcador oficial, pero el
+      pick se liquida después:
+      - los que empiezan pasada la medianoche UTC (liquidación con 3 h de margen), en el reintento
+        de las 06:00 UTC;
+      - córners y tarjetas de las ligas grandes, cuando football-data los publica (1-3 días).
+
+      Mientras, salía ⏳ con el final ya en la tabla (5 picks el 2-nov). Ahora un pick sin liquidar
+      con su partido en `matches` sale ✅ o ❌ provisional con el marcador oficial y los córners y
+      tarjetas de `matches` o, donde faltan, de ESPN (`board._final_of` → `_provisional`, la misma
+      regla: roja = 1, córners 0-0 = sin dato). Sin el dato de su mercado sigue ⏳. Tampoco cuenta
+      en los totales ni en Ganadas y perdidas hasta que se liquida.
     - **Córners y tarjetas de los partidos pasados (v2.5.1, 26-oct-2026).** El dueño: "¿por qué solo
       los de hoy tienen tarjetas y córners y los de ayer no? ni los del pasado".
       - `matches` no los trae en MLS, Liga MX, Argentina, Brasil, Noruega, Suecia, Japón, China ni

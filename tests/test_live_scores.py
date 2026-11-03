@@ -144,6 +144,52 @@ def test_the_board_fills_corners_and_cards_from_espn_only_for_the_same_match():
     assert (rows[0]["corners"], rows[0]["cards"]) == ([12, 1], 2)
 
 
+# ─── pick con el final ya en la tabla pero sin liquidar (3-nov-26) ───────────
+# El dueño: "¿por qué todavía no tenemos ni tarjetas ni algunos resultados?"
+
+def _pending(match, market, label, family, odds=1.9, result=None):
+    return {"match": match, "match_date": pd.Timestamp("2026-11-02 19:45", tz="UTC"), "league": "soccer_italy_serie_a",
+            "label": label, "market": market, "family": family, "reason": None, "model_prob": 0.6,
+            "market_prob": 0.55, "result": result, "profit": None if result is None else 0.9, "source": None,
+            "playdoit_odds": odds}
+
+
+def _official(h, a, hg, ag, **stats):
+    return {"date": pd.Timestamp("2026-11-02"), "league": "soccer_italy_serie_a", "h": h, "a": a,
+            "home_goals": hg, "away_goals": ag, "home_corners": None, "away_corners": None,
+            "home_yellow": None, "away_yellow": None, "home_red": None, "away_red": None, **stats}
+
+
+def test_a_pick_with_the_official_score_shows_its_provisional_result_until_settled():
+    from dashboard import board as B
+    matches = pd.DataFrame([
+        _official("atl tucuman", "argentinos", 1, 2),                                     # sin liquidar hasta las 06:00
+        _official("atalanta", "parma", 0, 3),                                             # córners: los trae ESPN
+        _official("lorient", "brest", 0, 2, home_yellow=1, away_yellow=2, home_red=1, away_red=0),   # roja = 1
+        _official("sassuolo", "fiorentina", 2, 4, home_corners=0, away_corners=0),        # 0-0 = sin dato
+        _official("benfica", "alverca", 1, 0)])
+    picks = pd.DataFrame([
+        _pending("atl tucuman vs argentinos", "away_win", "Gana el visitante", "Ganador"),
+        _pending("atalanta vs parma", "corners_under_9.5", "Menos de 9.5 córners", "Córners", odds=1.87),
+        _pending("lorient vs brest", "cards_under_4.5", "Menos de 4.5 tarjetas", "Tarjetas", odds=None),
+        _pending("sassuolo vs fiorentina", "corners_under_9.5", "Menos de 9.5 córners", "Córners"),
+        _pending("benfica vs alverca", "under_3.5", "Menos de 3.5 goles", "Goles", result="win")])
+    espn = pd.DataFrame([{"home": "atalanta", "away": "parma", "kickoff": pd.Timestamp("2026-11-02 19:45", tz="UTC"),
+                          "home_goals": 0, "away_goals": 3, "home_corners": 8, "away_corners": 5,
+                          "home_cards": 0, "away_cards": 0, "status": "final", "clock": "FT"}])
+    rows = B.past_matches(matches, pd.DataFrame(), picks, pd.DataFrame(), normalize=lambda t: str(t).lower(),
+                          now=pd.Timestamp("2026-11-03 04:00", tz="UTC"), live=espn)
+    by = {r["key"]: r["pick"] for r in rows}
+    assert by["atl tucuman vs argentinos"]["result"] == "win" and by["atl tucuman vs argentinos"]["provisional"]
+    assert (by["atalanta vs parma"]["result"], by["atalanta vs parma"]["profit"]) == ("loss", -1.0)   # 13 córners
+    assert (by["lorient vs brest"]["result"], by["lorient vs brest"]["profit"]) == ("win", None)      # 4 tarjetas, sin momio
+    assert by["sassuolo vs fiorentina"]["result"] == "pending"                    # sin córners no se adivina
+    assert by["benfica vs alverca"]["result"] == "win" and not by["benfica vs alverca"].get("provisional")
+    # cuentan cuando la liquidación los confirma: hoy solo el de Benfica
+    assert B.summary(rows)["picks_fixed"]["n"] == 1
+    assert B.results_board(rows)["groups"]["picks"]["total"]["n"] == 1
+
+
 def test_the_match_detail_fills_its_last_five_without_adding_matches():
     from dashboard import match_detail as MD
     m = [{"date": pd.Timestamp("2026-10-26"), "league": "soccer_usa_mls", "h": "lafc", "a": "la galaxy",   # fecha UTC
