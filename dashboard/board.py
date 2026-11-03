@@ -113,6 +113,31 @@ def _low(v) -> bool:
     return bool(v) and not (isinstance(v, float) and pd.isna(v))
 
 
+def _final_of(r: dict) -> dict:
+    """El final de una fila de `matches` (con córners y tarjetas de ESPN donde
+    faltan, fill_from_espn) como lo guarda live_scores: roja = 1 y córners 0-0
+    = sin dato, igual que la liquidación."""
+    c = _corners(r)
+    hy, ay = _num(r.get("home_yellow")), _num(r.get("away_yellow"))
+    cards = hy is not None and ay is not None
+    return {"home_goals": r["home_goals"], "away_goals": r["away_goals"],
+            "home_corners": c[0] if c else None, "away_corners": c[1] if c else None,
+            "home_cards": hy + (_num(r.get("home_red")) or 0) if cards else None,
+            "away_cards": ay + (_num(r.get("away_red")) or 0) if cards else None}
+
+
+def _provisional(pick: dict, p: dict, final: dict) -> dict:
+    """El pick todavía sin liquidar, ganado o perdido con el final que ya se
+    conoce y la misma regla de liquidación. Provisional: no cuenta en los
+    totales hasta que la liquidación lo confirma."""
+    from src.features.live_scores import provisional_result
+    outcome, profit = provisional_result(p.get("market"), final, p.get("playdoit_odds"))
+    if not outcome:
+        return pick
+    return {**pick, "result": outcome, "profit": profit, "provisional": True,
+            "winner": who_was_right(p.get("model_prob"), p.get("market_prob"), outcome)}
+
+
 def _pick_info(p: dict) -> dict:
     """El pick guardado tal como lo ve la tabla de anteriores."""
     res_p = _str(p.get("result")) or "pending"
@@ -170,13 +195,20 @@ def past_matches(matches: pd.DataFrame, mvs: pd.DataFrame, picks: pd.DataFrame, 
                        "probs": [round(x, 3) for x in model],
                        "pin_probs": [round(x, 3) for x in pin] if pf else None,
                        "low": _low(m.get("low_history"))}
-        pick = None
+        pick, raw = None, None
         for p in _near(pk, key, r["date"]):
             used.add(id(p))
             info = _pick_info(p)
             if info.get("none") and pick:              # el pick de verdad gana a un "sin pick" viejo
                 continue
-            pick = info
+            pick, raw = info, p
+        # 3-nov-26, el dueño: "¿por qué todavía no tenemos ni tarjetas ni algunos
+        # resultados?". El marcador oficial llega en la noche, pero el pick se
+        # liquida después: los que empiezan pasada la medianoche UTC, en la
+        # corrida de las 06:00, y córners y tarjetas cuando football-data los
+        # publica (1-3 días). Mientras, salía ⏳ con el final ya en la tabla.
+        if pick and pick.get("label") and pick["result"] == "pending":
+            pick = _provisional(pick, raw, _final_of(r))
         bets_out = [{"market": market_name(b["market"]), "result": _str(b.get("result")) or "pending",
                      "profit": _num(b.get("profit"))}
                     for b in _near(bt, key, r["date"]) if _str(b.get("result")) != "stale"]
@@ -220,11 +252,7 @@ def past_matches(matches: pd.DataFrame, mvs: pd.DataFrame, picks: pd.DataFrame, 
                         fav = {**fav, "model_hit": fav["model"] == res,
                                "pin_hit": (fav["pin"] == res) if fav.get("pin") else None}
                     if pick.get("label"):
-                        from src.features.live_scores import provisional_result
-                        outcome, profit = provisional_result(p.get("market"), sc, p.get("playdoit_odds"))
-                        if outcome:
-                            pick = {**pick, "result": outcome, "profit": profit, "provisional": True,
-                                    "winner": who_was_right(p.get("model_prob"), p.get("market_prob"), outcome)}
+                        pick = _provisional(pick, p, sc)
             hc, ac = (_num(sc.get("home_corners")), _num(sc.get("away_corners"))) if sc else (None, None)
             hk, ak = (_num(sc.get("home_cards")), _num(sc.get("away_cards"))) if sc else (None, None)
             out.append({"date": (when - pd.Timedelta(hours=6)).tz_localize(None).normalize().strftime("%Y-%m-%d"),
@@ -275,7 +303,7 @@ def summary(rows: list) -> dict:
     fav = [r["fav"] for r in done if r.get("fav") and r["fav"].get("pin_hit") is not None
            and not r["fav"].get("low")]
     picks = [r["pick"] for r in done if r.get("pick") and r["pick"]["result"] in PLAYED
-             and not r["pick"].get("low")]
+             and not r["pick"].get("low") and not r["pick"].get("provisional")]
     bets = [b for r in done for b in r["bets"] if b["result"] in PLAYED]
 
     def rec(ps):
@@ -332,7 +360,7 @@ def results_board(rows: list) -> dict:
 
     Tres grupos: los picks del modelo corregido (desde el 22-oct), los que pasan
     la regla (🎯) y las apuestas reales. Mismo criterio que `summary`: solo lo ya
-    liquidado (no el provisional de ESPN) y sin los de poca historia. Por grupo:
+    liquidado (no el provisional) y sin los de poca historia. Por grupo:
     totales, ganadas/perdidas por día con las unidades acumuladas, el ranking por
     tipo de pick y por liga, los mejores aciertos y los fallos en los que el
     programa estaba más seguro."""
@@ -341,7 +369,8 @@ def results_board(rows: list) -> dict:
     for r in done:
         base = {"date": r["date"], "league": r.get("league") or "", "match": f"{r['home']} vs {r['away']}"}
         p = r.get("pick") or {}
-        if p.get("result") in PLAYED and not p.get("old_model") and not p.get("low") and p.get("label"):
+        if (p.get("result") in PLAYED and not p.get("old_model") and not p.get("low") and p.get("label")
+                and not p.get("provisional")):
             picks.append({**base, "type": p["label"], "family": p.get("family"), "result": p["result"],
                           "profit": p.get("profit"), "model": p.get("model"), "rule": bool(p.get("rule"))})
         for b in r.get("bets") or []:
