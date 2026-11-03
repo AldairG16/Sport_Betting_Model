@@ -18,8 +18,9 @@ más recientemente en cualquiera de las tablas (el feed se vuelve a leer en
 cada corrida y el closing reescribe el pick cada 30 min); en empate, la más
 tardía. Las filas del mismo partido en otra fecha a menos de WINDOW_DAYS días
 son de un horario que no se jugó:
-  - picks, sombra y propuestas → result 'stale' (como "sin datos": fuera del
-    acierto, las unidades y el aprendizaje);
+  - picks, sombra, propuestas y piernas del parlay → result 'stale' (como
+    "sin datos": fuera del acierto, las unidades y el aprendizaje; en el
+    parlay la pierna se anula y sigue con las demás);
   - model_vs_sharp → skipped_at (fuera del sesgo aprendido y del dashboard).
 bets_history no se toca: dos apuestas al mismo partido a distinta hora son
 dos apuestas, y el bankroll las contó así.
@@ -36,10 +37,12 @@ WINDOW_DAYS = 3        # más lejos ya es otro partido (la vuelta de una copa, l
 
 # tabla: columna que dice cuándo se escribió la fila (se refresca al reescribirla)
 WRITTEN = {"program_picks": "picked_at", "shadow_bets": "created_at",
-           "model_proposals": "evaluated_at", "model_vs_sharp": "created_at"}
+           "model_proposals": "evaluated_at", "model_vs_sharp": "created_at", "program_parlays": "picked_at"}
 VOID_SQL = {
     "program_picks": "UPDATE program_picks SET result = 'stale', profit = NULL, resolved_at = NOW() "
                      "WHERE match = :match AND match_date = :match_date AND result IS DISTINCT FROM 'stale'",
+    "program_parlays": "UPDATE program_parlays SET result = 'stale', profit = NULL, resolved_at = NOW() "
+                       "WHERE match = :match AND match_date = :match_date AND result IS DISTINCT FROM 'stale'",
     "shadow_bets": "UPDATE shadow_bets SET result = 'stale', profit = NULL, resolved_at = NOW() "
                    "WHERE match = :match AND match_date = :match_date AND result IS DISTINCT FROM 'stale'",
     "model_proposals": "UPDATE model_proposals SET result = 'stale', profit = NULL, resolved_at = NOW() "

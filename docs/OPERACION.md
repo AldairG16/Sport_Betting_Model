@@ -1868,6 +1868,62 @@ historia. Por grupo muestra:
 
 Con 192 picks (29-oct) cada liga tiene 3-29: el ranking describe lo que pasó, no predice.
 
+**Pestaña "Parlay" (v2.6.0, 3-nov-26).** El dueño: "quiero agregar la función parley, donde seleccione
+los partidos más seguros, de las mejores ligas, de los que más se ganan y los agrupe en una pestaña".
+
+- **Lo que eligió:**
+  - mejores ligas = donde más ganan los picks: unidades a favor desde el modelo corregido (22-oct) con
+    10 picks liquidados o más (`program_parlays.winning_leagues`, sin los de poca historia). La lista se
+    actualiza sola;
+  - de cada partido, la apuesta más segura aunque no sea el pick;
+  - un botón de 2, 3 o 4 partidos (empieza en 3).
+- **La regla** (`src/models/program_parlays.py`):
+  - segura = la probabilidad más baja entre el programa y el mercado sin margen, 55% o más
+    (`MIN_SAFE`);
+  - entre los mismos candidatos con momio real del pick (`_candidates_of`: 1X2, 2.5, 1.5/3.5 reales,
+    ambos anotan, córners, tarjetas), al momio estimado de PlayDoit, que pague −400 o mejor
+    (`MIN_LEG_ODDS` 1.25). Sin piso, la más segura sería un más de 1.5 a −1400 que no suma nada:
+    Galatasaray–Stuttgart del 3-nov pagaba 1.07;
+  - fuera: poca historia, análisis que ya no valen, partidos entre ligas sin el ajuste de ClubElo y
+    el ganador al que le faltan 4+ titulares (`lineup_check`);
+  - por día de México, las 4 más seguras (una por partido) con su `rank`. El parlay de k son las k
+    primeras.
+- **Cuándo se guarda:** `snapshot_parlays` corre en el paso "Picks del programa" (morning, evening,
+  cada closing), justo después de `snapshot_picks`. Tabla `program_parlays`, una fila por pierna,
+  `UNIQUE (day, rank)`.
+  - Mientras no empieza la primera pierna, el parlay del día es un borrador: se borra y se vuelve a
+    escribir entero (solo filas sin resultado).
+  - Desde 5 min antes de la primera pierna queda fijo: es la apuesta que se pudo hacer.
+  - Si ninguna liga va ganando, el borrador se borra.
+- **Cómo se liquida:** `resolve_parlays`, en "Shadow results", con la misma función que los picks
+  (`plan_shadow_resolutions`, stake 1 al momio de PlayDoit).
+  - Una pierna sin datos a los 10 días, o de un partido reprogramado (`rescheduled.VOID_SQL`), queda
+    `stale` y se anula: el parlay sigue con las demás.
+  - El chequeo diario la revisa como a los picks (sección 1, la liquidación contra el cálculo
+    independiente; sección 3, las piernas atoradas).
+- **Dashboard** (`/api/board/parlay`, `dashboard/parlay.py`):
+  - el parlay de hoy y de los próximos días: las piernas por hora, con su momio americano; en gris las
+    que entran solo en uno más grande;
+  - lo que paga, la probabilidad de que salgan todas (programa y mercado) y "puede cambiar hasta las
+    HH:MM" o "🔒 ya empezó";
+  - el historial del tamaño elegido: solo los días que tenían las k piernas y ya liquidados, más
+    cuántas piernas salieron;
+  - las ligas que entran hoy, con sus unidades.
+  - Como en Anteriores, una pierna con el marcador final (ESPN o `matches`) sale ✅/❌ provisional y
+    el parlay no cuenta hasta la liquidación.
+- **No hay días reconstruidos:** `odds_history` no guarda las líneas 1.5/3.5 ni córners y tarjetas,
+  así que la regla saldría otra. El historial empieza el 3-nov.
+- **Medido antes de hacerlo (3-nov):**
+  - con los picks de cada partido (no la apuesta más segura) y 3 piernas, en las ligas que iban
+    ganando habría salido parlay 7 de 12 días, 5 ganados (+8u); en las ligas grandes, 9 días con 2
+    ganados (−1.8u). Muestra chica;
+  - con la regla final, ensayada sobre el 28-oct al 2-nov con los últimos momios guardados en
+    `upcoming_matches`: salieron 16 de 23 piernas (70%; el mercado esperaba ~67%). El de 2 ganó 2
+    de 6 días (−2.0u), el de 3 ganó 1 de 6 (−3.3u) y el de 4 ganó 1 de 5 (−1.2u).
+  - Los partidos de 60%+ apostados sueltos dejaron −3.4%, y el parlay multiplica el margen de cada
+    pierna. Por eso se guarda y se mide: el historial de la pestaña dice si estas apuestas seguras de
+    verdad salen.
+
 **Se mantiene abierto solo (v1.6.0).** El `.exe` es un supervisor
 (`dashboard/supervisor.py`): lanza el servidor (el mismo `.exe` con `--serve`), le
 pregunta cada 15 s a `/api/health` y lo vuelve a abrir si se cierra (esperas de 5, 15,

@@ -113,6 +113,7 @@ function refreshAll(manual){
   loadUpcoming();
   if (cur === 'anteriores') loadPast(true);
   else if (cur === 'resultados') loadResults(true);
+  else if (cur === 'parlay') loadParlay();
   else if (manual && cur === 'equipos') loadTeams();
   else if (manual && cur === 'graficas') loadCharts(true);
   refreshDone();
@@ -131,7 +132,7 @@ function refreshDone(){
 }
 
 // ── Pestañas ──
-var TABS = ['proximos', 'anteriores', 'resultados', 'equipos', 'graficas'], _loaded = {};
+var TABS = ['proximos', 'parlay', 'anteriores', 'resultados', 'equipos', 'graficas'], _loaded = {};
 function showTab(name){
   if (TABS.indexOf(name) < 0) name = 'proximos';
   var b = el('tabs').getElementsByTagName('button');
@@ -141,6 +142,7 @@ function showTab(name){
   if (_loaded[name]) return;
   _loaded[name] = true;
   if (name === 'anteriores') loadPast();
+  else if (name === 'parlay') loadParlay();
   else if (name === 'resultados') loadResults();
   else if (name === 'equipos') loadTeams();
   else if (name === 'graficas') loadCharts();
@@ -555,6 +557,94 @@ function loadResults(fresh){
   var pills = el('rgroups').getElementsByTagName('span');
   for (var i = 0; i < pills.length; i++) if (pills[i].getAttribute('data-g'))
     pills[i].onclick = function(){ _resGroup = this.getAttribute('data-g'); _storeSet('rgroup', _resGroup); renderResults(); };
+})();
+
+// ── Parlay (v2.6.0, 3-nov-26) ──
+// El dueño: "quiero agregar la función parley, donde seleccione los partidos más
+// seguros, de las mejores ligas, de los que más se ganan y los agrupe en una
+// pestaña". De cada partido de las ligas donde los picks van ganando, la apuesta
+// más segura; el parlay de 2, 3 o 4 son las más seguras del día.
+var _px = null, _pxK = _storeGet('parlayk', '3');
+function pxIcon(x){
+  if (x.result === 'win' || x.result === 'half_win') return '✅';
+  if (x.result === 'loss' || x.result === 'half_loss') return '❌';
+  if (x.result === 'push' || x.result === 'stale') return '<span title="Anulada: el parlay sigue con las demás">↔</span>';
+  if (x.live && x.live.status === 'live') return '<span class="small muted">● ' + esc(x.live.clock || 'en vivo') + '</span>';
+  return x.started ? '<span class="muted" title="Ya empezó">⏳</span>' : '<span class="muted">·</span>';
+}
+function pxStatus(p){
+  if (!p) return '<span class="muted">—</span>';
+  var prov = p.settled ? '' : ' <span class="small muted" title="Con el marcador final; cuenta en el historial cuando se liquide">provisional</span>';
+  if (p.status === 'win') return '<span class="pos">✅ ' + money(p.profit) + '</span>' + prov;
+  if (p.status === 'loss') return '<span class="neg">❌ ' + money(-1) + '</span>' + prov;
+  if (p.status === 'push') return '↔ anulado' + prov;
+  return '<span class="muted">⏳ van ' + p.won_legs + ' de ' + p.k + '</span>';
+}
+function pxDay(d, k){
+  var p = d.parlays[k], h = '<div class="day">' + dayLabel(d.day) + '</div>';
+  if (!p) return h + '<div class="muted small" style="margin-bottom:8px">Solo 1 partido cumple (' + esc(d.legs[0].match) + ', ' +
+                     esc(d.legs[0].label) + '): no hay parlay.</div>';
+  h += '<div class="tbl" style="margin-bottom:8px"><table><thead><tr><th>Hora</th><th>Partido</th><th>Apuesta</th><th>Momio</th>' +
+       '<th class="hide-sm" title="Probabilidad del programa / del mercado sin margen">🤖 / 🏦</th><th></th></tr></thead><tbody>';
+  var byTime = d.legs.slice().sort(function(a, b){ return a.kickoff < b.kickoff ? -1 : a.kickoff > b.kickoff ? 1 : a.rank - b.rank; });
+  for (var i = 0; i < byTime.length; i++) {
+    var x = byTime[i], used = p.ranks.indexOf(x.rank) >= 0;
+    h += '<tr' + (used ? '' : ' class="out" title="Más partidos que cumplen: entra si eliges un parlay más grande"') + '>' +
+         '<td class="nw">' + mxtime(x.kickoff) + '</td><td>' + esc(x.match) + '<div class="small muted">' + esc(x.league) + '</div></td>' +
+         '<td>' + famIcon(x.family) + ' <b>' + esc(x.label) + '</b>' + (x.started ? '' : lineupTag({ label: x.label, lineup: x.lineup })) + '</td>' +
+         '<td class="nw">' + esc(x.odds_us || '') + '</td><td class="hide-sm nw">' + p100(x.model) + ' / ' + p100(x.market) + '</td>' +
+         '<td class="sc"' + (x.provisional ? ' title="Provisional: con el marcador final; se confirma al liquidar"' : '') + '>' + pxIcon(x) + '</td></tr>';
+  }
+  h += '</tbody></table><div class="xsum"><span>Parlay de <b>' + p.k + '</b>' +
+       (p.full ? '' : ' <span class="small muted">(solo ' + p.k + ' cumplen)</span>') + '</span>' +
+       '<span title="Momio del parlay en PlayDoit (el estimado de cada pierna, multiplicado)">paga <b class="big">' + esc(p.odds_us || '—') + '</b></span>' +
+       '<span class="muted" title="Probabilidad de que salgan todas: programa / mercado">salen todas: 🤖 ' + p100(p.p_model) + ' · 🏦 ' + p100(p.p_market) + '</span>' +
+       '<span>' + pxStatus(p) + '</span>' +
+       (p.status === 'pending' ? '<span class="small muted">' + (p.locked ? '🔒 ya empezó: así quedó' :
+         'puede cambiar hasta las ' + mxtime(p.first_kickoff) + ' (empieza el primero)') + '</span>' : '') +
+       '</div></div>';
+  return h;
+}
+function renderParlay(){
+  if (!_px) return;
+  var k = _pxK, i, h = '', today = mxday(), r = _px.rules;
+  var pills = el('xsize').getElementsByTagName('span');
+  for (i = 0; i < pills.length; i++) if (pills[i].getAttribute('data-k'))
+    pills[i].className = 'pill' + (pills[i].getAttribute('data-k') === k ? ' on' : '');
+  el('xrule').innerHTML = 'De cada partido, la apuesta más segura: el programa y el mercado le dan ' + p100(r.min_safe) +
+    ' o más y paga ' + esc(r.min_odds_us) + ' o mejor · solo ligas donde los picks van ganando';
+  for (i = 0; i < _px.days.length; i++) if (_px.days[i].day >= today) h = pxDay(_px.days[i], k) + h;   // del más próximo
+  el('xnext').innerHTML = h || '<div class="muted">Hoy no hay parlay: ningún partido de las ligas que van ganando cumple. ' +
+    'Se arma solo en cuanto haya 2 o más (se revisa cada 30 min).</div>';
+  var t = _px.record[k];
+  el('xkpis').innerHTML = kpi(t.n, 'Parlays de ' + k + ' liquidados') + kpi(t.won, '✅ Ganados', 'pos') + kpi(t.lost, '❌ Perdidos', 'neg') +
+    kpi(money(t.units), 'Unidades (1u por parlay)', t.units >= 0 ? 'pos' : 'neg') + kpi(_roi(t.roi), 'Rendimiento (ROI)') +
+    kpi(t.legs ? t.legs_won + ' / ' + t.legs : '—', 'Piernas que salieron (' + p100(t.legs_hit) + ')');
+  h = '';
+  for (i = 0; i < _px.days.length; i++) {
+    var d = _px.days[i], p = d.parlays[k];
+    if (d.day >= today || !p) continue;
+    var legs = [];
+    for (var j = 0; j < d.legs.length; j++) if (p.ranks.indexOf(d.legs[j].rank) >= 0)
+      legs.push(pxIcon(d.legs[j]) + ' ' + esc(d.legs[j].label) + ' <span class="muted">· ' + esc(d.legs[j].match) + '</span>');
+    h += '<tr><td class="nw">' + shortDate(d.day) + (p.full ? '' : ' <span class="small muted" title="Ese día solo ' + p.k + ' cumplían">(' + p.k + ')</span>') +
+         '</td><td class="small">' + legs.join('<br>') + '</td><td class="nw">' + esc(p.odds_us || '') + '</td><td class="nw">' + pxStatus(p) + '</td></tr>';
+  }
+  el('xhist').innerHTML = h || '<tr><td colspan="4" class="muted">Todavía no hay parlays terminados: se guardan desde el 3 de noviembre.</td></tr>';
+  var lg = [];
+  for (i = 0; i < _px.leagues.length; i++) lg.push(esc(_px.leagues[i].name) + ' <span class="pos">' + money(_px.leagues[i].units) + '</span>');
+  el('xleagues').innerHTML = (lg.length ? '<b>Ligas que entran hoy</b> (unidades de los picks desde el ' + shortDate(r.since) + ', ' + r.min_n +
+    ' picks o más): ' + lg.join(' · ') : 'Ninguna liga va ganando todavía con ' + r.min_n + ' picks o más.') +
+    '<br>El parlay multiplica el margen de la casa de cada pierna: el historial dice si estas apuestas seguras de verdad salen.';
+}
+function loadParlay(){
+  getJSON('/api/board/parlay', function(d){ _px = d; renderParlay(); },
+    function(msg){ el('xnext').innerHTML = '<div class="muted">' + esc(msg) + '</div>'; });
+}
+(function(){
+  var pills = el('xsize').getElementsByTagName('span');
+  for (var i = 0; i < pills.length; i++) if (pills[i].getAttribute('data-k'))
+    pills[i].onclick = function(){ _pxK = this.getAttribute('data-k'); _storeSet('parlayk', _pxK); renderParlay(); };
 })();
 
 // ── Equipos ──

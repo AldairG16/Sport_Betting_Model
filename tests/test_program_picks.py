@@ -296,8 +296,10 @@ def test_picks_are_settled_with_the_shadow_bets(monkeypatch):
     monkeypatch.setattr(sb, "resolve_shadow_outcomes", lambda: called.append("shadow"))
     monkeypatch.setattr(P, "resolve_proposals", lambda: called.append("proposals"))
     monkeypatch.setattr(PP, "resolve_picks", lambda: called.append("picks"))
+    import src.models.program_parlays as PL
+    monkeypatch.setattr(PL, "resolve_parlays", lambda: called.append("parlays"))
     O.step_shadow_results()
-    assert called == ["shadow", "proposals", "picks"]
+    assert called == ["shadow", "proposals", "picks", "parlays"]
 
 
 # ─── el tablero ──────────────────────────────────────────────────────────────

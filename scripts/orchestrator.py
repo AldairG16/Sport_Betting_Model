@@ -513,6 +513,9 @@ def step_shadow_results():
     # ...y los picks del programa que muestra el dashboard (21-oct-26)
     from src.models.program_picks import resolve_picks
     resolve_picks()
+    # ...y las piernas del parlay del día (3-nov-26)
+    from src.models.program_parlays import resolve_parlays
+    resolve_parlays()
 
 
 def step_mlb_predict():
@@ -772,9 +775,12 @@ def step_clubelo():
 
 def step_program_picks():
     """Guarda el pick del programa de los próximos 3 días (lo que muestra el
-    dashboard) para medir después cómo terminó. Solo DB, segundos."""
+    dashboard) para medir después cómo terminó. Solo DB, segundos. Después,
+    el parlay del día (3-nov-26), con los mismos momios y alineaciones."""
     from src.models.program_picks import snapshot_picks
     snapshot_picks()
+    from src.models.program_parlays import snapshot_parlays
+    snapshot_parlays()
 
 
 def step_output_checks():
