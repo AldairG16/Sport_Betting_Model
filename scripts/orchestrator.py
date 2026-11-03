@@ -939,8 +939,9 @@ def step_rule_evidence():
 
 def step_filter_learning():
     """Filtros de selección (entre semana, rango de cuota, ligas difíciles)
-    prendidos o apagados según la evidencia de rule_evidence de esta semana
-    (src/models/filter_learner.py). Telegram solo si alguno cambia."""
+    prendidos o apagados según la evidencia de rule_evidence de esta semana, y
+    el filtro por región del 🎯 (América, 2-nov-26) según los picks del
+    programa (src/models/filter_learner.py). Telegram solo si alguno cambia."""
     from src.models.filter_learner import changed, format_report, load_filter_state, run_filter_learning
     previous = load_filter_state()
     state = run_filter_learning(verbose=True)
