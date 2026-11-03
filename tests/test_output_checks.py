@@ -276,14 +276,14 @@ def test_daily_check_reports_every_problem_as_an_error(monkeypatch):
             return pd.DataFrame([{"t": now}])
         if "AS bets" in s:
             return pd.DataFrame([{"bets": 0, "shadow": 2, "props": 0}])
-        if "AS n FROM program_picks" in s:          # picks atorados (29-oct-26): ninguno
+        if "AS n FROM program_picks" in s or "AS n FROM program_parlays" in s:   # atorados: ninguno
             return pd.DataFrame([{"n": 0}])
         if "FROM matches" in s:
             return pd.DataFrame([_m(d=str(now.date()))])
         if "FROM bets_history WHERE result IN" in s:
             return pd.DataFrame([{"id": 3, "match": "aa vs bb", "match_date": now, "market": "home_win",
                                   "result": "loss"}])
-        if "FROM shadow_bets WHERE" in s or "FROM model_proposals WHERE" in s or "FROM program_picks WHERE" in s:
+        if any(f"FROM {t} WHERE" in s for t in ("shadow_bets", "model_proposals", "program_picks", "program_parlays")):
             return pd.DataFrame(columns=["id", "match", "match_date", "market", "result"])
         if "FROM live_scores" in s:                 # marcadores del día (26-oct-26): ninguno
             return pd.DataFrame(columns=["home", "away", "kickoff", "home_goals", "away_goals", "status"])

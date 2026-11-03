@@ -385,8 +385,9 @@ def test_daily_check_skips_the_picks_table_until_it_exists(monkeypatch):
 
     def fake_read_sql(sql, con=None, params=None, **kw):
         s = " ".join(str(sql).split())
-        if "FROM program_picks" in s:
-            raise RuntimeError('relation "program_picks" does not exist')
+        for t in ("program_picks", "program_parlays"):           # el parlay también nace después (3-nov-26)
+            if f"FROM {t}" in s:
+                raise RuntimeError(f'relation "{t}" does not exist')
         if s.startswith("SELECT COUNT(*) FROM matches"):          # datos de entrada (23-oct-26): sanos
             return pd.DataFrame([[0]])
         if s.startswith("SELECT MAX(") and " AS t FROM " in s:
