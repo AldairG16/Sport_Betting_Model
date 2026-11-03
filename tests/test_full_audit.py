@@ -104,6 +104,26 @@ def test_a_feature_that_stops_arriving_is_an_error():
     assert feature_coverage({"evaluated": 5}) == []                    # corrida chica: sin juicio
 
 
+def test_expired_understat_xg_is_not_blamed_on_names_or_the_weekly_load(monkeypatch):
+    # 3-nov-26: Understat no responde desde el 31-oct; su xG vence el 16-nov y
+    # desde ahí cada corrida habría dicho "revisar nombres o la carga semanal"
+    from datetime import datetime, timedelta, timezone
+    from scripts.system_audit import coverage_problems
+    from src.features import soccerdata_feed as SF
+    from src.utils.output_checks import feature_coverage
+    run = {"evaluated": 136, "h2h_used": 134, "xg_used": 96, "corners_used": 90, "shots_used": 90,
+           "with_shots": 100, "big5": 43, "xg_real_big5": 0}
+    assert any("0 de 43" in m for m in feature_coverage(run))                 # vigente: es un error
+    assert feature_coverage({**run, "xg_real_expired": 1}) == []             # vencido: lo avisa su fuente
+    now = datetime(2026, 11, 17, 12, tzinfo=timezone.utc)
+    assert coverage_problems({**run, "xg_real_expired": 1, "at": now.isoformat()}, now=pd.Timestamp(now)) == []
+    monkeypatch.setattr(SF, "last_refresh", lambda: datetime(2026, 10, 26, 19, tzinfo=timezone.utc))
+    assert not SF.is_expired(now - timedelta(days=2))                        # 15-nov: todavía sirve
+    assert SF.is_expired(now)                                                # 17-nov: vencido
+    monkeypatch.setattr(SF, "last_refresh", lambda: None)
+    assert SF.is_expired(now)                                                # nunca cargado
+
+
 def test_xg_corners_and_shots_are_judged_only_where_the_league_has_shots():
     from src.utils.output_checks import feature_coverage
     # noche del 27-oct-26: 32 de 42 partidos de Brasil, MLS, Suecia, Liga MX

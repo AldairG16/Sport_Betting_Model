@@ -208,6 +208,15 @@ def last_refresh() -> datetime | None:
     return (t if t.tzinfo else t.tz_localize("UTC")).to_pydatetime()
 
 
+def is_expired(now: datetime | None = None) -> bool:
+    """¿Ya no sirve el último xG de Understat (más de STALE_DAYS días, o no
+    hay)? Entonces get_real_xg devuelve None para todos y el modelo usa el xG
+    estimado con tiros: lo avisan este módulo (report_stale) y el chequeo de
+    datos (output_checks.FEED_MAX_AGE_DAYS), no la cobertura de la corrida."""
+    last = last_refresh()
+    return last is None or (now or datetime.now(timezone.utc)) - last > timedelta(days=STALE_DAYS)
+
+
 def report_stale(res: dict, last: datetime | None, now: datetime) -> None:
     """Sin xG nuevo: WARNING mientras el último sirve todavía más de
     WARN_DAYS_LEFT días; si vence antes o no hay, ERROR (llega a Telegram).
