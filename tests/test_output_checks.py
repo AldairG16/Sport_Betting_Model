@@ -276,14 +276,14 @@ def test_daily_check_reports_every_problem_as_an_error(monkeypatch):
             return pd.DataFrame([{"t": now}])
         if "AS bets" in s:
             return pd.DataFrame([{"bets": 0, "shadow": 2, "props": 0}])
-        if "AS n FROM program_picks" in s:          # picks atorados (29-oct-26): ninguno
+        if "AS n FROM program_picks" in s or "AS n FROM program_parlays" in s:   # atorados: ninguno
             return pd.DataFrame([{"n": 0}])
         if "FROM matches" in s:
             return pd.DataFrame([_m(d=str(now.date()))])
         if "FROM bets_history WHERE result IN" in s:
             return pd.DataFrame([{"id": 3, "match": "aa vs bb", "match_date": now, "market": "home_win",
                                   "result": "loss"}])
-        if "FROM shadow_bets WHERE" in s or "FROM model_proposals WHERE" in s or "FROM program_picks WHERE" in s:
+        if any(f"FROM {t} WHERE" in s for t in ("shadow_bets", "model_proposals", "program_picks", "program_parlays")):
             return pd.DataFrame(columns=["id", "match", "match_date", "market", "result"])
         if "FROM live_scores" in s:                 # marcadores del día (26-oct-26): ninguno
             return pd.DataFrame(columns=["home", "away", "kickoff", "home_goals", "away_goals", "status"])
@@ -305,10 +305,10 @@ def test_daily_check_reports_every_problem_as_an_error(monkeypatch):
 
 
 
-def _healthy_db(now, star_picks=(), closings=(), stuck_picks=0, states=None):
+def _healthy_db(now, star_picks=(), closings=(), stuck_picks=0, states=None, stuck_legs=0):
     """read_sql falso de una base sana (todas las secciones pasan); star_picks:
     las filas de program_picks de la sección 11; closings: las de shadow_bets
-    de la 12 ({match, valid})."""
+    de la 12 ({match, valid}); stuck_legs: piernas del parlay atoradas."""
     xi = [f"p{i}" for i in range(11)]
 
     def fake_read_sql(sql, con=None, params=None, **kw):
@@ -321,6 +321,8 @@ def _healthy_db(now, star_picks=(), closings=(), stuck_picks=0, states=None):
             return pd.DataFrame([{"bets": 0, "shadow": 0, "props": 0}])
         if "AS n FROM program_picks" in s:
             return pd.DataFrame([{"n": stuck_picks}])
+        if "AS n FROM program_parlays" in s:
+            return pd.DataFrame([{"n": stuck_legs}])
         if s.startswith("SELECT value FROM model_state"):      # estado (créditos): states={clave: valor}
             v = (states or {}).get((params or {}).get("k"))
             return pd.DataFrame([{"value": v}] if v is not None else [], columns=["value"])
@@ -519,6 +521,10 @@ def test_stuck_program_picks_are_reported_like_the_other_tables(monkeypatch):
     monkeypatch.setattr(pd, "read_sql", _healthy_db(pd.Timestamp.now(tz="UTC"), stuck_picks=2))
     assert mod.run_output_checks(engine=object(), normalize=lambda t: t) == [
         "Pendientes: 2 picks del programa atorados más allá de su ventana"]
+    # las piernas del parlay también (3-nov-26)
+    monkeypatch.setattr(pd, "read_sql", _healthy_db(pd.Timestamp.now(tz="UTC"), stuck_legs=1))
+    assert mod.run_output_checks(engine=object(), normalize=lambda t: t) == [
+        "Pendientes: 1 piernas del parlay atoradas más allá de su ventana"]
 
 
 def test_stale_odds_while_credits_are_out_are_said_once_not_as_new_errors(monkeypatch):

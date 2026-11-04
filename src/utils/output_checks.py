@@ -570,14 +570,14 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
 
     # 1) liquidación de lo resuelto en los últimos días
     rows = []
-    for table in ("bets_history", "shadow_bets", "model_proposals", "program_picks"):
+    for table in ("bets_history", "shadow_bets", "model_proposals", "program_picks", "program_parlays"):
         try:
             df = q(f"""SELECT id, match, match_date, market, result FROM {table}
                        WHERE result IN {RESOLVED} AND match_date >= NOW() - make_interval(days => :d)""", d=days)
             rows += [{**r, "table": table} for r in df.to_dict("records")]
         except Exception as e:
-            if table == "program_picks" and "does not exist" in str(e):
-                continue                  # nace con el primer pick guardado (21-oct-26)
+            if table in ("program_picks", "program_parlays") and "does not exist" in str(e):
+                continue                  # nacen con el primer pick (21-oct-26) y el primer parlay (3-nov-26)
             problems.append(f"Liquidación: no se pudo leer {table} ({type(e).__name__})")
     bad = settlement_mismatches(rows, matches, normalize)
     if bad:
@@ -612,14 +612,18 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
                 problems.append(f"Pendientes: {int(n)} {name} atoradas más allá de su ventana")
     except Exception as e:
         problems.append(f"Pendientes: no se pudo revisar ({type(e).__name__})")
-    try:                                          # los picks también pasan a 'stale' a los 10 días (29-oct-26)
-        n = int(q("""SELECT COUNT(*) AS n FROM program_picks WHERE result IS NULL AND market IS NOT NULL
-                     AND match_date < NOW() - INTERVAL '11 days'""").iloc[0]["n"] or 0)
-        if n > 0:
-            problems.append(f"Pendientes: {n} picks del programa atorados más allá de su ventana")
-    except Exception as e:
-        if "does not exist" not in str(e):        # la tabla nace con el primer pick guardado
-            problems.append(f"Pendientes: no se pudo revisar los picks ({type(e).__name__})")
+    # los picks también pasan a 'stale' a los 10 días (29-oct-26), y las piernas del parlay (3-nov-26)
+    for table, stuck, what, extra in (
+            ("program_picks", "picks del programa atorados", "los picks", " AND market IS NOT NULL"),
+            ("program_parlays", "piernas del parlay atoradas", "las piernas del parlay", "")):
+        try:
+            n = int(q(f"""SELECT COUNT(*) AS n FROM {table} WHERE result IS NULL{extra}
+                          AND match_date < NOW() - INTERVAL '11 days'""").iloc[0]["n"] or 0)
+            if n > 0:
+                problems.append(f"Pendientes: {n} {stuck} más allá de su ventana")
+        except Exception as e:
+            if "does not exist" not in str(e):    # la tabla nace con lo primero que se guarda
+                problems.append(f"Pendientes: no se pudo revisar {what} ({type(e).__name__})")
 
     # 4) xG real fuera de escala
     try:

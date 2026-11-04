@@ -296,8 +296,10 @@ def test_picks_are_settled_with_the_shadow_bets(monkeypatch):
     monkeypatch.setattr(sb, "resolve_shadow_outcomes", lambda: called.append("shadow"))
     monkeypatch.setattr(P, "resolve_proposals", lambda: called.append("proposals"))
     monkeypatch.setattr(PP, "resolve_picks", lambda: called.append("picks"))
+    import src.models.program_parlays as PL
+    monkeypatch.setattr(PL, "resolve_parlays", lambda: called.append("parlays"))
     O.step_shadow_results()
-    assert called == ["shadow", "proposals", "picks"]
+    assert called == ["shadow", "proposals", "picks", "parlays"]
 
 
 # ─── el tablero ──────────────────────────────────────────────────────────────
@@ -383,8 +385,9 @@ def test_daily_check_skips_the_picks_table_until_it_exists(monkeypatch):
 
     def fake_read_sql(sql, con=None, params=None, **kw):
         s = " ".join(str(sql).split())
-        if "FROM program_picks" in s:
-            raise RuntimeError('relation "program_picks" does not exist')
+        for t in ("program_picks", "program_parlays"):           # el parlay también nace después (3-nov-26)
+            if f"FROM {t}" in s:
+                raise RuntimeError(f'relation "{t}" does not exist')
         if s.startswith("SELECT COUNT(*) FROM matches"):          # datos de entrada (23-oct-26): sanos
             return pd.DataFrame([[0]])
         if s.startswith("SELECT MAX(") and " AS t FROM " in s:

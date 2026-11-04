@@ -120,15 +120,16 @@ def test_a_match_voided_in_an_earlier_run_is_not_reported_as_new(monkeypatch, ca
 
 def test_the_evening_voids_phantoms_before_settling_and_a_failure_is_an_error(monkeypatch):
     from scripts import orchestrator as O
-    from src.models import save_bets, proposals, program_picks
+    from src.models import save_bets, proposals, program_picks, program_parlays
     from src.utils.log import RUN_ISSUES
     order = []
     monkeypatch.setattr(R, "void_rescheduled", lambda: order.append("void"))
     monkeypatch.setattr(save_bets, "resolve_shadow_outcomes", lambda: order.append("shadow"))
     monkeypatch.setattr(proposals, "resolve_proposals", lambda: order.append("proposals"))
     monkeypatch.setattr(program_picks, "resolve_picks", lambda: order.append("picks"))
+    monkeypatch.setattr(program_parlays, "resolve_parlays", lambda: order.append("parlays"))
     O.step_shadow_results()
-    assert order == ["void", "shadow", "proposals", "picks"]
+    assert order == ["void", "shadow", "proposals", "picks", "parlays"]
 
     def boom():
         raise RuntimeError("sin conexión")
@@ -136,7 +137,7 @@ def test_the_evening_voids_phantoms_before_settling_and_a_failure_is_an_error(mo
     order.clear()
     RUN_ISSUES.reset()
     O.step_shadow_results()
-    assert order == ["shadow", "proposals", "picks"]                   # la liquidación sigue
+    assert order == ["shadow", "proposals", "picks", "parlays"]        # la liquidación sigue
     assert any("Partidos reprogramados" in e for e in RUN_ISSUES.errors())
     RUN_ISSUES.reset()
 
