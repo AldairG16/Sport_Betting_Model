@@ -1886,15 +1886,47 @@ los partidos más seguros, de las mejores ligas, de los que más se ganan y los 
     Galatasaray–Stuttgart del 3-nov pagaba 1.07;
   - fuera: poca historia, análisis que ya no valen, partidos entre ligas sin el ajuste de ClubElo y
     el ganador al que le faltan 4+ titulares (`lineup_check`);
-  - por día de México, las 4 más seguras (una por partido) con su `rank`. El parlay de k son las k
-    primeras.
+  - por horario (v2.7.0, abajo), las 4 más seguras (una por partido) con su `rank`. El parlay de k
+    son las k primeras.
 - **Cuándo se guarda:** `snapshot_parlays` corre en el paso "Picks del programa" (morning, evening,
   cada closing), justo después de `snapshot_picks`. Tabla `program_parlays`, una fila por pierna,
-  `UNIQUE (day, rank)`.
-  - Mientras no empieza la primera pierna, el parlay del día es un borrador: se borra y se vuelve a
-    escribir entero (solo filas sin resultado).
-  - Desde 5 min antes de la primera pierna queda fijo: es la apuesta que se pudo hacer.
-  - Si ninguna liga va ganando, el borrador se borra.
+  `UNIQUE (slot, rank)` (`slot` = la hora UTC del primer partido del horario).
+  - Mientras no empieza su primer partido, el parlay es un borrador: los borradores (sin resultado y
+    `slot` después de ahora + 5 min) se borran y se vuelven a escribir enteros.
+  - Desde 5 min antes de su primer partido queda fijo: es la apuesta que se pudo hacer. Sus partidos
+    no entran a otro horario (`exclude`).
+  - Si ninguna liga va ganando, los borradores se borran.
+- **Un parlay por horario (v2.7.0, 4-nov-26).** El dueño: "en los parlays necesito que se tomen en
+  cuenta ya que se hagan las alineaciones… si son al mismo horario sería mejor porque las
+  alineaciones ya estarían para todos los picks del parlay". Antes era uno por día y quedaba fijo 5
+  min antes de su primer partido: el del 6-nov juntaba 12:00, 13:00 y 21:00, y el de las 21:00 se
+  elegía 9 horas antes de su alineación. Eligió (1a, 2a, 3a):
+  - mismo horario = los partidos que empiezan hasta 30 min después del primero (`BLOCK_MINUTES`,
+    `blocks_of`: cada horario arranca con el primer partido que queda). Un horario con un solo
+    partido no es parlay (`MIN_BLOCK_LEGS` 2);
+  - un parlay por cada horario, con su récord;
+  - aviso de Telegram cuando el parlay ya vio las alineaciones de todos (abajo).
+  - Por qué alcanza: el closing (cada 30 min) guarda la alineación de ESPN de 80 a 5 min antes de cada
+    partido ("Alineaciones publicadas") y después rehace picks y parlays con ella. En el último
+    snapshot antes de fijarse, los partidos de 30 min después ya tienen la suya. Medido el 4-nov: el
+    último pick con alineación se calculó entre 6 y 33 min antes del partido (casi siempre ~28).
+  - Lo que cuesta: menos parlays grandes. De las piernas que cumplían del 28-oct al 7-nov (9 días),
+    un horario juntaba 2+ partidos 7 días, 3+ en 3 y 4 en 1 (uno por día juntaba 4 casi siempre).
+    Hora exacta en vez de 30 min: 6, 1 y 0.
+  - Migración: `_ensure` agrega `slot` una vez (sin la columna). Lo guardado toma como horario el
+    primer partido de su día, y `UNIQUE (day, rank)` pasa a `UNIQUE (slot, rank)`.
+- **Aviso "Parlay listo" (v2.7.0, `src/models/parlay_alerts.py`):** paso "Parlay listo (Telegram)"
+  del closing, después de "Partidos de hoy".
+  - Listo = todas sus piernas se eligieron con la alineación (`lineup` "confirmada…") o su liga no
+    la tiene en ESPN (`espn_leagues`; ahí nunca llega y esperarla dejaría el parlay sin aviso).
+  - Manda los partidos (de la más segura a la menos), lo que paga el de 2, 3 y 4 en americano, la
+    probabilidad de que salgan todas y "queda fijo a las HH:MM".
+  - Una vez por parlay; otra ("🔄 Cambió el parlay") si cambia antes de quedar fijo. Estado en
+    `model_state` 'telegram_parlays' ({horario: partidos y apuestas avisados}, se olvida a los 2
+    días).
+  - Si Telegram falla, error y se reintenta en el siguiente closing.
+  - El parlay que nunca junta todas sus alineaciones antes de fijarse no avisa; la pestaña lo marca
+    ⏳.
 - **Cómo se liquida:** `resolve_parlays`, en "Shadow results", con la misma función que los picks
   (`plan_shadow_resolutions`, stake 1 al momio de PlayDoit).
   - Una pierna sin datos a los 10 días, o de un partido reprogramado (`rescheduled.VOID_SQL`), queda
@@ -1902,11 +1934,13 @@ los partidos más seguros, de las mejores ligas, de los que más se ganan y los 
   - El chequeo diario la revisa como a los picks (sección 1, la liquidación contra el cálculo
     independiente; sección 3, las piernas atoradas).
 - **Dashboard** (`/api/board/parlay`, `dashboard/parlay.py`):
-  - el parlay de hoy y de los próximos días: las piernas por hora, con su momio americano; en gris las
-    que entran solo en uno más grande;
-  - lo que paga, la probabilidad de que salgan todas (programa y mercado) y "puede cambiar hasta las
-    HH:MM" o "🔒 ya empezó";
-  - el historial del tamaño elegido: solo los días que tenían las k piernas y ya liquidados, más
+  - los parlays de hoy y de los próximos días, uno por horario ("Parlay de las 19:00"): las piernas
+    por hora, con su momio americano y 📋 (vio la alineación) o ⏳; en gris las que entran solo en uno
+    más grande;
+  - lo que paga, la probabilidad de que salgan todas (programa y mercado) y "📋 ya vio las
+    alineaciones de todos · queda fijo a las HH:MM", "⏳ esperando alineaciones (falta 1 de 2) ·
+    puede cambiar hasta las HH:MM" o "🔒 ya empezó";
+  - el historial del tamaño elegido: solo los horarios que tenían las k piernas y ya liquidados, más
     cuántas piernas salieron;
   - las ligas que entran hoy, con sus unidades.
   - Como en Anteriores, una pierna con el marcador final (ESPN o `matches`) sale ✅/❌ provisional y

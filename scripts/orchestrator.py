@@ -776,7 +776,8 @@ def step_clubelo():
 def step_program_picks():
     """Guarda el pick del programa de los próximos 3 días (lo que muestra el
     dashboard) para medir después cómo terminó. Solo DB, segundos. Después,
-    el parlay del día (3-nov-26), con los mismos momios y alineaciones."""
+    el parlay de cada horario (3-nov-26; por horario desde el 4-nov), con los
+    mismos momios y alineaciones."""
     from src.models.program_picks import snapshot_picks
     snapshot_picks()
     from src.models.program_parlays import snapshot_parlays
@@ -1115,6 +1116,7 @@ def run_closing(logger: Logger):
     run_step(logger, "Picks del programa", step_program_picks)
     run_step(logger, "Alertas de alineación", step_lineup_alerts)
     run_step(logger, "Partidos de hoy (Telegram)", step_today_board)
+    run_step(logger, "Parlay listo (Telegram)", step_parlay_alerts)
 
 
 def step_espn_finals():
@@ -1154,6 +1156,15 @@ def step_today_board():
     aparte si cambia el pick de algo que empieza pronto (src/models/today_board.py)."""
     from src.models.today_board import run_today_board
     run_today_board()
+
+
+def step_parlay_alerts():
+    """El aviso de Telegram del parlay de un horario cuando ya vio las
+    alineaciones de todos sus partidos (v2.7.0, 4-nov-26). Va después de
+    "Picks del programa", que rehace el parlay con ellas
+    (src/models/parlay_alerts.py)."""
+    from src.models.parlay_alerts import run_parlay_alerts
+    run_parlay_alerts()
 
 
 def run_weekly(logger: Logger):
