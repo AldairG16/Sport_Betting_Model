@@ -812,15 +812,16 @@ def api_board_results():
 
 @app.route("/api/board/parlay")
 def api_board_parlay():
-    """El parlay del día (v2.6.0, 3-nov-26): las piernas las guarda el pipeline
-    (src/models/program_parlays.py) y dashboard/parlay.py arma el de 2, 3 o 4."""
+    """El parlay de cada horario (v2.6.0, 3-nov-26; por horario desde v2.7.0):
+    las piernas las guarda el pipeline (src/models/program_parlays.py) y
+    dashboard/parlay.py arma el de 2, 3 o 4."""
     from dashboard import parlay as _px
+    from src.features.espn_lineups import espn_leagues
     from src.models import program_parlays as _pl
     from src.utils.team_normalizer import normalize_team
-    # la tabla nace con el primer parlay que guarda el pipeline
-    legs = _q("""SELECT day, rank, match, match_date, league, display, market, label, family, model_prob, market_prob,
-                        safety, playdoit_odds, lineup, result, profit
-                 FROM program_parlays ORDER BY day DESC, rank""", optional=True)
+    # la tabla nace con el primer parlay que guarda el pipeline; * porque la columna
+    # slot (v2.7.0) la agrega el pipeline y este dashboard puede llegar antes
+    legs = _q("SELECT * FROM program_parlays ORDER BY day DESC, rank", optional=True)
     picks = _q("""SELECT league, match_date, result, profit, reason FROM program_picks
                   WHERE match_date >= CAST(:s AS date)""", {"s": _pl.FIXED_SINCE})
     if g.get("db_down"):
@@ -836,9 +837,12 @@ def api_board_parlay():
                                 home_corners, away_corners, home_yellow, away_yellow, home_red, away_red
                          FROM matches WHERE date >= CAST(:d AS date) AND home_goals IS NOT NULL""", p)
     leagues = _pl.winning_leagues(picks, before=pd.Timestamp.now(tz="UTC"))
-    return jsonify({"ok": True, **_px.parlay_board(legs, live, leagues, normalize=normalize_team, official=official),
+    board = _px.parlay_board(legs, live, leagues, normalize=normalize_team, official=official,
+                             covered=set(espn_leagues()))
+    return jsonify({"ok": True, **board,
                     "rules": {"min_safe": _pl.MIN_SAFE, "min_odds_us": _odds_us(_pl.MIN_LEG_ODDS),
-                              "min_n": _pl.LEAGUE_MIN_N, "max_legs": _pl.MAX_LEGS, "since": _pl.FIXED_SINCE}})
+                              "min_n": _pl.LEAGUE_MIN_N, "max_legs": _pl.MAX_LEGS, "since": _pl.FIXED_SINCE,
+                              "block_minutes": _pl.BLOCK_MINUTES}})
 
 
 @app.route("/api/board/teams")

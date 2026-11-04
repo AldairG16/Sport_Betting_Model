@@ -563,7 +563,10 @@ function loadResults(fresh){
 // El dueño: "quiero agregar la función parley, donde seleccione los partidos más
 // seguros, de las mejores ligas, de los que más se ganan y los agrupe en una
 // pestaña". De cada partido de las ligas donde los picks van ganando, la apuesta
-// más segura; el parlay de 2, 3 o 4 son las más seguras del día.
+// más segura; el parlay de 2, 3 o 4 son las más seguras del horario.
+// v2.7.0 (4-nov-26): un parlay por horario (los que empiezan hasta 30 min después
+// del primero), para que vea las alineaciones de todos. El dueño: "si son al mismo
+// horario sería mejor porque las alineaciones ya estarían para todos los picks".
 var _px = null, _pxK = _storeGet('parlayk', '3');
 function pxIcon(x){
   if (x.result === 'win' || x.result === 'half_win') return '✅';
@@ -580,8 +583,23 @@ function pxStatus(p){
   if (p.status === 'push') return '↔ anulado' + prov;
   return '<span class="muted">⏳ van ' + p.won_legs + ' de ' + p.k + '</span>';
 }
-function pxDay(d, k){
-  var p = d.parlays[k], h = '<div class="day">' + dayLabel(d.day) + '</div>';
+function pxLineup(x){
+  if (x.started) return '';
+  if (x.lineup) return ' <span title="' + esc('Elegida con la alineación (' + x.lineup + ')') + '">📋</span>';
+  if (x.no_lineups) return ' <span class="muted small" title="ESPN no publica alineaciones de esta liga: revísala antes de apostar.">· sin alineación</span>';
+  return ' <span class="muted" title="Todavía sin alineación: sale ~1 h antes del partido y el parlay se rehace con ella.">⏳</span>';
+}
+function pxReady(b, p){
+  if (!p || p.status !== 'pending') return '';
+  if (p.locked) return '<span class="small muted">🔒 ya empezó: así quedó</span>';
+  if (b.ready) return '<span class="small pos" title="Todas sus piernas se eligieron con la alineación publicada">📋 ya vio las alineaciones de todos</span>' +
+    '<span class="small muted">queda fijo a las ' + mxtime(b.lock) + '</span>';
+  return '<span class="small muted" title="Las alineaciones salen ~1 h antes; el parlay se rehace cada 30 min y Telegram avisa cuando las vio todas">' +
+    '⏳ esperando alineaciones (' + (b.waiting.length === 1 ? 'falta 1' : 'faltan ' + b.waiting.length) + ' de ' + b.legs.length +
+    ') · puede cambiar hasta las ' + mxtime(b.lock) + '</span>';
+}
+function pxBlock(d, k){
+  var p = d.parlays[k], h = '<div class="small" style="margin:6px 0 4px"><b>Parlay de las ' + mxtime(d.slot) + '</b></div>';
   if (!p) return h + '<div class="muted small" style="margin-bottom:8px">Solo 1 partido cumple (' + esc(d.legs[0].match) + ', ' +
                      esc(d.legs[0].label) + '): no hay parlay.</div>';
   h += '<div class="tbl" style="margin-bottom:8px"><table><thead><tr><th>Hora</th><th>Partido</th><th>Apuesta</th><th>Momio</th>' +
@@ -591,17 +609,15 @@ function pxDay(d, k){
     var x = byTime[i], used = p.ranks.indexOf(x.rank) >= 0;
     h += '<tr' + (used ? '' : ' class="out" title="Más partidos que cumplen: entra si eliges un parlay más grande"') + '>' +
          '<td class="nw">' + mxtime(x.kickoff) + '</td><td>' + esc(x.match) + '<div class="small muted">' + esc(x.league) + '</div></td>' +
-         '<td>' + famIcon(x.family) + ' <b>' + esc(x.label) + '</b>' + (x.started ? '' : lineupTag({ label: x.label, lineup: x.lineup })) + '</td>' +
+         '<td>' + famIcon(x.family) + ' <b>' + esc(x.label) + '</b>' + pxLineup(x) + '</td>' +
          '<td class="nw">' + esc(x.odds_us || '') + '</td><td class="hide-sm nw">' + p100(x.model) + ' / ' + p100(x.market) + '</td>' +
          '<td class="sc"' + (x.provisional ? ' title="Provisional: con el marcador final; se confirma al liquidar"' : '') + '>' + pxIcon(x) + '</td></tr>';
   }
   h += '</tbody></table><div class="xsum"><span>Parlay de <b>' + p.k + '</b>' +
-       (p.full ? '' : ' <span class="small muted">(solo ' + p.k + ' cumplen)</span>') + '</span>' +
+       (p.full ? '' : ' <span class="small muted">(solo ' + p.k + ' en este horario)</span>') + '</span>' +
        '<span title="Momio del parlay en PlayDoit (el estimado de cada pierna, multiplicado)">paga <b class="big">' + esc(p.odds_us || '—') + '</b></span>' +
        '<span class="muted" title="Probabilidad de que salgan todas: programa / mercado">salen todas: 🤖 ' + p100(p.p_model) + ' · 🏦 ' + p100(p.p_market) + '</span>' +
-       '<span>' + pxStatus(p) + '</span>' +
-       (p.status === 'pending' ? '<span class="small muted">' + (p.locked ? '🔒 ya empezó: así quedó' :
-         'puede cambiar hasta las ' + mxtime(p.first_kickoff) + ' (empieza el primero)') + '</span>' : '') +
+       '<span>' + pxStatus(p) + '</span>' + pxReady(d, p) +
        '</div></div>';
   return h;
 }
@@ -612,22 +628,29 @@ function renderParlay(){
   for (i = 0; i < pills.length; i++) if (pills[i].getAttribute('data-k'))
     pills[i].className = 'pill' + (pills[i].getAttribute('data-k') === k ? ' on' : '');
   el('xrule').innerHTML = 'De cada partido, la apuesta más segura: el programa y el mercado le dan ' + p100(r.min_safe) +
-    ' o más y paga ' + esc(r.min_odds_us) + ' o mejor · solo ligas donde los picks van ganando';
-  for (i = 0; i < _px.days.length; i++) if (_px.days[i].day >= today) h = pxDay(_px.days[i], k) + h;   // del más próximo
-  el('xnext').innerHTML = h || '<div class="muted">Hoy no hay parlay: ningún partido de las ligas que van ganando cumple. ' +
-    'Se arma solo en cuanto haya 2 o más (se revisa cada 30 min).</div>';
+    ' o más y paga ' + esc(r.min_odds_us) + ' o mejor · solo ligas donde los picks van ganando · un parlay por horario ' +
+    '(los que empiezan hasta ' + r.block_minutes + ' min después del primero), para que vea las alineaciones de todos';
+  var next = [], lastDay = '';
+  for (i = _px.blocks.length - 1; i >= 0; i--) if (_px.blocks[i].day >= today) next.push(_px.blocks[i]);   // del más próximo
+  for (i = 0; i < next.length; i++) {
+    if (next[i].day !== lastDay) { h += '<div class="day">' + dayLabel(next[i].day) + '</div>'; lastDay = next[i].day; }
+    h += pxBlock(next[i], k);
+  }
+  el('xnext').innerHTML = h || '<div class="muted">Por ahora no hay parlay: ningún horario junta 2 o más partidos que cumplan en las ligas que van ganando. ' +
+    'Se arma solo en cuanto los haya (se revisa cada 30 min) y Telegram avisa cuando ya vio las alineaciones.</div>';
   var t = _px.record[k];
   el('xkpis').innerHTML = kpi(t.n, 'Parlays de ' + k + ' liquidados') + kpi(t.won, '✅ Ganados', 'pos') + kpi(t.lost, '❌ Perdidos', 'neg') +
     kpi(money(t.units), 'Unidades (1u por parlay)', t.units >= 0 ? 'pos' : 'neg') + kpi(_roi(t.roi), 'Rendimiento (ROI)') +
     kpi(t.legs ? t.legs_won + ' / ' + t.legs : '—', 'Piernas que salieron (' + p100(t.legs_hit) + ')');
   h = '';
-  for (i = 0; i < _px.days.length; i++) {
-    var d = _px.days[i], p = d.parlays[k];
+  for (i = 0; i < _px.blocks.length; i++) {
+    var d = _px.blocks[i], p = d.parlays[k];
     if (d.day >= today || !p) continue;
     var legs = [];
     for (var j = 0; j < d.legs.length; j++) if (p.ranks.indexOf(d.legs[j].rank) >= 0)
       legs.push(pxIcon(d.legs[j]) + ' ' + esc(d.legs[j].label) + ' <span class="muted">· ' + esc(d.legs[j].match) + '</span>');
-    h += '<tr><td class="nw">' + shortDate(d.day) + (p.full ? '' : ' <span class="small muted" title="Ese día solo ' + p.k + ' cumplían">(' + p.k + ')</span>') +
+    h += '<tr><td class="nw">' + shortDate(d.day) + ' <span class="muted">' + mxtime(d.slot) + '</span>' +
+         (p.full ? '' : ' <span class="small muted" title="Ese horario solo tenía ' + p.k + '">(' + p.k + ')</span>') +
          '</td><td class="small">' + legs.join('<br>') + '</td><td class="nw">' + esc(p.odds_us || '') + '</td><td class="nw">' + pxStatus(p) + '</td></tr>';
   }
   el('xhist').innerHTML = h || '<tr><td colspan="4" class="muted">Todavía no hay parlays terminados: se guardan desde el 3 de noviembre.</td></tr>';

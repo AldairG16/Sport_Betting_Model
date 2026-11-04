@@ -12,6 +12,11 @@ MAX_LEGS más seguras de cada día). Aquí, funciones puras: el parlay de 2, 3 o
 cómo va y el historial. Como en Anteriores, una pierna con el final de ESPN
 sale ✅/❌ provisional y el parlay no cuenta en los totales hasta que la
 liquidación lo confirma.
+
+v2.7.0 (4-nov-26): un parlay por horario (program_parlays.slot), no por día,
+para que vea las alineaciones de todos sus partidos. Cada horario dice si ya
+las vio (ready) o cuáles faltan (waiting). Lo guardado antes de la columna
+toma como horario el primer partido de su día.
 """
 
 import math
@@ -63,11 +68,13 @@ def _factor(result: str | None, odds: float) -> float | None:
     return None
 
 
-def leg_view(r: dict, scores: list, now: pd.Timestamp) -> dict:
+def leg_view(r: dict, scores: list, now: pd.Timestamp, covered=None) -> dict:
     """Una pierna como la ve la pestaña. scores: los marcadores de su partido,
     el de ESPN (live_scores) y el final oficial (`matches`, board._final_of);
-    sin liquidar, el primero que resuelve su mercado la da ✅/❌ provisional."""
+    sin liquidar, el primero que resuelve su mercado la da ✅/❌ provisional.
+    covered: las ligas con alineación en ESPN (None = no se sabe)."""
     from src.features.live_scores import provisional_result
+    from src.models.program_parlays import lineup_ready
     kick = _utc(r["match_date"])
     h, _, a = str(r["match"]).partition(" vs ")
     odds = float(r["playdoit_odds"])
@@ -86,13 +93,14 @@ def leg_view(r: dict, scores: list, now: pd.Timestamp) -> dict:
             "started": bool(kick <= now), "label": r.get("label"), "family": r.get("family"),
             "model": _num(r.get("model_prob")), "market": _num(r.get("market_prob")),
             "safety": _num(r.get("safety")), "odds": odds, "odds_us": _us(odds),
-            "lineup": _str(r.get("lineup")), "result": result or "pending", "provisional": provisional,
-            "live": status}
+            "lineup": _str(r.get("lineup")), "lineup_ok": lineup_ready(r.get("lineup"), r.get("league"), covered),
+            "no_lineups": covered is not None and r.get("league") not in covered,
+            "result": result or "pending", "provisional": provisional, "live": status}
 
 
 def combine(legs: list, k: int) -> dict | None:
-    """El parlay de las k piernas más seguras del día (None con menos de 2).
-    full: el día tenía las k (si no, es de las que hay). status: win / loss /
+    """El parlay de las k piernas más seguras del horario (None con menos de 2).
+    full: el horario tenía las k (si no, es de las que hay). status: win / loss /
     push (todas anuladas) / pending. settled: todas liquidadas, sin provisional
     (solo esos cuentan en el historial). profit: a 1u."""
     use = sorted(legs, key=lambda x: x["rank"])[:k]
@@ -121,11 +129,12 @@ def combine(legs: list, k: int) -> dict | None:
             "locked": any(x["started"] for x in use)}
 
 
-def record(days: list, k: int) -> dict:
-    """El historial del parlay de k: solo los días que tenían las k piernas y
-    ya liquidados. Las piernas cuentan aparte (¿qué tan seguras fueron?)."""
+def record(blocks: list, k: int) -> dict:
+    """El historial del parlay de k: solo los horarios que tenían las k
+    piernas y ya liquidados. Las piernas cuentan aparte (¿qué tan seguras
+    fueron?)."""
     done, legs = [], []
-    for d in days:
+    for d in blocks:
         p = d["parlays"].get(str(k))
         if p and p["full"] and p["settled"]:
             done.append(p)
@@ -164,23 +173,44 @@ def _official_for(official: list, key: str, kick: pd.Timestamp) -> dict | None:
     return None
 
 
+def _slot_of(r: dict, first: dict) -> pd.Timestamp:
+    """El horario de la pierna; lo guardado antes de v2.7.0, el primer partido de su día."""
+    s = r.get("slot")
+    if s is not None and not pd.isna(s):
+        return _utc(s)
+    return first[pd.Timestamp(r["day"]).strftime("%Y-%m-%d")]
+
+
 def parlay_board(legs: pd.DataFrame, live: pd.DataFrame | None, leagues: list, now=None, normalize=None,
-                 official: pd.DataFrame | None = None) -> dict:
-    """La pestaña: cada día con sus piernas y su parlay de 2, 3 y 4, del más
-    reciente; el historial de cada tamaño y las ligas que entran hoy.
+                 official: pd.DataFrame | None = None, covered=None) -> dict:
+    """La pestaña: cada horario con sus piernas y su parlay de 2, 3 y 4, del
+    más reciente; si ya vio las alineaciones de todos (ready) y cuáles faltan
+    (waiting); el historial de cada tamaño y las ligas que entran hoy.
     official: filas de `matches` (h, a, date, goles, córners, tarjetas) para
-    lo que ESPN no cubre."""
+    lo que ESPN no cubre. covered: las ligas con alineación en ESPN."""
+    from src.models.program_parlays import LOCK_MINUTES
     now = _utc(now if now is not None else pd.Timestamp.now(tz="UTC"))
     idx = _live_index(live.to_dict("records") if live is not None and not live.empty else [], normalize)
     off = official.to_dict("records") if official is not None and not official.empty else []
-    days = {}
-    for r in (legs.to_dict("records") if legs is not None and not legs.empty else []):
+    rows = legs.to_dict("records") if legs is not None and not legs.empty else []
+    first = {}
+    for r in rows:
+        d = pd.Timestamp(r["day"]).strftime("%Y-%m-%d")
+        first[d] = min(first.get(d, _utc(r["match_date"])), _utc(r["match_date"]))
+    blocks = {}
+    for r in rows:
         key, kick = str(r["match"]).lower(), _utc(r["match_date"])
         scores = [] if _str(r.get("result")) else [_live_for(idx, key, kick), _official_for(off, key, kick)]
-        days.setdefault(pd.Timestamp(r["day"]).strftime("%Y-%m-%d"), []).append(leg_view(r, scores, now))
+        slot = _slot_of(r, first)
+        b = blocks.setdefault(slot, {"day": pd.Timestamp(r["day"]).strftime("%Y-%m-%d"), "legs": []})
+        b["legs"].append(leg_view(r, scores, now, covered))
     out = []
-    for day in sorted(days, reverse=True):
-        ls = sorted(days[day], key=lambda x: x["rank"])
-        out.append({"day": day, "legs": ls, "parlays": {str(k): combine(ls, k) for k in SIZES}})
-    return {"days": out, "record": {str(k): record(out, k) for k in SIZES},
+    for slot in sorted(blocks, reverse=True):
+        ls = sorted(blocks[slot]["legs"], key=lambda x: x["rank"])
+        out.append({"day": blocks[slot]["day"], "slot": slot.isoformat(),
+                    "lock": (slot - pd.Timedelta(minutes=LOCK_MINUTES)).isoformat(),
+                    "ready": all(x["lineup_ok"] for x in ls),
+                    "waiting": [x["match"] for x in ls if not x["lineup_ok"]],
+                    "legs": ls, "parlays": {str(k): combine(ls, k) for k in SIZES}})
+    return {"blocks": out, "record": {str(k): record(out, k) for k in SIZES},
             "leagues": [{**x, "name": league_name(x["league"])} for x in leagues]}
