@@ -756,6 +756,11 @@ tolerados":
 - **cierres guardados** (sección 12, 29-oct-26, `closing_coverage`): de los partidos sombra
   jugados entre 27 y 3 horas antes, al menos 80% con un cierre válido (10+ partidos). Lo
   normal es 98-100%. Si el aviso de "sin créditos" salió hoy, es WARNING y no ERROR.
+- **picks en juego** (sección 14, 5-nov-26, `repicked_after_start`): ningún pick ni pierna de
+  parlay de los últimos 3 días guardado (`picked_at`) más de 2 min después del inicio real, la
+  hora más temprana entre la del sistema y la de ESPN (`espn_kickoffs`). Los reconstruidos se
+  saltan: se guardan después del partido a propósito. Ver §5, "La hora de The Odds API puede
+  venir tarde".
 
 Al final de cada corrida del pipeline, `pipeline_invariants` revisa los goles esperados en
 el tope (más del 5% de los partidos), los partidos a más de 20 pts de Pinnacle (más del
@@ -1190,6 +1195,24 @@ apuesta así liquidada.
 - **Córners.** Los archivos `/new/` de football-data (Brasil, Liga MX, Argentina) no traen
   córners y el loader los guardó como 0-0. `props_fair` veía ligas de 0 córners ("más de 9.5"
   = 0%); ahora 0-0 es sin dato. `corners_stats` ya filtraba los ceros.
+
+**La hora de The Odds API puede venir tarde (1-nov-2026, arreglado en v2.8.0).** Panathinaikos–AEK
+(sistema 19:00 UTC, real 17:30) y Vancouver–Seattle (sistema 21:30, real 20:30): el closing creyó
+que faltaba y siguió rehaciendo el pick con momios EN JUEGO (Panathinaikos a 1.36 ganando, el
+pick pasó a "más de 2.5" a 1.83). 2 de 307 partidos con hora de ESPN; se vio midiendo los
+cambios con la alineación (el precio no cuadraba).
+- Cada closing, "Marcadores del día (ESPN)" guarda también la hora de ESPN de los partidos que
+  empiezan en las próximas 3 h (`live_scores.AHEAD_H`) en `espn_kickoffs` (kickoff = la del
+  sistema, `espn_kickoff` = la de ESPN; mismo emparejamiento estricto, ±90 min). Si difieren más
+  de 5 min sale un WARNING "⏰ … ESPN dice …" en el log.
+- `snapshot_picks` no toca el pick de un partido que ESPN ya da por empezado (o a 5 min,
+  `program_picks.started_early`), aunque la hora del sistema diga que falta.
+- `snapshot_parlays`: un horario con un partido así queda fijo como estaba (no se borra el
+  borrador ni se escribe otro en ese horario) y ese partido no entra a otro parlay.
+- Sin `espn_kickoffs` (antes del primer closing de v2.8.0, o si no se pudo leer) manda la hora
+  del sistema, como antes. Lo que ESPN no empareja (más de 90 min de diferencia o ligas fuera de
+  ESPN) tampoco se corrige.
+- El chequeo de salidas §14 avisa si vuelve a pasar.
 
 ---
 
@@ -2105,6 +2128,27 @@ de responder "cómo nos fue con los picks".
       queda nada sigue siendo ese ganador, con el motivo, nunca 🎯.
     - `program_picks.lineup`: NULL = el pick todavía no vio la alineación; "confirmada" (y
       quién trae 4+ fuera) = se recalculó con ella. Lo que se mide es el último pick.
+    - **¿Los cambios con la alineación ayudan o estorban? (v2.8.0, 5-nov-2026).** El dueño: "mide
+      si los cambios por alineación ayudan o estorban".
+      - Medido a mano el 4-nov con lo que había (`prev_label`, solo el último cambio de cada
+        partido, sin momio del pick de antes en 1.5/3.5, córners y tarjetas): 34 cambios en la
+        última hora del 1 al 4 de nov. En aciertos, empate (15 → 17). En los 🎯, −5.4u → +2.0u:
+        los 5 "mismo pick, quitó la 🎯" perdieron y 4 "🎯 → otro sin 🎯" habrían ganado
+        (−3.7u). La regla de 4+ fuera no causó ningún cambio: todos venían del mercado de la
+        última hora, que ya incorporó la alineación. ~1.7 desviaciones: no decide.
+      - Desde v2.8.0, la primera vez que el pick ve la alineación (`lineup` pasa de NULL a
+        "confirmada…") el upsert guarda el pick que había, tal cual (`pre_lineup_label`,
+        `pre_lineup_market`, `pre_lineup_star`, `pre_lineup_odds` = su momio de PlayDoit de ese
+        momento, `pre_lineup_at`). Una sola vez: si la alineación no se pudo leer y vuelve, no
+        se pisa. La reconstrucción (`backfill_picks`) no lo toca.
+      - `resolve_picks` lo liquida igual que el pick (`_resolve_pre_lineup`: misma función,
+        stake 1; sin momio, el resultado cuenta y las unidades no) en `pre_lineup_result` /
+        `pre_lineup_profit`.
+      - El reporte semanal de Telegram trae "CAMBIOS CON LA ALINEACIÓN"
+        (`src/models/lineup_changes.py`): de la semana y acumulado, aciertos de los que
+        cambiaron y lo que dejaron los 🎯 de antes contra los de después (lo que se apuesta;
+        sin 🎯 = 0). Veredicto con 20+ cambios con algún 🎯 y ±2 desviaciones: "AYUDAN",
+        "ESTORBAN" o "sin diferencia clara"; antes, cuántos faltan. Solo mide: no cambia el pick.
     - Por qué 4: contra el cierre, el rival del equipo debilitado gana +2.6 pt con 4 fuera y
       +8.2 con 5+ (4,389 partidos, 20-oct), y el programa ni siquiera ve la rotación.
     - Medido el 26-oct: en 415 picks a que gana un equipo (desde septiembre) los de 4+ fuera
@@ -2155,6 +2199,9 @@ de responder "cómo nos fue con los picks".
       ESPN, gratis, el marcador de los partidos del sistema que empezaron en las últimas 6 h, con
       córners y tarjetas. Lo guarda en `live_scores`, aparte: `matches` y la liquidación oficial
       no cambian. El emparejamiento es el estricto de las alineaciones.
+    - Desde v2.8.0 también guarda la hora de inicio de ESPN de lo que empieza en las próximas
+      3 h (`espn_kickoffs`): el pick y el parlay quedan fijos a la más temprana (§5, "La hora de
+      The Odds API puede venir tarde").
     - En Anteriores se ve el marcador ("● 67'" en juego, "final" al terminar). Con el final, el
       pick sale ✅ o ❌ con la misma regla de liquidación (`provisional_result` →
       `save_bets.resolve_market`), al momio estimado de PlayDoit.

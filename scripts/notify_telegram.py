@@ -1298,6 +1298,10 @@ def send_weekly_report():
     from src.models.proposals import weekly_lines
     lines += weekly_lines()
 
+    # ── ¿Los cambios de pick con la alineación ayudan o estorban? (v2.8.0) ──
+    from src.models import lineup_changes
+    lines += lineup_changes.weekly_lines(engine)
+
     # ── Bankroll ──────────────────────────────────────────────────────────
     drawdown_str = f"  Max DD: -{bk['drawdown_pct']:.1f}%" if bk["drawdown_pct"] > 0 else ""
     lines += [

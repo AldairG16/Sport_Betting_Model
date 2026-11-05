@@ -15,6 +15,13 @@ liquidación, save_bets.resolve_market) hasta que la noche lo confirma.
 
 El emparejamiento es el estricto de las alineaciones (espn_lineups.assign_events).
 
+5-nov-26 (v2.8.0), la hora real de inicio: el 1-nov The Odds API tenía
+Panathinaikos–AEK y Vancouver–Seattle 1-1.5 h más tarde de lo real y el
+closing siguió rehaciendo su pick con momios EN JUEGO (el sistema creía que
+faltaba). Cada closing guarda también la hora de ESPN de los partidos que
+empiezan en las próximas AHEAD_H horas (`espn_kickoffs`): el pick y el parlay
+quedan fijos a la más temprana de las dos (program_picks.started_early).
+
 26-oct-26, el dueño: "¿por qué solo los de hoy tienen tarjetas y córners y
 los de ayer no? ni los del pasado". `matches` no los trae en MLS, Liga MX,
 Argentina, Brasil, Noruega, Suecia, Japón, China ni la Champions (football-data
@@ -52,6 +59,24 @@ DDL = f"""
     )
 """
 LOOKBACK_H = 6              # partidos que empezaron en las últimas horas
+AHEAD_H = 3                 # y la hora de ESPN de los que empiezan en las próximas
+KICK_DIFF_MIN = 5           # más diferencia que esto con la hora del sistema se avisa en el log
+
+# La hora de inicio de ESPN de cada partido del sistema (kickoff = la del
+# sistema, upcoming_matches.match_date; home/away = sus nombres).
+KICKOFFS_TABLE = "espn_kickoffs"
+KICKOFFS_DDL = f"""
+    CREATE TABLE IF NOT EXISTS {KICKOFFS_TABLE} (
+        sport_key TEXT NOT NULL,
+        kickoff TIMESTAMPTZ NOT NULL,
+        home TEXT NOT NULL,
+        away TEXT NOT NULL,
+        espn_kickoff TIMESTAMPTZ NOT NULL,
+        espn_id TEXT,
+        fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (sport_key, kickoff, home)
+    )
+"""
 
 
 def _int(v):
@@ -101,8 +126,10 @@ def parse_live(data: dict | None) -> list:
 
 def capture_live_scores(engine=None, get=None, now=None) -> int:
     """Closing: guarda el marcador de ESPN de los partidos del sistema que
-    empezaron en las últimas LOOKBACK_H horas. Devuelve cuántos guardó."""
-    from src.features.espn_lineups import _get, assign_events, espn_leagues
+    empezaron en las últimas LOOKBACK_H horas y la hora de inicio de ESPN de
+    esos y de los que empiezan en las próximas AHEAD_H (espn_kickoffs).
+    Devuelve cuántos marcadores guardó."""
+    from src.features.espn_lineups import _get, assign_events, espn_leagues, parse_scoreboard
     if engine is None:
         from config.database import engine
     now = now or datetime.now(timezone.utc)
@@ -111,32 +138,65 @@ def capture_live_scores(engine=None, get=None, now=None) -> int:
         fixtures = [(r[0], r[1], r[2], r[3]) for r in conn.execute(text("""
             SELECT DISTINCT sport_key, home_team_norm, away_team_norm, match_date FROM upcoming_matches
             WHERE match_date BETWEEN :a AND :b
-        """), {"a": now - timedelta(hours=LOOKBACK_H), "b": now}).fetchall() if r[0] in leagues]
+        """), {"a": now - timedelta(hours=LOOKBACK_H), "b": now + timedelta(hours=AHEAD_H)}).fetchall()
+            if r[0] in leagues]
     if not fixtures:
         return 0
-    rows, read, asked = [], 0, 0
+    begun = [f for f in fixtures if pd.Timestamp(f[3]) <= pd.Timestamp(now)]   # con la hora del sistema
+    rows, kicks, read, asked = [], [], 0, 0
     for sport_key in sorted({f[0] for f in fixtures}):
-        events = []
+        live, events = [], []
         days = {pd.Timestamp(f[3]).tz_convert("UTC").date() for f in fixtures if f[0] == sport_key}
         for day in days | {d - timedelta(days=1) for d in days}:       # ESPN usa su propia fecha
             asked += 1
             data = _get(leagues[sport_key], "scoreboard", f"dates={day:%Y%m%d}", get)
             if data is not None:
                 read += 1
-            events += parse_live(data)
-        uniq = {e["event"]: e for e in events}
-        for eid, (h, a, k) in assign_events(sport_key, list(uniq.values()), fixtures).items():
+            live += parse_live(data)
+            events += parse_scoreboard(data)
+        uniq = {e["event"]: e for e in live}
+        for eid, (h, a, k) in assign_events(sport_key, list(uniq.values()), begun).items():
             e = uniq[eid]
             rows.append({"sport_key": sport_key, "kickoff": k, "home": h, "away": a, "espn_id": eid,
                          **{c: e[c] for c in ("home_goals", "away_goals", "home_corners", "away_corners",
                                               "home_cards", "away_cards", "status", "clock")}})
+        every = {e["event"]: e for e in events}
+        for eid, (h, a, k) in assign_events(sport_key, list(every.values()), fixtures).items():
+            kicks.append({"sport_key": sport_key, "kickoff": k, "home": h, "away": a,
+                          "espn_kickoff": every[eid]["kick"], "espn_id": eid})
     if asked and not read:
         log.error("❌ Marcadores del día (ESPN): no respondió ninguna liga — el dashboard se queda con ⏳")
         return 0
     _save(engine, rows)
+    _save_kicks(engine, kicks)
+    for d in kick_differences(kicks):
+        log.warning(f"⏰ {d['home']} vs {d['away']}: ESPN dice {d['espn_kickoff']:%d-%m %H:%M} UTC y el sistema "
+                    f"{d['kickoff']:%H:%M} — el pick y el parlay quedan fijos a la más temprana")
     final = sum(1 for r in rows if r["status"] == "final")
-    print(f"⚽ Marcadores del día (ESPN): {len(rows)} partidos ({final} terminados, {len(rows) - final} en juego)")
+    print(f"⚽ Marcadores del día (ESPN): {len(rows)} partidos ({final} terminados, {len(rows) - final} en juego)"
+          f" · hora de ESPN de {len(kicks)}")
     return len(rows)
+
+
+def kick_differences(kicks: list) -> list:
+    """Función pura: los partidos cuya hora de ESPN se separa de la del
+    sistema más de KICK_DIFF_MIN minutos."""
+    return [k for k in kicks
+            if abs((pd.Timestamp(k["espn_kickoff"]) - pd.Timestamp(k["kickoff"])).total_seconds()) > KICK_DIFF_MIN * 60]
+
+
+def _save_kicks(engine, kicks: list) -> None:
+    if not kicks:
+        return
+    with engine.begin() as conn:
+        conn.execute(text(KICKOFFS_DDL))
+        conn.execute(text(f"""
+            INSERT INTO {KICKOFFS_TABLE} (sport_key, kickoff, home, away, espn_kickoff, espn_id)
+            VALUES (:sport_key, :kickoff, :home, :away, :espn_kickoff, :espn_id)
+            ON CONFLICT (sport_key, kickoff, home) DO UPDATE SET
+                away = EXCLUDED.away, espn_kickoff = EXCLUDED.espn_kickoff, espn_id = EXCLUDED.espn_id,
+                fetched_at = NOW()
+        """), kicks)
 
 
 def _save(engine, rows: list) -> None:
