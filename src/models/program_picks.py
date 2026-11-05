@@ -41,6 +41,14 @@ del mercado, guardado con el motivo por el que no la pasa (reason; NULL = la
 pasa). Sin momios guardados, el 1X2 contra el Pinnacle de model_vs_sharp:
 cuenta acierto, no unidades. Solo un partido que el programa no analizó se
 queda sin pick.
+
+5-nov-26 (v2.8.0), dos cosas. (1) El pick queda fijo también a la hora de
+ESPN si es más temprana (started_early): el 1-nov dos picks se rehicieron
+con el partido ya empezado porque The Odds API tenía la hora 1-1.5 h tarde.
+(2) El pick de antes de la alineación (pre_lineup_*): la primera vez que el
+pick ve la alineación se guarda el que había, con su momio, y se liquida
+aparte (resolve_picks). El dueño: "mide si los cambios por alineación
+ayudan o estorban" (src/models/lineup_changes.py, en el reporte semanal).
 """
 
 import math
@@ -97,7 +105,16 @@ PICKS_ALTERS = ("ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS source TEXT"
                 # cambió, para el aviso de Telegram (src/models/today_board.py)
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS prev_label TEXT",
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS prev_star BOOLEAN",
-                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS changed_at TIMESTAMPTZ")
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS changed_at TIMESTAMPTZ",
+                # el pick de antes de la alineación (5-nov-26): cuál era, si era
+                # 🎯, su momio, cuándo vio la alineación y cómo habría salido
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pre_lineup_label TEXT",
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pre_lineup_market TEXT",
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pre_lineup_star BOOLEAN",
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pre_lineup_odds NUMERIC",
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pre_lineup_at TIMESTAMPTZ",
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pre_lineup_result TEXT",
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pre_lineup_profit NUMERIC")
 _COLS = ("match", "match_date", "league", "display", "market", "label", "family", "reason", "model_prob",
          "market_prob", "lean", "min_us", "best_odds", "playdoit_odds", "value", "lineup")
 
@@ -632,11 +649,20 @@ _CHANGED = f"(program_picks.label IS DISTINCT FROM EXCLUDED.label OR {_STAR_OLD}
 _CHANGE_SETS = (f"prev_label = CASE WHEN {_CHANGED} THEN program_picks.label ELSE program_picks.prev_label END, "
                 f"prev_star = CASE WHEN {_CHANGED} THEN {_STAR_OLD} ELSE program_picks.prev_star END, "
                 f"changed_at = CASE WHEN {_CHANGED} THEN NOW() ELSE program_picks.changed_at END")
+# la primera vez que el pick ve la alineación (5-nov-26): se guarda el de antes
+# tal cual estaba (pick, 🎯 y momio de PlayDoit de ese momento). Una sola vez:
+# si después la alineación no se pudo leer y vuelve, no se pisa.
+_FIRST_LINEUP = (f"(program_picks.pre_lineup_at IS NULL AND program_picks.lineup IS NULL "
+                 f"AND EXCLUDED.lineup LIKE '{LINEUP_OK}%')")
+_PRE_LINEUP_SETS = ", ".join(
+    f"pre_lineup_{c} = CASE WHEN {_FIRST_LINEUP} THEN {old} ELSE program_picks.pre_lineup_{c} END"
+    for c, old in (("label", "program_picks.label"), ("market", "program_picks.market"), ("star", _STAR_OLD),
+                   ("odds", "program_picks.playdoit_odds"), ("at", "NOW()")))
 
 
 def _upsert(conn, rows: list, where: str, track_changes: bool = False) -> None:
-    """track_changes: el pick en vivo (snapshot_picks) anota cuándo cambió;
-    la reconstrucción de picks pasados no."""
+    """track_changes: el pick en vivo (snapshot_picks) anota cuándo cambió y
+    el pick de antes de la alineación; la reconstrucción de picks pasados no."""
     cols = _COLS + ("source",)
     for i in range(0, len(rows), 200):
         part = rows[i:i + 200]
@@ -647,7 +673,7 @@ def _upsert(conn, rows: list, where: str, track_changes: bool = False) -> None:
         sets = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols if c not in ("match", "match_date"))
         conn.execute(text(f"""
             INSERT INTO program_picks ({", ".join(cols)}) VALUES {", ".join(values)}
-            ON CONFLICT (match, match_date) DO UPDATE SET {_CHANGE_SETS + ", " if track_changes else ""}{sets}, picked_at = NOW(),
+            ON CONFLICT (match, match_date) DO UPDATE SET {_CHANGE_SETS + ", " + _PRE_LINEUP_SETS + ", " if track_changes else ""}{sets}, picked_at = NOW(),
                 result = NULL, profit = NULL, resolved_at = NULL
             WHERE {where}
         """), params)
@@ -659,9 +685,46 @@ def _ensure(conn) -> None:
         conn.execute(text(a))
 
 
+KICK_LOCK_MIN = 5            # un partido que empieza en 5 min ya no se toca (como el filtro de abajo)
+
+
+def frozen_by_espn(kicks: list, now, normalize=None) -> set:
+    """Función pura: match_key de los partidos que según ESPN empiezan antes
+    de now + KICK_LOCK_MIN aunque la hora del sistema diga que falta (kicks:
+    filas de espn_kickoffs con home, away, kickoff, espn_kickoff)."""
+    lock = pd.Timestamp(now) + pd.Timedelta(minutes=KICK_LOCK_MIN)
+    return {match_key(k["home"], k["away"], normalize) for k in kicks
+            if _utc(k["espn_kickoff"]) <= lock < _utc(k["kickoff"])}
+
+
+def started_early(engine, normalize=None, now=None) -> set:
+    """frozen_by_espn con lo que guardó el closing (live_scores.capture_live_scores).
+    Vacío si la tabla todavía no existe o no se pudo leer: entonces manda la
+    hora del sistema, como antes."""
+    now = pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz="UTC")
+    try:
+        kicks = pd.read_sql(text("""
+            SELECT home, away, kickoff, espn_kickoff FROM espn_kickoffs
+            WHERE kickoff BETWEEN CAST(:a AS timestamptz) AND CAST(:b AS timestamptz)
+        """), engine, params={"a": now.to_pydatetime(), "b": (now + pd.Timedelta(days=1)).to_pydatetime()})
+    except Exception as e:
+        if "does not exist" not in str(e):        # nace con el primer closing de v2.8.0
+            log.warning(f"⚠️  Sin la hora de ESPN ({type(e).__name__}): los picks se fijan con la hora del sistema")
+        return set()
+    if not {"home", "away", "kickoff", "espn_kickoff"} <= set(kicks.columns):
+        return set()
+    return frozen_by_espn(kicks.to_dict("records"), now, normalize)
+
+
+def _row_key(r: dict, normalize=None) -> str:
+    h, _, a = str(r["match"]).partition(" vs ")
+    return match_key(h, a, normalize)
+
+
 def snapshot_picks(hours: int = SNAPSHOT_HOURS, engine=None) -> int:
     """Guarda el pick (o "sin pick") de los partidos de las próximas `hours`
-    horas con los momios de ahora. Un partido ya empezado no se toca."""
+    horas con los momios de ahora. Un partido ya empezado no se toca: con la
+    hora del sistema o, si es más temprana, con la de ESPN (v2.8.0)."""
     if engine is None:
         from config.database import engine
     from src.utils.team_normalizer import normalize_team
@@ -679,6 +742,11 @@ def snapshot_picks(hours: int = SNAPSHOT_HOURS, engine=None) -> int:
         from src.models.filter_learner import paused_regions
         rows = build_picks(mvs, up, snaps, _ratio(engine), normalize_team, _props_for(engine), load_bias(engine),
                            _lineups_for(engine, normalize_team), paused_regions(engine))
+        early = started_early(engine, normalize_team, now)
+        frozen = [r for r in rows if _row_key(r, normalize_team) in early]
+        rows = [r for r in rows if _row_key(r, normalize_team) not in early]
+        for r in frozen:
+            log.warning(f"⏰ {r['match']}: ESPN ya lo da por empezado — su pick queda como estaba")
         if not rows:
             return 0
         with engine.begin() as conn:
@@ -688,7 +756,8 @@ def snapshot_picks(hours: int = SNAPSHOT_HOURS, engine=None) -> int:
         log.error(f"❌ Picks del programa no guardados: {type(e).__name__}: {str(e)[:200]}")
         return 0
     n = sum(1 for r in rows if r["market"])
-    print(f"🎯 Picks del programa: {n} de {len(rows)} partidos")
+    print(f"🎯 Picks del programa: {n} de {len(rows)} partidos"
+          + (f" · {len(frozen)} ya empezaron según ESPN (sin tocar)" if frozen else ""))
     return len(rows)
 
 
@@ -701,6 +770,10 @@ def resolve_picks(engine=None) -> dict:
     from src.models.save_bets import SHADOW_STALE_DAYS, _preload_matches, plan_shadow_resolutions
     with engine.begin() as conn:
         _ensure(conn)
+    try:
+        _resolve_pre_lineup(engine)
+    except Exception as e:                        # la medición no detiene la liquidación del pick
+        log.error(f"❌ Pick de antes de la alineación sin liquidar: {type(e).__name__}: {str(e)[:160]}")
     pending = pd.read_sql(text("""
         SELECT id, match, match_date, market, playdoit_odds FROM program_picks
         WHERE result IS NULL AND market IS NOT NULL AND match_date < NOW() - INTERVAL '3 hours'
@@ -727,6 +800,41 @@ def resolve_picks(engine=None) -> dict:
     print(f"🎯 Picks del programa liquidados: {len(plan)}/{len(pending)}"
           + (f", {stale} sin datos → stale" if stale else ""))
     return {"pending": int(len(pending)), "resolved": len(plan), "stale": int(stale or 0)}
+
+
+def _resolve_pre_lineup(engine) -> int:
+    """Liquida el pick de antes de la alineación (pre_lineup_*) igual que el
+    pick: misma función, stake 1, su momio de PlayDoit de ese momento (sin
+    momio: el resultado cuenta, las unidades no). Devuelve cuántos liquidó."""
+    from src.models.save_bets import SHADOW_STALE_DAYS, _preload_matches, plan_shadow_resolutions
+    pending = pd.read_sql(text("""
+        SELECT id, match, match_date, pre_lineup_market AS market, pre_lineup_odds AS playdoit_odds
+        FROM program_picks
+        WHERE pre_lineup_market IS NOT NULL AND pre_lineup_result IS NULL
+          AND match_date < NOW() - INTERVAL '3 hours'
+    """), engine)
+    plan = []
+    if not pending.empty:
+        no_price = set(pending.loc[pending["playdoit_odds"].isna(), "id"])
+        plan = plan_shadow_resolutions(pending.assign(odds=pending["playdoit_odds"].fillna(2.0).astype(float)),
+                                       _preload_matches(pending["match_date"]))
+        for p in plan:
+            if p["id"] in no_price:
+                p["profit"] = None
+    with engine.begin() as conn:
+        if plan:
+            conn.execute(text("""
+                UPDATE program_picks SET pre_lineup_result = :result, pre_lineup_profit = :profit
+                WHERE id = :id AND pre_lineup_result IS NULL
+            """), plan)
+        conn.execute(text(f"""
+            UPDATE program_picks SET pre_lineup_result = 'stale'
+            WHERE pre_lineup_market IS NOT NULL AND pre_lineup_result IS NULL
+              AND match_date < NOW() - INTERVAL '{SHADOW_STALE_DAYS} days'
+        """))
+    if plan:
+        print(f"🔁 Pick de antes de la alineación liquidado: {len(plan)}/{len(pending)}")
+    return len(plan)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

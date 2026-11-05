@@ -18,7 +18,8 @@ que lo que sale tenga sentido y avisa como ERROR (llega a Telegram como
   - pendientes atorados más allá de la ventana de 'stale';
   - xG real fuera de escala;
   - lo aprendido: claves del weekly sin actualizar en 9+ días;
-  - cierres: partidos de ayer con un cierre válido (29-oct-26).
+  - cierres: partidos de ayer con un cierre válido (29-oct-26);
+  - picks o parlays rehechos con el partido ya empezado según ESPN (5-nov-26).
 
 Las funciones de revisión son puras; run_output_checks hace las consultas.
 """
@@ -540,6 +541,35 @@ def lineup_pick_problems(picks: list, lineups: list, profiles: dict) -> dict:
     return out
 
 
+REPICK_GRACE_MIN = 2             # el closing tarda; más que esto después del inicio = momios en juego
+
+
+def repicked_after_start(picks: list, kicks: list, normalize=None) -> list:
+    """Función pura (5-nov-26): el 1-nov dos picks se rehicieron con el
+    partido ya empezado (The Odds API con la hora 1-1.5 h tarde). picks:
+    filas de program_picks / program_parlays (match, match_date, picked_at);
+    kicks: espn_kickoffs (home, away, kickoff, espn_kickoff). Devuelve los
+    que se guardaron más de REPICK_GRACE_MIN después del inicio real (la
+    hora más temprana entre la del sistema y la de ESPN)."""
+    import pandas as pd
+    from src.models.program_picks import match_key
+    utc = lambda t: (lambda x: x.tz_convert("UTC") if x.tzinfo else x.tz_localize("UTC"))(pd.Timestamp(t))
+    idx = defaultdict(list)
+    for k in kicks:
+        idx[match_key(k["home"], k["away"], normalize)].append((utc(k["kickoff"]), utc(k["espn_kickoff"])))
+    out = []
+    for p in picks:
+        if p.get("picked_at") is None or pd.isna(p.get("picked_at")):
+            continue
+        h, _, a = str(p["match"]).partition(" vs ")
+        kick = utc(p["match_date"])
+        espn = [e for s, e in idx.get(match_key(h, a, normalize), []) if abs((s - kick).total_seconds()) <= 3 * 3600]
+        real = min([kick] + espn)
+        if utc(p["picked_at"]) > real + timedelta(minutes=REPICK_GRACE_MIN):
+            out.append(f"{p['match']} (guardado {utc(p['picked_at']):%d-%m %H:%M}, empezó {real:%H:%M} UTC)")
+    return out
+
+
 def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     """Corre todo y avisa cada problema como ERROR. Devuelve los avisos."""
     import pandas as pd
@@ -797,6 +827,31 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
                     problems.append(msg)
     except Exception as e:
         problems.append(f"Créditos: no se pudo revisar el ritmo ({type(e).__name__})")
+
+    # 14) ni el pick ni el parlay se rehacen con el partido ya empezado (5-nov-26):
+    #     el 1-nov Panathinaikos–AEK y Vancouver–Seattle se rehicieron con momios
+    #     en juego porque The Odds API tenía la hora 1-1.5 h tarde
+    try:
+        kicks = q("""SELECT home, away, kickoff, espn_kickoff FROM espn_kickoffs
+                     WHERE kickoff >= NOW() - make_interval(days => :d) - INTERVAL '3 hours'""", d=days)
+        played = """SELECT match, match_date, picked_at FROM {t}
+                    WHERE match_date BETWEEN NOW() - make_interval(days => :d) AND NOW() {extra}"""
+        # los reconstruidos (backfill_picks) se guardan después del partido a propósito
+        rows14 = q(played.format(t="program_picks", extra="AND source IS DISTINCT FROM 'reconstruido'"),
+                   d=days).to_dict("records")
+        try:
+            rows14 += q(played.format(t="program_parlays", extra=""), d=days).to_dict("records")
+        except Exception as e:
+            if "does not exist" not in str(e):
+                raise
+        late = repicked_after_start(rows14, kicks.to_dict("records"), normalize)
+        seen.append(f"picks rehechos ya empezado el partido ({len(late)})")
+        if late:
+            problems.append(f"Picks en juego: {len(late)} picks o piernas de parlay se guardaron con el partido ya "
+                            f"empezado según ESPN, con momios en vivo ({'; '.join(late[:3])})")
+    except Exception as e:
+        if "does not exist" not in str(e):        # espn_kickoffs nace con el primer closing de v2.8.0
+            problems.append(f"Picks en juego: no se pudo revisar ({type(e).__name__})")
 
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")

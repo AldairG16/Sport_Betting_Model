@@ -536,7 +536,10 @@ def step_load_extra_leagues():
 def step_live_scores():
     """Marcador de ESPN de los partidos que ya empezaron (24-oct-26): el
     dashboard muestra si el pick se ganó o se perdió sin esperar a la noche
-    (src/features/live_scores.py). Gratis; no toca matches ni la liquidación."""
+    (src/features/live_scores.py). Gratis; no toca matches ni la liquidación.
+    Desde v2.8.0 también guarda la hora de inicio de ESPN de lo que empieza en
+    las próximas 3 h (espn_kickoffs): el pick y el parlay, que van después,
+    quedan fijos a la más temprana."""
     from src.features.live_scores import capture_live_scores
     capture_live_scores()
 

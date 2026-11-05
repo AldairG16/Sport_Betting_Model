@@ -45,6 +45,11 @@ las de un horario ya están cuando se fija (program_parlays.slot = la hora de
 su primer partido; un horario con menos de MIN_BLOCK_LEGS no es parlay).
 Medido (28-oct a 7-nov, 9 días): 2+ partidos en un horario 7 días, 3+ en 3,
 4 en 1; uno por día juntaba 4 casi siempre.
+
+5-nov-26 (v2.8.0): un horario también queda fijo cuando ESPN da por empezado
+alguno de sus partidos antes de la hora del sistema (PP.started_early), y ese
+partido no entra a otro: el 1-nov dos picks se rehicieron con el partido ya
+empezado porque The Odds API tenía la hora 1-1.5 h tarde.
 """
 
 import math
@@ -241,7 +246,9 @@ def snapshot_parlays(hours: int = PP.SNAPSHOT_HOURS, engine=None) -> int:
     """Rehace el parlay de cada horario de las próximas `hours` horas con los
     momios y las alineaciones de ahora. El de un horario cuyo primer partido
     ya empezó (o empieza en LOCK_MINUTES) no se toca: quedó fijo, y sus
-    partidos no entran a otro. Devuelve cuántas piernas guardó."""
+    partidos no entran a otro. Lo mismo si ESPN da por empezado alguno de sus
+    partidos antes de la hora del sistema (v2.8.0, PP.started_early).
+    Devuelve cuántas piernas guardó."""
     if engine is None:
         from config.database import engine
     from src.utils.team_normalizer import normalize_team
@@ -259,19 +266,29 @@ def snapshot_parlays(hours: int = PP.SNAPSHOT_HOURS, engine=None) -> int:
             _ensure(conn)
         stored = pd.read_sql(text("""SELECT slot, match FROM program_parlays
                                      WHERE slot >= NOW() - INTERVAL '1 day'"""), engine)
-        fixed = [r for r in stored.to_dict("records") if pd.notna(r.get("slot")) and PP._utc(r["slot"]) <= lock]
+        # v2.8.0: también queda fijo el horario con un partido que según ESPN
+        # ya empezó aunque la hora del sistema diga que falta
+        early = PP.started_early(engine, normalize_team, now)
+        stored = stored.to_dict("records")
+        started = {PP._utc(r["slot"]) for r in stored
+                   if pd.notna(r.get("slot")) and PP._row_key(r, normalize_team) in early}
+        fixed = [r for r in stored if pd.notna(r.get("slot")) and (PP._utc(r["slot"]) <= lock
+                                                                   or PP._utc(r["slot"]) in started)]
         locked = {PP._utc(r["slot"]) for r in fixed}
         built = {}
         if not mvs.empty and leagues:
             up = pd.read_sql(text(PP._UPCOMING_SQL), engine, params={"h": hours})
+            gone = {str(m).lower() for m in mvs["match"] if PP._row_key({"match": m}, normalize_team) in early}
             built = build_parlays(mvs, up, leagues, PP._ratio(engine), normalize_team, PP._props_for(engine),
                                   PP.load_bias(engine), PP._lineups_for(engine, normalize_team),
-                                  exclude={r["match"] for r in fixed})
-        rows = [leg for slot in sorted(built) if slot > lock for leg in built[slot]]
+                                  exclude={r["match"] for r in fixed} | gone)
+        rows = [leg for slot in sorted(built) if slot > lock and slot not in locked for leg in built[slot]]
+        keep = sorted(s for s in locked if s > lock)
         with engine.begin() as conn:
-            # un parlay sin empezar es un borrador: se reemplazan todos
-            conn.execute(text("DELETE FROM program_parlays WHERE result IS NULL AND slot > :lock"),
-                         {"lock": lock.to_pydatetime()})
+            # un parlay sin empezar es un borrador: se reemplazan todos (menos los fijos por ESPN)
+            conn.execute(text("DELETE FROM program_parlays WHERE result IS NULL AND slot > :lock"
+                              + "".join(f" AND slot <> :keep{i}" for i in range(len(keep)))),
+                         {"lock": lock.to_pydatetime(), **{f"keep{i}": s.to_pydatetime() for i, s in enumerate(keep)}})
             if rows:
                 values, params = [], {}
                 for k, r in enumerate(rows):

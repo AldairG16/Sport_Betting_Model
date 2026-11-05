@@ -293,6 +293,8 @@ def test_daily_check_reports_every_problem_as_an_error(monkeypatch):
             return pd.DataFrame([{"m": 12.3}])
         if "model_state" in s:
             return pd.DataFrame([{"key": k, "updated_at": now} for k in oc.WEEKLY_KEYS])
+        if "FROM espn_kickoffs" in s:               # hora de ESPN (5-nov-26): ninguna distinta
+            return pd.DataFrame(columns=["home", "away", "kickoff", "espn_kickoff"])
         raise AssertionError(s[:80])
     monkeypatch.setattr(pd, "read_sql", fake_read_sql)
     RUN_ISSUES.reset()
