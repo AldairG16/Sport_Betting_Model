@@ -307,3 +307,32 @@ def test_fotmob_xg_counts_as_real_xg_in_the_pipeline():
     assert xg_source_label(fm, fm) == "fotmob" and xg_source_label(us, us) == "understat"
     assert xg_source_label(us, fm) == "fotmob+understat"
     assert xg_source_label(fm, {"source": "proxy"}) == "proxy" and xg_source_label(None, fm) == "proxy"
+
+
+def test_the_freshest_club_scorer_row_wins_between_sources(monkeypatch):
+    import src.models.scorer_model as SM
+    seen = {}
+
+    def fake_read_sql(sql, engine, params=None):
+        seen["sql"] = str(sql)
+        # la base las devuelve ya ordenadas por la consulta: la de FotMob (hoy) primero
+        return pd.DataFrame([{"player": "Adrien Rabiot", "team": "Milan", "goals": 5, "matches": 8},
+                             {"player": "Adrien Rabiot", "team": "AC Milan", "goals": 4, "matches": 7}])
+    monkeypatch.setattr(SM.pd, "read_sql", fake_read_sql)
+    out = {}
+    SM._merge_club_scorers(out, {"ac milan": 10})
+    assert "ORDER BY updated_at DESC" in seen["sql"]
+    assert out["adrien rabiot"]["goals"] == 5
+
+
+def test_every_parlay_leg_must_be_the_target_pick_of_its_match():
+    from src.utils.output_checks import legs_off_target
+    k = pd.Timestamp("2030-01-05 14:30", tz="UTC")
+    legs = [{"match": "a vs b", "match_date": k, "market": "home_win"},
+            {"match": "c vs d", "match_date": k, "market": "away_win"},
+            {"match": "e vs f", "match_date": k, "market": "home_win"}]
+    picks = [{"match": "a vs b", "match_date": k, "market": "home_win", "reason": None},
+             {"match": "c vs d", "match_date": k, "market": "away_win", "reason": "Alineación: 4 fuera"},  # sin 🎯
+             {"match": "e vs f", "match_date": k.tz_localize(None), "market": "draw", "reason": None}]   # otro pick
+    assert legs_off_target(legs, picks) == ["c vs d away_win", "e vs f home_win"]
+    assert legs_off_target(legs[:1], picks) == []

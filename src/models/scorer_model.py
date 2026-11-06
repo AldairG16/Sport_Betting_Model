@@ -134,11 +134,15 @@ def _merge_club_scorers(out: dict, team_matches: dict) -> None:
     ningún goleador de club llegaba a los picks. Tampoco se cargaban si no
     había eventos de selecciones en la ventana.
     """
+    # La más reciente primero (6-nov-26): con el respaldo de FotMob el mismo
+    # jugador puede tener la fila vieja de Understat ("AC Milan") y la nueva
+    # ("Milan"); setdefault se quedaba con la que llegara primero de la base.
     try:
         club = pd.read_sql(text("""
             SELECT player, team, goals, matches
             FROM player_club_goals
             WHERE updated_at >= NOW() - INTERVAL '60 days'
+            ORDER BY updated_at DESC
         """), engine)
     except Exception:
         return   # tabla ausente o DB error → solo selecciones
