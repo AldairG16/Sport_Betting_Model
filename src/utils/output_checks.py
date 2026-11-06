@@ -290,6 +290,20 @@ def bono_parlay_problems(rows: list) -> list:
     return bad
 
 
+def legs_off_target(legs: list, picks: list) -> list:
+    """Función pura (6-nov-26): las piernas de un parlay con bono por jugar que
+    no son el 🎯 de su partido (el pick guardado con ese mercado y sin motivo).
+    Picks y parlay salen del mismo paso con los mismos momios: si no
+    coinciden, el parlay recomienda algo que el pick no. legs/picks: filas
+    con match, match_date, market (y reason los picks)."""
+    import pandas as pd
+    key = lambda r: (str(r["match"]), pd.Timestamp(r["match_date"]).tz_convert("UTC")
+                     if pd.Timestamp(r["match_date"]).tzinfo else pd.Timestamp(r["match_date"]).tz_localize("UTC"))
+    target = {key(p): p.get("market") for p in picks
+              if p.get("market") and not (isinstance(p.get("reason"), str) and p.get("reason"))}
+    return sorted({f"{x['match']} {x['market']}" for x in legs if target.get(key(x)) != x.get("market")})
+
+
 def missing_results(analyzed: list, matches: list, normalize=None) -> list:
     """Partidos analizados (model_vs_sharp: match, match_date) sin marcador."""
     idx = _match_index(matches)
@@ -971,6 +985,23 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     except Exception as e:
         if "does not exist" not in str(e):
             problems.append(f"Por jugar: no se pudo revisar ({type(e).__name__})")
+
+    # 18) cada pierna de un parlay por jugar es el 🎯 de su partido (6-nov-26).
+    #     Solo los que no se han fijado: después, el pick de un partido de más
+    #     tarde puede cambiar con su alineación y el parlay ya está apostado
+    try:
+        legs = q("""SELECT match, match_date, market FROM program_parlays
+                    WHERE rule = 'bono' AND result IS NULL AND slot > NOW() + INTERVAL '5 minutes'""").to_dict("records")
+        if legs:
+            picks = q("""SELECT match, match_date, market, reason FROM program_picks
+                         WHERE match = ANY(:m) AND result IS NULL""", m=sorted({x["match"] for x in legs})).to_dict("records")
+            off = legs_off_target(legs, picks)
+            if off:
+                problems.append(f"Parlay con bono: {len(off)} piernas que no son el 🎯 de su partido ({'; '.join(off[:3])})")
+        seen.append(f"piernas del parlay = 🎯 ({len(legs)})")
+    except Exception as e:
+        if "does not exist" not in str(e):
+            problems.append(f"Parlay con bono: no se pudo revisar sus piernas ({type(e).__name__})")
 
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")

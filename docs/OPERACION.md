@@ -252,7 +252,7 @@ están todas las clases que ya pasaron, como chequeos que corren igual cada vez:
 
 | Chequeo | Qué revisa | Cuándo corre |
 |---|---|---|
-| Salidas y datos de entrada | Liquidación contra un cálculo independiente; resultados que faltan; pendientes atorados; xG fuera de escala; lo aprendido del weekly; fechas espejo, resultados con fecha futura, repetidos, repetidos con un equipo escrito distinto, tablas de otras fuentes viejas; marcador provisional de ESPN contra el oficial; picks contra alineaciones; finales de ESPN; un partido reprogramado contado en dos fechas; el 🎯 de cada familia contra lo que esperaba el mercado; lo cobrado por el pago anticipado; la regla del parlay con bono; lo que se ve por jugar a dos horas distintas | Evening (`output_checks`) |
+| Salidas y datos de entrada | Liquidación contra un cálculo independiente; resultados que faltan; pendientes atorados; xG fuera de escala; lo aprendido del weekly; fechas espejo, resultados con fecha futura, repetidos, repetidos con un equipo escrito distinto, tablas de otras fuentes viejas; marcador provisional de ESPN contra el oficial; picks contra alineaciones; finales de ESPN; un partido reprogramado contado en dos fechas; el 🎯 de cada familia contra lo que esperaba el mercado; lo cobrado por el pago anticipado; la regla del parlay con bono; lo que se ve por jugar a dos horas distintas; cada pierna de un parlay por jugar es el 🎯 de su partido | Evening (`output_checks`) |
 | Equipos próximos con historia | Que tengan historia y que no esté partida en dos nombres | Weekly |
 | Nombres de Understat y ESPN | Que cuadren con `matches` | Weekly |
 | Lo que entra al modelo | La cobertura de cada feature en la última corrida (`model_state` `pipeline_coverage`) | Weekly |
@@ -2089,7 +2089,12 @@ morning, evening, weekly, resultados, resolvedor, watchdog), `system_audit` (11/
   temporada (1.53) que el de Understat (1.68). Si el mismo equipo queda con las dos fuentes, vale la
   fila más reciente (`real_xg_of`). El pipeline cuenta los dos como xG real (`xg_source_label`).
 
-Chequeos nuevos: `renamed` en los datos de entrada y la 17 (lo que se ve por jugar, una sola vez).
+Chequeos nuevos: `renamed` en los datos de entrada, la 17 (lo que se ve por jugar, una sola vez) y la 18
+(cada pierna de un parlay que todavía no se fija es el 🎯 de su partido, `legs_off_target`). Con dos
+fuentes de goleadores, el mismo jugador puede quedar con la fila vieja de Understat y la nueva de FotMob:
+`scorer_model._merge_club_scorers` toma la más reciente. La fusión de repetidos se probó de punta a punta
+contra Postgres en un esquema aislado (borra el repetido, pasa sus datos a la fila que queda, lo respalda
+y la segunda corrida no hace nada).
 
 **Se mantiene abierto solo (v1.6.0).** El `.exe` es un supervisor
 (`dashboard/supervisor.py`): lanza el servidor (el mismo `.exe` con `--serve`), le
