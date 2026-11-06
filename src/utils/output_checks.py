@@ -834,7 +834,11 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
                                                                AND CURRENT_DATE - 1""", d=days).to_dict("records")
         fin = q("""SELECT home, away, kickoff FROM live_scores WHERE status = 'final'
                    AND kickoff >= CURRENT_DATE - make_interval(days => :d)""", d=days + 2).to_dict("records")
-        cov = espn_final_coverage(played, fin, set(espn_leagues()), normalize)
+        # solo las ligas que el sistema analiza (6-nov-26): Japón y China están en
+        # ESPN pero bloqueadas en SPORT_KEYS desde mayo; sus partidos no tienen
+        # pick ni salen en el dashboard, y contaban como finales que faltan
+        from config.settings import SPORT_KEYS
+        cov = espn_final_coverage(played, fin, set(espn_leagues()) & set(SPORT_KEYS), normalize)
         seen.append(f"finales de ESPN ({cov['covered']} de {cov['total']})")
         if cov["total"] >= 10 and cov["covered"] < ESPN_FINALS_MIN * cov["total"]:
             problems.append(f"Córners y tarjetas (ESPN): solo {cov['covered']} de {cov['total']} partidos jugados "
