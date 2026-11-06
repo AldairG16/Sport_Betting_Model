@@ -234,8 +234,59 @@ def settlement_mismatches(rows: list, matches: list, normalize=None) -> list:
         if m is None:
             continue
         mine = settle_independent(r["market"], m)
+        if mine == "loss" and r["result"] == "win" and _is_true(r.get("pa_paid")):
+            continue                      # v2.9.0: pago anticipado, lo revisa early_payout_problems
         if mine is not None and mine != r["result"]:
             bad.append({**r, "expected": mine, "score": f"{m['home_goals']}-{m['away_goals']}"})
+    return bad
+
+
+def _is_true(v) -> bool:
+    """Un booleano de la base (bool, numpy.bool_, None o NaN)."""
+    try:
+        return v is not None and v == v and bool(v)
+    except (TypeError, ValueError):
+        return False
+
+
+def early_payout_problems(rows: list, live: list, normalize=None) -> list:
+    """v2.9.0: cada pick o pierna cobrada por el Pago Anticipado tiene que
+    tener en live_scores que su equipo fue 2 goles arriba (o más). rows:
+    [{table, id, match, match_date, market, league, result, pa_paid}]."""
+    from src.models import early_payout as EP
+    idx = EP.lead_index(live, normalize)
+    bad = []
+    for r in rows:
+        if not _is_true(r.get("pa_paid")):
+            continue
+        lead = EP.lead_of(idx, r["match"], r["match_date"], r["market"], normalize)
+        if not EP.applies(r.get("league"), r["market"]) or lead is None or lead < EP.PA_LEAD:
+            bad.append(f"{r['table']} #{r['id']} {r['match']} {r['market']} (ventaja {lead})")
+    return bad
+
+
+def bono_parlay_problems(rows: list) -> list:
+    """v2.9.0: cada parlay con bono guardado cumple la regla: del día de 4 a 6
+    piernas y de un horario de 3 a 6, cada una el favorito de 65%+ a −500 o más
+    largo en una liga con pago anticipado, sin partidos repetidos. rows: las
+    piernas (slot, kind, seq, match, market, league, market_prob, playdoit_odds)."""
+    from src.models import program_parlays as PL
+    groups = defaultdict(list)
+    for r in rows:
+        groups[(str(r["slot"]), r.get("kind"), r.get("seq"))].append(r)
+    bad = []
+    for (slot, kind, seq), legs in groups.items():
+        lo = PL.DAY_MIN_LEGS if kind == "dia" else PL.SLOT_MIN_LEGS
+        name = f"{kind} {seq} de {slot[:16]}"
+        if not lo <= len(legs) <= PL.MAX_LEGS:
+            bad.append(f"{name}: {len(legs)} piernas")
+        if len({x["match"] for x in legs}) != len(legs):
+            bad.append(f"{name}: un partido repetido")
+        for x in legs:
+            p, o = _num(x.get("market_prob")), _num(x.get("playdoit_odds"))
+            if (x.get("market") not in ("home_win", "away_win") or x.get("league") not in PL.LEAGUES
+                    or p is None or p < PL.STRONG_FAV - 1e-9 or o is None or o < PL.MIN_LEG_ODDS - 1e-9):
+                bad.append(f"{name}: {x['match']} {x.get('market')} ({p}, {o}, {x.get('league')})")
     return bad
 
 
@@ -602,8 +653,16 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     rows = []
     for table in ("bets_history", "shadow_bets", "model_proposals", "program_picks", "program_parlays"):
         try:
-            df = q(f"""SELECT id, match, match_date, market, result FROM {table}
-                       WHERE result IN {RESOLVED} AND match_date >= NOW() - make_interval(days => :d)""", d=days)
+            # v2.9.0: los picks y el parlay traen si se cobraron por el pago anticipado
+            extra = ", league, pa_paid" if table in ("program_picks", "program_parlays") else ""
+            try:
+                df = q(f"""SELECT id, match, match_date, market, result{extra} FROM {table}
+                           WHERE result IN {RESOLVED} AND match_date >= NOW() - make_interval(days => :d)""", d=days)
+            except Exception as e:
+                if not extra or "pa_paid" not in str(e):
+                    raise
+                df = q(f"""SELECT id, match, match_date, market, result FROM {table}
+                           WHERE result IN {RESOLVED} AND match_date >= NOW() - make_interval(days => :d)""", d=days)
             rows += [{**r, "table": table} for r in df.to_dict("records")]
         except Exception as e:
             if table in ("program_picks", "program_parlays") and "does not exist" in str(e):
@@ -852,6 +911,32 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     except Exception as e:
         if "does not exist" not in str(e):        # espn_kickoffs nace con el primer closing de v2.8.0
             problems.append(f"Picks en juego: no se pudo revisar ({type(e).__name__})")
+
+    # 15) el Pago Anticipado (v2.9.0): lo cobrado tiene que haber ido 2 goles arriba
+    try:
+        paid = [r for r in rows if _is_true(r.get("pa_paid"))]
+        if paid:
+            live = q("""SELECT home, away, kickoff, status, home_max_lead, away_max_lead FROM live_scores
+                        WHERE kickoff >= NOW() - make_interval(days => :d) - INTERVAL '1 day'""", d=days)
+            bad = early_payout_problems(paid, live.to_dict("records"), normalize)
+            if bad:
+                problems.append(f"Pago anticipado: {len(bad)} cobradas sin que ESPN diga que fueron 2 goles arriba "
+                                f"({'; '.join(bad[:3])})")
+        seen.append(f"pago anticipado ({len(paid)} cobradas)")
+    except Exception as e:
+        problems.append(f"Pago anticipado: no se pudo revisar ({type(e).__name__})")
+
+    # 16) la regla del parlay con bono (v2.9.0)
+    try:
+        legs = q("""SELECT slot, kind, seq, match, market, league, market_prob, playdoit_odds FROM program_parlays
+                    WHERE rule = 'bono' AND slot >= NOW() - make_interval(days => :d)""", d=days).to_dict("records")
+        bad = bono_parlay_problems(legs)
+        seen.append(f"parlays con bono ({len({(str(x['slot']), x['kind'], x['seq']) for x in legs})})")
+        if bad:
+            problems.append(f"Parlay con bono: {len(bad)} fuera de la regla ({'; '.join(bad[:3])})")
+    except Exception as e:
+        if "does not exist" not in str(e):        # la columna rule nace con el primer snapshot de v2.9.0
+            problems.append(f"Parlay con bono: no se pudo revisar ({type(e).__name__})")
 
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")

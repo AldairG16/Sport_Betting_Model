@@ -230,7 +230,7 @@ def test_a_cup_match_only_has_a_pick_when_it_was_analysed_by_league():
     assert PP.decide(row, _u())[1] == PP.CROSS                                 # sin factor: fuera de la regla
     assert PP.decide({**row, "league_factor": float("nan")}, _u())[1] == PP.CROSS
     pk, why = PP.decide({**row, "league_factor": 1.12}, _u())
-    assert pk["market"] == "over25" and why is None
+    assert pk["market"] == "over25" and why == PP.NOT_STRONG                   # pasa la regla; 🎯 solo favoritos (v2.9.0)
 
 
 def test_model_vs_sharp_keeps_the_league_factor():

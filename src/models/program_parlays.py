@@ -5,51 +5,42 @@ El parlay del día, guardado y medido (3-nov-26).
 
 El dueño: "quiero agregar la función parley, donde seleccione los partidos más
 seguros, de las mejores ligas, de los que más se ganan y los agrupe en una
-pestaña". Lo que eligió:
-  - mejores ligas = donde más ganan los picks del programa: unidades a favor
-    desde el modelo corregido (22-oct) con LEAGUE_MIN_N picks o más. La lista
-    se actualiza sola con cada pick liquidado;
-  - de cada partido, la apuesta más segura aunque no sea el pick;
-  - 2, 3 o 4 partidos, a elegir en la pestaña (se guardan las MAX_LEGS
-    piernas más seguras; el parlay de k son las k primeras).
-
-Segura = la probabilidad más baja entre el programa y el mercado sin margen:
-los dos tienen que creerlo (MIN_SAFE). Entre los mercados con momio real de
-PlayDoit que paguen MIN_LEG_ODDS o más: sin piso, la más segura siempre es un
-más de 1.5 a −1400 que no suma nada al parlay (Galatasaray–Stuttgart del
-3-nov pagaba 1.07).
-
-Medido antes de hacerlo (3-nov-26, 12 días de picks del modelo corregido, con
-los picks de cada partido en vez de la apuesta más segura, 3 piernas): en las
-ligas que iban ganando habría salido parlay 7 días, 5 ganados (+8u); en las
-ligas grandes, 9 días y 2 ganados (−1.8u). Muestra chica: no prueba nada. Los
-partidos de 60%+ sueltos dejaron −3.4% y el parlay multiplica el margen de
-cada pierna; por eso se guarda y se mide como los picks.
+pestaña". v2.6.0 tomaba la apuesta más segura de cada partido de las ligas
+donde los picks iban ganando; v2.7.0 (4-nov-26) hizo un parlay por horario
+para que viera las alineaciones; v2.8.0 (5-nov-26) lo deja fijo también a la
+hora de inicio de ESPN si es más temprana (PP.started_early).
 
 El parlay se rehace en cada snapshot (morning, evening, cada closing) hasta
 que empieza su primera pierna; desde ahí queda fijo (es la apuesta que se
-pudo hacer). No se reconstruyen días pasados: odds_history no guarda las
-líneas 1.5/3.5 ni córners y tarjetas, y la regla saldría otra.
+pudo hacer). El closing guarda la alineación de 80 a 5 min antes de cada
+partido y rehace el parlay con ella.
 
-4-nov-26 (v2.7.0), un parlay por horario. El dueño: "en los parlays necesito
-que se tomen en cuenta ya que se hagan las alineaciones… si son al mismo
-horario sería mejor porque las alineaciones ya estarían para todos los picks
-del parlay". Eligió: mismo horario = los partidos que empiezan hasta
-BLOCK_MINUTES después del primero (1a); un parlay por cada horario, con su
-récord (2a); aviso de Telegram cuando ya vio las alineaciones de todos (3a,
-src/models/parlay_alerts.py). Antes era uno por día y quedaba fijo 5 min
-antes de su primer partido: el del 6-nov juntaba 12:00, 13:00 y 21:00, y el
-de las 21:00 se elegía 9 horas antes de su alineación. El closing guarda la
-alineación de 80 a 5 min antes de cada partido y rehace el parlay con ella:
-las de un horario ya están cuando se fija (program_parlays.slot = la hora de
-su primer partido; un horario con menos de MIN_BLOCK_LEGS no es parlay).
-Medido (28-oct a 7-nov, 9 días): 2+ partidos en un horario 7 días, 3+ en 3,
-4 en 1; uno por día juntaba 4 casi siempre.
-
-5-nov-26 (v2.8.0): un horario también queda fijo cuando ESPN da por empezado
-alguno de sus partidos antes de la hora del sistema (PP.started_early), y ese
-partido no entra a otro: el 1-nov dos picks se rehicieron con el partido ya
-empezado porque The Odds API tenía la hora 1-1.5 h tarde.
+6-nov-26 (v2.9.0), el parlay con bono. La extensión de Claude revisó PlayDoit
+el 5-nov (sin apostar): el boleto paga un bono sobre la GANANCIA del parlay,
+3 selecciones 5%, 4 7.5%, 5 10%, 6 15%, 7 20%, 8 25%, 9 35% (la barra llega
+a 40%), cada selección a −500 o más largo; y el Pago Anticipado (2 goles de
+ventaja) también vale dentro del parlay (src/models/early_payout.py). El
+favorito de 65%+ en Pinnacle sin margen sale ≈ 0% al precio promedio (el
+sesgo del favorito, 2012-2026) y ≈ +1-2% con el pago anticipado: el bono
+queda casi entero de ganancia. En el historial (Europa 1ª división, ligas
+con pago anticipado, precio = promedio de las casas, semana por semana) el
+de 4 dejó +17%, el de 5 +21% y el de 6 +33%, positivos en 2012-17, 2018-22
+y 2023-26; si PlayDoit pagara 3% menos que el promedio, +4% a +10%. El parlay
+anterior (la apuesta más segura de cada partido) esperaba ≈ −19% con 3
+piernas y con 2 no tiene bono. El dueño eligió (1b, 2c, 4a):
+  - las piernas: el ganador de 65%+ (Pinnacle sin margen) en una liga con
+    pago anticipado, a −500 o más largo (PP.strong_favourite), sin 4+
+    titulares fuera;
+  - el parlay del día: los más fuertes del día, de 4 a 6 (DAY_MIN_LEGS,
+    MAX_LEGS); si sobran 4 o más, otro con esos. Se fija 5 min antes de su
+    primer partido: solo los de ese horario llevan alineación (con alineaciones
+    para todos casi nunca se juntan 4: 0 horarios en 3 semanas);
+  - además, el parlay de un horario: 3 o más que empiezan juntos (hasta
+    BLOCK_MINUTES), con las alineaciones de todos (bono 5%: +10% en el
+    historial). Repite partidos del del día; si son los mismos, es uno solo;
+  - reemplaza al anterior: lo guardado sigue en la tabla (rule 'seguro').
+Escocia no tiene pago anticipado y la Europa League no la baja el sistema:
+no entran.
 """
 
 import math
@@ -58,22 +49,29 @@ from datetime import timedelta
 import pandas as pd
 from sqlalchemy import text
 
+from src.models import early_payout as EP
 from src.models import program_picks as PP
 from src.utils.log import get_logger
 
 log = get_logger(__name__)
 
-MIN_SAFE = 0.55
-MIN_LEG_ODDS = 1.25          # −400 en PlayDoit
-MAX_LEGS = 4
-LEAGUE_MIN_N = 10            # picks liquidados para juzgar una liga
+RULE = "bono"                 # v2.9.0; lo de antes queda como 'seguro'
+STRONG_FAV = PP.STRONG_FAV
+MIN_LEG_ODDS = PP.MIN_FAV_ODDS
+# El bono del boleto de PlayDoit sobre la ganancia, por número de selecciones (5-nov-26)
+BONUS = {3: 0.05, 4: 0.075, 5: 0.10, 6: 0.15, 7: 0.20, 8: 0.25, 9: 0.35}
+MAX_LEGS = 6                  # el dueño: de 4 a 6
+DAY_MIN_LEGS = 4
+SLOT_MIN_LEGS = 3
+MIN_BLOCK_LEGS = SLOT_MIN_LEGS
+LEAGUES = EP.PA_LEAGUES
 FIXED_SINCE = "2026-10-22"   # el modelo corregido (= dashboard.board.MODEL_FIXED)
 LOCK_MINUTES = 5             # la misma ventana de snapshot_picks: un partido a 5 min ya no se toca
 BLOCK_MINUTES = 30           # mismo horario: hasta 30 min después del primero (el dueño, 4-nov-26)
-MIN_BLOCK_LEGS = 2           # un horario con un solo partido no es parlay
 MX_OFFSET = pd.Timedelta(hours=6)    # México, UTC-6 fijo
 SETTLED = ("win", "loss", "push", "half_win", "half_loss")
 LINEUP_OK = "confirmada"     # = program_picks.LINEUP_OK: la pierna se eligió con la alineación
+LEAGUE_MIN_N = 10            # (v2.6.0) picks liquidados para juzgar una liga en winning_leagues
 
 PARLAYS_DDL = """
     CREATE TABLE IF NOT EXISTS program_parlays (
@@ -84,11 +82,11 @@ PARLAYS_DDL = """
         model_prob NUMERIC, market_prob NUMERIC, safety NUMERIC, playdoit_odds NUMERIC NOT NULL,
         lineup TEXT, picked_at TIMESTAMPTZ DEFAULT NOW(),
         result TEXT, profit NUMERIC, resolved_at TIMESTAMPTZ,
-        UNIQUE (slot, rank)
+        rule TEXT, kind TEXT, seq INT, pa BOOLEAN, pa_paid BOOLEAN,
+        CONSTRAINT program_parlays_parlay_rank_key UNIQUE (slot, rule, kind, seq, rank)
     )
 """
-# v2.6.0 → v2.7.0 (4-nov-26): de un parlay por día a uno por horario. Lo guardado
-# toma como horario el primer partido de su día. Corre una vez (sin la columna).
+# v2.6.0 → v2.7.0 (4-nov-26): de un parlay por día a uno por horario. Corre una vez (sin la columna).
 MIGRATE_SQL = (
     "ALTER TABLE program_parlays ADD COLUMN IF NOT EXISTS slot TIMESTAMPTZ",
     """UPDATE program_parlays p SET slot = f.first
@@ -97,8 +95,20 @@ MIGRATE_SQL = (
     "ALTER TABLE program_parlays DROP CONSTRAINT IF EXISTS program_parlays_day_rank_key",
     "ALTER TABLE program_parlays ADD CONSTRAINT program_parlays_slot_rank_key UNIQUE (slot, rank)",
 )
+# v2.7.0 → v2.9.0 (6-nov-26): varios parlays por horario (del día y del horario).
+# Lo guardado queda como la regla anterior ('seguro'). Corre una vez (sin la columna rule).
+MIGRATE_BONO_SQL = (
+    "ALTER TABLE program_parlays ADD COLUMN IF NOT EXISTS rule TEXT",
+    "ALTER TABLE program_parlays ADD COLUMN IF NOT EXISTS kind TEXT",
+    "ALTER TABLE program_parlays ADD COLUMN IF NOT EXISTS seq INT",
+    "ALTER TABLE program_parlays ADD COLUMN IF NOT EXISTS pa BOOLEAN",
+    "ALTER TABLE program_parlays ADD COLUMN IF NOT EXISTS pa_paid BOOLEAN",
+    "UPDATE program_parlays SET rule = 'seguro', kind = 'horario', seq = 1 WHERE rule IS NULL",
+    "ALTER TABLE program_parlays DROP CONSTRAINT IF EXISTS program_parlays_slot_rank_key",
+    "ALTER TABLE program_parlays ADD CONSTRAINT program_parlays_parlay_rank_key UNIQUE (slot, rule, kind, seq, rank)",
+)
 _COLS = ("day", "slot", "rank", "match", "match_date", "league", "display", "market", "label", "family",
-         "model_prob", "market_prob", "safety", "playdoit_odds", "lineup")
+         "model_prob", "market_prob", "safety", "playdoit_odds", "lineup", "rule", "kind", "seq", "pa")
 
 
 def _num(v):
@@ -114,8 +124,20 @@ def mx_day(t) -> pd.Timestamp:
     return (PP._utc(t) - MX_OFFSET).tz_localize(None).normalize()
 
 
-def safety(c: dict) -> float:
-    return min(float(c["model"]), float(c["market_prob"]))
+def bonus_for(n: int) -> float:
+    """El bono de PlayDoit sobre la ganancia de un parlay de n selecciones."""
+    if n < min(BONUS):
+        return 0.0
+    return BONUS.get(n, max(BONUS.values()))
+
+
+def payout(odds: list) -> dict:
+    """Momio del parlay (decimal) sin y con el bono, que se paga sobre la ganancia."""
+    dec = math.prod(odds) if odds else None
+    if not dec:
+        return {"odds": None, "bonus": 0.0, "with_bonus": None}
+    b = bonus_for(len(odds))
+    return {"odds": dec, "bonus": b, "with_bonus": 1 + (dec - 1) * (1 + b)}
 
 
 def lineup_ready(lineup, league, covered=None) -> bool:
@@ -142,11 +164,9 @@ def blocks_of(legs: list) -> list:
 
 
 def winning_leagues(picks: pd.DataFrame, before=None) -> list:
-    """Las ligas donde los picks del programa van ganando: unidades a favor
-    con LEAGUE_MIN_N picks liquidados o más, del modelo corregido y sin los de
-    poca historia, de la que más gana a la que menos. before: solo los
-    partidos anteriores a ese momento. picks: program_picks (league,
-    match_date, result, profit, reason)."""
+    """(v2.6.0) Las ligas donde los picks del programa van ganando: unidades a
+    favor con LEAGUE_MIN_N picks liquidados o más, del modelo corregido y sin
+    los de poca historia. Desde v2.9.0 el parlay ya no las usa."""
     if picks is None or picks.empty:
         return []
     p = picks[picks["result"].isin(SETTLED) & picks["league"].notna()].copy()
@@ -165,93 +185,119 @@ def winning_leagues(picks: pd.DataFrame, before=None) -> list:
     return sorted(out, key=lambda x: (-x["units"], -x["n"]))
 
 
-def safest_leg(r: dict, u, props=None, ratio=None, bias=None, weak=None) -> dict | None:
-    """La apuesta más segura de un partido de model_vs_sharp con los momios de
-    ahora (u): con momio real de PlayDoit de MIN_LEG_ODDS o más y MIN_SAFE o
-    más para el programa y para el mercado. Fuera: los análisis que ya no
-    valen, los de poca historia, los partidos entre ligas sin el ajuste por
-    fuerza de liga (el programa ahí no sabe) y el ganador al que le faltan 4+
-    titulares (weak, PP.lineup_check)."""
-    from src.models.side_bias import is_skipped
-    low = r.get("low_history")
-    if is_skipped(r) or (low and not (isinstance(low, float) and pd.isna(low))):
+def strong_leg(r: dict, u, ratio=None, bias=None, weak=None) -> dict | None:
+    """El favorito fuerte de un partido de model_vs_sharp con los momios de
+    ahora (u): 65%+ en Pinnacle sin margen, liga con pago anticipado, −500 o
+    más largo (PP.strong_favourite) y sin 4+ titulares fuera (weak)."""
+    if str(r.get("league") or "") not in LEAGUES:
         return None
-    if PP.cross_league(r.get("league")) and _num(r.get("league_factor")) is None:
+    fav = PP.strong_favourite(PP._candidates_of(r, u, None, ratio, bias), r.get("league"))
+    if fav is None or fav["market"] in (weak or {}):
         return None
-    weak = weak or {}
-    ok = [c for c in (PP._candidates_of(r, u, props, ratio, bias) or [])
-          if c["playdoit_odds"] and c["playdoit_odds"] >= MIN_LEG_ODDS and c["market"] not in weak
-          and safety(c) >= MIN_SAFE]
-    return max(ok, key=lambda c: (safety(c), c["playdoit_odds"])) if ok else None
+    return fav
 
 
-def build_parlays(mvs: pd.DataFrame, upcoming: pd.DataFrame, leagues, ratio=None, normalize=None,
-                  props_for=None, bias=None, lineups_for=None, exclude=None) -> dict:
-    """Función pura: {horario (hora UTC de su primer partido): [piernas]} con
-    las MAX_LEGS piernas más seguras de cada horario (blocks_of), una por
-    partido, de los partidos de `leagues`; solo los horarios con
-    MIN_BLOCK_LEGS o más. mvs: model_vs_sharp de los partidos que todavía no
-    empiezan (la fila más reciente de cada uno cuenta); upcoming: sus momios
-    de ahora; exclude: partidos (match en minúsculas) que ya están en un
-    parlay fijo."""
-    leagues = set(leagues)
-    exclude = {str(m).lower() for m in (exclude or ())}
+def _ranked(legs: list) -> list:
+    return sorted(legs, key=lambda x: (-x["market_prob"], PP._utc(x["match_date"]), x["match"]))
+
+
+def _parlay(kind: str, seq: int, day, legs: list) -> dict:
+    slot = min(PP._utc(x["match_date"]) for x in legs)        # se fija 5 min antes de su primer partido
+    return {"kind": kind, "seq": seq, "slot": slot,
+            "legs": [{**x, "day": day, "slot": slot.to_pydatetime(), "rank": i + 1, "rule": RULE, "kind": kind,
+                      "seq": seq} for i, x in enumerate(_ranked(legs))]}
+
+
+def group_parlays(found: list, exclude: dict | None = None, fixed_seq: dict | None = None) -> list:
+    """Función pura: los parlays de las piernas encontradas.
+    - del día ('dia'): por día de México, los más fuertes, de DAY_MIN_LEGS a
+      MAX_LEGS; si sobran DAY_MIN_LEGS o más, otro;
+    - del horario ('horario'): SLOT_MIN_LEGS o más que empiezan juntos
+      (blocks_of), hasta MAX_LEGS; si son los mismos partidos que un parlay
+      del día, no se repite.
+    exclude: {tipo: partidos ya en un parlay fijo de ese tipo}; fixed_seq:
+    {día: cuántos parlays del día ya quedaron fijos} (para numerarlos).
+    Cada parlay: {kind, seq, slot (hora UTC de su primer partido), legs con rank}."""
+    exclude, fixed_seq = exclude or {}, fixed_seq or {}
+    out, by_day = [], {}
+    for x in found:
+        by_day.setdefault(mx_day(x["match_date"]).date(), []).append(x)
+    for day in sorted(by_day):
+        legs = by_day[day]
+        rest = _ranked([x for x in legs if x["match"] not in exclude.get("dia", set())])
+        daily, seq = [], fixed_seq.get(day, 0)
+        while len(rest) >= DAY_MIN_LEGS:
+            seq += 1
+            daily.append({x["match"] for x in rest[:MAX_LEGS]})
+            out.append(_parlay("dia", seq, day, rest[:MAX_LEGS]))
+            rest = rest[MAX_LEGS:]
+        free = [x for x in legs if x["match"] not in exclude.get("horario", set())]
+        for block in blocks_of(free):
+            use = _ranked(block)[:MAX_LEGS]
+            if len(use) < SLOT_MIN_LEGS or {x["match"] for x in use} in daily:
+                continue
+            out.append(_parlay("horario", 1, day, use))
+    return out
+
+
+def build_parlays(mvs: pd.DataFrame, upcoming: pd.DataFrame, ratio=None, normalize=None, bias=None,
+                  lineups_for=None, exclude: dict | None = None, fixed_seq: dict | None = None) -> list:
+    """Función pura: los parlays con bono (group_parlays) de los partidos de
+    model_vs_sharp que todavía no empiezan (la fila más reciente de cada uno)
+    con sus momios de ahora (upcoming)."""
     up = {PP.match_key(r.home_team_norm, r.away_team_norm, normalize): r for r in upcoming.itertuples(index=False)}
     latest = {}
     order = mvs.sort_values("created_at") if "created_at" in mvs.columns else mvs
     for r in order.to_dict("records"):
-        if r.get("league") not in leagues:
+        if r.get("league") not in LEAGUES:
             continue
         h, _, a = str(r["match"]).partition(" vs ")
         latest[(PP.match_key(h, a, normalize), str(r["match_date"]))] = r
     found = []
     for (key, _), r in latest.items():
         u = up.get(key)
-        if u is None or str(r["match"]).lower() in exclude:
+        if u is None:
             continue
         h, _, a = key.partition(" vs ")
-        props = props_for(h, a, r.get("league"), r["match_date"]) if props_for else None
         weak, lineup = lineups_for(h, a, r["match_date"]) if lineups_for else ({}, None)
-        leg = safest_leg(r, u, props, ratio, bias, weak)
+        leg = strong_leg(r, u, ratio, bias, weak)
         if not leg:
             continue
+        team = u.home_team if leg["market"] == "home_win" else u.away_team
         found.append({
             "match": str(r["match"]).lower(), "match_date": PP._utc(r["match_date"]).to_pydatetime(),
             "league": r.get("league"), "display": f"{u.home_team} vs {u.away_team}",
-            "market": leg["market"], "label": leg["label"], "family": leg["family"],
-            "model_prob": round(float(leg["model"]), 3), "market_prob": round(float(leg["market_prob"]), 3),
-            "safety": round(safety(leg), 3), "playdoit_odds": round(float(leg["playdoit_odds"]), 4),
-            "lineup": lineup})
-    out = {}
-    for block in blocks_of(found):
-        if len(block) < MIN_BLOCK_LEGS:
-            continue
-        legs = sorted(block, key=lambda x: (-x["safety"], -x["playdoit_odds"], x["match_date"]))[:MAX_LEGS]
-        slot = min(PP._utc(x["match_date"]) for x in legs)        # se fija 5 min antes de su primer partido
-        out[slot] = [{**x, "day": mx_day(slot).date(), "slot": slot.to_pydatetime(), "rank": i + 1}
-                     for i, x in enumerate(legs)]
-    return out
+            "market": leg["market"], "label": f"Gana {team}", "family": "Ganador",
+            "model_prob": round(float(leg["model"]), 3) if leg.get("model") is not None else None,
+            "market_prob": round(float(leg["market_prob"]), 3), "safety": round(float(leg["market_prob"]), 3),
+            "playdoit_odds": round(float(leg["playdoit_odds"]), 4), "lineup": lineup,
+            "pa": EP.applies(r.get("league"), leg["market"])})
+    return group_parlays(found, exclude, fixed_seq)
 
 
 def _ensure(conn) -> None:
     conn.execute(text(PARLAYS_DDL))
-    has_slot = conn.execute(text("""SELECT 1 FROM information_schema.columns
-                                    WHERE table_name = 'program_parlays' AND column_name = 'slot'""")).first()
-    if not has_slot:
+    cols = {r[0] for r in conn.execute(text("""SELECT column_name FROM information_schema.columns
+                                               WHERE table_name = 'program_parlays'""")).fetchall()}
+    if "slot" not in cols:
         for sql in MIGRATE_SQL:
+            conn.execute(text(sql))
+    if "rule" not in cols:
+        for sql in MIGRATE_BONO_SQL:
             conn.execute(text(sql))
 
 
 def snapshot_parlays(hours: int = PP.SNAPSHOT_HOURS, engine=None) -> int:
-    """Rehace el parlay de cada horario de las próximas `hours` horas con los
-    momios y las alineaciones de ahora. El de un horario cuyo primer partido
-    ya empezó (o empieza en LOCK_MINUTES) no se toca: quedó fijo, y sus
-    partidos no entran a otro. Lo mismo si ESPN da por empezado alguno de sus
+    """Rehace los parlays con bono de las próximas `hours` horas con los momios
+    y las alineaciones de ahora. Un parlay cuyo primer partido ya empezó (o
+    empieza en LOCK_MINUTES) no se toca: quedó fijo, y sus partidos no entran
+    a otro del mismo tipo. Lo mismo si ESPN da por empezado alguno de sus
     partidos antes de la hora del sistema (v2.8.0, PP.started_early).
     Devuelve cuántas piernas guardó."""
     if engine is None:
         from config.database import engine
     from src.utils.team_normalizer import normalize_team
+    built, rows, locked = [], [], set()
     try:
         now = pd.Timestamp.now(tz="UTC")
         lock = now + pd.Timedelta(minutes=LOCK_MINUTES)
@@ -259,12 +305,9 @@ def snapshot_parlays(hours: int = PP.SNAPSHOT_HOURS, engine=None) -> int:
             SELECT * FROM model_vs_sharp
             WHERE match_date BETWEEN NOW() + make_interval(mins => :m) AND NOW() + make_interval(hours => :h)
         """), engine, params={"h": hours, "m": LOCK_MINUTES})
-        picks = pd.read_sql(text("""SELECT league, match_date, result, profit, reason FROM program_picks
-                                    WHERE match_date >= CAST(:s AS date)"""), engine, params={"s": FIXED_SINCE})
-        leagues = [x["league"] for x in winning_leagues(picks, before=now)]
         with engine.begin() as conn:
             _ensure(conn)
-        stored = pd.read_sql(text("""SELECT slot, match FROM program_parlays
+        stored = pd.read_sql(text("""SELECT slot, day, match, rule, kind, seq FROM program_parlays
                                      WHERE slot >= NOW() - INTERVAL '1 day'"""), engine)
         # v2.8.0: también queda fijo el horario con un partido que según ESPN
         # ya empezó aunque la hora del sistema diga que falta
@@ -275,14 +318,21 @@ def snapshot_parlays(hours: int = PP.SNAPSHOT_HOURS, engine=None) -> int:
         fixed = [r for r in stored if pd.notna(r.get("slot")) and (PP._utc(r["slot"]) <= lock
                                                                    or PP._utc(r["slot"]) in started)]
         locked = {PP._utc(r["slot"]) for r in fixed}
-        built = {}
-        if not mvs.empty and leagues:
+        mine = [r for r in fixed if r.get("rule") == RULE]
+        exclude = {k: {r["match"] for r in mine if r.get("kind") == k} for k in ("dia", "horario")}
+        fixed_seq = {}
+        for r in mine:
+            if r.get("kind") == "dia":
+                d = pd.Timestamp(r["day"]).date()
+                fixed_seq[d] = max(fixed_seq.get(d, 0), int(r.get("seq") or 1))
+        if not mvs.empty:
             up = pd.read_sql(text(PP._UPCOMING_SQL), engine, params={"h": hours})
             gone = {str(m).lower() for m in mvs["match"] if PP._row_key({"match": m}, normalize_team) in early}
-            built = build_parlays(mvs, up, leagues, PP._ratio(engine), normalize_team, PP._props_for(engine),
-                                  PP.load_bias(engine), PP._lineups_for(engine, normalize_team),
-                                  exclude={r["match"] for r in fixed} | gone)
-        rows = [leg for slot in sorted(built) if slot > lock and slot not in locked for leg in built[slot]]
+            mvs = mvs[~mvs["match"].astype(str).str.lower().isin(gone)]
+            built = build_parlays(mvs, up, PP._ratio(engine), normalize_team, PP.load_bias(engine),
+                                  PP._lineups_for(engine, normalize_team), exclude, fixed_seq)
+        built = [p for p in built if p["slot"] > lock and p["slot"] not in locked]
+        rows = [leg for p in built for leg in p["legs"]]
         keep = sorted(s for s in locked if s > lock)
         with engine.begin() as conn:
             # un parlay sin empezar es un borrador: se reemplazan todos (menos los fijos por ESPN)
@@ -295,41 +345,41 @@ def snapshot_parlays(hours: int = PP.SNAPSHOT_HOURS, engine=None) -> int:
                     values.append("(" + ", ".join(f":{c}{k}" for c in _COLS) + ")")
                     params.update({f"{c}{k}": r[c] for c in _COLS})
                 conn.execute(text(f"""INSERT INTO program_parlays ({", ".join(_COLS)}) VALUES {", ".join(values)}
-                                      ON CONFLICT (slot, rank) DO NOTHING"""), params)
+                                      ON CONFLICT (slot, rule, kind, seq, rank) DO NOTHING"""), params)
     except Exception as e:
         log.error(f"❌ Parlays no guardados: {type(e).__name__}: {str(e)[:200]}")
         return 0
-    slots = {r["slot"] for r in rows}
-    ready = sum(1 for s in slots if all(str(r.get("lineup") or "").startswith(LINEUP_OK)
-                                        for r in rows if r["slot"] == s))
-    print(f"🧩 Parlays: {len(rows)} piernas en {len(slots)} horarios"
-          + (f", {ready} ya con las alineaciones de todos" if ready else "")
-          + (f" ({len(locked)} ya fijos, sin tocar)" if locked else "")
-          + ("" if leagues else " · ninguna liga va ganando todavía"))
+    days = sum(1 for p in built if p["kind"] == "dia")
+    print(f"🧩 Parlays con bono: {days} del día y {len(built) - days} de un horario ({len(rows)} piernas)"
+          + (f" · {len(locked)} horario(s) ya fijos, sin tocar" if locked else ""))
     return len(rows)
 
 
 def resolve_parlays(engine=None) -> dict:
     """Liquida cada pierna ya jugada con la misma función que los picks
-    (stake 1, al momio estimado de PlayDoit). El parlay sale de sus piernas
-    (dashboard/parlay.py). Sin datos a los SHADOW_STALE_DAYS días: 'stale'."""
+    (stake 1, al momio estimado de PlayDoit) y el Pago Anticipado (v2.9.0:
+    el favorito que fue 2 goles arriba se cobra). El parlay y su bono salen
+    de sus piernas (dashboard/parlay.py). Sin datos a los SHADOW_STALE_DAYS
+    días: 'stale'."""
     if engine is None:
         from config.database import engine
     from src.models.save_bets import SHADOW_STALE_DAYS, _preload_matches, plan_shadow_resolutions
     with engine.begin() as conn:
         _ensure(conn)
     pending = pd.read_sql(text("""
-        SELECT id, match, match_date, market, playdoit_odds FROM program_parlays
+        SELECT id, match, match_date, market, league, playdoit_odds FROM program_parlays
         WHERE result IS NULL AND match_date < NOW() - INTERVAL '3 hours'
     """), engine)
     if pending.empty:
         return {"pending": 0, "resolved": 0}
-    plan = plan_shadow_resolutions(pending.assign(odds=pending["playdoit_odds"].astype(float)),
-                                   _preload_matches(pending["match_date"]))
+    priced = pending.assign(odds=pending["playdoit_odds"].astype(float))
+    plan = plan_shadow_resolutions(priced, _preload_matches(pending["match_date"]))
+    plan = PP._with_early_payout(engine, plan, priced)
     with engine.begin() as conn:
         if plan:
             conn.execute(text("""
-                UPDATE program_parlays SET result = :result, profit = :profit, resolved_at = NOW()
+                UPDATE program_parlays SET result = :result, profit = :profit, pa_paid = :pa_paid,
+                                           resolved_at = NOW()
                 WHERE id = :id AND result IS NULL
             """), plan)
         stale = conn.execute(text(f"""

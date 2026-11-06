@@ -101,13 +101,13 @@ def test_paused_regions_reads_the_state_with_the_callers_connection():
 
 def test_a_paused_region_keeps_its_pick_without_the_target():
     normal, why = PK.decide(dict(ROW), UP)
-    assert why is None                                                              # en Bélgica pasa la regla
+    assert why == PK.NOT_STRONG                                                     # en Bélgica pasa la regla (🎯 solo favoritos, v2.9.0)
     mls = {**ROW, "league": "soccer_usa_mls"}
     pick, why_mls = PK.decide(mls, UP, paused=("america",))
     assert pick["market"] == normal["market"]                                       # el mismo pick…
     assert why_mls == PK.REGION_PAUSED.format(region="América")                     # …sin 🎯, con el motivo
-    assert PK.decide(mls, UP) == (normal, None)                                     # apagado: 🎯 como siempre
-    assert PK.decide(dict(ROW), UP, paused=("america",)) == (normal, None)          # otra región: nada cambia
+    assert PK.decide(mls, UP) == (normal, PK.NOT_STRONG)                            # apagado: como siempre
+    assert PK.decide(dict(ROW), UP, paused=("america",)) == (normal, PK.NOT_STRONG) # otra región: nada cambia
     low, why_low = PK.decide({**mls, "low_history": "x con 4"}, UP, paused=("america",))
     assert why_low.startswith(PK.LOW_HISTORY)                                       # el otro motivo manda
 

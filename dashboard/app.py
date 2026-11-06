@@ -812,37 +812,38 @@ def api_board_results():
 
 @app.route("/api/board/parlay")
 def api_board_parlay():
-    """El parlay de cada horario (v2.6.0, 3-nov-26; por horario desde v2.7.0):
-    las piernas las guarda el pipeline (src/models/program_parlays.py) y
-    dashboard/parlay.py arma el de 2, 3 o 4."""
+    """Los parlays con bono (v2.9.0; la pestaña nació en v2.6.0): las piernas
+    las guarda el pipeline (src/models/program_parlays.py) y dashboard/parlay.py
+    arma cada parlay con su bono y su pago anticipado."""
     from dashboard import parlay as _px
     from src.features.espn_lineups import espn_leagues
     from src.models import program_parlays as _pl
     from src.utils.team_normalizer import normalize_team
-    # la tabla nace con el primer parlay que guarda el pipeline; * porque la columna
-    # slot (v2.7.0) la agrega el pipeline y este dashboard puede llegar antes
+    # la tabla nace con el primer parlay que guarda el pipeline; * porque las columnas
+    # (slot de v2.7.0, rule/kind/seq/pa de v2.9.0) las agrega el pipeline
     legs = _q("SELECT * FROM program_parlays ORDER BY day DESC, rank", optional=True)
-    picks = _q("""SELECT league, match_date, result, profit, reason FROM program_picks
-                  WHERE match_date >= CAST(:s AS date)""", {"s": _pl.FIXED_SINCE})
     if g.get("db_down"):
         return _no_data()
+    if not legs.empty and "rule" in legs.columns:
+        legs = legs[legs["rule"] == _pl.RULE]
+    elif not legs.empty:
+        legs = legs.iloc[0:0]
     live = official = None
     open_legs = legs[legs["result"].isna()] if not legs.empty else legs
     if not open_legs.empty:                     # sin liquidar: el marcador de ESPN o el oficial
         p = {"d": (pd.to_datetime(open_legs["match_date"], utc=True).min() - pd.Timedelta(days=2)).to_pydatetime()}
-        live = _q("""SELECT home, away, kickoff, home_goals, away_goals, home_corners, away_corners,
-                            home_cards, away_cards, status, clock
-                     FROM live_scores WHERE kickoff >= :d""", p, optional=True)
+        live = _q("""SELECT * FROM live_scores WHERE kickoff >= :d""", p, optional=True)
         official = _q("""SELECT date, LOWER(home_team) AS h, LOWER(away_team) AS a, home_goals, away_goals,
                                 home_corners, away_corners, home_yellow, away_yellow, home_red, away_red
                          FROM matches WHERE date >= CAST(:d AS date) AND home_goals IS NOT NULL""", p)
-    leagues = _pl.winning_leagues(picks, before=pd.Timestamp.now(tz="UTC"))
-    board = _px.parlay_board(legs, live, leagues, normalize=normalize_team, official=official,
+    board = _px.parlay_board(legs, live, normalize=normalize_team, official=official,
                              covered=set(espn_leagues()))
     return jsonify({"ok": True, **board,
-                    "rules": {"min_safe": _pl.MIN_SAFE, "min_odds_us": _odds_us(_pl.MIN_LEG_ODDS),
-                              "min_n": _pl.LEAGUE_MIN_N, "max_legs": _pl.MAX_LEGS, "since": _pl.FIXED_SINCE,
-                              "block_minutes": _pl.BLOCK_MINUTES}})
+                    "rules": {"strong": _pl.STRONG_FAV, "min_odds_us": _odds_us(_pl.MIN_LEG_ODDS),
+                              "day_min": _pl.DAY_MIN_LEGS, "slot_min": _pl.SLOT_MIN_LEGS, "max_legs": _pl.MAX_LEGS,
+                              "bonus": {str(k): v for k, v in _pl.BONUS.items()},
+                              "block_minutes": _pl.BLOCK_MINUTES,
+                              "leagues": [league_name(x) for x in _pl.LEAGUES]}})
 
 
 @app.route("/api/board/teams")
@@ -1156,18 +1157,12 @@ PAGE = """<!DOCTYPE html>
 </div>
 
 <div class="pane" id="tab-parlay">
-  <div class="bar" id="xsize">
-    <span class="pill" data-k="2">2 partidos</span>
-    <span class="pill" data-k="3">3 partidos</span>
-    <span class="pill" data-k="4">4 partidos</span>
-    <span class="small muted" id="xrule" style="margin-left:auto"></span>
-  </div>
+  <div class="small muted" id="xrule" style="margin-bottom:8px"></div>
   <div id="xnext" class="muted">Cargando…</div>
   <div class="day">Cómo le ha ido</div>
   <div class="kpis" id="xkpis"></div>
-  <div class="tbl"><table><thead><tr><th>Día</th><th>Partidos</th><th>Momio</th><th>Resultado</th></tr></thead>
+  <div class="tbl"><table><thead><tr><th>Día</th><th>Parlay</th><th>Partidos</th><th>Momio</th><th>Resultado</th></tr></thead>
     <tbody id="xhist"></tbody></table></div>
-  <div class="small muted" id="xleagues" style="margin-top:10px"></div>
 </div>
 
 <div class="pane" id="tab-resultados">

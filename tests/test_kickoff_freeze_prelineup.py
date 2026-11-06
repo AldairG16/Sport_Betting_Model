@@ -103,12 +103,11 @@ def test_a_parlay_slot_freezes_when_espn_says_one_of_its_matches_started(monkeyp
 def test_a_match_that_espn_says_started_does_not_enter_a_new_parlay(monkeypatch):
     from tests.test_program_parlays import NOW
     eng = FakeEngine()
-    _parlay_patch(monkeypatch, None, [{"home": "napoli", "away": "lecce", "kickoff": UTC("2030-01-05 19:45"),
+    _parlay_patch(monkeypatch, None, [{"home": "napoli", "away": "lecce", "kickoff": UTC("2030-01-05 17:45"),
                                        "espn_kickoff": NOW - pd.Timedelta(minutes=10)}])
-    assert PL.snapshot_parlays(engine=eng) == 4
-    (_, params), = eng.statements("INSERT INTO program_parlays")
-    matches = {v for k, v in params.items() if k.startswith("match") and not k.startswith("match_date")}
-    assert "napoli vs lecce" not in matches and len(matches) == 4
+    # v2.9.0: sin napoli quedan 3 favoritos en horarios distintos, no alcanzan para el parlay del día
+    assert PL.snapshot_parlays(engine=eng) == 0
+    assert eng.statements("INSERT INTO program_parlays") == []
 
 
 def test_the_daily_check_catches_a_pick_saved_after_the_real_kickoff():

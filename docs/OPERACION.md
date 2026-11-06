@@ -252,7 +252,7 @@ están todas las clases que ya pasaron, como chequeos que corren igual cada vez:
 
 | Chequeo | Qué revisa | Cuándo corre |
 |---|---|---|
-| Salidas y datos de entrada | Liquidación contra un cálculo independiente; resultados que faltan; pendientes atorados; xG fuera de escala; lo aprendido del weekly; fechas espejo, resultados con fecha futura, repetidos, tablas de otras fuentes viejas; marcador provisional de ESPN contra el oficial; picks contra alineaciones; finales de ESPN; un partido reprogramado contado en dos fechas; el 🎯 de cada familia contra lo que esperaba el mercado | Evening (`output_checks`) |
+| Salidas y datos de entrada | Liquidación contra un cálculo independiente; resultados que faltan; pendientes atorados; xG fuera de escala; lo aprendido del weekly; fechas espejo, resultados con fecha futura, repetidos, tablas de otras fuentes viejas; marcador provisional de ESPN contra el oficial; picks contra alineaciones; finales de ESPN; un partido reprogramado contado en dos fechas; el 🎯 de cada familia contra lo que esperaba el mercado; lo cobrado por el pago anticipado; la regla del parlay con bono | Evening (`output_checks`) |
 | Equipos próximos con historia | Que tengan historia y que no esté partida en dos nombres | Weekly |
 | Nombres de Understat y ESPN | Que cuadren con `matches` | Weekly |
 | Lo que entra al modelo | La cobertura de cada feature en la última corrida (`model_state` `pipeline_coverage`) | Weekly |
@@ -1980,6 +1980,73 @@ los partidos más seguros, de las mejores ligas, de los que más se ganan y los 
   - Los partidos de 60%+ apostados sueltos dejaron −3.4%, y el parlay multiplica el margen de cada
     pierna. Por eso se guarda y se mide: el historial de la pestaña dice si estas apuestas seguras de
     verdad salen.
+
+**Parlay con bono y 🎯 de favoritos fuertes (v2.9.0, 6-nov-26).** El dueño: "necesito que encuentres
+mejoras al sistema en donde sí podamos tener una ventaja ante el mercado". Lo que se encontró (todo de
+solo lectura antes de tocar código):
+
+- **Lo que PlayDoit ofrece**, revisado por la extensión de Claude en el navegador del dueño, sin apostar
+  (5-nov):
+  - un bono de parlay que solo se ve en el boleto: 3 selecciones 5%, 4 7.5%, 5 10%, 6 15%, 7 20%, 8 25%,
+    9 35% (la barra llega a 40%), **sobre la ganancia**, cada selección a −500 o más largo;
+  - "Pago Anticipado Futbol – 2 Goles de Ventaja" (etiqueta "PA"): si el equipo va 2 goles arriba en
+    cualquier momento, la apuesta se paga ganada. Solo 1X2 a 90 min, antes del partido, en sencillas,
+    parlays y "Crear apuesta"; no al empate. Salió en Premier, LaLiga, Serie A, Bundesliga, Ligue 1,
+    Eredivisie, Portugal, Turquía, Bélgica, Grecia y Champions; **no** en Escocia. La Europa League no se
+    pudo revisar y el sistema no la baja;
+  - lo que no sirve: empate + menos 2.5 del mismo partido solo entra como "Crea tu apuesta" o "1x2 y
+    total", con el momio ya corregido (−2% a −17% contra lo justo); el súper pago anticipado de 1 gol
+    (solo México) es otro mercado con su propio momio (−4% a −11%); los momios mejorados son casi todos
+    combinadas con jugadores y córners, y los de goles pierden aun mejorados (−4% a −21%).
+- **El precio de PlayDoit**, medido por primera vez: en 13 favoritos paga ≈ 1% más que el promedio de las
+  casas; empates igual; menos 2.5 ≈ 2% menos.
+- **El sesgo del favorito:** Pinnacle sin margen (proporcional) subestima a los de 65%+ por 2.5-4 pts en
+  los tres periodos (Europa 1ª división, 77.1% contra 74.3%, n=11,596); en vivo desde el 12-oct, 77.8%
+  contra 73.1% (n=108). Al precio promedio quedan ≈ 0%; los momios altos pierden 10-17%.
+- **El historial del parlay** (`historical_odds` 2012-2026, ligas con pago anticipado, precio = promedio,
+  combinaciones al azar de cada semana; los partidos de una misma semana son independientes, verificado):
+  con pago anticipado el de 4 deja +17%, el de 5 +21% y el de 6 +33%, positivo en 2012-17, 2018-22 y
+  2023-26 (el más flojo); si PlayDoit pagara 3% menos que el promedio, +4% a +10%. Pega 34%, 26% y 20%.
+  Hacen falta ~100 parlays para verlo en resultados reales.
+
+Lo que eligió el dueño (1b, 2c, 3a, 4a):
+
+- **El 🎯** (`program_picks.strong_favourite`, `decide`): solo el ganador de 65%+ en Pinnacle sin margen
+  (`STRONG_FAV`) en una liga con pago anticipado (`early_payout.PA_LEAGUES`), con momio de PlayDoit de
+  −500 o más largo (`MIN_FAV_ODDS` 1.20) y sin 4+ titulares fuera. En esos partidos el pick es ese
+  favorito. Los demás siguen mostrando su pick, sin 🎯 (`NOT_STRONG`, o el motivo que ya tenían); el 🎯
+  de goles y el del modelo se acaban. El mínimo de PlayDoit del favorito sale del mercado:
+  1 / (Pinnacle + 3.5 pts) (`FAV_EDGE`: el sesgo más el pago anticipado; ≈ el promedio de las casas).
+- **El parlay** (`src/models/program_parlays.py`, reemplaza al de "la apuesta más segura"):
+  - piernas = esos favoritos (`strong_leg`), una por partido, marcadas `pa`;
+  - **del día** (`kind` 'dia'): los más fuertes del día de México, de 4 a 6 (`DAY_MIN_LEGS`, `MAX_LEGS`);
+    si sobran 4 o más, otro (`seq` 2…). Se fija 5 min antes de su primer partido, así que solo los de su
+    primer horario llevan alineación: con 4+ en un mismo horario casi nunca se junta (medido del 14-oct
+    al 5-nov: 0 horarios con 4; 3 en uno, una vez cada dos semanas; por día, 4+ en 1.6 días por semana);
+  - **de un horario** (`kind` 'horario'): 3 o más que empiezan juntos (hasta 30 min), con las alineaciones
+    de todos. Repite partidos del del día; si son los mismos, es uno solo;
+  - tabla `program_parlays`, columnas nuevas `rule` ('bono'; lo de antes quedó 'seguro'), `kind`, `seq`,
+    `pa`, `pa_paid`, y `UNIQUE (slot, rule, kind, seq, rank)` (`MIGRATE_BONO_SQL`, corre una vez).
+- **Pago anticipado al liquidar** (`src/models/early_payout.py`): `live_scores` guarda la ventaja más
+  grande de cada equipo (`home_max_lead`, `away_max_lead`) con los goles del marcador de ESPN que el
+  closing ya lee; ESPN da cada gol con el equipo al que se le cuenta (en un autogol, el rival del que lo
+  metió: verificado en 300 partidos, 24 con autogol) y si la suma no da el marcador queda sin dato.
+  `resolve_picks` y `resolve_parlays` cobran como ganada (`pa_paid`) la apuesta al ganador de una liga con
+  pago anticipado que fue 2 goles arriba. Una perdida sin la ventaja espera hasta 30 h
+  (`WAIT_HOURS`); después se liquida perdida. Aplica a todo pick de ganador en esas ligas, no solo al 🎯
+  (es lo que pagaría PlayDoit).
+- **Aviso "Parlay listo"** (`parlay_alerts.py`): el del horario cuando todas sus piernas vieron la
+  alineación; el del día cuando la vieron las de su primer horario; a 40 min de fijarse avisa igual y lo
+  dice (`READY_LATE_MIN`). Trae cada partido con 📋/⏳ y "PA", lo que paga y con el bono, y la probabilidad
+  de que salgan todas según Pinnacle. Estado `telegram_parlays` con clave `horario|tipo|número`.
+- **Pestaña Parlay:** cada parlay del día y de un horario con sus piernas, "paga +X · con bono Y%: +Z",
+  ⚡ en la pierna cobrada por pago anticipado; el historial de los liquidados (todos, del día, de un
+  horario) a 1u con bono. Ya no hay botón de 2, 3 o 4. Lo de la regla anterior no se muestra.
+- **Chequeo diario** (`output_checks`): la liquidación independiente acepta la ganada por pago anticipado
+  (`pa_paid`); la 15 revisa que cada una tenga en `live_scores` la ventaja de 2+; la 16, que cada parlay
+  con bono cumpla la regla (piernas, momio, probabilidad, liga, sin repetidos).
+- Lo que no se puede: leer el precio real de PlayDoit (el widget de Altenar responde 403 a scripts: no se
+  raspa). El parlay usa el promedio de las casas; el dueño ve el precio real al apostarlo.
 
 **Se mantiene abierto solo (v1.6.0).** El `.exe` es un supervisor
 (`dashboard/supervisor.py`): lanza el servidor (el mismo `.exe` con `--serve`), le

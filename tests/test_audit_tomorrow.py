@@ -140,7 +140,7 @@ def test_the_pick_uses_the_1x2_after_the_side_bias_like_the_pipeline():
     from tests.test_program_picks import _mvs, _u
     row = _mvs(model=(0.48, 0.25, 0.27), over=None, btts=None)        # Pinnacle de _u: ≈ 43 / 26 / 28
     pk, why = PP.decide(row, _u())
-    assert pk["market"] == "home_win" and why is None                     # crudo: 5 pts, pasa la regla
+    assert pk["market"] == "home_win" and why == PP.NOT_STRONG            # crudo: 5 pts, pasa la regla (sin 🎯 desde v2.9.0)
     pk, why = PP.decide(row, _u(), bias=BIAS)
     assert pk["market"] == "home_win" and why == PP.NO_EDGE               # corregido: ~44%, sin ventaja
     assert pk["model"] == pytest.approx(0.44, abs=0.005)

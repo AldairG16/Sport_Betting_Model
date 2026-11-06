@@ -55,9 +55,16 @@ DDL = f"""
         clock TEXT,
         espn_id TEXT,
         fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        home_max_lead INT, away_max_lead INT,
         PRIMARY KEY (sport_key, kickoff, home)
     )
 """
+# v2.9.0 (6-nov-26): la ventaja más grande de cada equipo durante el partido,
+# para liquidar el Pago Anticipado de PlayDoit (src/models/early_payout.py)
+ALTERS = ("ALTER TABLE live_scores ADD COLUMN IF NOT EXISTS home_max_lead INT",
+          "ALTER TABLE live_scores ADD COLUMN IF NOT EXISTS away_max_lead INT")
+SCORE_COLS = ("home_goals", "away_goals", "home_corners", "away_corners", "home_cards", "away_cards",
+              "status", "clock", "home_max_lead", "away_max_lead")
 LOOKBACK_H = 6              # partidos que empezaron en las últimas horas
 AHEAD_H = 3                 # y la hora de ESPN de los que empiezan en las próximas
 KICK_DIFF_MIN = 5           # más diferencia que esto con la hora del sistema se avisa en el log
@@ -89,7 +96,10 @@ def _int(v):
 def parse_live(data: dict | None) -> list:
     """Función pura: los partidos de un scoreboard que ya empezaron, con su
     marcador, córners y tarjetas (amarilla o roja = 1, como PlayDoit) y si
-    terminó ('final') o sigue ('live')."""
+    terminó ('final') o sigue ('live'). Desde v2.9.0 también la ventaja más
+    grande de cada equipo (early_payout.max_leads; None si los goles no dan
+    el marcador)."""
+    from src.models.early_payout import max_leads
     out = []
     for ev in (data or {}).get("events", []):
         c = (ev.get("competitions") or [{}])[0]
@@ -120,6 +130,8 @@ def parse_live(data: dict | None) -> list:
                         f"{s}_cards": cards.get(tid, 0) if details else None})
         if row["home_goals"] is None or row["away_goals"] is None:
             continue
+        row["home_max_lead"], row["away_max_lead"] = max_leads(
+            details, str(side["home"].get("team", {}).get("id", "")), row["home_goals"], row["away_goals"])
         out.append(row)
     return out
 
@@ -158,8 +170,7 @@ def capture_live_scores(engine=None, get=None, now=None) -> int:
         for eid, (h, a, k) in assign_events(sport_key, list(uniq.values()), begun).items():
             e = uniq[eid]
             rows.append({"sport_key": sport_key, "kickoff": k, "home": h, "away": a, "espn_id": eid,
-                         **{c: e[c] for c in ("home_goals", "away_goals", "home_corners", "away_corners",
-                                              "home_cards", "away_cards", "status", "clock")}})
+                         **{c: e.get(c) for c in SCORE_COLS}})
         every = {e["event"]: e for e in events}
         for eid, (h, a, k) in assign_events(sport_key, list(every.values()), fixtures).items():
             kicks.append({"sport_key": sport_key, "kickoff": k, "home": h, "away": a,
@@ -202,18 +213,25 @@ def _save_kicks(engine, kicks: list) -> None:
 def _save(engine, rows: list) -> None:
     if not rows:
         return
+    rows = [{**{c: None for c in SCORE_COLS}, **r} for r in rows]
     with engine.begin() as conn:
         conn.execute(text(DDL))
+        for sql in ALTERS:
+            conn.execute(text(sql))
         conn.execute(text(f"""
             INSERT INTO {TABLE} (sport_key, kickoff, home, away, home_goals, away_goals, home_corners,
-                                 away_corners, home_cards, away_cards, status, clock, espn_id)
+                                 away_corners, home_cards, away_cards, status, clock, espn_id,
+                                 home_max_lead, away_max_lead)
             VALUES (:sport_key, :kickoff, :home, :away, :home_goals, :away_goals, :home_corners,
-                    :away_corners, :home_cards, :away_cards, :status, :clock, :espn_id)
+                    :away_corners, :home_cards, :away_cards, :status, :clock, :espn_id,
+                    :home_max_lead, :away_max_lead)
             ON CONFLICT (sport_key, kickoff, home) DO UPDATE SET
                 away = EXCLUDED.away, home_goals = EXCLUDED.home_goals, away_goals = EXCLUDED.away_goals,
                 home_corners = EXCLUDED.home_corners, away_corners = EXCLUDED.away_corners,
                 home_cards = EXCLUDED.home_cards, away_cards = EXCLUDED.away_cards,
                 status = EXCLUDED.status, clock = EXCLUDED.clock, espn_id = EXCLUDED.espn_id,
+                home_max_lead = COALESCE(EXCLUDED.home_max_lead, {TABLE}.home_max_lead),
+                away_max_lead = COALESCE(EXCLUDED.away_max_lead, {TABLE}.away_max_lead),
                 fetched_at = NOW()
         """), rows)
 
@@ -233,9 +251,7 @@ def final_rows(sport_key: str, events: list, candidates: list, have: set, start)
         if names is None:
             continue
         out.append({"sport_key": sport_key, "kickoff": e["kick"], "home": names[0], "away": names[1],
-                    "espn_id": e["event"], **{c: e[c] for c in ("home_goals", "away_goals", "home_corners",
-                                                                 "away_corners", "home_cards", "away_cards",
-                                                                 "status", "clock")}})
+                    "espn_id": e["event"], **{c: e.get(c) for c in SCORE_COLS}})
     return out
 
 

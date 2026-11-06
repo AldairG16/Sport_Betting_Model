@@ -1,11 +1,13 @@
 """
-El parlay del día (v2.6.0, 3-nov-26).
+El parlay (v2.6.0, 3-nov-26) con bono (v2.9.0, 6-nov-26).
 
-El dueño: "quiero agregar la función parley, donde seleccione los partidos más
-seguros, de las mejores ligas, de los que más se ganan y los agrupe en una
-pestaña". Eligió: las ligas donde los picks van ganando, de cada partido la
-apuesta más segura aunque no sea el pick, y 2, 3 o 4 partidos a elegir. Se
-guarda y se mide como los picks. Sin DB.
+La extensión de Claude revisó PlayDoit el 5-nov sin apostar: el boleto paga un
+bono sobre la ganancia (3 = 5%, 4 = 7.5%, 5 = 10%, 6 = 15%), cada selección a
+−500 o más largo, y el Pago Anticipado (2 goles de ventaja) vale en el parlay.
+El dueño eligió (1b, 2c, 4a): favoritos de 65%+ (Pinnacle sin margen) en las
+ligas con pago anticipado; el parlay del día de 4 a 6 y el de un horario (3 o
+más que empiezan juntos, con alineación); reemplaza al de "la apuesta más
+segura". Sin DB.
 """
 
 from types import SimpleNamespace
@@ -15,6 +17,7 @@ import pandas as pd
 import pytest
 
 from dashboard import parlay as X
+from src.models import early_payout as EP
 from src.models import parlay_alerts as PA
 from src.models import program_parlays as PL
 from src.models import program_picks as PP
@@ -26,179 +29,124 @@ NOW = pd.Timestamp("2030-01-05 15:00", tz="UTC")
 
 def _mvs(match="napoli vs lecce", kick="2030-01-05 19:45", league="soccer_italy_serie_a", **kw):
     return {"match": match, "match_date": pd.Timestamp(kick, tz="UTC"), "league": league,
-            "p_home": 0.62, "p_draw": 0.22, "p_away": 0.16, "pin_home": 0.58, "pin_draw": 0.25, "pin_away": 0.17,
-            "lam_home": 2.0, "lam_away": 0.9, "p_over25": 0.62, "p_btts": None,
+            "p_home": 0.70, "p_draw": 0.18, "p_away": 0.12, "pin_home": 0.69, "pin_draw": 0.19, "pin_away": 0.12,
+            "lam_home": 2.2, "lam_away": 0.7, "p_over25": 0.62, "p_btts": None,
             "created_at": pd.Timestamp("2030-01-05 12:00", tz="UTC"), **kw}
 
 
 def _up(home="napoli", away="lecce", **kw):
+    # Pinnacle 1.40 / 5.0 / 8.0 → el local 68.7% sin margen; promedio de las casas 1.36 (-278)
     return {"home_team_norm": home, "away_team_norm": away, "home_team": home.title(), "away_team": away.title(),
-            "pin_home_odds": 1.65, "pin_draw_odds": 4.0, "pin_away_odds": 5.5,
-            "home_odds": 1.66, "draw_odds": 4.1, "away_odds": 5.6,
-            "consensus_home_odds": 1.60, "consensus_draw_odds": 3.9, "consensus_away_odds": 5.2,
-            "over25_odds": 1.80, "under25_odds": 2.10, "consensus_over25_odds": 1.75, "consensus_under25_odds": 2.05,
-            "over15_odds": 1.24, "under15_odds": 4.4, "consensus_over15_odds": 1.22, "consensus_under15_odds": 4.2,
+            "pin_home_odds": 1.40, "pin_draw_odds": 5.0, "pin_away_odds": 8.0,
+            "home_odds": 1.42, "draw_odds": 5.2, "away_odds": 8.5,
+            "consensus_home_odds": 1.36, "consensus_draw_odds": 4.8, "consensus_away_odds": 7.6,
+            "over25_odds": 1.70, "under25_odds": 2.20, "consensus_over25_odds": 1.66, "consensus_under25_odds": 2.15,
             "btts_yes_odds": None, "btts_no_odds": None, **kw}
 
 
-def _cand(market, model, mk, odds, family="Goles"):
-    return {"market": market, "label": market, "family": family, "model": model, "market_prob": mk,
-            "best_odds": odds, "playdoit_odds": odds}
+# ─── la pierna: el favorito fuerte con pago anticipado ──────────────────────
+
+def test_a_leg_is_the_65pct_favourite_with_early_payout_at_minus_500_or_longer():
+    leg = PL.strong_leg(_mvs(), SimpleNamespace(**_up()))
+    assert leg["market"] == "home_win" and leg["market_prob"] == pytest.approx(0.687, abs=1e-3)
+    assert leg["playdoit_odds"] == pytest.approx(1.36)
+    # Pinnacle 1.65 / 4.0 / 5.5: el local 58%, no es favorito fuerte
+    assert PL.strong_leg(_mvs(), SimpleNamespace(**_up(pin_home_odds=1.65, pin_draw_odds=4.0, pin_away_odds=5.5))) is None
+    # MLS: sin pago anticipado en la lista; Escocia tampoco (sin la etiqueta "PA")
+    assert PL.strong_leg(_mvs(league="soccer_usa_mls"), SimpleNamespace(**_up())) is None
+    assert PL.strong_leg(_mvs(league="soccer_spl"), SimpleNamespace(**_up())) is None
+    # más corto que -500 no entra al bono del boleto
+    assert PL.strong_leg(_mvs(), SimpleNamespace(**_up(consensus_home_odds=1.15))) is None
+    # el favorito con 4+ titulares fuera no es pierna
+    assert PL.strong_leg(_mvs(), SimpleNamespace(**_up()), weak={"home_win": "Alineación: …"}) is None
+    # la Champions sí (la etiqueta "PA" salió en Bodø/Glimt–LASK)
+    assert PL.strong_leg(_mvs(league="soccer_uefa_champs_league", league_factor=1.0), SimpleNamespace(**_up()))
 
 
-# ─── la apuesta más segura de cada partido ──────────────────────────────────
-
-def test_the_safest_bet_is_the_one_both_believe_most_not_the_biggest_gap():
-    u = SimpleNamespace(**_up())
-    leg = PL.safest_leg(_mvs(), u)
-    # más de 1.5 es la más segura (~77% el mercado) pero paga −455: no suma al parlay
-    assert leg["market"] == "home_win" and leg["playdoit_odds"] == pytest.approx(1.60)
-    assert PL.safety(leg) == pytest.approx(min(leg["model"], leg["market_prob"]))
-    assert PL.safety(leg) >= PL.MIN_SAFE
-
-
-def test_both_the_program_and_the_market_have_to_believe_it(monkeypatch):
-    cs = [_cand("over_1.5", 0.90, 0.52, 1.80),      # el programa 90%, el mercado 52%: no es segura
-          _cand("under_3.5", 0.70, 0.66, 1.45)]
-    monkeypatch.setattr(PP, "_candidates_of", lambda *a, **k: cs)
-    assert PL.safest_leg(_mvs(), None)["market"] == "under_3.5"
-    cs[1]["model"] = 0.54                            # por debajo del 55%: nada
-    assert PL.safest_leg(_mvs(), None) is None
+def test_the_bonus_is_paid_on_the_profit_by_number_of_legs():
+    assert [PL.bonus_for(n) for n in (1, 2, 3, 4, 5, 6, 7, 8, 9, 12)] == \
+        [0, 0, 0.05, 0.075, 0.10, 0.15, 0.20, 0.25, 0.35, 0.35]
+    pay = PL.payout([1.5, 1.5, 1.5, 1.5])
+    assert pay["odds"] == pytest.approx(5.0625) and pay["bonus"] == 0.075
+    assert pay["with_bonus"] == pytest.approx(1 + 4.0625 * 1.075)      # sobre la ganancia, no sobre el pago
+    # lo que vio la extensión: 5 selecciones a +779 con 10 → bono 7.79
+    assert (PL.payout([8.79 ** 0.2] * 5)["with_bonus"] - 8.79) * 10 == pytest.approx(7.79, abs=0.01)
 
 
-def test_no_leg_from_a_weakened_winner_low_history_or_an_unadjusted_cup(monkeypatch):
-    cs = [_cand("home_win", 0.70, 0.66, 1.45, "Ganador"), _cand("under_3.5", 0.62, 0.60, 1.55)]
-    monkeypatch.setattr(PP, "_candidates_of", lambda *a, **k: cs)
-    assert PL.safest_leg(_mvs(), None, weak={"home_win": "Alineación: …"})["market"] == "under_3.5"
-    assert PL.safest_leg(_mvs(low_history="lecce con 3 partidos"), None) is None
-    assert PL.safest_leg(_mvs(skipped_at=NOW), None) is None
-    assert PL.safest_leg(_mvs(league="soccer_uefa_champs_league"), None) is None
-    assert PL.safest_leg(_mvs(league="soccer_uefa_champs_league", league_factor=1.1), None)["market"] == "home_win"
+def _leg(match, kick, p=0.70, odds=1.40, league="soccer_italy_serie_a"):
+    return {"match": match, "match_date": pd.Timestamp(kick, tz="UTC").to_pydatetime(), "league": league,
+            "market": "home_win", "label": "Gana X", "family": "Ganador", "market_prob": p, "model_prob": p,
+            "safety": p, "playdoit_odds": odds, "lineup": None, "pa": True}
 
 
-# ─── las ligas donde los picks van ganando ──────────────────────────────────
-
-def _picks(league, n, profit, result="win", when="2026-10-25 19:00", reason=None):
-    return [{"league": league, "match_date": pd.Timestamp(when, tz="UTC"), "result": result, "profit": profit,
-             "reason": reason}] * n
-
-
-def test_only_leagues_with_units_in_favor_and_enough_picks_since_the_model_fix():
-    df = pd.DataFrame(_picks("soccer_italy_serie_a", 6, 0.8) + _picks("soccer_italy_serie_a", 5, -1.0, "loss")
-                      + _picks("soccer_usa_mls", 12, -1.0, "loss")                       # pierde
-                      + _picks("soccer_epl", 9, 0.9)                                     # 9 picks: pocos
-                      + _picks("soccer_spain_la_liga", 12, 0.9, when="2026-10-10 19:00")  # modelo con error
-                      + _picks("soccer_france_ligue_one", 12, 0.9, reason=PP.LOW_HISTORY + ": x")
-                      + _picks("soccer_germany_bundesliga", 12, None, result=None))       # sin liquidar
-    assert PL.winning_leagues(df) == []                              # Serie A: 6 × 0.8 − 5 = −0.2
-    df.loc[df["league"] == "soccer_italy_serie_a", "profit"] = df["profit"].where(df["result"] == "loss", 1.0)
-    assert PL.winning_leagues(df) == [{"league": "soccer_italy_serie_a", "n": 11, "won": 6, "lost": 5,
-                                       "units": 1.0}]                 # 6 − 5 = +1
-    assert PL.winning_leagues(df, before="2026-10-20") == []        # antes de esos partidos no había nada
-    assert PL.FIXED_SINCE == "2026-10-22"
-    from dashboard.board import MODEL_FIXED
-    assert pd.Timestamp(PL.FIXED_SINCE, tz="UTC") == MODEL_FIXED
+def test_the_day_parlay_takes_the_strongest_four_to_six_and_another_with_the_rest():
+    legs = [_leg(f"m{i} vs r{i}", f"2030-01-05 {10 + i}:00", p=0.66 + i / 100) for i in range(10)]
+    days = [p for p in PL.group_parlays(legs) if p["kind"] == "dia"]
+    assert [len(p["legs"]) for p in days] == [6, 4] and [p["seq"] for p in days] == [1, 2]
+    assert [x["match"] for x in days[0]["legs"]][:2] == ["m9 vs r9", "m8 vs r8"]      # del más fuerte
+    assert days[0]["slot"] == pd.Timestamp("2030-01-05 14:00", tz="UTC")             # su primer partido
+    assert {x["rank"] for x in days[0]["legs"]} == set(range(1, 7))
+    # 3 en el día no son parlay del día; 8 son uno de 6 (los otros 2 no alcanzan)
+    assert [p for p in PL.group_parlays(legs[:3]) if p["kind"] == "dia"] == []
+    assert [len(p["legs"]) for p in PL.group_parlays(legs[:8]) if p["kind"] == "dia"] == [6]
 
 
-# ─── el parlay de cada día ─────────────────────────────────────────────────
-
-def _five():
-    teams = [("napoli", "lecce"), ("roma", "como"), ("inter", "genoa"), ("milan", "torino"), ("juventus", "parma")]
-    mvs = pd.DataFrame([_mvs(f"{h} vs {a}") for h, a in teams])
-    up = pd.DataFrame([_up(h, a) for h, a in teams])
-    return mvs, up
-
-
-def test_a_slot_keeps_the_four_safest_one_per_match_and_only_winning_leagues(monkeypatch):
-    mvs, up = _five()
-    safe = {"napoli": 0.80, "roma": 0.62, "inter": 0.75, "milan": 0.58, "juventus": 0.70}
-    monkeypatch.setattr(PP, "_candidates_of", lambda r, *a, **k: [
-        _cand("home_win", safe[r["match"].split(" vs ")[0]], 0.9, 1.40, "Ganador"),
-        _cand("under_3.5", 0.56, 0.56, 1.70)])
-    blocks = PL.build_parlays(mvs, up, ["soccer_italy_serie_a"])
-    (slot, legs), = blocks.items()                                   # los 5 empiezan a las 19:45
-    assert slot == pd.Timestamp("2030-01-05 19:45", tz="UTC")
-    assert legs[0]["day"] == pd.Timestamp("2030-01-05").date()       # 19:45 UTC = 13:45 de México
-    assert [x["match"] for x in legs] == ["napoli vs lecce", "inter vs genoa", "juventus vs parma", "roma vs como"]
-    assert [x["rank"] for x in legs] == [1, 2, 3, 4] and legs[0]["display"] == "Napoli vs Lecce"
-    assert PL.build_parlays(mvs, up, ["soccer_epl"]) == {}            # la liga no va ganando: nada
+def test_three_or_more_starting_together_are_also_a_slot_parlay_with_their_lineups():
+    legs = [_leg("a vs b", "2030-01-05 14:00"), _leg("c vs d", "2030-01-05 14:30"), _leg("e vs f", "2030-01-05 14:15"),
+            _leg("g vs h", "2030-01-05 19:00"), _leg("i vs j", "2030-01-05 20:00")]
+    out = PL.group_parlays(legs)
+    slot = [p for p in out if p["kind"] == "horario"]
+    assert len(slot) == 1 and {x["match"] for x in slot[0]["legs"]} == {"a vs b", "c vs d", "e vs f"}
+    assert [len(p["legs"]) for p in out if p["kind"] == "dia"] == [5]                 # repite partidos: es otro
+    # si el horario es el mismo parlay que el del día, es uno solo
+    same = PL.group_parlays(legs[:3] + [_leg("k vs l", "2030-01-05 14:20")])
+    assert [p["kind"] for p in same] == ["dia"]
 
 
-def test_a_late_match_in_mexico_counts_on_its_mexican_day(monkeypatch):
-    mvs = pd.DataFrame([_mvs(kick="2030-01-06 02:00"), _mvs("roma vs como", kick="2030-01-06 02:00")])
-    monkeypatch.setattr(PP, "_candidates_of", lambda *a, **k: [_cand("under_3.5", 0.7, 0.7, 1.5)])
-    blocks = PL.build_parlays(mvs, pd.DataFrame([_up(), _up("roma", "como")]), ["soccer_italy_serie_a"])
-    (legs,) = blocks.values()
-    assert {x["day"] for x in legs} == {pd.Timestamp("2030-01-05").date()}   # 20:00 del 5 en México
+def test_a_late_match_in_mexico_counts_on_its_mexican_day():
+    legs = [_leg(f"m{i} vs r{i}", "2030-01-06 03:00") for i in range(2)] + \
+           [_leg(f"n{i} vs s{i}", "2030-01-05 18:00") for i in range(2)]
+    (p,) = [p for p in PL.group_parlays(legs) if p["kind"] == "dia"]                  # 21:00 del sábado en México
+    assert p["legs"][0]["day"] == pd.Timestamp("2030-01-05").date()
 
 
-# ─── un parlay por horario (4-nov-26) ──────────────────────────────────────
-# El dueño: "si son al mismo horario sería mejor porque las alineaciones ya
-# estarían para todos los picks del parlay".
-
-def _at(*kicks):
-    teams = [("napoli", "lecce"), ("roma", "como"), ("inter", "genoa"), ("milan", "torino"), ("juventus", "parma"),
-             ("lazio", "verona")]
-    mvs = pd.DataFrame([_mvs(f"{h} vs {a}", kick=k) for (h, a), k in zip(teams, kicks)])
-    up = pd.DataFrame([_up(h, a) for h, a in teams[:len(kicks)]])
-    return mvs, up
+def test_a_match_in_a_fixed_parlay_does_not_enter_another_of_the_same_kind():
+    legs = [_leg(f"m{i} vs r{i}", f"2030-01-05 {10 + i}:00") for i in range(9)]
+    out = PL.group_parlays(legs, exclude={"dia": {f"m{i} vs r{i}" for i in range(5)}},
+                           fixed_seq={pd.Timestamp("2030-01-05").date(): 1})
+    (p,) = [p for p in out if p["kind"] == "dia"]
+    assert p["seq"] == 2 and {x["match"] for x in p["legs"]} == {f"m{i} vs r{i}" for i in range(5, 9)}
 
 
-def test_one_parlay_per_slot_of_matches_that_start_within_30_minutes(monkeypatch):
-    monkeypatch.setattr(PP, "_candidates_of", lambda *a, **k: [_cand("under_3.5", 0.7, 0.7, 1.5)])
-    # 12:00, 12:15, 12:30 juntos; 13:00 abre otro horario con 13:20; 21:00 solo
-    mvs, up = _at("2030-01-05 18:00", "2030-01-05 18:15", "2030-01-05 18:30", "2030-01-05 19:00",
-                  "2030-01-05 19:20", "2030-01-06 03:00")
-    blocks = PL.build_parlays(mvs, up, ["soccer_italy_serie_a"])
-    assert sorted(blocks) == [pd.Timestamp("2030-01-05 18:00", tz="UTC"), pd.Timestamp("2030-01-05 19:00", tz="UTC")]
-    first, second = (blocks[s] for s in sorted(blocks))
-    assert {x["match"] for x in first} == {"napoli vs lecce", "roma vs como", "inter vs genoa"}
-    assert {x["match"] for x in second} == {"milan vs torino", "juventus vs parma"}
-    assert [x["rank"] for x in second] == [1, 2]                     # cada horario con su orden
-    assert all(x["slot"] == pd.Timestamp("2030-01-05 19:00", tz="UTC") for x in second)
-    assert PL.BLOCK_MINUTES == 30 and PL.MIN_BLOCK_LEGS == 2          # el de las 21:00 solo: no es parlay
-
-
-def test_a_match_already_in_a_fixed_parlay_does_not_enter_another(monkeypatch):
-    monkeypatch.setattr(PP, "_candidates_of", lambda *a, **k: [_cand("under_3.5", 0.7, 0.7, 1.5)])
-    mvs, up = _at("2030-01-05 18:00", "2030-01-05 18:15", "2030-01-05 18:20")
-    blocks = PL.build_parlays(mvs, up, ["soccer_italy_serie_a"], exclude={"Napoli vs Lecce"})
-    (legs,) = blocks.values()
-    assert {x["match"] for x in legs} == {"roma vs como", "inter vs genoa"}
-    assert legs[0]["slot"] == pd.Timestamp("2030-01-05 18:15", tz="UTC")
-
-
-def test_a_leg_is_ready_with_its_lineup_or_where_espn_has_none():
-    assert PL.lineup_ready("confirmada", "soccer_italy_serie_a", {"soccer_italy_serie_a"})
-    assert PL.lineup_ready("confirmada: Lecce con 4 fuera", "soccer_italy_serie_a")
-    assert not PL.lineup_ready(None, "soccer_italy_serie_a", {"soccer_italy_serie_a"})   # todavía no sale
-    assert PL.lineup_ready(None, "soccer_korea_kleague1", {"soccer_italy_serie_a"})     # nunca va a salir
-    assert not PL.lineup_ready(None, "soccer_korea_kleague1")                           # sin saber: espera
-    assert PL.LINEUP_OK == PP.LINEUP_OK
-
-
-def test_the_table_moves_once_from_one_parlay_per_day_to_one_per_slot():
+def test_the_table_moves_once_to_the_bonus_parlays_and_keeps_the_old_rule():
     from tests.fake_db import FakeResult
-    old = FakeEngine(lambda sql, p: FakeResult())                   # sin la columna slot
+    old = FakeEngine(lambda sql, p: FakeResult())                   # sin columnas: las dos migraciones
     with old.begin() as conn:
         PL._ensure(conn)
     sqls = [s for s, _ in old.executed]
     assert any("ADD COLUMN IF NOT EXISTS slot" in s for s in sqls)
-    assert any("SET slot = f.first" in s for s in sqls)              # lo guardado: el primer partido de su día
-    assert any("DROP CONSTRAINT IF EXISTS program_parlays_day_rank_key" in s for s in sqls)
-    assert any("UNIQUE (slot, rank)" in s for s in sqls)
-    new = FakeEngine(lambda sql, p: FakeResult(rows=[(1,)]) if "information_schema" in sql else FakeResult())
+    assert any("SET rule = 'seguro'" in s for s in sqls)            # lo guardado: la regla anterior
+    assert any("DROP CONSTRAINT IF EXISTS program_parlays_slot_rank_key" in s for s in sqls)
+    assert any("UNIQUE (slot, rule, kind, seq, rank)" in s and "ADD CONSTRAINT" in s for s in sqls)
+    new = FakeEngine(lambda sql, p: FakeResult(rows=[("slot",), ("rule",)]) if "information_schema" in sql
+                     else FakeResult())
     with new.begin() as conn:
         PL._ensure(conn)
     assert not any("ALTER TABLE" in s for s, _ in new.executed)     # ya migrada: nada
 
 
-def _reads(stored=None, picks=None):
-    mvs, up = _five()
+def _four():
+    names = [("napoli", "lecce"), ("roma", "como"), ("inter", "genoa"), ("milan", "torino")]
+    mvs = pd.DataFrame([_mvs(f"{h} vs {a}", kick=f"2030-01-05 {17 + i}:45") for i, (h, a) in enumerate(names)])
+    up = pd.DataFrame([_up(h, a) for h, a in names])
+    return mvs, up
+
+
+def _reads(stored=None):
+    mvs, up = _four()
     return {"FROM model_vs_sharp": mvs, "FROM upcoming_matches": up,
-            "FROM program_picks": pd.DataFrame(picks if picks is not None else
-                                               _picks("soccer_italy_serie_a", 10, 0.5)),
-            "FROM program_parlays": stored if stored is not None else pd.DataFrame(columns=["slot", "match"]),
+            "FROM program_parlays": stored if stored is not None else
+            pd.DataFrame(columns=["slot", "day", "match", "rule", "kind", "seq"]),
             "playdoit_prices": pd.DataFrame(), "FROM matches": pd.DataFrame(), "FROM lineups": pd.DataFrame()}
 
 
@@ -206,44 +154,30 @@ def _patch(monkeypatch, reads):
     monkeypatch.setattr(PL.pd, "read_sql", lambda sql, con=None, params=None, **kw: next(
         df for k, df in reads.items() if k in str(sql)))
     monkeypatch.setattr(PL.pd.Timestamp, "now", classmethod(lambda cls, tz=None: NOW))
-    monkeypatch.setattr(PP, "_candidates_of", lambda *a, **k: [_cand("under_3.5", 0.7, 0.7, 1.5)])
 
 
-def test_the_snapshot_redoes_the_parlay_until_its_first_leg_starts(monkeypatch):
+def test_the_snapshot_saves_the_day_parlay_until_its_first_leg_starts(monkeypatch):
     eng = FakeEngine()
     _patch(monkeypatch, _reads())
     assert PL.snapshot_parlays(engine=eng) == 4
     (sql, params), = eng.statements("DELETE FROM program_parlays")
     assert "result IS NULL" in sql and "slot > :lock" in sql         # un borrador, nunca algo fijo ni liquidado
-    assert params["lock"] == NOW + pd.Timedelta(minutes=5)
     (sql, params), = eng.statements("INSERT INTO program_parlays")
-    assert "ON CONFLICT (slot, rank)" in sql
-    assert params["rank0"] == 1 and params["day0"] == pd.Timestamp("2030-01-05").date()
-    assert params["slot0"] == pd.Timestamp("2030-01-05 19:45", tz="UTC")
-    assert params["playdoit_odds0"] == 1.5 and params["safety0"] == 0.7
+    assert "ON CONFLICT (slot, rule, kind, seq, rank)" in sql
+    assert params["rule0"] == "bono" and params["kind0"] == "dia" and params["seq0"] == 1 and params["pa0"] is True
+    assert params["slot0"] == pd.Timestamp("2030-01-05 17:45", tz="UTC")
+    assert params["market0"] == "home_win" and params["label0"] == "Gana Napoli"
 
 
-def test_a_fixed_parlay_keeps_its_matches(monkeypatch):
+def test_a_fixed_day_parlay_keeps_its_matches(monkeypatch):
     eng = FakeEngine()
-    # el parlay de las 15:04 quedó fijo (empieza en menos de 5 min) con napoli y roma
-    stored = pd.DataFrame([{"slot": pd.Timestamp("2030-01-05 15:04", tz="UTC"), "match": "napoli vs lecce"},
-                           {"slot": pd.Timestamp("2030-01-05 15:04", tz="UTC"), "match": "roma vs como"}])
+    stored = pd.DataFrame([{"slot": pd.Timestamp("2030-01-05 15:04", tz="UTC"), "day": pd.Timestamp("2030-01-05"),
+                            "match": "napoli vs lecce", "rule": "bono", "kind": "dia", "seq": 1}])
     _patch(monkeypatch, _reads(stored))
-    assert PL.snapshot_parlays(engine=eng) == 3                      # los otros 3 arman su propio parlay
-    (_, params), = eng.statements("INSERT INTO program_parlays")
-    assert {v for k, v in params.items() if k.startswith("match") and not k.startswith("match_date")} == \
-        {"inter vs genoa", "milan vs torino", "juventus vs parma"}
+    assert PL.snapshot_parlays(engine=eng) == 0                      # quedan 3: no alcanzan para otro del día
+    assert eng.statements("INSERT INTO program_parlays") == []
     (sql, _), = eng.statements("DELETE FROM program_parlays")
     assert "slot > :lock" in sql                                     # el fijo no se borra
-
-
-def test_without_a_winning_league_a_stale_draft_is_cleared(monkeypatch):
-    eng = FakeEngine()
-    stored = pd.DataFrame([{"slot": pd.Timestamp("2030-01-05 19:45", tz="UTC"), "match": "napoli vs lecce"}])
-    _patch(monkeypatch, _reads(stored, picks=_picks("soccer_italy_serie_a", 10, -0.5, "loss")))
-    assert PL.snapshot_parlays(engine=eng) == 0
-    assert len(eng.statements("DELETE FROM program_parlays")) == 1   # el de antes ya no vale
-    assert eng.statements("INSERT INTO program_parlays") == []
 
 
 def test_a_failed_parlay_snapshot_is_an_error_that_reaches_telegram(monkeypatch):
@@ -257,23 +191,45 @@ def test_a_failed_parlay_snapshot_is_an_error_that_reaches_telegram(monkeypatch)
     RUN_ISSUES.reset()
 
 
-def test_legs_settle_at_the_playdoit_price(monkeypatch):
+def _settle(monkeypatch, score, idx, kick="2030-01-05 19:45", market="home_win"):
     import src.models.save_bets as sb
     eng = FakeEngine()
-    kick = pd.Timestamp("2030-01-05 19:45", tz="UTC")
-    pending = pd.DataFrame([{"id": 7, "match": "napoli vs lecce", "match_date": kick, "market": "under_3.5",
-                             "playdoit_odds": 1.5}])
+    kick = pd.Timestamp(kick, tz="UTC")
+    pending = pd.DataFrame([{"id": 7, "match": "napoli vs lecce", "match_date": kick, "market": market,
+                             "league": "soccer_italy_serie_a", "playdoit_odds": 1.5}])
     matches = pd.DataFrame([{"home_team_l": "napoli", "away_team_l": "lecce", "date": kick.tz_convert(None),
-                             "home_goals": 2, "away_goals": 0, "home_corners": None, "away_corners": None,
+                             "home_goals": score[0], "away_goals": score[1], "home_corners": None, "away_corners": None,
                              "home_yellow": None, "away_yellow": None, "home_goals_ht": None, "away_goals_ht": None,
                              "home_goals_h2": None, "away_goals_h2": None, "home_shots_target": None,
                              "away_shots_target": None}])
     monkeypatch.setattr(PL.pd, "read_sql", lambda *a, **k: pending)
     monkeypatch.setattr(sb, "_preload_matches", lambda dates: matches)
     monkeypatch.setattr(sb, "normalize_team", lambda t: t)
-    assert PL.resolve_parlays(engine=eng)["resolved"] == 1
-    (sql, plan), = eng.statements("UPDATE program_parlays SET result = :result")
-    assert plan[0]["result"] == "win" and plan[0]["profit"] == pytest.approx(0.5)
+    monkeypatch.setattr(EP, "load_leads", lambda *a, **k: idx)
+    out = PL.resolve_parlays(engine=eng)
+    stmts = eng.statements("UPDATE program_parlays SET result = :result")
+    return out, (stmts[0][1] if stmts else [])
+
+
+def test_a_leg_that_went_two_goals_up_is_paid_early(monkeypatch):
+    kick = pd.Timestamp("2030-01-05 19:45", tz="UTC")
+    idx = {"napoli vs lecce": [(kick, 2, 0)]}                        # iba 2-0 y acabó 2-2
+    out, plan = _settle(monkeypatch, (2, 2), idx)
+    assert out["resolved"] == 1 and plan[0]["result"] == "win" and plan[0]["pa_paid"] is True
+    assert plan[0]["profit"] == pytest.approx(0.5)
+    _, plan = _settle(monkeypatch, (2, 2), {"napoli vs lecce": [(kick, 1, 0)]})     # solo 1 arriba: perdida
+    assert plan[0]["result"] == "loss" and plan[0]["pa_paid"] is False
+    _, plan = _settle(monkeypatch, (2, 0), {})                                     # ganada: nada que esperar
+    assert plan[0]["result"] == "win" and plan[0]["pa_paid"] is False
+
+
+def test_a_lost_leg_waits_for_espn_before_settling_without_early_payout(monkeypatch):
+    soon = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=5)).strftime("%Y-%m-%d %H:%M")
+    out, plan = _settle(monkeypatch, (0, 1), {}, kick=soon)
+    assert out["resolved"] == 0 and plan == []                      # sigue pendiente: falta la ventaja de ESPN
+    old = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=2)).strftime("%Y-%m-%d %H:%M")
+    _, plan = _settle(monkeypatch, (0, 1), {}, kick=old)
+    assert plan[0]["result"] == "loss" and plan[0]["pa_paid"] is False      # pasadas 30 h: perdida
 
 
 def test_the_closing_saves_the_parlay_right_after_the_picks(monkeypatch):
@@ -291,8 +247,6 @@ def test_the_closing_warns_after_redoing_the_parlay_with_the_lineups(monkeypatch
     assert names.index("Parlay listo (Telegram)") > names.index("Picks del programa")
     assert names.index("Picks del programa") > names.index("Alineaciones publicadas")
     assert steps["Parlay listo (Telegram)"] is O.step_parlay_alerts
-    import inspect
-    assert "run_parlay_alerts" in inspect.getsource(O.step_parlay_alerts)
 
 
 def test_a_rescheduled_match_voids_its_parlay_leg_too():
@@ -300,191 +254,193 @@ def test_a_rescheduled_match_voids_its_parlay_leg_too():
     assert "program_parlays" in R.WRITTEN and "SET result = 'stale'" in R.VOID_SQL["program_parlays"]
 
 
+# ─── el pago anticipado: la ventaja más grande de ESPN ─────────────────────
+
+def _goal(team, shown):
+    return {"scoringPlay": True, "team": {"id": team}, "clock": {"displayValue": shown, "value": 0}}
+
+
+def test_the_biggest_lead_comes_from_espn_goals_and_must_add_up_to_the_score():
+    det = [_goal("1", "10'"), _goal("1", "30'"), _goal("2", "60'"), _goal("2", "88'")]
+    assert EP.max_leads(det, "1", 2, 2) == (2, 0)
+    # el descuento del primer tiempo va antes del 46'
+    det = [_goal("2", "46'"), _goal("1", "45'+2'"), _goal("1", "20'")]
+    assert EP.max_leads(det, "1", 2, 1) == (2, 0)
+    assert EP.max_leads(det, "1", 3, 1) == (None, None)             # no da el marcador: sin dato
+    assert EP.max_leads([], "1", 0, 0) == (0, 0)
+
+
+def test_live_scores_keep_the_biggest_lead_of_each_team():
+    from src.features.live_scores import parse_live
+    data = {"events": [{"id": "9", "date": "2030-01-05T19:45Z", "competitions": [{
+        "status": {"type": {"state": "post", "completed": True}},
+        "competitors": [{"homeAway": "home", "team": {"id": "1", "displayName": "Napoli"}, "score": "2"},
+                        {"homeAway": "away", "team": {"id": "2", "displayName": "Lecce"}, "score": "2"}],
+        "details": [_goal("1", "10'"), _goal("1", "30'"), _goal("2", "60'"), _goal("2", "88'")]}]}]}
+    (row,) = parse_live(data)
+    assert (row["home_max_lead"], row["away_max_lead"]) == (2, 0)
+
+
+def test_only_the_winner_in_a_league_with_the_pa_tag_gets_it():
+    assert EP.applies("soccer_epl", "home_win") and EP.applies("soccer_uefa_champs_league", "away_win")
+    assert not EP.applies("soccer_epl", "draw") and not EP.applies("soccer_spl", "home_win")
+    assert not EP.applies("soccer_mexico_ligamx", "home_win")       # el súper PA de México es otro mercado
+
+
 # ─── la pestaña ────────────────────────────────────────────────────────────
 
-def _leg(rank, odds=1.5, result=None, kick="2030-01-05 19:45", match=None, market="under_3.5", day="2030-01-05",
-         slot=None, lineup=None, league="soccer_italy_serie_a"):
-    return {"day": pd.Timestamp(day).date(), "rank": rank, "match": match or f"team{rank} vs rival{rank}",
+def _row(rank, odds=1.5, result=None, kick="2030-01-05 19:45", match=None, kind="dia", seq=1, slot="2030-01-05 19:45",
+         lineup=None, league="soccer_italy_serie_a", rule="bono", pa_paid=None, market="home_win"):
+    return {"day": pd.Timestamp("2030-01-05").date(), "rank": rank, "match": match or f"team{rank} vs rival{rank}",
             "match_date": pd.Timestamp(kick, tz="UTC"), "league": league, "market": market,
-            "label": "Menos de 3.5 goles", "family": "Goles", "model_prob": 0.72, "market_prob": 0.70,
-            "safety": 0.70, "playdoit_odds": odds, "lineup": lineup, "result": result,
-            "profit": None, "slot": pd.Timestamp(slot, tz="UTC") if slot else None}
+            "label": f"Gana Team{rank}", "family": "Ganador", "model_prob": 0.72, "market_prob": 0.70,
+            "safety": 0.70, "playdoit_odds": odds, "lineup": lineup, "result": result, "profit": None,
+            "slot": pd.Timestamp(slot, tz="UTC"), "rule": rule, "kind": kind, "seq": seq, "pa": True,
+            "pa_paid": pa_paid}
 
 
-def _board(legs, live=None, now=NOW, official=None, covered=None):
-    return X.parlay_board(pd.DataFrame(legs), pd.DataFrame(live or []), [], now=now,
+def _board(rows, live=None, now=NOW, official=None, covered=None):
+    return X.parlay_board(pd.DataFrame(rows), pd.DataFrame(live or []), now=now,
                           official=pd.DataFrame(official) if official else None, covered=covered)
 
 
-def test_each_slot_is_its_own_parlay_and_says_if_it_saw_every_lineup():
-    s1, s2 = "2030-01-05 18:00", "2030-01-05 19:00"
-    legs = [_leg(1, 1.5, kick=s1, slot=s1, lineup="confirmada"), _leg(2, 1.4, kick="2030-01-05 18:20", slot=s1,
-                                                                       lineup="confirmada: Lecce con 4 fuera"),
-            _leg(1, 1.6, kick=s2, slot=s2, match="a vs b", lineup="confirmada"),
-            _leg(2, 1.3, kick=s2, slot=s2, match="c vs d"),
-            _leg(3, 1.3, kick=s2, slot=s2, match="e vs f", league="soccer_korea_kleague1")]   # ESPN no la tiene
-    b = _board(legs, covered={"soccer_italy_serie_a"})
-    late, early = b["blocks"]                                        # del más reciente
-    assert early["slot"].startswith("2030-01-05T18:00") and late["slot"].startswith("2030-01-05T19:00")
-    assert early["day"] == late["day"] == "2030-01-05"
-    assert early["lock"].startswith("2030-01-05T17:55")              # queda fijo 5 min antes
-    assert early["ready"] and early["waiting"] == []
-    assert early["parlays"]["2"]["odds"] == pytest.approx(2.1) and early["parlays"]["3"]["k"] == 2
-    assert not late["ready"] and late["waiting"] == [late["legs"][1]["match"]]   # la de Corea no se espera
-    assert [x["no_lineups"] for x in late["legs"]] == [False, False, True]
+def test_each_parlay_shows_its_bonus_and_what_it_pays():
+    b = _board([_row(i) for i in range(1, 5)] + [_row(9, rule="seguro")])
+    (d,) = b["parlays"]                                              # el de la regla anterior no sale
+    p = d["parlay"]
+    assert d["kind"] == "dia" and p["k"] == 4 and p["bonus"] == 0.075
+    assert p["odds_us"] == "+406" and p["odds_bonus_us"] == "+437"   # 5.0625 → con 7.5% sobre la ganancia
+    assert p["p_market"] == pytest.approx(0.7 ** 4, abs=1e-3) and p["status"] == "pending"
 
 
-def test_parlays_saved_before_the_slot_column_take_their_days_first_match():
-    legs = [_leg(1, kick="2030-01-05 19:00"), _leg(2, kick="2030-01-06 02:00")]   # v2.6.0: sin slot
-    (b,) = _board(legs)["blocks"]
-    assert b["slot"].startswith("2030-01-05T19:00") and len(b["legs"]) == 2
+def test_a_won_parlay_gets_the_bonus_and_a_void_leg_lowers_it():
+    won = _board([_row(i, result="win") for i in range(1, 5)])["parlays"][0]["parlay"]
+    assert won["status"] == "win" and won["profit"] == pytest.approx(4.0625 * 1.075, abs=1e-3)
+    one_void = _board([_row(i, result="win") for i in range(1, 4)] + [_row(4, result="stale")])["parlays"][0]["parlay"]
+    assert one_void["profit"] == pytest.approx((1.5 ** 3 - 1) * 1.05, abs=1e-3)     # 3 válidas: 5%
+    lost = _board([_row(1, result="loss")] + [_row(i, result="win") for i in range(2, 5)])["parlays"][0]["parlay"]
+    assert lost["status"] == "loss" and lost["profit"] == -1.0
 
 
-def test_the_parlay_of_k_multiplies_the_k_safest_legs():
-    b = _board([_leg(1, 1.5), _leg(2, 1.4), _leg(3, 1.3)])
-    (d,) = b["blocks"]
-    p2, p3, p4 = d["parlays"]["2"], d["parlays"]["3"], d["parlays"]["4"]
-    assert p2["ranks"] == [1, 2] and p2["odds"] == pytest.approx(2.1) and p2["odds_us"] == "+110"   # americano
-    assert p3["odds"] == pytest.approx(2.73) and p3["p_market"] == pytest.approx(0.343)
-    assert p4["k"] == 3 and not p4["full"]                           # ese día solo había 3
-    assert p3["status"] == "pending" and not p3["locked"] and p3["first_kickoff"].startswith("2030-01-05T19:45")
-
-
-def test_one_lost_leg_loses_the_parlay_and_a_void_one_drops_out():
-    b = _board([_leg(1, 1.5, "win"), _leg(2, 1.4, "loss"), _leg(3, 1.3, "push"), _leg(4, 1.2)])
-    p = b["blocks"][0]["parlays"]
-    assert p["2"]["status"] == "loss" and p["2"]["profit"] == -1.0 and p["2"]["settled"]
-    p = _board([_leg(1, 1.5, "win"), _leg(2, 1.4, "stale"), _leg(3, 1.3, "win")])["blocks"][0]["parlays"]
-    assert p["3"]["status"] == "win" and p["3"]["profit"] == pytest.approx(1.5 * 1.3 - 1)
-    assert p["4"]["k"] == 3
-
-
-def test_a_leg_with_the_final_score_is_provisional_and_does_not_count_yet():
+def test_a_leg_two_goals_up_is_a_provisional_win_by_early_payout():
     live = [{"home": "team1", "away": "rival1", "kickoff": pd.Timestamp("2030-01-05 19:45", tz="UTC"),
-             "home_goals": 1, "away_goals": 0, "status": "final", "clock": ""},
-            {"home": "team2", "away": "rival2", "kickoff": pd.Timestamp("2030-01-05 19:45", tz="UTC"),
-             "home_goals": 3, "away_goals": 2, "status": "live", "clock": "80'"}]
-    b = _board([_leg(1), _leg(2)], live, now=pd.Timestamp("2030-01-05 21:30", tz="UTC"))
-    legs, p = b["blocks"][0]["legs"], b["blocks"][0]["parlays"]["2"]
-    assert legs[0]["result"] == "win" and legs[0]["provisional"]
-    assert legs[1]["result"] == "pending" and legs[1]["live"]["clock"] == "80'"   # en juego: solo con el final
-    assert p["status"] == "pending" and p["won_legs"] == 1 and p["locked"]
-    live[1]["status"] = "final"
-    b = _board([_leg(1), _leg(2)], live, now=pd.Timestamp("2030-01-05 22:00", tz="UTC"))
-    p = b["blocks"][0]["parlays"]["2"]
-    assert b["blocks"][0]["legs"][1]["result"] == "loss"                # 5 goles: menos de 3.5 perdió
-    assert p["status"] == "loss" and not p["settled"]
-    assert b["record"]["2"]["n"] == 0                                 # provisional: no cuenta todavía
+             "home_goals": 2, "away_goals": 2, "status": "final", "clock": "FT", "home_max_lead": 2, "away_max_lead": 0}]
+    d = _board([_row(i) for i in range(1, 5)], live=live, now=pd.Timestamp("2030-01-06 03:00", tz="UTC"))["parlays"][0]
+    leg = next(x for x in d["legs"] if x["rank"] == 1)
+    assert leg["result"] == "win" and leg["provisional"] and leg["pa_paid"]
 
 
-def test_espn_missing_the_official_score_still_resolves_the_leg():
-    official = [{"date": pd.Timestamp("2030-01-05"), "h": "team1", "a": "rival1", "home_goals": 0, "away_goals": 0,
-                 "home_corners": None, "away_corners": None, "home_yellow": None, "away_yellow": None,
-                 "home_red": None, "away_red": None}]
-    b = _board([_leg(1), _leg(2)], now=pd.Timestamp("2030-01-06 02:00", tz="UTC"), official=official)
-    assert b["blocks"][0]["legs"][0]["result"] == "win" and b["blocks"][0]["legs"][0]["provisional"]
-    assert b["blocks"][0]["legs"][1]["result"] == "pending"
-
-
-def test_the_record_counts_only_settled_days_that_had_all_k_legs():
-    d3, d4 = dict(day="2030-01-03", kick="2030-01-03 19:45"), dict(day="2030-01-04", kick="2030-01-04 19:45")
-    legs = ([_leg(1, 1.5, "win", **d3), _leg(2, 1.4, "win", **d3), _leg(3, 1.3, "loss", **d3)]
-            + [_leg(1, 1.6, "win", **d4), _leg(2, 1.5, "win", **d4)])
-    r = _board(legs)["record"]
-    assert r["2"]["n"] == 2 and r["2"]["won"] == 2 and r["2"]["units"] == pytest.approx(1.1 + 1.4, abs=0.01)
-    assert r["3"] == {**r["3"], "n": 1, "won": 0, "lost": 1, "units": -1.0, "legs": 3, "legs_won": 2}
-    assert r["4"]["n"] == 0                                          # ningún día tuvo 4
+def test_the_record_counts_only_settled_parlays_by_kind():
+    rows = [_row(i, result="win") for i in range(1, 5)] + \
+           [_row(i, result="loss" if i == 1 else "win", kind="horario", slot="2030-01-04 19:45",
+                 kick="2030-01-04 19:45", match=f"x{i} vs y{i}") for i in range(1, 4)] + \
+           [_row(i, kind="dia", seq=2, slot="2030-01-06 19:45", kick="2030-01-06 19:45", match=f"z{i} vs w{i}")
+            for i in range(1, 5)]
+    r = _board(rows)["record"]
+    assert (r["all"]["n"], r["all"]["won"], r["all"]["lost"]) == (2, 1, 1)
+    assert r["dia"]["units"] == pytest.approx(4.37, abs=0.01) and r["horario"]["units"] == -1.0
 
 
 def test_parlay_endpoint_and_tab(monkeypatch):
     import dashboard.app as A
-    picks = pd.DataFrame(_picks("soccer_italy_serie_a", 10, 0.5))
-    legs = pd.DataFrame([_leg(1), _leg(2)])
+    legs = pd.DataFrame([_row(i) for i in range(1, 5)])
 
     def fake_q(sql, params=None, optional=False):
         s = " ".join(sql.split())
         if "FROM program_parlays" in s:
             return legs
-        if "FROM program_picks" in s:
-            return picks
         if "FROM live_scores" in s or "FROM matches" in s:
             return pd.DataFrame()
         raise AssertionError(s[:90])
     monkeypatch.setattr(A, "_q", fake_q)
     c = A.app.test_client()
     d = c.get("/api/board/parlay").get_json()
-    assert d["ok"] and d["blocks"][0]["parlays"]["2"]["odds_us"] == "+125"
-    assert d["leagues"][0]["name"] == "Serie A" and d["rules"]["min_odds_us"] == "-400"
-    assert d["rules"]["block_minutes"] == 30
-    assert not d["blocks"][0]["ready"] and len(d["blocks"][0]["waiting"]) == 2      # sin alineaciones todavía
+    assert d["ok"] and d["parlays"][0]["parlay"]["odds_bonus_us"] == "+437"
+    assert d["rules"]["min_odds_us"] == "-500" and d["rules"]["strong"] == 0.65 and d["rules"]["bonus"]["6"] == 0.15
+    assert "Champions League" in " ".join(d["rules"]["leagues"]) or d["rules"]["leagues"]
     html = c.get("/").get_data(as_text=True)
-    for el_id in ('data-tab="parlay"', 'id="tab-parlay"', 'id="xsize"', 'id="xnext"', 'id="xkpis"', 'id="xhist"'):
+    for el_id in ('data-tab="parlay"', 'id="tab-parlay"', 'id="xrule"', 'id="xnext"', 'id="xkpis"', 'id="xhist"'):
         assert el_id in html
+    assert 'id="xsize"' not in html                                  # ya no hay botón de 2, 3 o 4
     from pathlib import Path
     js = (Path(A.__file__).parent / "ui_es5.js").read_text(encoding="utf-8")
-    assert "'parlay'" in js and "/api/board/parlay" in js
-    assert "_px.blocks" in js and "_px.days" not in js                # un parlay por horario
+    assert "/api/board/parlay" in js and "_px.parlays" in js and "odds_bonus_us" in js and "_pxK" not in js
 
 
-# ─── el aviso de Telegram (4-nov-26) ───────────────────────────────────────
+# ─── el aviso de Telegram ──────────────────────────────────────────────────
 
 MX = ZoneInfo("America/Mexico_City")
 SLOT = pd.Timestamp("2030-01-05 18:00", tz="UTC")
 
 
-def _row(rank, match, lineup="confirmada", odds=1.5, league="soccer_italy_serie_a", slot=SLOT, kick=None, market="under_3.5"):
-    return {"slot": slot, "rank": rank, "match": match, "display": match.title(), "match_date": kick or slot,
-            "league": league, "label": "Menos de 3.5 goles", "market": market, "model_prob": 0.72,
-            "market_prob": 0.70, "playdoit_odds": odds, "lineup": lineup}
+def _alert(rank, match, lineup="confirmada", odds=1.5, kick=None, kind="horario", seq=1, slot=SLOT,
+           league="soccer_italy_serie_a"):
+    return {"slot": slot, "rank": rank, "kind": kind, "seq": seq, "match": match, "display": match.title(),
+            "match_date": kick or slot, "league": league, "label": f"Gana {match.split(' vs ')[0].title()}",
+            "market": "home_win", "model_prob": 0.72, "market_prob": 0.70, "playdoit_odds": odds, "lineup": lineup,
+            "pa": True}
 
 
-def test_a_parlay_is_announced_once_when_every_leg_saw_its_lineup():
-    rows = [_row(1, "napoli vs lecce", odds=1.5), _row(2, "roma vs como", odds=1.4, lineup=None)]
+def test_a_slot_parlay_is_announced_once_when_every_leg_saw_its_lineup():
+    rows = [_alert(1, "napoli vs lecce"), _alert(2, "roma vs como", lineup=None), _alert(3, "inter vs genoa")]
     covered = {"soccer_italy_serie_a"}
-    assert PA.to_alert(rows, {}, covered) == []                      # falta la alineación de roma
+    early = pd.Timestamp("2030-01-05 16:30", tz="UTC").to_pydatetime()
+    assert PA.to_alert(rows, {}, covered, early) == []               # falta la alineación de roma
     rows[1]["lineup"] = "confirmada: Como con 4 fuera"
-    ((key, legs, changed),) = PA.to_alert(rows, {}, covered)
+    ((key, legs, changed, late),) = PA.to_alert(rows, {}, covered, early)
+    assert key == f"{SLOT.isoformat()}|horario|1" and not changed and not late
     sent = {key: PA.signature(legs)}
-    assert key == SLOT.isoformat() and not changed
-    assert PA.to_alert(rows, sent, covered) == []                    # ya avisado
-    rows[1]["market"] = "over_1.5"                                   # cambió la apuesta antes de quedar fija
-    ((_, _, changed),) = PA.to_alert(rows, sent, covered)
-    assert changed
-    assert PA.to_alert([_row(1, "napoli vs lecce")], {}, covered) == []          # uno solo no es parlay
+    assert PA.to_alert(rows, sent, covered, early) == []             # ya avisado
+    assert PA.to_alert(rows[:2], {}, covered, early) == []           # 2 no son parlay
 
 
-def test_the_announcement_lists_the_legs_and_what_the_parlay_pays():
-    rows = [_row(2, "roma vs como", odds=1.4, kick=SLOT + pd.Timedelta(minutes=15), lineup="confirmada: Como con 4 fuera"),
-            _row(1, "napoli vs lecce", odds=1.5), _row(3, "inter vs genoa", odds=1.3, league="soccer_korea_kleague1",
-                                                       lineup=None)]
+def test_a_day_parlay_only_needs_the_lineups_of_its_first_slot():
+    rows = [_alert(1, "a vs b", kind="dia"), _alert(2, "c vs d", kind="dia", kick=SLOT + pd.Timedelta(minutes=20)),
+            _alert(3, "e vs f", kind="dia", lineup=None, kick=SLOT + pd.Timedelta(hours=4)),
+            _alert(4, "g vs h", kind="dia", lineup=None, kick=SLOT + pd.Timedelta(hours=6))]
+    early = pd.Timestamp("2030-01-05 16:30", tz="UTC").to_pydatetime()
+    ((key, _, _, late),) = PA.to_alert(rows, {}, {"soccer_italy_serie_a"}, early)
+    assert key.endswith("|dia|1") and not late
+    rows[1]["lineup"] = None                                         # falta una del primer horario
+    assert PA.to_alert(rows, {}, {"soccer_italy_serie_a"}, early) == []
+    # a 40 min de fijarse avisa igual y lo dice
+    ((_, _, _, late),) = PA.to_alert(rows, {}, {"soccer_italy_serie_a"},
+                                     pd.Timestamp("2030-01-05 17:25", tz="UTC").to_pydatetime())
+    assert late
+
+
+def test_the_announcement_shows_the_bonus_the_early_payout_and_american_odds():
+    rows = [_alert(1, "napoli vs lecce", kind="dia"), _alert(2, "roma vs como", kind="dia", odds=1.4,
+                                                            kick=SLOT + pd.Timedelta(hours=2), lineup=None),
+            _alert(3, "inter vs genoa", kind="dia", odds=1.3), _alert(4, "milan vs torino", kind="dia", odds=1.6)]
     t = PA.alert_text(rows, MX)
-    assert "Parlay de las 12:00" in t and "queda fijo a las 11:55" in t           # hora de México
-    assert t.index("Napoli Vs Lecce") < t.index("Roma Vs Como") < t.index("Inter Vs Genoa")   # de la más segura
-    assert "12:15" in t and "Como con 4 fuera" in t and "sin alineación en ESPN" in t
-    assert "Parlay de 2: <b>+110</b>" in t and "Parlay de 3: <b>+173</b>" in t     # americano, nunca decimal
-    assert "2.1" not in t and "Parlay de 4" not in t
-    assert "Cambió el parlay de las 12:00" in PA.alert_text(rows, MX, changed=True)
+    assert "Parlay del día" in t and "4 partidos" in t and "antes de las 11:55" in t
+    assert "Gana Napoli · -200 · PA" in t and "📋" in t and "⏳" in t
+    assert "Paga <b>+337</b>" in t and "con el bono de 7.5%: <b>+362</b>" in t
+    assert "Salen todas: ~24% (Pinnacle)" in t and "4.3" not in t
+    assert "Cambió el parlay del día" in PA.alert_text(rows, MX, changed=True)
+    assert "Faltan alineaciones" in PA.alert_text(rows, MX, late=True)
 
 
 def test_the_closing_sends_each_ready_parlay_and_remembers_it(monkeypatch):
-    rows = pd.DataFrame([_row(1, "napoli vs lecce"), _row(2, "roma vs como")])
+    rows = pd.DataFrame([_alert(1, "napoli vs lecce"), _alert(2, "roma vs como"), _alert(3, "inter vs genoa")])
     monkeypatch.setattr(PA.pd, "read_sql", lambda *a, **k: rows)
     state, sent = {}, []
-    kw = dict(engine=object(), now=pd.Timestamp("2030-01-05 17:30", tz="UTC").to_pydatetime(),
+    kw = dict(engine=object(), now=pd.Timestamp("2030-01-05 17:00", tz="UTC").to_pydatetime(),
               load_state=lambda k: state.get(k), save_state=lambda k, v, history=True: state.__setitem__(k, v),
               covered={"soccer_italy_serie_a"})
     assert PA.run_parlay_alerts(send=lambda t: sent.append(t) or True, **kw)["sent"] == 1
-    assert state[PA.ALERT_KEY]["sent"] == {SLOT.isoformat(): "napoli vs lecce:under_3.5 | roma vs como:under_3.5"}
+    assert list(state[PA.ALERT_KEY]["sent"]) == [f"{SLOT.isoformat()}|horario|1"]
     assert PA.run_parlay_alerts(send=lambda t: sent.append(t) or True, **kw)["sent"] == 0   # una sola vez
     assert len(sent) == 1
 
 
 def test_a_failed_announcement_is_retried_on_the_next_closing(monkeypatch):
     RUN_ISSUES.reset()
-    rows = pd.DataFrame([_row(1, "napoli vs lecce"), _row(2, "roma vs como")])
+    rows = pd.DataFrame([_alert(1, "napoli vs lecce"), _alert(2, "roma vs como"), _alert(3, "inter vs genoa")])
     monkeypatch.setattr(PA.pd, "read_sql", lambda *a, **k: rows)
     state = {}
-    out = PA.run_parlay_alerts(engine=object(), now=pd.Timestamp("2030-01-05 17:30", tz="UTC").to_pydatetime(),
+    out = PA.run_parlay_alerts(engine=object(), now=pd.Timestamp("2030-01-05 17:00", tz="UTC").to_pydatetime(),
                                send=lambda t: False, load_state=lambda k: state.get(k),
                                save_state=lambda k, v, history=True: state.__setitem__(k, v),
                                covered={"soccer_italy_serie_a"})
@@ -495,9 +451,34 @@ def test_a_failed_announcement_is_retried_on_the_next_closing(monkeypatch):
 
 def test_old_announcements_are_forgotten(monkeypatch):
     now = pd.Timestamp("2030-01-10 12:00", tz="UTC").to_pydatetime()
-    old = {SLOT.isoformat(): "x", pd.Timestamp("2030-01-10 18:00", tz="UTC").isoformat(): "y"}
-    state = {PA.ALERT_KEY: {"sent": old}}
+    keep = f"{pd.Timestamp('2030-01-10 18:00', tz='UTC').isoformat()}|dia|1"
+    state = {PA.ALERT_KEY: {"sent": {SLOT.isoformat(): "x", keep: "y"}}}        # uno de antes de v2.9.0
     monkeypatch.setattr(PA.pd, "read_sql", lambda *a, **k: pd.DataFrame(columns=["slot"]))
     PA.run_parlay_alerts(engine=object(), now=now, send=lambda t: True, load_state=lambda k: state.get(k),
                          save_state=lambda k, v, history=True: state.__setitem__(k, v), covered=set())
-    assert list(state[PA.ALERT_KEY]["sent"]) == [pd.Timestamp("2030-01-10 18:00", tz="UTC").isoformat()]
+    assert list(state[PA.ALERT_KEY]["sent"]) == [keep]
+
+
+# ─── el chequeo diario ─────────────────────────────────────────────────────
+
+def test_the_daily_check_catches_a_parlay_outside_the_rule_and_unbacked_early_payouts():
+    from src.utils import output_checks as OC
+    good = [{"slot": SLOT, "kind": "dia", "seq": 1, "match": f"m{i} vs r{i}", "market": "home_win",
+             "league": "soccer_epl", "market_prob": 0.70, "playdoit_odds": 1.40} for i in range(4)]
+    assert OC.bono_parlay_problems(good) == []
+    bad = good[:3] + [{**good[3], "market_prob": 0.60}, {**good[0], "slot": SLOT + pd.Timedelta(hours=1),
+                                                         "kind": "horario", "playdoit_odds": 1.10}]
+    found = OC.bono_parlay_problems(bad)
+    assert any("0.6" in x for x in found) and any("1 piernas" in x for x in found) and any("1.1" in x for x in found)
+    kick = pd.Timestamp("2030-01-05 19:45", tz="UTC")
+    live = [{"home": "napoli", "away": "lecce", "kickoff": kick, "status": "final", "home_max_lead": 1,
+             "away_max_lead": 0}]
+    paid = [{"table": "program_parlays", "id": 1, "match": "napoli vs lecce", "match_date": kick,
+             "market": "home_win", "league": "soccer_italy_serie_a", "result": "win", "pa_paid": True}]
+    assert len(OC.early_payout_problems(paid, live)) == 1            # solo fue 1 arriba
+    live[0]["home_max_lead"] = 2
+    assert OC.early_payout_problems(paid, live) == []
+    # la liquidación independiente no lo cuenta como error
+    m = [{"h": "napoli", "a": "lecce", "d": kick.date(), "home_goals": 2, "away_goals": 2}]
+    assert OC.settlement_mismatches(paid, m) == []
+    assert len(OC.settlement_mismatches([{**paid[0], "pa_paid": None}], m)) == 1
