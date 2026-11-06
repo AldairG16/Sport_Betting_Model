@@ -437,7 +437,17 @@ def real_bets_with_state(learned: dict, real_bets: list) -> list:
 # como multiplicador solo a λ_home dejaba el total en (1+HA)·baseline·tempo
 # (+23% de goles esperados medido en producción — ronda 4, D4/D8).
 BIG5_LEAGUES = ("soccer_epl", "soccer_spain_la_liga", "soccer_germany_bundesliga",
-                "soccer_italy_serie_a", "soccer_france_ligue_one")   # xG real de Understat
+                "soccer_italy_serie_a", "soccer_france_ligue_one")   # xG real de Understat (o FotMob)
+REAL_XG_SOURCES = ("understat", "fotmob")
+
+
+def xg_source_label(home_xg, away_xg) -> str:
+    """De dónde salió el xG del partido: la fuente real si los dos equipos la
+    tienen ("understat", "fotmob" o las dos unidas con "+"), si no "proxy"."""
+    srcs = [(x or {}).get("source") for x in (home_xg, away_xg)]
+    if not all(s in REAL_XG_SOURCES for s in srcs):
+        return "proxy"
+    return srcs[0] if srcs[0] == srcs[1] else "+".join(sorted(set(srcs)))
 LAMBDA_CAP = 3.5   # guardia de cola (simulado: recorta ~1% de ratings legítimos)
 
 def compute_lambdas(home_attack, home_defense, away_attack, away_defense,
@@ -766,14 +776,14 @@ def _stage_team_strengths(row, stats):
     # tiros — mismo contrato (xg_for/xg_against por partido).
     home_xg = _credible_xg(get_real_xg(home)) or _credible_xg(get_team_xg(home))
     away_xg = _credible_xg(get_real_xg(away)) or _credible_xg(get_team_xg(away))
-    _xg_source = "understat" if (home_xg and home_xg.get("source") == "understat"
-                                 and away_xg and away_xg.get("source") == "understat") else "proxy"
+    # Understat o, desde el 6-nov-26, su respaldo FotMob (soccerdata_feed)
+    _xg_source = xg_source_label(home_xg, away_xg)
     # cobertura del xG real en las 5 grandes y del xG/córners/tiros en las
     # ligas que traen tiros (output_checks.feature_coverage)
     _league = _row_league_of(row)
     if _league in BIG5_LEAGUES:
         stats['big5'] += 1
-        stats['xg_real_big5'] += _xg_source == "understat"
+        stats['xg_real_big5'] += _xg_source != "proxy"
     _shot_leagues = leagues_with_shots()
     if _shot_leagues is not None and _league in _shot_leagues:
         stats['with_shots'] += 1

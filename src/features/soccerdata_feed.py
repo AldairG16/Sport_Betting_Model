@@ -54,6 +54,21 @@ UNDERSTAT_LEAGUES = {
 UNDERSTAT_URL = "https://understat.com/getLeagueData/{league}/{season}"
 UNDERSTAT_HEADERS = {"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest"}
 
+# Respaldo (6-nov-26): Understat está caído desde el 2-nov ("We will come back
+# soon") y el xG del 26-oct vencía el 16-nov. FotMob publica el xG de la
+# temporada por equipo (a favor y en contra) y por jugador en JSON estático,
+# sin bloqueo para scripts. Se usa solo para las ligas que Understat no dio.
+FOTMOB_LEAGUES = {
+    "soccer_epl": 47,
+    "soccer_spain_la_liga": 87,
+    "soccer_germany_bundesliga": 54,
+    "soccer_italy_serie_a": 55,
+    "soccer_france_ligue_one": 53,
+}
+FOTMOB_LEAGUE_URL = "https://www.fotmob.com/api/data/leagues?id={league}"
+FOTMOB_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"}
+
 
 def current_season() -> str:
     """Temporada en curso por su año de inicio: 2026-27 → '2026'."""
@@ -131,68 +146,161 @@ def fetch_understat(league: str, season: str) -> dict:
     return r.json()
 
 
-def refresh_understat(seasons: list[str] | None = None, verbose: bool = True) -> dict:
+def parse_fotmob(xg_for: list, xg_against: list, goals: list | None = None,
+                 player_xg: list | None = None) -> tuple[list[dict], list[dict]]:
+    """
+    Función pura. Las listas StatList de FotMob (expected_goals_team,
+    expected_goals_conceded_team y, de jugadores, goals y expected_goals) →
+    (equipos, jugadores) con las mismas columnas que parse_understat: el xG
+    de la temporada (no por partido) y los partidos jugados.
+    """
+    against = {x.get("TeamId"): _num(x.get("StatValue")) for x in xg_against or []}
+    teams = []
+    for x in xg_for or []:
+        name, n = str(x.get("ParticipantName") or "").strip(), _num(x.get("MatchesPlayed"), int)
+        xf, xa = _num(x.get("StatValue")), against.get(x.get("TeamId"))
+        if not name or not n or xf is None or xa is None:
+            continue
+        teams.append({"team": name, "xg_for": round(xf, 4), "xg_against": round(xa, 4), "matches": n})
+    pxg = {x.get("ParticiantId"): _num(x.get("StatValue")) for x in player_xg or []}
+    players = []
+    for x in goals or []:
+        name, team, g = (str(x.get("ParticipantName") or "").strip(), str(x.get("TeamName") or "").strip(),
+                         _num(x.get("StatValue"), int))
+        if not name or not team or not g:
+            continue
+        players.append({"player": name, "team": team, "goals": g,
+                        "matches": _num(x.get("MatchesPlayed"), int), "xg": pxg.get(x.get("ParticiantId"))})
+    return teams, players
+
+
+def fetch_fotmob(league_id: int, season: str, get=None) -> tuple[list[dict], list[dict]]:
+    """xG de la temporada `season` ('2026') de una liga de FotMob → (equipos,
+    jugadores). Lanza si falla o si FotMob muestra otra temporada."""
+    import requests
+    get = get or (lambda url: requests.get(url, headers=FOTMOB_HEADERS, timeout=30))
+
+    def _json(url):
+        r = get(url)
+        r.raise_for_status()
+        return r.json()
+    data = _json(FOTMOB_LEAGUE_URL.format(league=league_id))
+    shown = str((data.get("details") or {}).get("selectedSeason") or "")
+    if not shown.startswith(season):
+        raise ValueError(f"FotMob muestra la temporada {shown or '?'}")
+    stats = data.get("stats") or {}
+    urls = {s.get("name"): s.get("fetchAllUrl") for s in (stats.get("teams") or []) + (stats.get("players") or [])}
+
+    def stat(name, required=True):
+        if not urls.get(name):
+            if required:
+                raise ValueError(f"FotMob sin {name}")
+            return []
+        return (_json(urls[name]).get("TopLists") or [{}])[0].get("StatList") or []
+    return parse_fotmob(stat("expected_goals_team"), stat("expected_goals_conceded_team"),
+                        stat("goals", required=False), stat("expected_goals", required=False))
+
+
+def _save(sport_key: str, season: str, teams: list, players: list, source: str) -> tuple[int, int]:
+    """Guarda una liga en team_xg_real y player_club_goals."""
+    with engine.begin() as conn:
+        _ensure_tables(conn)
+        for t in teams:
+            conn.execute(text("""
+                INSERT INTO team_xg_real
+                    (team, league, season, xg_for, xg_against, matches, source)
+                VALUES (:team, :league, :season, :xg_for, :xg_against, :matches, :source)
+                ON CONFLICT (team, league, season) DO UPDATE SET
+                    xg_for = EXCLUDED.xg_for,
+                    xg_against = EXCLUDED.xg_against,
+                    matches = EXCLUDED.matches,
+                    source = EXCLUDED.source,
+                    updated_at = NOW()
+            """), {**t, "league": sport_key, "season": season, "source": source})
+        for p in players:
+            conn.execute(text("""
+                INSERT INTO player_club_goals
+                    (player, team, league, season, goals, matches, xg)
+                VALUES (:player, :team, :league, :season, :goals, :matches, :xg)
+                ON CONFLICT (player, team, season) DO UPDATE SET
+                    goals = EXCLUDED.goals,
+                    matches = EXCLUDED.matches,
+                    xg = EXCLUDED.xg,
+                    updated_at = NOW()
+            """), {**p, "league": sport_key, "season": season})
+    return len(teams), len(players)
+
+
+def refresh_understat(seasons: list[str] | None = None, verbose: bool = True,
+                      fotmob=None) -> dict:
     """
     xG por equipo y goles por jugador de las 5 grandes ligas → tablas
     team_xg_real y player_club_goals en Neon. Corre en el weekly.
     status: "ok" (todas las ligas), "partial" o "failed" (ninguna).
     Si la primera liga no conecta, el sitio no responde y no se piden las
     demás: van al mismo servidor (2-nov-26: cinco esperas de 30 s).
+    Desde el 6-nov-26, la liga que Understat no dio se pide a FotMob (solo
+    la temporada en curso); status cuenta las dos fuentes y "via_fotmob" dice
+    cuáles salieron de ahí. fotmob(league_id, season): para las pruebas.
     """
     import requests
     seasons = seasons or [current_season()]
     wanted = [(sk, lg, s) for sk, lg in UNDERSTAT_LEAGUES.items() for s in seasons]
     teams_up, players_up, loaded = 0, 0, 0
-    errors = []
+    errors, missing = [], []
+    down = False
 
     for sport_key, league, season in wanted:
+        if down:
+            missing.append((sport_key, season))
+            continue
         try:
             teams, players = parse_understat(fetch_understat(league, season))
         except Exception as e:
             errors.append(f"{league}/{season}: {type(e).__name__}")
+            missing.append((sport_key, season))
             if not loaded and isinstance(e, requests.exceptions.ConnectionError):
                 errors.append("sin conexión: no se pidieron las demás ligas")
-                break
+                down = True
             continue
         if not teams:
             errors.append(f"{league}/{season}: sin equipos")
+            missing.append((sport_key, season))
             continue
+        t, p = _save(sport_key, season, teams, players, "understat")
+        teams_up, players_up, loaded = teams_up + t, players_up + p, loaded + 1
 
-        with engine.begin() as conn:
-            _ensure_tables(conn)
-            for t in teams:
-                conn.execute(text("""
-                    INSERT INTO team_xg_real
-                        (team, league, season, xg_for, xg_against, matches, source)
-                    VALUES (:team, :league, :season, :xg_for, :xg_against, :matches, 'understat')
-                    ON CONFLICT (team, league, season) DO UPDATE SET
-                        xg_for = EXCLUDED.xg_for,
-                        xg_against = EXCLUDED.xg_against,
-                        matches = EXCLUDED.matches,
-                        source = 'understat',
-                        updated_at = NOW()
-                """), {**t, "league": sport_key, "season": season})
-                teams_up += 1
-            for p in players:
-                conn.execute(text("""
-                    INSERT INTO player_club_goals
-                        (player, team, league, season, goals, matches, xg)
-                    VALUES (:player, :team, :league, :season, :goals, :matches, :xg)
-                    ON CONFLICT (player, team, season) DO UPDATE SET
-                        goals = EXCLUDED.goals,
-                        matches = EXCLUDED.matches,
-                        xg = EXCLUDED.xg,
-                        updated_at = NOW()
-                """), {**p, "league": sport_key, "season": season})
-                players_up += 1
-        loaded += 1
+    via_fotmob = []
+    fotmob = fotmob or fetch_fotmob
+    for sport_key, season in missing:
+        if sport_key not in FOTMOB_LEAGUES or season != current_season():
+            continue
+        try:
+            teams, players = fotmob(FOTMOB_LEAGUES[sport_key], season)
+        except Exception as e:
+            errors.append(f"FotMob {sport_key}: {type(e).__name__}")
+            if not via_fotmob and isinstance(e, (ConnectionError, requests.exceptions.ConnectionError,
+                                                 requests.exceptions.Timeout)):
+                break                                # tampoco responde: no se espera por cada liga
+            continue
+        if not teams:
+            errors.append(f"FotMob {sport_key}: sin equipos")
+            continue
+        t, p = _save(sport_key, season, teams, players, "fotmob")
+        teams_up, players_up, loaded = teams_up + t, players_up + p, loaded + 1
+        via_fotmob.append(sport_key)
 
     status = "ok" if loaded == len(wanted) else ("failed" if not loaded else "partial")
     result = {"status": status, "team_rows": teams_up, "player_rows": players_up,
-              "errors": errors[:5]}
+              "errors": errors[:5], "via_fotmob": via_fotmob}
     if verbose:
         print(f"   📊 Understat: {teams_up} equipos, {players_up} jugadores · "
-              f"errores: {len(errors)}" + (f" ({'; '.join(errors[:3])})" if errors else ""))
+              f"errores: {len(errors)}" + (f" ({'; '.join(errors[:3])})" if errors else "")
+              + (f" · {len(via_fotmob)} liga(s) con el respaldo de FotMob" if via_fotmob else ""))
+    if via_fotmob:
+        # se ve en "Avisos de la corrida": la fuente principal sigue caída
+        log.warning(f"⚠️  xG real de FotMob (respaldo) en {len(via_fotmob)} liga(s): Understat no respondió "
+                    f"({'; '.join(errors[:2])})")
     return result
 
 
@@ -276,10 +384,20 @@ def get_real_xg(team: str) -> dict | None:
     from src.utils.team_normalizer import normalize_team
     team = normalize_team(team)
     try:
-        df = pd.read_sql(text("SELECT team, season, xg_for, xg_against, matches, updated_at FROM team_xg_real"),
+        df = pd.read_sql(text("SELECT team, season, xg_for, xg_against, matches, updated_at, source FROM team_xg_real"),
                          engine)
     except Exception:
         return None
+    return real_xg_of(df, team, normalize_team)
+
+
+def real_xg_of(df: pd.DataFrame, team: str, normalize_team, now=None) -> dict | None:
+    """Función pura de get_real_xg sobre las filas de team_xg_real. Con dos
+    fuentes el mismo equipo puede tener dos filas ("Deportivo La Coruna" de
+    Understat y "Deportivo A Coruña" de FotMob): vale la más reciente de la
+    temporada más nueva (6-nov-26; antes, la primera que saliera, y si era la
+    vieja el equipo se quedaba sin xG aunque hubiera uno al día)."""
+    now = pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz="UTC")
     # La tabla guarda el nombre de Understat ("Bayern Munich", "VfB Stuttgart")
     # y el pipeline pregunta con el canónico ("bayern munchen", "stuttgart"):
     # se comparan los dos normalizados. Hasta el 23-oct-26 se comparaban tal
@@ -288,10 +406,10 @@ def get_real_xg(team: str) -> dict | None:
     df = df[df["team"].map(normalize_team) == team]
     if df.empty:
         return None
-    row = df.sort_values("season", ascending=False).iloc[0]
-    updated = row["updated_at"]
-    if pd.notna(updated) and (pd.Timestamp.now(tz="UTC") - pd.Timestamp(updated)
-                               > pd.Timedelta(days=STALE_DAYS)):
+    df = df.assign(_at=pd.to_datetime(df["updated_at"], utc=True))
+    row = df.sort_values(["season", "_at"], ascending=False, na_position="last").iloc[0]
+    updated = row["_at"]
+    if pd.notna(updated) and now - updated > pd.Timedelta(days=STALE_DAYS):
         return None
     if pd.isna(row["xg_for"]) or pd.isna(row["xg_against"]):
         return None
@@ -305,7 +423,7 @@ def get_real_xg(team: str) -> dict | None:
         "xg_for": round(xg_for, 4),
         "xg_against": round(xg_against, 4),
         "matches": n,
-        "source": "understat",
+        "source": str(row.get("source") or "understat"),
     }
 
 

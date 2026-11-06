@@ -21,7 +21,7 @@ ver §2.
 | **OpenWeatherMap** | Clima del partido (`src/features/weather_impact.py`). | `WEATHER_API_KEY` | Gratis, 1000 llamadas/día. |
 | **TheSportsDB** | Marcadores de respaldo de las ligas que ni ESPN ni football-data tienen: hoy solo la K-League (`scripts/fetch_results_tsdb.py`, 2-nov-26). The Odds API dejó sin marcador su jornada 34. Corre en el evening y en resultados (solo partidos analizados sin marcador) y en el weekly (las jornadas de la última semana completas). La historia 2023-2026 se cargó una vez con `--history`. Con la clave libre: ~10 llamadas seguidas y luego 429 con `Retry-After` de 120 s, que se respeta. | `THESPORTSDB_KEY` opcional; sin ella usa la clave pública de prueba `123`. | Gratis. |
 | **ClubElo** | Fuerza de cada liga para los partidos entre ligas (§7, "Fuerza de liga"). Su API (`api.clubelo.com`) responde 502; las páginas públicas `clubelo.com/<PAÍS>` piden un reto anti-bots desde el 29-oct-26: sigue la foto del 22-oct (sirve 120 días, hasta el 19-feb). | Ninguna. | Gratis. |
-| **Understat** | xG real de las 5 grandes y goleadores de clubes (`src/features/soccerdata_feed.py`). Lo lee el weekly; si no pudo, el morning reintenta cada día. El xG sirve 21 días: mientras quede más de una semana es aviso, después ERROR. El 2-nov-26 el sitio no respondía (ni desde GitHub ni desde la PC): siguió el xG del 26-oct. | Ninguna. | Gratis. |
+| **Understat** | xG real de las 5 grandes y goleadores de clubes (`src/features/soccerdata_feed.py`). Lo lee el weekly; si no pudo, el morning reintenta cada día. El xG sirve 21 días: mientras quede más de una semana es aviso, después ERROR. El 2-nov-26 el sitio no respondía (ni desde GitHub ni desde la PC): siguió el xG del 26-oct. Desde el 6-nov-26, la liga que Understat no da sale de **FotMob** (`fetch_fotmob`, el mismo xG de la temporada por equipo y por jugador, `source` 'fotmob'), con aviso en "Avisos de la corrida". | Ninguna. | Gratis. |
 
 `RAPIDAPI_KEY` solo la usa `test_api.py`, que no forma parte del pipeline.
 
@@ -2080,8 +2080,14 @@ morning, evening, weekly, resultados, resolvedor, watchdog), `system_audit` (11/
   united" y el chequeo de datos cuenta los que la fusión no unió (`renamed`).
 - **El pick de antes de la alineación se liquidaba sin el pago anticipado**: un ganador que fue 2 goles
   arriba contaba perdido antes y ganado después, y "CAMBIOS CON LA ALINEACIÓN" salía cargado.
-- Sin falla, ya avisado: Understat sigue caído (su página dice "We will come back soon"); el morning
-  reintenta cada día y el xG del 26-oct sirve hasta el 16-nov, después el modelo usa el sustituto.
+- **El xG real dependía solo de Understat**, caído desde el 2-nov (su página dice "We will come back
+  soon"): el del 26-oct vencía el 16-nov y desde ahí las 5 grandes iban con el xG estimado con tiros.
+  Ahora la liga que Understat no da se pide a FotMob (`soccerdata_feed.fetch_fotmob`: JSON estático,
+  sin bloqueo; FBref y Sofascore responden 403 a scripts y no se usan). Cubre los 96 equipos de los
+  próximos partidos de las 5 grandes; contra el Understat del 26-oct correlaciona 0.96 (a favor) y 0.91
+  (en contra), y su promedio (1.55 por equipo y partido) está más cerca de los goles reales de la
+  temporada (1.53) que el de Understat (1.68). Si el mismo equipo queda con las dos fuentes, vale la
+  fila más reciente (`real_xg_of`). El pipeline cuenta los dos como xG real (`xg_source_label`).
 
 Chequeos nuevos: `renamed` en los datos de entrada y la 17 (lo que se ve por jugar, una sola vez).
 
