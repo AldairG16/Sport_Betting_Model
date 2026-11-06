@@ -32,6 +32,10 @@ LEAGUE_DATA = {
 }
 
 
+def _no_fotmob(league_id, season):
+    raise ConnectionError("sin red en las pruebas")
+
+
 class TestUnderstat:
 
     def test_parse_teams_and_scorers(self):
@@ -49,7 +53,8 @@ class TestUnderstat:
         eng = FakeEngine()
         monkeypatch.setattr(sf, "engine", eng)
         monkeypatch.setattr(sf, "fetch_understat", fetch)
-        return sf.refresh_understat(verbose=False), eng
+        # el respaldo de FotMob (6-nov-26) sin red: aquí se prueba Understat solo
+        return sf.refresh_understat(verbose=False, fotmob=_no_fotmob), eng
 
     def test_all_leagues_load(self, monkeypatch):
         res, eng = self._refresh(monkeypatch, lambda league, season: LEAGUE_DATA)

@@ -338,8 +338,8 @@ def check_source_names(days: int = 120) -> list:
             SELECT DISTINCT LOWER(home_team) FROM matches WHERE date >= CURRENT_DATE - 730
             UNION SELECT DISTINCT LOWER(away_team) FROM matches WHERE date >= CURRENT_DATE - 730"""))}
         sources = {
-            "team_xg_real (Understat)": [r[0] for r in conn.execute(text("SELECT DISTINCT team FROM team_xg_real"))],
-            "player_club_goals (Understat)": [str(r[0]).split(",")[-1] for r in conn.execute(text(
+            "team_xg_real (Understat/FotMob)": [r[0] for r in conn.execute(text("SELECT DISTINCT team FROM team_xg_real"))],
+            "player_club_goals (Understat/FotMob)": [str(r[0]).split(",")[-1] for r in conn.execute(text(
                 "SELECT DISTINCT team FROM player_club_goals WHERE updated_at >= NOW() - INTERVAL '60 days'"))],
             # alineaciones de las ligas que predecimos (no las de copas)
             "lineups (ESPN)": [r[0] for r in conn.execute(text("""

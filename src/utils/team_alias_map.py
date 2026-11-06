@@ -31,6 +31,9 @@ TEAM_ALIASES = {
     # 6-nov-26: Preston vs "sheffield utd" entró junto a Preston vs Sheffield United (3-nov)
     "sheffield utd": "sheffield united",
     "sheff utd": "sheffield united",
+    # nombres de FotMob (xG de respaldo, 6-nov-26)
+    "deportivo a coruna": "la coruna",
+    "deportivo alaves": "alaves",
 
     # mls
     "los angeles": "lafc",

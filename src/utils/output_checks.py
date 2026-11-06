@@ -122,7 +122,7 @@ def feature_coverage(stats: dict) -> list:
     # carga: la avisan report_stale y FEED_MAX_AGE_DAYS["team_xg_real"].
     real = int(stats.get("xg_real_big5", 0))
     if b5 >= 10 and real < MIN_XG_REAL_BIG5 * b5 and not stats.get("xg_real_expired"):
-        out.append(f"Entrada: xG real de Understat en {real} de {b5} partidos de las 5 grandes — "
+        out.append(f"Entrada: xG real (Understat o FotMob) en {real} de {b5} partidos de las 5 grandes — "
                    f"nombres de team_xg_real o la carga semanal")
     return out
 
@@ -332,7 +332,7 @@ def stale_learning(updated: dict, now: datetime | None = None) -> list:
 # revisada cada día en vez de esperar a la próxima auditoría.
 MAX_MIRROR_PAIRS = 3          # 2 partidos reales con fechas espejo y mismo marcador pasan (Belgica 2023)
 FEED_MAX_AGE_DAYS = {         # tabla: (columna de fecha, días)
-    "team_xg_real": ("updated_at", 21),     # Understat, weekly; sirve 21 días (= soccerdata_feed.STALE_DAYS)
+    "team_xg_real": ("updated_at", 21),     # Understat (o FotMob), weekly; sirve 21 días (= soccerdata_feed.STALE_DAYS)
     "club_elo": ("fetched_on", 120),        # ClubElo, semanal; bloqueado desde el 29-oct (= clubelo.MAX_AGE_DAYS)
     "espn_matches": ("fetched_at", 3),      # copas, Europa, amistosos: evening
     # lo que producen las corridas de cada día (morning, evening, closing)

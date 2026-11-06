@@ -229,3 +229,78 @@ def test_void_also_voids_the_alias_twin(monkeypatch):
     assert out["twins"] == ["santos laguna vs pumas unam"] and out["program_picks"] == 1
     assert out["model_proposals"] == 0
     assert [(sql.split()[1], p["match"]) for sql, p in log] == [("program_picks", "santos laguna vs pumas unam")]
+
+
+# ─── 6. xG real con Understat caído: el respaldo de FotMob ───────────────────
+
+def _fm(name, team_id, value, matches=9, team=None, pid=0):
+    return {"ParticipantName": name, "TeamId": team_id, "ParticiantId": pid, "StatValue": value,
+            "MatchesPlayed": matches, **({"TeamName": team} if team else {})}
+
+
+def test_fotmob_lists_become_season_xg_rows():
+    from src.features import soccerdata_feed as SF
+    teams, players = SF.parse_fotmob(
+        [_fm("Arsenal", 1, 14.9), _fm("Chelsea", 2, 12.0, matches=0)],          # sin partidos: no sirve
+        [_fm("Arsenal", 1, 7.2), _fm("Chelsea", 2, 9.0)],
+        [_fm("Bukayo Saka", 1, 5, team="Arsenal", pid=7), _fm("Sin goles", 1, 0, team="Arsenal", pid=8)],
+        [_fm("Bukayo Saka", 1, 4.1, pid=7)])
+    assert teams == [{"team": "Arsenal", "xg_for": 14.9, "xg_against": 7.2, "matches": 9}]
+    assert players == [{"player": "Bukayo Saka", "team": "Arsenal", "goals": 5, "matches": 9, "xg": 4.1}]
+
+
+def test_fotmob_refuses_another_season():
+    from src.features import soccerdata_feed as SF
+
+    class R:
+        def __init__(self, d): self.d = d
+        def raise_for_status(self): pass
+        def json(self): return self.d
+    league = {"details": {"selectedSeason": "2025/2026"}, "stats": {"teams": [], "players": []}}
+    with pytest.raises(ValueError):
+        SF.fetch_fotmob(47, "2026", get=lambda url: R(league))
+    league["details"]["selectedSeason"] = "2026/2027"
+    league["stats"]["teams"] = [{"name": "expected_goals_team", "fetchAllUrl": "for"},
+                                {"name": "expected_goals_conceded_team", "fetchAllUrl": "against"}]
+    lists = {"for": [_fm("Arsenal", 1, 14.9)], "against": [_fm("Arsenal", 1, 7.2)]}
+    teams, players = SF.fetch_fotmob(47, "2026", get=lambda url: R(league if "fotmob.com/api" in url
+                                                                    else {"TopLists": [{"StatList": lists[url]}]}))
+    assert teams[0]["xg_for"] == 14.9 and players == []
+
+
+def test_a_league_understat_did_not_give_comes_from_fotmob(monkeypatch):
+    from src.features import soccerdata_feed as SF
+    saved = []
+    monkeypatch.setattr(SF, "fetch_understat", lambda league, season: (_ for _ in ()).throw(ValueError("html")))
+    monkeypatch.setattr(SF, "_save", lambda sk, season, teams, players, source: saved.append((sk, source)) or (1, 0))
+    monkeypatch.setattr(SF, "current_season", lambda: "2026")
+    res = SF.refresh_understat(seasons=["2026"], verbose=False,
+                               fotmob=lambda lid, season: ([{"team": "x", "xg_for": 1, "xg_against": 1, "matches": 1}], []))
+    assert res["status"] == "ok" and sorted(res["via_fotmob"]) == sorted(SF.FOTMOB_LEAGUES)
+    assert {s for _, s in saved} == {"fotmob"}
+    # si FotMob tampoco responde, sigue "failed" y el aviso de vencimiento de siempre
+    res = SF.refresh_understat(seasons=["2026"], verbose=False,
+                               fotmob=lambda lid, season: (_ for _ in ()).throw(ConnectionError()))
+    assert res["status"] == "failed" and res["via_fotmob"] == []
+
+
+def test_the_freshest_row_of_a_team_wins_between_sources():
+    from src.features import soccerdata_feed as SF
+    from src.utils.team_normalizer import normalize_team
+    now = pd.Timestamp("2026-11-20", tz="UTC")
+    df = pd.DataFrame([
+        {"team": "Deportivo La Coruna", "season": "2026", "xg_for": 15.0, "xg_against": 12.0, "matches": 10,
+         "updated_at": pd.Timestamp("2026-10-26", tz="UTC"), "source": "understat"},          # ya vencido
+        {"team": "Deportivo A Coruña", "season": "2026", "xg_for": 14.0, "xg_against": 13.0, "matches": 11,
+         "updated_at": pd.Timestamp("2026-11-19", tz="UTC"), "source": "fotmob"}])
+    x = SF.real_xg_of(df, "la coruna", normalize_team, now=now)
+    assert x["source"] == "fotmob" and x["matches"] == 11
+    assert normalize_team("Deportivo Alavés") == "alaves"
+
+
+def test_fotmob_xg_counts_as_real_xg_in_the_pipeline():
+    from src.pipeline.prediction_pipeline import xg_source_label
+    fm, us = {"source": "fotmob"}, {"source": "understat"}
+    assert xg_source_label(fm, fm) == "fotmob" and xg_source_label(us, us) == "understat"
+    assert xg_source_label(us, fm) == "fotmob+understat"
+    assert xg_source_label(fm, {"source": "proxy"}) == "proxy" and xg_source_label(None, fm) == "proxy"
