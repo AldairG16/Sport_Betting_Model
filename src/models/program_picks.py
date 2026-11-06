@@ -49,6 +49,19 @@ con el partido ya empezado porque The Odds API tenía la hora 1-1.5 h tarde.
 pick ve la alineación se guarda el que había, con su momio, y se liquida
 aparte (resolve_picks). El dueño: "mide si los cambios por alineación
 ayudan o estorban" (src/models/lineup_changes.py, en el reporte semanal).
+
+6-nov-26 (v2.9.0), el 🎯 solo a favoritos fuertes. La auditoría del 5-nov
+encontró que el programa no le gana al mercado (los 🎯 del modelo esperaban
+−6.8% al precio de PlayDoit) y que la única apuesta que no pierde al precio
+promedio es el favorito fuerte: Pinnacle sin margen subestima a los de 65%+
+por 2.5-4 pts en los tres periodos (2012-17, 2018-22, 2023-26; Europa 1ª
+división 77.1% contra 74.3%, n=11,596), y con el Pago Anticipado de PlayDoit
+(early_payout.py) suben 1.26 pts más. El dueño eligió (4a, 3a): el 🎯 solo
+para el favorito de 65%+ según Pinnacle en las ligas con pago anticipado
+(STRONG_FAV, early_payout.PA_LEAGUES), a −500 o más largo; en esos partidos el
+pick es el favorito. Los demás partidos siguen mostrando su pick, sin 🎯
+(NOT_STRONG), y el 🎯 de goles se quita. El favorito con 4+ titulares fuera
+no es 🎯.
 """
 
 import math
@@ -114,7 +127,9 @@ PICKS_ALTERS = ("ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS source TEXT"
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pre_lineup_odds NUMERIC",
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pre_lineup_at TIMESTAMPTZ",
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pre_lineup_result TEXT",
-                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pre_lineup_profit NUMERIC")
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pre_lineup_profit NUMERIC",
+                # v2.9.0: se cobró por el Pago Anticipado de PlayDoit (early_payout.py)
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pa_paid BOOLEAN")
 _COLS = ("match", "match_date", "league", "display", "market", "label", "family", "reason", "model_prob",
          "market_prob", "lean", "min_us", "best_odds", "playdoit_odds", "value", "lineup")
 
@@ -144,6 +159,13 @@ LINEUP_OK = "confirmada"
 # lo decide el weekly con resultados), el pick se ve igual, nunca 🎯.
 REGION_PAUSED = "Región {region} en pausa: sus 🎯 pierden contra el mercado (filtro aprendido)"
 REGION_NAMES = {"america": "América"}
+STRONG_FAV = 0.65             # favorito fuerte: 65%+ en Pinnacle sin margen (v2.9.0)
+MIN_FAV_ODDS = 1.20           # −500: más corto no entra al bono del parlay de PlayDoit
+# Lo que el favorito fuerte gana de más sobre Pinnacle sin margen: el sesgo
+# (+2.5-4 pts) y el pago anticipado (+1.26). Con 3.5 pts el momio mínimo queda
+# ≈ el promedio de las casas, donde el historial da ≈ 0% sin pago anticipado.
+FAV_EDGE = 0.035
+NOT_STRONG = "Solo 🎯 al favorito de 65%+ con pago anticipado"
 
 
 def _num(v):
@@ -348,7 +370,10 @@ def _row(r: dict, kick, display, pick_: dict | None, reason: str | None, source=
     if not pick_:
         return {**base, **{c: None for c in ("market", "label", "family", "model_prob", "market_prob", "lean",
                                              "min_us", "best_odds", "playdoit_odds", "value")}, "reason": reason}
-    min_us = min_american(pick_["model"], pin_prob=pick_["market_prob"])
+    if pick_.get("strong"):           # v2.9.0: el mínimo sale del mercado, no del programa
+        min_us = to_american(1 / (pick_["market_prob"] + FAV_EDGE))
+    else:
+        min_us = min_american(pick_["model"], pin_prob=pick_["market_prob"])
     est_us = to_american(pick_["playdoit_odds"]) if pick_["playdoit_odds"] else None
     return {**base, "market": pick_["market"], "label": pick_["label"], "family": pick_["family"], "reason": reason,
             "model_prob": round(pick_["model"], 3), "market_prob": round(pick_["market_prob"], 3), "lean": True,
@@ -381,17 +406,35 @@ def model_1x2(r: dict, bias: dict | None = None) -> list:
     return [p["home_win"], p["draw"], p["away_win"]]
 
 
+def strong_favourite(cs: list, league) -> dict | None:
+    """El favorito fuerte de un partido (v2.9.0): el ganador con STRONG_FAV o
+    más en Pinnacle sin margen, en una liga con pago anticipado, con momio de
+    PlayDoit de MIN_FAV_ODDS o más. None si no hay."""
+    from src.models.early_payout import PA_LEAGUES
+    if str(league or "") not in PA_LEAGUES:
+        return None
+    fav = [c for c in cs or [] if c["market"] in ("home_win", "away_win") and c["market_prob"] is not None
+           and c["market_prob"] >= STRONG_FAV and c["playdoit_odds"] and c["playdoit_odds"] >= MIN_FAV_ODDS]
+    return max(fav, key=lambda c: c["market_prob"]) if fav else None
+
+
 def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=None, paused=()) -> tuple:
     """(pick, motivo) para una fila de model_vs_sharp con los momios de ahora
     (u) y los de cuando se analizó (then_snap). bias: sesgo por lado aprendido.
     weak: los ganadores con la alineación debilitada (lineup_check). paused:
-    regiones (side_bias.region_of) con el 🎯 en pausa por el filtro aprendido."""
+    regiones (side_bias.region_of) con el 🎯 en pausa por el filtro aprendido.
+    v2.9.0: el 🎯 es solo el favorito fuerte (strong_favourite); los demás
+    picks se ven sin 🎯."""
     from src.models.side_bias import is_skipped, region_of
     if is_skipped(r):                  # la última corrida ya no lo evaluó (22-oct-26)
         return None, STALE
     cs = _candidates_of(r, u, props, ratio, bias)
     if cs is None:
         return None, NO_EDGE
+    weak = weak or {}
+    fav = strong_favourite(cs, r.get("league"))
+    if fav is not None and fav["market"] not in weak:
+        return {**fav, "strong": True}, None
     pick, why = choose(cs, _market_then(r, then_snap, ratio), r.get("league"), _num(r.get("league_factor")) is not None,
                        weak)
     low = r.get("low_history")
@@ -400,6 +443,8 @@ def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=N
     region = region_of(r.get("league"))
     if pick and why is None and region in paused:         # pasa la regla: se ve igual, sin 🎯
         why = REGION_PAUSED.format(region=REGION_NAMES.get(region, region))
+    if pick and why is None:                              # v2.9.0: el 🎯 es solo del favorito fuerte
+        why = weak.get(fav["market"]) if fav is not None else NOT_STRONG
     return pick, why
 
 
@@ -775,22 +820,24 @@ def resolve_picks(engine=None) -> dict:
     except Exception as e:                        # la medición no detiene la liquidación del pick
         log.error(f"❌ Pick de antes de la alineación sin liquidar: {type(e).__name__}: {str(e)[:160]}")
     pending = pd.read_sql(text("""
-        SELECT id, match, match_date, market, playdoit_odds FROM program_picks
+        SELECT id, match, match_date, market, league, playdoit_odds FROM program_picks
         WHERE result IS NULL AND market IS NOT NULL AND match_date < NOW() - INTERVAL '3 hours'
     """), engine)
     if pending.empty:
         return {"pending": 0, "resolved": 0}
     no_price = set(pending.loc[pending["playdoit_odds"].isna(), "id"])
     # sin momio de PlayDoit el resultado cuenta igual; las unidades no
-    plan = plan_shadow_resolutions(pending.assign(odds=pending["playdoit_odds"].fillna(2.0).astype(float)),
-                                   _preload_matches(pending["match_date"]))
+    priced = pending.assign(odds=pending["playdoit_odds"].fillna(2.0).astype(float))
+    plan = plan_shadow_resolutions(priced, _preload_matches(pending["match_date"]))
+    plan = _with_early_payout(engine, plan, priced)
     for p in plan:
         if p["id"] in no_price:
             p["profit"] = None
     with engine.begin() as conn:
         if plan:
             conn.execute(text("""
-                UPDATE program_picks SET result = :result, profit = :profit, resolved_at = NOW()
+                UPDATE program_picks SET result = :result, profit = :profit, pa_paid = :pa_paid,
+                                         resolved_at = NOW()
                 WHERE id = :id AND result IS NULL
             """), plan)
         stale = conn.execute(text(f"""
@@ -800,6 +847,25 @@ def resolve_picks(engine=None) -> dict:
     print(f"🎯 Picks del programa liquidados: {len(plan)}/{len(pending)}"
           + (f", {stale} sin datos → stale" if stale else ""))
     return {"pending": int(len(pending)), "resolved": len(plan), "stale": int(stale or 0)}
+
+
+def _with_early_payout(engine, plan: list, rows: pd.DataFrame) -> list:
+    """El Pago Anticipado de PlayDoit (v2.9.0) sobre lo liquidado: el ganador
+    de una liga con pago anticipado que iba 2 goles arriba se cobra
+    (early_payout.apply_to_plan). Lo usan los picks y el parlay."""
+    from src.models import early_payout as EP
+    from src.utils.team_normalizer import normalize_team
+    if not plan:
+        return plan
+    idx = EP.load_leads(engine, pd.to_datetime(rows["match_date"], utc=True).min() - pd.Timedelta(days=1),
+                        normalize_team)
+    by_id = {r["id"]: r for r in rows.to_dict("records")}
+    out = EP.apply_to_plan(plan, by_id, idx, normalize_team)
+    paid, waiting = sum(1 for p in out if p["pa_paid"]), len(plan) - len(out)
+    if paid or waiting:
+        print(f"⚡ Pago anticipado: {paid} cobrada(s) por ir 2 goles arriba"
+              + (f", {waiting} esperan la ventaja de ESPN" if waiting else ""))
+    return out
 
 
 def _resolve_pre_lineup(engine) -> int:
