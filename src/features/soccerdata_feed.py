@@ -163,10 +163,14 @@ def parse_fotmob(xg_for: list, xg_against: list, goals: list | None = None,
             continue
         teams.append({"team": name, "xg_for": round(xf, 4), "xg_against": round(xa, 4), "matches": n})
     pxg = {x.get("ParticiantId"): _num(x.get("StatValue")) for x in player_xg or []}
+    # el equipo del jugador con el nombre de la lista de equipos (por TeamId): en
+    # la de jugadores FotMob usa el largo ("1. FC Union Berlin", "Bayer 04
+    # Leverkusen") y no cuadraba con matches (system_audit, 6-nov-26)
+    team_of = {x.get("TeamId"): str(x.get("ParticipantName") or "").strip() for x in xg_for or []}
     players = []
     for x in goals or []:
-        name, team, g = (str(x.get("ParticipantName") or "").strip(), str(x.get("TeamName") or "").strip(),
-                         _num(x.get("StatValue"), int))
+        name, g = str(x.get("ParticipantName") or "").strip(), _num(x.get("StatValue"), int)
+        team = team_of.get(x.get("TeamId")) or str(x.get("TeamName") or "").strip()
         if not name or not team or not g:
             continue
         players.append({"player": name, "team": team, "goals": g,
