@@ -243,10 +243,13 @@ def test_fotmob_lists_become_season_xg_rows():
     teams, players = SF.parse_fotmob(
         [_fm("Arsenal", 1, 14.9), _fm("Chelsea", 2, 12.0, matches=0)],          # sin partidos: no sirve
         [_fm("Arsenal", 1, 7.2), _fm("Chelsea", 2, 9.0)],
-        [_fm("Bukayo Saka", 1, 5, team="Arsenal", pid=7), _fm("Sin goles", 1, 0, team="Arsenal", pid=8)],
+        # en la lista de jugadores FotMob escribe el nombre largo del equipo: vale el de la de equipos
+        [_fm("Bukayo Saka", 1, 5, team="Arsenal FC London", pid=7), _fm("Sin goles", 1, 0, team="Arsenal", pid=8),
+         _fm("De otro", 3, 2, team="1. FC Union Berlin", pid=9)],
         [_fm("Bukayo Saka", 1, 4.1, pid=7)])
     assert teams == [{"team": "Arsenal", "xg_for": 14.9, "xg_against": 7.2, "matches": 9}]
-    assert players == [{"player": "Bukayo Saka", "team": "Arsenal", "goals": 5, "matches": 9, "xg": 4.1}]
+    assert players == [{"player": "Bukayo Saka", "team": "Arsenal", "goals": 5, "matches": 9, "xg": 4.1},
+                       {"player": "De otro", "team": "1. FC Union Berlin", "goals": 2, "matches": 9, "xg": None}]
 
 
 def test_fotmob_refuses_another_season():
