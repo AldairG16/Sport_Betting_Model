@@ -419,6 +419,17 @@ def is_skipped(r) -> bool:
     return v is not None and not pd.isna(v)
 
 
+def drop_phantoms(latest: dict) -> dict:
+    """{(partido, fecha): fila de model_vs_sharp} sin el horario viejo de un
+    partido reprogramado (6-nov-26). void_rescheduled marca (skipped_at) la
+    fila de la fecha que no se jugó; si el mismo partido tiene otra fila que
+    sí vale, la marcada sobra: Próximos y el pick lo mostraban otra vez a la
+    hora vieja (Tigres vs Cruz Azul a las 23:00 y a la 01:00). Una marcada
+    sin otra (la última corrida ya no lo evaluó) se queda: su "sin pick" se ve."""
+    valid = {k for (k, _), r in latest.items() if not is_skipped(r)}
+    return {kd: r for kd, r in latest.items() if not (is_skipped(r) and kd[0] in valid)}
+
+
 def load_side_bias() -> dict:
     from src.utils.model_state import load_state
     return load_state(STATE_KEY) or {}

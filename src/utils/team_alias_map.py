@@ -28,6 +28,9 @@ TEAM_ALIASES = {
     # europa
     "kln": "koln",
     "len": "lens",
+    # 6-nov-26: Preston vs "sheffield utd" entró junto a Preston vs Sheffield United (3-nov)
+    "sheffield utd": "sheffield united",
+    "sheff utd": "sheffield united",
 
     # mls
     "los angeles": "lafc",

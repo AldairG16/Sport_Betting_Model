@@ -362,11 +362,21 @@ DATA_HEALTH_SQL = {
                      AND a.id < b.id AND ABS(a.date::date - b.date::date) <= 1
                      AND a.home_goals = b.home_goals AND a.away_goals = b.away_goals
                     WHERE a.date >= CURRENT_DATE - 120""",
+    # el mismo partido con UN equipo escrito distinto (6-nov-26: Preston vs
+    # "sheffield utd" junto a Preston vs Sheffield United): misma liga, ±1 día,
+    # mismo marcador y solo uno de los dos nombres igual. "duplicate" no lo veía
+    # (pide los dos nombres iguales) y la fusión del evening lo deja en 0
+    "renamed": """SELECT COUNT(*) FROM matches a JOIN matches b
+                    ON a.id < b.id AND ABS(a.date::date - b.date::date) <= 1
+                   AND COALESCE(a.league, '') = COALESCE(b.league, '')
+                   AND a.home_goals = b.home_goals AND a.away_goals = b.away_goals
+                   AND ((LOWER(a.home_team) = LOWER(b.home_team)) <> (LOWER(a.away_team) = LOWER(b.away_team)))
+                  WHERE a.date >= CURRENT_DATE - 120 AND a.home_goals IS NOT NULL""",
 }
 
 
 def data_health(counts: dict, ages: dict) -> list:
-    """counts: {"mirror", "future", "duplicate"}; ages: {tabla: días desde lo
+    """counts: {"mirror", "future", "duplicate", "renamed"}; ages: {tabla: días desde lo
     último, o None si está vacía o no se pudo leer}; una tabla que todavía no
     existe (instalación nueva) no viene en ages. Avisos (vacío = en orden)."""
     out = []
@@ -377,6 +387,9 @@ def data_health(counts: dict, ages: dict) -> list:
         out.append(f"Datos: {counts['future']} partidos con resultado y fecha futura (día y mes cruzados)")
     if int(counts.get("duplicate") or 0) > 0:
         out.append(f"Datos: {counts['duplicate']} partidos repetidos en los últimos 120 días")
+    if int(counts.get("renamed") or 0) > 0:
+        out.append(f"Datos: {counts['renamed']} partidos repetidos con un equipo escrito distinto en los últimos "
+                   f"120 días (la fusión no los unió: falta el alias en src/utils/team_alias_map.py)")
     for table, age in ages.items():
         if table not in FEED_MAX_AGE_DAYS:
             continue
@@ -937,6 +950,27 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     except Exception as e:
         if "does not exist" not in str(e):        # la columna rule nace con el primer snapshot de v2.9.0
             problems.append(f"Parlay con bono: no se pudo revisar ({type(e).__name__})")
+
+    # 17) lo que se ve por jugar, una vez (6-nov-26): el horario viejo de un
+    #     reprogramado seguía en Próximos, en "Partidos de hoy" y podía entrar
+    #     al parlay (Tigres vs Cruz Azul a las 23:00 y a la 01:00)
+    try:
+        ahead = q("""SELECT 'program_picks' AS "table", match, match_date FROM program_picks
+                     WHERE match_date >= NOW() - INTERVAL '1 day' AND result IS DISTINCT FROM 'stale'""").to_dict("records")
+        try:
+            ahead += q("""SELECT 'program_parlays' AS "table", match, match_date FROM program_parlays
+                          WHERE rule = 'bono' AND match_date >= NOW() - INTERVAL '1 day'
+                            AND result IS DISTINCT FROM 'stale'""").to_dict("records")
+        except Exception as e:
+            if "does not exist" not in str(e):
+                raise
+        twice = counted_twice(ahead)
+        seen.append(f"por jugar a dos horas ({len(twice)})")
+        if twice:
+            problems.append(f"Por jugar: {len(twice)} partidos se ven a dos horas distintas ({'; '.join(twice[:3])})")
+    except Exception as e:
+        if "does not exist" not in str(e):
+            problems.append(f"Por jugar: no se pudo revisar ({type(e).__name__})")
 
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")

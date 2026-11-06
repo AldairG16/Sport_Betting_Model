@@ -252,7 +252,7 @@ están todas las clases que ya pasaron, como chequeos que corren igual cada vez:
 
 | Chequeo | Qué revisa | Cuándo corre |
 |---|---|---|
-| Salidas y datos de entrada | Liquidación contra un cálculo independiente; resultados que faltan; pendientes atorados; xG fuera de escala; lo aprendido del weekly; fechas espejo, resultados con fecha futura, repetidos, tablas de otras fuentes viejas; marcador provisional de ESPN contra el oficial; picks contra alineaciones; finales de ESPN; un partido reprogramado contado en dos fechas; el 🎯 de cada familia contra lo que esperaba el mercado; lo cobrado por el pago anticipado; la regla del parlay con bono | Evening (`output_checks`) |
+| Salidas y datos de entrada | Liquidación contra un cálculo independiente; resultados que faltan; pendientes atorados; xG fuera de escala; lo aprendido del weekly; fechas espejo, resultados con fecha futura, repetidos, repetidos con un equipo escrito distinto, tablas de otras fuentes viejas; marcador provisional de ESPN contra el oficial; picks contra alineaciones; finales de ESPN; un partido reprogramado contado en dos fechas; el 🎯 de cada familia contra lo que esperaba el mercado; lo cobrado por el pago anticipado; la regla del parlay con bono; lo que se ve por jugar a dos horas distintas | Evening (`output_checks`) |
 | Equipos próximos con historia | Que tengan historia y que no esté partida en dos nombres | Weekly |
 | Nombres de Understat y ESPN | Que cuadren con `matches` | Weekly |
 | Lo que entra al modelo | La cobertura de cada feature en la última corrida (`model_state` `pipeline_coverage`) | Weekly |
@@ -2047,6 +2047,43 @@ Lo que eligió el dueño (1b, 2c, 3a, 4a):
   con bono cumpla la regla (piernas, momio, probabilidad, liga, sin repetidos).
 - Lo que no se puede: leer el precio real de PlayDoit (el widget de Altenar responde 403 a scripts: no se
   raspa). El parlay usa el promedio de las casas; el dueño ve el precio real al apostarlo.
+
+**Auditoría del 6-nov-26 (v2.9.1).** El dueño: "corre una auditoría completa del sistema, necesito que me
+entregues el sistema 100% funcional sin ningún bug silencioso". Los logs de producción (60 closings,
+morning, evening, weekly, resultados, resolvedor, watchdog), `system_audit` (11/11), `db_smoke_test`
+(36/36) y todos los endpoints del dashboard estaban en verde; lo que se encontró revisando lo que sale:
+
+- **El horario viejo de un reprogramado se seguía viendo.** Tigres vs Cruz Azul pasó de las 23:00 a la
+  01:00: `void_rescheduled` anuló el viejo, pero Próximos (`visibility.predictions`), "Partidos de hoy"
+  (`today_board._SQL`) y el conteo de picks lo mostraban otra vez, y `build_parlays` no revisaba
+  `skipped_at` (un partido de liga con pago anticipado habría entrado dos veces al parlay, o con un
+  análisis que ya no vale). En Anteriores, Lyon vs Angers, PSG vs Lyon y América vs Pachuca salían con el
+  pick anulado en vez del de verdad, según el orden en que llegaran de la base: "Ganadas y perdidas" no
+  contaba 3 picks ganados. Ahora `side_bias.drop_phantoms` quita la fila anulada cuando el partido tiene
+  otra que vale (la que no tiene otra se queda: su "sin pick" se ve), el parlay salta toda fila con
+  `skipped_at`, los tableros y el aviso de alineación filtran `result = 'stale'` y Anteriores prefiere el
+  pick de verdad (`board._shown_rank`). El closing anula el horario viejo antes de guardar los picks
+  (`step_program_picks`); antes solo el evening y los resultados.
+- **Antes del partido, el horario bueno se decidía por un empate.** El closing reescribe cada 30 min el
+  pick de las dos fechas con el mismo `NOW()`, y en empate ganaba la más tardía: un partido adelantado
+  habría anulado su horario real y le habría dado su resultado al viejo. Ahora decide ESPN, luego el feed
+  de momios de ahora (`upcoming_matches`, `phantom_dates(feed=)`) y solo al final lo escrito.
+- **El nombre de antes de un alias contaba doble.** Santos Laguna vs Pumas (22-oct) y Paderborn vs
+  Stuttgart (10-oct) estaban con el nombre viejo y el nuevo a la misma hora en picks, sombra y
+  `model_vs_sharp`: doble en el sesgo aprendido, el filtro por región y los totales. `alias_twins` anula
+  la fila del nombre viejo solo en la tabla donde está la del nuevo (las propuestas de Santos vs Pumas
+  solo tienen el viejo y se quedan).
+- **Un partido repetido con un equipo escrito distinto vivía hasta 7 días.** Preston vs "sheffield utd"
+  entró el 3-nov junto a Preston vs Sheffield United; la fusión (con respaldo) solo corría el lunes en el
+  weekly y el partido contaba doble en la forma de Preston. Ahora corre en el evening y en los
+  resultados antes de liquidar (paso "Partidos repetidos"), "sheffield utd" es alias de "sheffield
+  united" y el chequeo de datos cuenta los que la fusión no unió (`renamed`).
+- **El pick de antes de la alineación se liquidaba sin el pago anticipado**: un ganador que fue 2 goles
+  arriba contaba perdido antes y ganado después, y "CAMBIOS CON LA ALINEACIÓN" salía cargado.
+- Sin falla, ya avisado: Understat sigue caído (su página dice "We will come back soon"); el morning
+  reintenta cada día y el xG del 26-oct sirve hasta el 16-nov, después el modelo usa el sustituto.
+
+Chequeos nuevos: `renamed` en los datos de entrada y la 17 (lo que se ve por jugar, una sola vez).
 
 **Se mantiene abierto solo (v1.6.0).** El `.exe` es un supervisor
 (`dashboard/supervisor.py`): lanza el servidor (el mismo `.exe` con `--serve`), le

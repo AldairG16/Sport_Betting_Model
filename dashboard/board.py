@@ -138,6 +138,14 @@ def _provisional(pick: dict, p: dict, final: dict) -> dict:
             "winner": who_was_right(p.get("model_prob"), p.get("market_prob"), outcome)}
 
 
+def _shown_rank(info: dict) -> int:
+    """Cuál de los picks guardados de un partido se muestra: el pick (2), el
+    anulado por un cambio de horario (1) o "sin pick" (0)."""
+    if info.get("none"):
+        return 0
+    return 1 if info.get("result") == "stale" else 2
+
+
 def _pick_info(p: dict) -> dict:
     """El pick guardado tal como lo ve la tabla de anteriores."""
     res_p = _str(p.get("result")) or "pending"
@@ -199,7 +207,9 @@ def past_matches(matches: pd.DataFrame, mvs: pd.DataFrame, picks: pd.DataFrame, 
         for p in _near(pk, key, r["date"]):
             used.add(id(p))
             info = _pick_info(p)
-            if info.get("none") and pick:              # el pick de verdad gana a un "sin pick" viejo
+            # el pick de verdad gana a un "sin pick" viejo y al del horario viejo
+            # de un reprogramado ('stale', 6-nov-26: Lyon vs Angers salía anulado)
+            if pick and _shown_rank(info) < _shown_rank(pick):
                 continue
             pick, raw = info, p
         # 3-nov-26, el dueño: "¿por qué todavía no tenemos ni tarjetas ni algunos

@@ -294,6 +294,7 @@ def load_pick(conn, home: str, away: str, kickoff) -> dict | None:
         SELECT market, label, family, reason, min_us FROM program_picks
         WHERE match = :m AND match_date BETWEEN CAST(:k AS timestamptz) - INTERVAL '3 hours'
                                             AND CAST(:k AS timestamptz) + INTERVAL '3 hours'
+          AND result IS DISTINCT FROM 'stale'          -- no el horario viejo de un reprogramado
         ORDER BY picked_at DESC NULLS LAST LIMIT 1
     """), {"m": f"{home} vs {away}".lower(), "k": kickoff}).mappings().first()
     return dict(r) if r else None
