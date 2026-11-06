@@ -245,11 +245,15 @@ def build_parlays(mvs: pd.DataFrame, upcoming: pd.DataFrame, ratio=None, normali
     """Función pura: los parlays con bono (group_parlays) de los partidos de
     model_vs_sharp que todavía no empiezan (la fila más reciente de cada uno)
     con sus momios de ahora (upcoming)."""
+    from src.models.side_bias import is_skipped
     up = {PP.match_key(r.home_team_norm, r.away_team_norm, normalize): r for r in upcoming.itertuples(index=False)}
     latest = {}
     order = mvs.sort_values("created_at") if "created_at" in mvs.columns else mvs
     for r in order.to_dict("records"):
-        if r.get("league") not in LEAGUES:
+        # un análisis que ya no vale (skipped_at: la última corrida no lo
+        # evaluó, o es el horario viejo de un reprogramado) no es pierna: su
+        # pick sale sin 🎯 (decide) y el mismo partido entraba dos veces
+        if r.get("league") not in LEAGUES or is_skipped(r):
             continue
         h, _, a = str(r["match"]).partition(" vs ")
         latest[(PP.match_key(h, a, normalize), str(r["match_date"]))] = r

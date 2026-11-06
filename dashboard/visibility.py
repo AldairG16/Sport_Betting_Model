@@ -134,8 +134,9 @@ def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,
     for r in order.itertuples(index=False):           # el más reciente manda
         latest[(_canon(r.match, normalize), str(r.match_date))] = r
     out = []
-    from src.models.side_bias import is_skipped
-    for (key, _), r in sorted(latest.items(), key=lambda kv: pd.Timestamp(kv[1].match_date)):
+    from src.models.side_bias import drop_phantoms, is_skipped
+    # sin el horario viejo de un reprogramado (6-nov-26): salía dos veces
+    for (key, _), r in sorted(drop_phantoms(latest).items(), key=lambda kv: pd.Timestamp(kv[1].match_date)):
         u = up.get(key)
         # la última corrida ya no lo evaluó (22-oct-26): sin la opinión vieja
         skipped = is_skipped(r)

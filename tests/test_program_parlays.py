@@ -235,10 +235,11 @@ def test_a_lost_leg_waits_for_espn_before_settling_without_early_payout(monkeypa
 def test_the_closing_saves_the_parlay_right_after_the_picks(monkeypatch):
     from scripts import orchestrator as O
     called = []
+    monkeypatch.setattr(O, "_void_rescheduled", lambda: called.append("void"))     # v2.9.1: antes, el horario viejo
     monkeypatch.setattr(PP, "snapshot_picks", lambda: called.append("picks"))
     monkeypatch.setattr(PL, "snapshot_parlays", lambda: called.append("parlay"))
     O.step_program_picks()
-    assert called == ["picks", "parlay"]
+    assert called == ["void", "picks", "parlay"]
 
 
 def test_the_closing_warns_after_redoing_the_parlay_with_the_lineups(monkeypatch):

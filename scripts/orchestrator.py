@@ -560,6 +560,21 @@ def step_resolve_stale():
     resolve_stale_bets(apply=True, verbose=True)
 
 
+def step_merge_duplicates():
+    """El mismo partido guardado dos veces con un equipo escrito distinto
+    (6-nov-26: Preston vs "sheffield utd" junto a Preston vs Sheffield United,
+    del 3-nov). La fusión (con respaldo, weekly_sanity_audit) solo corría los
+    lunes en el weekly: el repetido vivía hasta 7 días y el partido contaba
+    doble en la forma de los equipos. Ahora corre cada vez que llegan
+    resultados (evening y resultados), antes de liquidar."""
+    from scripts.weekly_sanity_audit import audit_duplicate_matches
+    status, msg = audit_duplicate_matches()
+    if status != "ok":
+        log.error(f"❌ Partidos repetidos: {msg}")
+    else:
+        print(f"   Partidos repetidos: {msg}")
+
+
 def step_team_names_check():
     """Un ascendido o una fuente nueva puede traer otro nombre del mismo club
     (el mismo partido guardado dos veces). Busca los pares nuevos, fusiona
@@ -705,6 +720,7 @@ def run_evening(logger: Logger):
     run_step(logger, "Fetch results (TheSportsDB)", step_fetch_results_tsdb)
     run_step(logger, "Córners y tarjetas (ESPN)", step_espn_finals)
     run_step(logger, "Tiros y córners (ESPN)", step_espn_stats)
+    run_step(logger, "Partidos repetidos", step_merge_duplicates)
     run_step(logger, "Results",           step_results)
     run_step(logger, "Shadow results",    step_shadow_results)
     # Resolver bets pending (corners/cards/HT) ANTES del resumen, así el
@@ -780,7 +796,12 @@ def step_program_picks():
     """Guarda el pick del programa de los próximos 3 días (lo que muestra el
     dashboard) para medir después cómo terminó. Solo DB, segundos. Después,
     el parlay de cada horario (3-nov-26; por horario desde el 4-nov), con los
-    mismos momios y alineaciones."""
+    mismos momios y alineaciones.
+
+    Antes, el horario viejo de un partido reprogramado (6-nov-26): solo se
+    anulaba en el evening y en los resultados, y mientras tanto el closing lo
+    seguía guardando y Próximos y "Partidos de hoy" lo mostraban dos veces."""
+    _void_rescheduled()
     from src.models.program_picks import snapshot_picks
     snapshot_picks()
     from src.models.program_parlays import snapshot_parlays
@@ -1224,6 +1245,7 @@ def run_results_only(logger: Logger):
     run_step(logger, "Fetch results",                  step_fetch_results)
     run_step(logger, "Fetch results (fbdata backup)",  step_fetch_results_backup)
     run_step(logger, "Fetch results (TheSportsDB)",    step_fetch_results_tsdb)
+    run_step(logger, "Partidos repetidos",             step_merge_duplicates)
     run_step(logger, "Results",                        step_results)
     run_step(logger, "Shadow results",                 step_shadow_results)
     run_step(logger, "CLV update",                     step_clv)

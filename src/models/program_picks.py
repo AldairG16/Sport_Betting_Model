@@ -565,6 +565,7 @@ def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame |
     bias: sesgo aprendido (side_bias: por lado, región y goles).
     lineups_for(home, away, kickoff) → (weak, nota) de lineup_check.
     paused: regiones con el 🎯 en pausa (filter_learner.paused_regions)."""
+    from src.models.side_bias import drop_phantoms
     up = {match_key(r.home_team_norm, r.away_team_norm, normalize): r for r in upcoming.itertuples(index=False)}
     idx = _snap_index(snaps if snaps is not None else pd.DataFrame(), normalize)
     latest = {}
@@ -573,7 +574,7 @@ def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame |
         h, _, a = str(r["match"]).partition(" vs ")
         latest[(match_key(h, a, normalize), str(r["match_date"]))] = r
     rows = []
-    for (key, _), r in latest.items():
+    for (key, _), r in drop_phantoms(latest).items():       # sin el horario viejo de un reprogramado
         u = up.get(key)
         then = _snap_before(idx, key, r["match_date"], r["created_at"]) if r.get("created_at") is not None else None
         h, _, a = key.partition(" vs ")
@@ -682,8 +683,12 @@ def _ratio(engine):
         rows = pd.read_sql(text("""SELECT decimal, consensus_decimal, boosted FROM playdoit_prices
                                    WHERE captured_at >= NOW() - INTERVAL '60 days'"""), engine)
         return playdoit_ratio(rows.to_dict("records")) if not rows.empty else None
-    except Exception:
-        return None                       # sin capturas todavía: el promedio tal cual
+    except Exception as e:
+        # sin capturas todavía (la tabla no existe): el promedio tal cual. Otro
+        # error cambiaría en silencio el momio estimado de PlayDoit (6-nov-26)
+        if "does not exist" not in str(e):
+            log.warning(f"⚠️  Momio de PlayDoit sin su ajuste medido ({type(e).__name__}): se usa el promedio")
+        return None
 
 
 # 🎯 = pasa la regla (reason vacío) y hay pick
@@ -849,10 +854,11 @@ def resolve_picks(engine=None) -> dict:
     return {"pending": int(len(pending)), "resolved": len(plan), "stale": int(stale or 0)}
 
 
-def _with_early_payout(engine, plan: list, rows: pd.DataFrame) -> list:
+def _with_early_payout(engine, plan: list, rows: pd.DataFrame, what: str = "") -> list:
     """El Pago Anticipado de PlayDoit (v2.9.0) sobre lo liquidado: el ganador
     de una liga con pago anticipado que iba 2 goles arriba se cobra
-    (early_payout.apply_to_plan). Lo usan los picks y el parlay."""
+    (early_payout.apply_to_plan). Lo usan los picks, el pick de antes de la
+    alineación y el parlay. what: de qué es la línea del log."""
     from src.models import early_payout as EP
     from src.utils.team_normalizer import normalize_team
     if not plan:
@@ -863,7 +869,7 @@ def _with_early_payout(engine, plan: list, rows: pd.DataFrame) -> list:
     out = EP.apply_to_plan(plan, by_id, idx, normalize_team)
     paid, waiting = sum(1 for p in out if p["pa_paid"]), len(plan) - len(out)
     if paid or waiting:
-        print(f"⚡ Pago anticipado: {paid} cobrada(s) por ir 2 goles arriba"
+        print(f"⚡ Pago anticipado{what}: {paid} cobrada(s) por ir 2 goles arriba"
               + (f", {waiting} esperan la ventaja de ESPN" if waiting else ""))
     return out
 
@@ -871,10 +877,13 @@ def _with_early_payout(engine, plan: list, rows: pd.DataFrame) -> list:
 def _resolve_pre_lineup(engine) -> int:
     """Liquida el pick de antes de la alineación (pre_lineup_*) igual que el
     pick: misma función, stake 1, su momio de PlayDoit de ese momento (sin
-    momio: el resultado cuenta, las unidades no). Devuelve cuántos liquidó."""
+    momio: el resultado cuenta, las unidades no) y, desde el 6-nov-26, el
+    mismo pago anticipado: sin él, un ganador que fue 2 goles arriba contaba
+    perdido antes de la alineación y ganado después, y la medición de los
+    cambios con la alineación salía cargada. Devuelve cuántos liquidó."""
     from src.models.save_bets import SHADOW_STALE_DAYS, _preload_matches, plan_shadow_resolutions
     pending = pd.read_sql(text("""
-        SELECT id, match, match_date, pre_lineup_market AS market, pre_lineup_odds AS playdoit_odds
+        SELECT id, match, match_date, league, pre_lineup_market AS market, pre_lineup_odds AS playdoit_odds
         FROM program_picks
         WHERE pre_lineup_market IS NOT NULL AND pre_lineup_result IS NULL
           AND match_date < NOW() - INTERVAL '3 hours'
@@ -882,8 +891,9 @@ def _resolve_pre_lineup(engine) -> int:
     plan = []
     if not pending.empty:
         no_price = set(pending.loc[pending["playdoit_odds"].isna(), "id"])
-        plan = plan_shadow_resolutions(pending.assign(odds=pending["playdoit_odds"].fillna(2.0).astype(float)),
-                                       _preload_matches(pending["match_date"]))
+        priced = pending.assign(odds=pending["playdoit_odds"].fillna(2.0).astype(float))
+        plan = plan_shadow_resolutions(priced, _preload_matches(pending["match_date"]))
+        plan = _with_early_payout(engine, plan, priced, " (antes de la alineación)")
         for p in plan:
             if p["id"] in no_price:
                 p["profit"] = None

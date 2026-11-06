@@ -52,6 +52,7 @@ _SQL = """
         ORDER BY u.updated_at DESC NULLS LAST LIMIT 1
     ) u ON TRUE
     WHERE p.match_date >= :a AND p.match_date < :b
+      AND p.result IS DISTINCT FROM 'stale'     -- el horario viejo de un reprogramado (6-nov-26)
     ORDER BY p.match_date, p.display
 """
 

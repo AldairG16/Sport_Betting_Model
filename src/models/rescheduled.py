@@ -13,17 +13,23 @@ aprendido. (v2.4.3 solo lo escondía del dashboard.)
 
 La fecha que vale es la de ESPN (live_scores) si la tiene: el feed de momios
 llegó a traer América vs Pachuca dos veces en la misma foto, a la 01:00 y a
-la 01:05, y se jugó a la 01:05. Si ESPN no lo tiene, la de la fila escrita
-más recientemente en cualquiera de las tablas (el feed se vuelve a leer en
-cada corrida y el closing reescribe el pick cada 30 min); en empate, la más
-tardía. Las filas del mismo partido en otra fecha a menos de WINDOW_DAYS días
-son de un horario que no se jugó:
+la 01:05, y se jugó a la 01:05. Si ESPN no lo tiene, la del feed de momios
+de ahora si trae una sola (upcoming_matches, desde el 6-nov-26); si tampoco y
+ya pasó la primera de las fechas, la de la fila escrita más recientemente en
+cualquiera de las tablas (en empate, la más tardía). Antes de eso se espera.
+Las filas del mismo partido en otra fecha a menos de WINDOW_DAYS días son de
+un horario que no se jugó:
   - picks, sombra, propuestas y piernas del parlay → result 'stale' (como
     "sin datos": fuera del acierto, las unidades y el aprendizaje; en el
     parlay la pierna se anula y sigue con las demás);
   - model_vs_sharp → skipped_at (fuera del sesgo aprendido y del dashboard).
 bets_history no se toca: dos apuestas al mismo partido a distinta hora son
 dos apuestas, y el bankroll las contó así.
+
+6-nov-26: lo mismo con el nombre de antes de un alias (alias_twins). Un
+partido analizado antes y después de que se aprendiera el alias de un club
+quedaba dos veces a la misma hora ("pumas unam" y "unam pumas"): se anula la
+fila del nombre viejo.
 """
 
 import pandas as pd
@@ -57,11 +63,24 @@ def _ts(v) -> pd.Timestamp:
     return t.tz_convert("UTC") if t.tzinfo else t.tz_localize("UTC")
 
 
-def phantom_dates(rows: list, espn: dict | None = None, window_days: int = WINDOW_DAYS) -> set:
+def phantom_dates(rows: list, espn: dict | None = None, window_days: int = WINDOW_DAYS,
+                  feed: dict | None = None, now=None) -> set:
     """Función pura. rows: [{"match", "match_date", "written"}] de todas las
-    tablas; espn: {match: [kickoff, ...]} de live_scores. Devuelve los
-    (match, match_date) de un horario que ya no vale: el partido tiene otra
-    fecha que vale, a window_days días o menos."""
+    tablas; espn: {match: [kickoff, ...]} de live_scores; feed: {match:
+    [match_date, ...]} del feed de momios de ahora (upcoming_matches).
+    Devuelve los (match, match_date) de un horario que ya no vale: el partido
+    tiene otra fecha que vale, a window_days días o menos. Vale la de ESPN; si
+    ESPN no lo tiene, la del feed si trae una sola; si tampoco y ya pasó la
+    primera de las fechas, la escrita más recientemente. Antes de eso no se
+    decide nada: anular no tiene vuelta.
+
+    El feed va antes que lo escrito desde el 6-nov-26: el closing reescribe
+    cada 30 min el pick de las dos fechas a la vez (mismo NOW()), así que antes
+    del partido empataban y ganaba la más tardía. Un partido adelantado habría
+    anulado su horario real y le habría dado su resultado al viejo. Un feed con
+    dos horarios del mismo partido (América vs Pachuca a la 01:00 y a la 01:05
+    en la misma foto) no decide."""
+    now = _ts(now) if now is not None else pd.Timestamp.now(tz="UTC")
     window = pd.Timedelta(days=window_days)
     dates, latest = {}, {}
     for r in rows:
@@ -79,16 +98,43 @@ def phantom_dates(rows: list, espn: dict | None = None, window_days: int = WINDO
             continue
         kicks = [_ts(k) for k in (espn or {}).get(match, [])]
         near = [(abs(d - k), d) for d in ds for k in kicks if abs(d - k) <= window]
-        cur = min(near)[1] if near else latest.get(match, (None, None))[1]
+        listed = {f for f in (_ts(x) for x in (feed or {}).get(match, [])) if any(abs(d - f) <= window for d in ds)}
+        if near:
+            cur = min(near)[1]
+        elif len(listed) == 1:
+            f = next(iter(listed))
+            cur = min((abs(d - f), d) for d in ds)[1]
+        elif now < min(ds):
+            continue                     # ningún horario empezó: espera a ESPN o a un feed sin dudas
+        else:
+            cur = latest.get(match, (None, None))[1]
         if cur is None:
             continue
         out |= {(match, d) for d in ds if d != cur and abs(d - cur) <= window}
     return out
 
 
+def alias_twins(rows: list, normalize) -> set:
+    """Función pura (6-nov-26): el mismo partido a la misma hora guardado con
+    el nombre de antes de un alias y con el de ahora ("santos laguna vs pumas
+    unam" y "santos laguna vs unam pumas", 22-oct; "sc paderborn" y
+    "paderborn", 10-oct): contaba dos veces en los picks, la sombra y el sesgo
+    aprendido. rows: [{"table", "match", "match_date"}]. Devuelve los (tabla,
+    match, match_date) con el nombre viejo cuando la fila con el de ahora
+    existe EN LA MISMA TABLA: si solo está el viejo (las propuestas de Santos
+    vs Pumas), es la única y se queda."""
+    def canon(m):
+        h, sep, a = str(m).partition(" vs ")
+        return f"{normalize(h)} vs {normalize(a)}" if sep else str(m)
+    have = {(r.get("table"), r["match"], _ts(r["match_date"])) for r in rows}
+    return {(t, m, d) for t, m, d in have if canon(m) != m and (t, canon(m), d) in have}
+
+
 def void_rescheduled(engine=None, days: int | None = 30) -> dict:
-    """Anula en cada tabla las filas de un horario que no se jugó. days=None
-    revisa toda la historia. Corre antes de liquidar (evening y weekly)."""
+    """Anula en cada tabla las filas de un horario que no se jugó y las del
+    nombre de antes de un alias. days=None revisa toda la historia. Corre
+    antes de liquidar (evening, resultados y weekly) y, desde el 6-nov-26,
+    antes de guardar los picks en cada closing."""
     if engine is None:
         from config.database import engine
     since = "" if days is None else f"WHERE match_date >= NOW() - INTERVAL '{int(days)} days'"
@@ -102,7 +148,7 @@ def void_rescheduled(engine=None, days: int | None = 30) -> dict:
                 continue
             raise
         present.append(table)
-        rows += df.to_dict("records")
+        rows += [{**r, "table": table} for r in df.to_dict("records")]
     espn = {}
     multi = {m for m, n in pd.Series([r["match"] for r in rows]).value_counts().items() if n > 1}
     if multi:
@@ -117,22 +163,36 @@ def void_rescheduled(engine=None, days: int | None = 30) -> dict:
         except Exception as e:
             if "does not exist" not in str(e):
                 raise
-    phantoms = phantom_dates(rows, espn)
+    feed = {}
+    if multi:
+        try:
+            up = pd.read_sql(text("""SELECT home_team_norm || ' vs ' || away_team_norm AS match, match_date
+                                     FROM upcoming_matches"""), engine)
+            for r in up.to_dict("records"):
+                if r["match"] in multi:
+                    feed.setdefault(r["match"], []).append(r["match_date"])
+        except Exception as e:
+            if "does not exist" not in str(e):
+                raise
+    from src.utils.team_normalizer import normalize_team
+    phantoms = phantom_dates(rows, espn, feed=feed)
+    twins = alias_twins(rows, normalize_team)
+    # el horario viejo se anula en todas las tablas; el nombre viejo, solo donde está el nuevo
+    todo = sorted({(t, m, d) for m, d in phantoms for t in present} | twins, key=lambda x: (x[1], x[2], x[0]))
     out = {t: 0 for t in present}
     new = set()                                     # los que tenían algo por anular en esta corrida
-    if phantoms:
+    if todo:
         with engine.begin() as conn:
-            for m, d in sorted(phantoms):
-                p = {"match": m, "match_date": d.to_pydatetime()}
-                for table in present:
-                    n = conn.execute(text(VOID_SQL[table]), p).rowcount or 0
-                    out[table] += n
-                    if n:
-                        new.add(m)
-    names = sorted({m for m, _ in phantoms})
+            for table, m, d in todo:
+                n = conn.execute(text(VOID_SQL[table]), {"match": m, "match_date": d.to_pydatetime()}).rowcount or 0
+                out[table] += n
+                if n:
+                    new.add(m)
+    names = sorted({m for m, _ in phantoms} | {m for _, m, _ in twins})
     # los de corridas anteriores se vuelven a ver 30 días; no son nuevos
     print(f"🗓️ Partidos reprogramados: {len(new)} nuevos"
           + (f" ({', '.join(sorted(new)[:3])}) · filas de la fecha vieja anuladas: "
              + ", ".join(f"{t} {n}" for t, n in out.items()) if new else "")
-          + (f" · {len(names) - len(new)} ya anulados antes" if len(names) > len(new) else ""))
-    return {"matches": names, "new": sorted(new), **out}
+          + (f" · {len(names) - len(new)} ya anulados antes" if len(names) > len(new) else "")
+          + (f" · {tn} con el nombre de antes de un alias" if (tn := len({m for _, m, _ in twins if m in new})) else ""))
+    return {"matches": names, "new": sorted(new), "twins": sorted({m for _, m, _ in twins}), **out}

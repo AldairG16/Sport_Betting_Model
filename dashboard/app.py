@@ -508,9 +508,13 @@ def api_predictions():
                                    "btts_yes_odds", "btts_no_odds", "consensus_home_odds",
                                    "consensus_draw_odds", "consensus_away_odds"])
     # el pick guardado de cada partido (v2.1): el que se ve es el que se mide
+    # sin el horario viejo de un reprogramado ('stale', 6-nov-26) y, si hubiera
+    # dos, el más reciente: la clave es el partido sin la fecha
     picks = _q("""
         SELECT match, label, family, market, model_prob, market_prob, playdoit_odds, reason, lineup
         FROM program_picks WHERE match_date BETWEEN NOW() - INTERVAL '3 hours' AND NOW() + INTERVAL '3 days'
+          AND result IS DISTINCT FROM 'stale'
+        ORDER BY picked_at NULLS FIRST
     """)
     saved = {}
     for p in (picks.to_dict("records") if not picks.empty else []):
