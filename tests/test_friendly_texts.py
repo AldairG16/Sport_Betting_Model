@@ -152,6 +152,22 @@ def test_cards_say_why_there_is_no_target_in_plain_words():
     assert got[10] == "más o menos 1 de cada 7 veces" and got[11] == "más o menos 1 de cada 3 veces"
 
 
+def test_singular_and_plural_read_right():
+    # se veía "Hoy: 1 partidos" y "⏳ falta las alineaciones de todos" (6-nov-26)
+    if not shutil.which("node"):
+        pytest.skip("sin node")
+    code = _js_functions("pxReady") + """
+      function mxtime(){ return '08:25'; }
+      var t = function(k){ return pxReady({kind: k, ready: false, lock: 'x', parlay: {status: 'pending'}}).replace(/<[^>]+>/g, ''); };
+      console.log(JSON.stringify([t('dia'), t('horario')]));"""
+    out = subprocess.run(["node", "-e", code], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout)
+    assert got[0].startswith("⏳ falta la alineación del primer partido (sale ~1 h antes)")
+    assert got[1].startswith("⏳ faltan las alineaciones de todos (salen ~1 h antes)")
+    assert "(n === 1 ? ' partido' : ' partidos')" in JS
+
+
 def test_the_old_jargon_is_gone_from_the_page():
     from dashboard.app import PAGE
     page = PAGE + re.sub(r"(^|\s)//.*$", "", JS, flags=re.M)          # lo que se ve, sin comentarios

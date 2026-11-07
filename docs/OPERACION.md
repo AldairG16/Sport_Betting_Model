@@ -2114,6 +2114,11 @@ el pick, "sin 🎯: …" y el estado de la alineación en renglones aparte; el e
 "unidades" a "ganancia", ROI a "lo que se gana o pierde de cada 100 apostados", "mercado" a "las casas", y
 el parlay explica cómo se arma y da la probabilidad en veces ("más o menos 1 de cada 7"). Lo cubre
 `tests/test_friendly_texts.py`, que corre las funciones de la página con node.
+v2.9.3 corrige el singular y el plural que se veían ya instalado: "Hoy: 1 partidos" y "⏳ falta las
+alineaciones de todos" (ahora "1 partido" y "faltan las alineaciones… (salen ~1 h antes)").
+Telegram usa las mismas palabras: el aviso de alineación dice "no es 🎯, no hay favorito claro: no lo
+apuestes" (lo corto de `star_note`) en lugar de "no pasa la regla del programa (…)", y el del parlay
+"Se gana más o menos 1 de cada 4 veces (según Pinnacle)" y ⚡ en lugar de "Salen todas: ~24%" y "PA".
 
 **Se mantiene abierto solo (v1.6.0).** El `.exe` es un supervisor
 (`dashboard/supervisor.py`): lanza el servidor (el mismo `.exe` con `--serve`), le

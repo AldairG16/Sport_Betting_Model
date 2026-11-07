@@ -92,6 +92,13 @@ def signature(legs: list) -> str:
     return " | ".join(f"{x['match']}:{x['market']}" for x in sorted(legs, key=lambda x: int(x["rank"])))
 
 
+def times_text(p: float) -> str:
+    """La probabilidad dicha en veces, como en el dashboard (pxOdds): 0.14 →
+    "más o menos 1 de cada 7 veces"; desde 2 de 3 → "70 de cada 100 veces"."""
+    n = round(1 / p) if p else 0
+    return f"más o menos 1 de cada {n} veces" if n > 1 else f"{round(p * 100)} de cada 100 veces"
+
+
 def alert_text(legs: list, tz, changed: bool = False, late: bool = False) -> str:
     """El mensaje de un parlay: sus partidos por hora, el momio con y sin el
     bono de PlayDoit y la probabilidad de que salgan todas (Pinnacle sin
@@ -112,7 +119,7 @@ def alert_text(legs: list, tz, changed: bool = False, late: bool = False) -> str
         seen = "📋" if note.startswith(PL.LINEUP_OK) else "⏳"
         rows.append(f"{seen} <b>{ko:%H:%M}</b> {html.escape(str(x.get('display') or x['match']))}\n"
                     f"   {html.escape(str(x.get('label') or x['market']))} · {_us(_num(x['playdoit_odds']))}"
-                    + (" · PA" if x.get("pa") else "")
+                    + (" · ⚡" if x.get("pa") else "")
                     + (f"\n   <i>{html.escape(extra)}</i>" if extra else ""))
     parts.append("\n".join(rows))
     pay = PL.payout([_num(x["playdoit_odds"]) or 1 for x in legs])
@@ -121,10 +128,10 @@ def alert_text(legs: list, tz, changed: bool = False, late: bool = False) -> str
     parts.append(f"Paga <b>{_us(pay['odds'])}</b>"
                  + (f" · con el bono de {pay['bonus']:.1%}".replace(".0%", "%") + f": <b>{_us(pay['with_bonus'])}</b>"
                     if pay["bonus"] else "")
-                 + (f"\nSalen todas: ~{p_all:.0%} (Pinnacle)" if p_all is not None else ""))
+                 + (f"\nSe gana {times_text(p_all)} (según Pinnacle)" if p_all is not None else ""))
     notes = ["📋 vio la alineación · ⏳ todavía no (sale ~1 h antes)",
-             "PA = pago anticipado: si el favorito va 2 goles arriba, PlayDoit la da por ganada",
-             "Momio estimado de PlayDoit; el bono se paga sobre la ganancia (3 = 5%, 4 = 7.5%, 5 = 10%, 6 = 15%)"]
+             "⚡ = pago anticipado: si el favorito va 2 goles arriba, PlayDoit la paga como ganada",
+             "El momio de PlayDoit es estimado; el bono se suma a la ganancia (3 partidos +5%, 4 +7.5%, 5 +10%, 6 +15%)"]
     if late:
         notes.insert(0, "Faltan alineaciones del primer horario y ya casi se fija: revísalas antes de apostar")
     parts.append("<i>" + "\n".join(notes) + "</i>")
