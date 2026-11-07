@@ -330,7 +330,7 @@ function loadUpcoming(){
     // todos los picks, aunque ninguno fuera 🎯)
     var today = mxday(), n = 0, good = 0;
     for (var j = 0; j < _up.length; j++) if (mxday(_up[j].match_date) === today) { n++; if (_up[j].pick && _up[j].pick.label && _up[j].pick.rule) good++; }
-    el('chiptoday').innerHTML = n ? '📅 Hoy: ' + n + ' partidos · 🎯 <b>' + good + '</b> recomendado' + (good === 1 ? '' : 's') : 'Hoy: sin partidos';
+    el('chiptoday').innerHTML = n ? '📅 Hoy: ' + n + (n === 1 ? ' partido' : ' partidos') + ' · 🎯 <b>' + good + '</b> recomendado' + (good === 1 ? '' : 's') : 'Hoy: sin partidos';
     getJSON('/api/lineups', function(l){
       _alerts = {};
       for (var k = 0; k < l.matches.length; k++) if (l.matches[k].level === 'alert') _alerts[l.matches[k].match] = l.matches[k].text;
@@ -607,10 +607,10 @@ function pxReady(d){
   var p = d.parlay;
   if (!p || p.status !== 'pending') return '';
   if (p.locked) return '<span class="small muted">🔒 ya empezó: así quedó</span>';
-  var what = d.kind === 'dia' ? 'la alineación del primer partido' : 'las alineaciones de todos';
+  var one = d.kind === 'dia', what = one ? 'la alineación del primer partido' : 'las alineaciones de todos';
   if (d.ready) return '<span class="small pos">📋 ya revisado con ' + what + '</span><span class="small muted">apuéstalo antes de las ' + mxtime(d.lock) + '</span>';
-  return '<span class="small muted" title="Las alineaciones salen ~1 h antes; el parlay se revisa cada 30 min y Telegram avisa cuando está listo">⏳ falta ' + what +
-    ' (sale ~1 h antes) · puede cambiar hasta las ' + mxtime(d.lock) + '</span>';
+  return '<span class="small muted" title="Las alineaciones salen ~1 h antes; el parlay se revisa cada 30 min y Telegram avisa cuando está listo">⏳ ' +
+    (one ? 'falta ' : 'faltan ') + what + (one ? ' (sale' : ' (salen') + ' ~1 h antes) · puede cambiar hasta las ' + mxtime(d.lock) + '</span>';
 }
 // "~14%" → "1 de cada 7": la probabilidad de ganarlo dicha en veces
 function pxOdds(p){
