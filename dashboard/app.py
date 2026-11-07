@@ -511,7 +511,7 @@ def api_predictions():
     # sin el horario viejo de un reprogramado ('stale', 6-nov-26) y, si hubiera
     # dos, el más reciente: la clave es el partido sin la fecha
     picks = _q("""
-        SELECT match, label, family, market, model_prob, market_prob, playdoit_odds, reason, lineup
+        SELECT match, label, family, market, model_prob, market_prob, playdoit_odds, reason, lineup, star_note
         FROM program_picks WHERE match_date BETWEEN NOW() - INTERVAL '3 hours' AND NOW() + INTERVAL '3 days'
           AND result IS DISTINCT FROM 'stale'
         ORDER BY picked_at NULLS FIRST
@@ -782,7 +782,7 @@ def _load_past_rows() -> list:
     mvs = _q("""SELECT match, match_date, p_home, p_draw, p_away, pin_home, pin_draw, pin_away, low_history
                 FROM model_vs_sharp WHERE match_date >= CAST(:s AS date) - 2 AND skipped_at IS NULL""", p)
     picks = _q("""SELECT match, match_date, league, label, family, market, reason, model_prob, market_prob, result,
-                         profit, source, playdoit_odds
+                         profit, source, playdoit_odds, star_note
                   FROM program_picks WHERE match_date >= CAST(:s AS date) - 2""", p)
     bets = _q("""SELECT match, match_date, market, result, profit FROM bets_history
                  WHERE match_date >= CAST(:s AS date) - 2""", p)
@@ -1155,8 +1155,9 @@ PAGE = """<!DOCTYPE html>
   <div class="bar">
     <select id="uleague"><option value="">Todas las ligas</option></select>
     <select id="ufam"><option value="">Todas las apuestas</option><option>Ganador</option><option>Goles</option><option>Ambos anotan</option><option>Córners</option><option>Tarjetas</option></select>
-    <span class="small muted" style="margin-left:auto"><span style="color:var(--home)">■</span> local <span style="color:var(--draw)">■</span> empate <span style="color:var(--away)">■</span> visitante · programa (arriba) y Pinnacle (abajo)</span>
+    <span class="small muted" style="margin-left:auto">De cada 100: <span style="color:var(--home)">■</span> gana el local <span style="color:var(--draw)">■</span> empate <span style="color:var(--away)">■</span> gana el visitante · barra gruesa: el programa · delgada: Pinnacle</span>
   </div>
+  <div class="small muted" style="margin:0 0 10px">🎯 = <b>apuesta recomendada</b>: un equipo muy favorito (según Pinnacle, la casa más precisa, gana 65 de cada 100 partidos así o más) que paga -500 o mejor en PlayDoit, en una liga con pago anticipado. Los partidos sin 🎯 muestran lo que más le gusta al programa, solo para seguirlo, y dicen por qué no son 🎯.</div>
   <div id="uplist" class="muted">Cargando…</div>
 </div>
 
@@ -1171,20 +1172,20 @@ PAGE = """<!DOCTYPE html>
 
 <div class="pane" id="tab-resultados">
   <div class="bar" id="rgroups">
-    <span class="pill on" data-g="picks" title="Todos los picks del modelo corregido (desde el 22 oct)">🤖 Todos los picks</span>
-    <span class="pill" data-g="rule" title="Solo los picks que pasan la regla">🎯 Pasan la regla</span>
-    <span class="pill" data-g="bets" title="Las apuestas reales registradas">💰 Apuestas reales</span>
-    <span class="small muted" style="margin-left:auto">Solo lo ya liquidado · unidades a 1u por pick, al momio mínimo de PlayDoit</span>
+    <span class="pill on" data-g="picks" title="Todos los picks del programa desde el 22 oct">🤖 Todos los picks</span>
+    <span class="pill" data-g="rule" title="Solo las apuestas recomendadas (🎯)">🎯 Recomendados</span>
+    <span class="pill" data-g="bets" title="Las apuestas con dinero real registradas">💰 Apuestas reales</span>
+    <span class="small muted" style="margin-left:auto">Solo partidos ya terminados y cobrados · cada pick cuenta como 1 unidad apostada al momio de PlayDoit</span>
   </div>
   <div class="kpis" id="rkpis"></div>
-  <div class="cb wide"><h3>Ganadas y perdidas por día · unidades acumuladas</h3><canvas id="cdaily"></canvas></div>
+  <div class="cb wide"><h3>Ganadas y perdidas por día · ganancia acumulada (unidades)</h3><canvas id="cdaily"></canvas></div>
   <div class="grid2">
-    <div class="tbl"><table><thead><tr><th>Tipo de pick</th><th>G-P</th><th>Acierto</th><th>Unidades</th><th class="hide-sm" title="Lo que se gana por cada unidad apostada">Rendimiento</th></tr></thead>
+    <div class="tbl"><table><thead><tr><th>Tipo de apuesta</th><th title="Ganadas - perdidas">G-P</th><th>Acierto</th><th>Ganancia</th><th class="hide-sm" title="Lo que se gana o pierde de cada 100 apostados">Rendimiento</th></tr></thead>
       <tbody id="rtypes"></tbody></table></div>
-    <div class="tbl"><table><thead><tr><th>Liga</th><th>G-P</th><th>Acierto</th><th>Unidades</th><th class="hide-sm" title="Lo que se gana por cada unidad apostada">Rendimiento</th></tr></thead>
+    <div class="tbl"><table><thead><tr><th>Liga</th><th title="Ganadas - perdidas">G-P</th><th>Acierto</th><th>Ganancia</th><th class="hide-sm" title="Lo que se gana o pierde de cada 100 apostados">Rendimiento</th></tr></thead>
       <tbody id="rleagues"></tbody></table></div>
   </div>
-  <div class="cb free"><h3>Unidades por liga</h3><div class="chartbox" id="cleaguesbox"><canvas id="cleagues"></canvas></div></div>
+  <div class="cb free"><h3>Ganancia por liga (unidades)</h3><div class="chartbox" id="cleaguesbox"><canvas id="cleagues"></canvas></div></div>
   <div class="grid2">
     <div class="tbl"><table><thead><tr><th colspan="4">✅ Mejores aciertos</th></tr></thead><tbody id="rbest"></tbody></table></div>
     <div class="tbl"><table><thead><tr><th colspan="4">❌ Fallos en los que el programa estaba más seguro</th></tr></thead><tbody id="rworst"></tbody></table></div>
@@ -1196,12 +1197,12 @@ PAGE = """<!DOCTYPE html>
   <div class="bar">
     <select id="pleague"><option value="">Todas las ligas</option></select>
     <input type="text" id="pteam" placeholder="Buscar equipo">
-    <span class="pill" id="ponly" title="Solo los partidos que analizó el programa">🤖 Analizados</span>
+    <span class="pill" id="ponly" title="Solo los partidos que analizó el programa">🤖 Solo analizados</span>
   </div>
   <div class="tbl"><table><thead><tr><th class="hide-sm">Liga</th><th style="text-align:right">Local</th><th></th><th>Visitante</th>
     <th title="Córners local - visitante">Córners</th><th title="Tarjetas del partido (roja = 1)" class="hide-sm">Tarjetas</th>
-    <th title="¿Acertó el favorito del programa?">🤖</th><th title="¿Acertó el favorito de Pinnacle?">🏦</th>
-    <th title="Pick del programa">Pick</th><th title="Apuestas reales" class="hide-sm">Apuesta</th></tr></thead>
+    <th title="¿Pasó lo que el programa veía más probable?">🤖</th><th title="¿Pasó lo que Pinnacle veía más probable?">🏦</th>
+    <th title="Pick del programa">Pick</th><th title="Apuestas con dinero real" class="hide-sm">Apuesta</th></tr></thead>
     <tbody id="pastbody"><tr><td colspan="10" class="muted">Cargando…</td></tr></tbody></table></div>
   <button class="more" id="pmore" style="display:none">Ver más</button>
 </div>
@@ -1218,14 +1219,14 @@ PAGE = """<!DOCTYPE html>
 <div class="pane" id="tab-graficas">
   <div class="grid2">
     <div class="cb"><h3>Bankroll</h3><canvas id="cbank"></canvas></div>
-    <div class="cb"><h3>Acierto del favorito por semana</h3><canvas id="cacc"></canvas></div>
+    <div class="cb"><h3>% de veces que ganó el favorito, por semana</h3><canvas id="cacc"></canvas></div>
   </div>
   <div class="grid2">
-    <div class="cb"><h3>Picks del programa (unidades acumuladas, 1u c/u)</h3><canvas id="cpicks"></canvas></div>
-    <div class="cb"><h3>Propuestas del modelo por semana (unidades)</h3><canvas id="cprops"></canvas></div>
+    <div class="cb"><h3>Ganancia acumulada de los picks (1 unidad cada uno)</h3><canvas id="cpicks"></canvas></div>
+    <div class="cb"><h3>Ganancia por semana de las apuestas que propone el modelo (unidades)</h3><canvas id="cprops"></canvas></div>
   </div>
   <div class="grid2">
-    <div class="cb"><h3>Picks por tipo de apuesta (modelo corregido, unidades)</h3><canvas id="cfam"></canvas></div>
+    <div class="cb"><h3>Ganancia por tipo de apuesta desde el 22 oct (unidades)</h3><canvas id="cfam"></canvas></div>
   </div>
 </div>
 <script src="/ui_es5.js?v=__V__"></script></body></html>""".replace("__HOW_TO_READ__", HOW_TO_READ)
