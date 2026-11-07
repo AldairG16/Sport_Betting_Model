@@ -201,10 +201,14 @@ def pick_line(pick: dict | None, alerts: list, review: dict | None = None) -> st
     if picked_team and picked_team in weakened and not discarded:
         return f"{head} — las bajas van contra este pick: no lo apuestes."
     if str(pick.get("reason") or "").startswith("Alineación"):
-        return f"{head} — el pick ya vio la alineación y no pasa la regla por las bajas: no lo apuestes."
+        return f"{head} — ya con la alineación, no es 🎯 por las bajas: no lo apuestes."
     if pick.get("reason"):
-        why = str(pick["reason"]).split(":")[0].lower()
-        return f"{head} — no pasa la regla del programa ({why}): no lo apuestes."
+        # lo corto de star_note (v2.9.2), como la tarjeta del dashboard: "no hay
+        # favorito claro", "Arsenal paga muy poco (-667)"; sin nota, el reason
+        why = str(pick.get("star_note") or pick["reason"]).split(":")[0].strip()
+        if why.startswith(("No ", "Sin ", "Liga ", "El ")):
+            why = why[0].lower() + why[1:]
+        return f"{head} — no es 🎯, {why}: no lo apuestes."
     if pick.get("min_us") is None:
         return f"{head} — sin precio para decir cuánto debe pagar."
     extra = " Las bajas del rival lo favorecen." if picked_team and weakened and picked_team not in weakened else ""
@@ -291,7 +295,7 @@ def load_pick(conn, home: str, away: str, kickoff) -> dict | None:
     if conn.execute(text("SELECT to_regclass('program_picks')")).scalar() is None:
         return None
     r = conn.execute(text("""
-        SELECT market, label, family, reason, min_us FROM program_picks
+        SELECT market, label, family, reason, min_us, star_note FROM program_picks
         WHERE match = :m AND match_date BETWEEN CAST(:k AS timestamptz) - INTERVAL '3 hours'
                                             AND CAST(:k AS timestamptz) + INTERVAL '3 hours'
           AND result IS DISTINCT FROM 'stale'          -- no el horario viejo de un reprogramado

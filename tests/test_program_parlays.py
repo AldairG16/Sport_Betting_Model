@@ -416,9 +416,11 @@ def test_the_announcement_shows_the_bonus_the_early_payout_and_american_odds():
             _alert(3, "inter vs genoa", kind="dia", odds=1.3), _alert(4, "milan vs torino", kind="dia", odds=1.6)]
     t = PA.alert_text(rows, MX)
     assert "Parlay del día" in t and "4 partidos" in t and "antes de las 11:55" in t
-    assert "Gana Napoli · -200 · PA" in t and "📋" in t and "⏳" in t
+    assert "Gana Napoli · -200 · ⚡" in t and "📋" in t and "⏳" in t
     assert "Paga <b>+337</b>" in t and "con el bono de 7.5%: <b>+362</b>" in t
-    assert "Salen todas: ~24% (Pinnacle)" in t and "4.3" not in t
+    assert "Se gana más o menos 1 de cada 4 veces (según Pinnacle)" in t and "4.3" not in t
+    assert "Salen todas" not in t and "PA =" not in t and "⚡ = pago anticipado" in t
+    assert PA.times_text(0.14) == "más o menos 1 de cada 7 veces" and PA.times_text(0.7) == "70 de cada 100 veces"
     assert "Cambió el parlay del día" in PA.alert_text(rows, MX, changed=True)
     assert "Faltan alineaciones" in PA.alert_text(rows, MX, late=True)
 

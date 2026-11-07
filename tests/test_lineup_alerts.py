@@ -216,7 +216,13 @@ def test_the_pick_line_says_when_to_bet_it():
     assert "<b>+120</b> o más" in LA.pick_line(win("home_win"), alerts, {"verdict": "DESCARTA"})
     assert LA.pick_line(win("away_win"), alerts).endswith("Las bajas del rival lo favorecen.")
     no = LA.pick_line(win("btts", reason="El programa se separa demasiado del mercado: probablemente se equivoca"), alerts)
-    assert no.endswith("no pasa la regla del programa (el programa se separa demasiado del mercado): no lo apuestes.")
+    assert no.endswith("no es 🎯, el programa se separa demasiado del mercado: no lo apuestes.")
+    # con la nota de v2.9.2 dice lo mismo que la tarjeta del dashboard
+    note = LA.pick_line(win("btts", reason="x", star_note="No hay favorito claro: nadie llega a 65"), alerts)
+    assert note.endswith("no es 🎯, no hay favorito claro: no lo apuestes.")
+    short = LA.pick_line(win("btts", reason="x", star_note="Arsenal paga muy poco (-667): es muy favorito"), alerts)
+    assert short.endswith("no es 🎯, Arsenal paga muy poco (-667): no lo apuestes.")
+    assert "regla" not in note + short + no
     assert LA.pick_line(None, alerts) == "" and "sin precio" in LA.pick_line(win("draw", min_us=None), alerts)
 
 
@@ -250,7 +256,7 @@ def test_a_pick_that_saw_the_lineup_and_lost_the_rule_says_not_to_bet():
             "reason": "Alineación: a Alpha le faltan 4 titulares habituales (J7, J8, J9, J10)"}
     # Claude descarta las bajas, pero la regla del programa ya las contó
     assert LA.pick_line(pick, alerts, {"verdict": "DESCARTA"}).endswith(
-        "el pick ya vio la alineación y no pasa la regla por las bajas: no lo apuestes.")
+        "ya con la alineación, no es 🎯 por las bajas: no lo apuestes.")
 
 
 def test_the_message_writes_team_names_like_the_dashboard():
