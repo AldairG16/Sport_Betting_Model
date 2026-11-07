@@ -106,10 +106,11 @@ def saved_pick(p) -> dict:
         return {"label": "", "reason": reason}
     po = _num(p.get("playdoit_odds"))
     lineup = p.get("lineup") if isinstance(p.get("lineup"), str) else None    # None: aún sin alineación (v2.5.0)
+    note = p.get("star_note") if isinstance(p.get("star_note"), str) else ""    # por qué no es 🎯 (6-nov-26)
     return {"label": p.get("label"), "family": p.get("family"), "market": p.get("market"),
             "model": _num(p.get("model_prob")), "market_prob": _num(p.get("market_prob")),
             "playdoit_us": fmt_american(to_american(po)) if po else "", "rule": not reason, "reason": reason,
-            "lineup": lineup}
+            "lineup": lineup, "star_note": note}
 
 
 def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,

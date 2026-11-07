@@ -129,9 +129,11 @@ PICKS_ALTERS = ("ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS source TEXT"
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pre_lineup_result TEXT",
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pre_lineup_profit NUMERIC",
                 # v2.9.0: se cobró por el Pago Anticipado de PlayDoit (early_payout.py)
-                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pa_paid BOOLEAN")
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pa_paid BOOLEAN",
+                # por qué no tiene 🎯, dicho por el favorito (star_note, 6-nov-26)
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS star_note TEXT")
 _COLS = ("match", "match_date", "league", "display", "market", "label", "family", "reason", "model_prob",
-         "market_prob", "lean", "min_us", "best_odds", "playdoit_odds", "value", "lineup")
+         "market_prob", "lean", "min_us", "best_odds", "playdoit_odds", "value", "lineup", "star_note")
 
 NO_EDGE = "Sin ventaja: el programa ve lo mismo que el mercado"
 TOO_FAR = "El programa se separa demasiado del mercado: probablemente se equivoca"
@@ -165,7 +167,22 @@ MIN_FAV_ODDS = 1.20           # −500: más corto no entra al bono del parlay d
 # (+2.5-4 pts) y el pago anticipado (+1.26). Con 3.5 pts el momio mínimo queda
 # ≈ el promedio de las casas, donde el historial da ≈ 0% sin pago anticipado.
 FAV_EDGE = 0.035
-NOT_STRONG = "Solo 🎯 al favorito de 65%+ con pago anticipado"
+NOT_STRONG = "No es el muy favorito: el 🎯 es solo para un equipo muy favorito en una liga con pago anticipado"
+# Por qué un partido no tiene 🎯, dicho por el favorito (6-nov-26, el dueño:
+# "no entiendo nada eso de al favorito de 65%"). El motivo guardado (reason)
+# habla del pick que se ve; este, del 🎯: con la regla de v2.9.0 el 🎯 es solo
+# del favorito, así que sin 🎯 siempre hay algo del favorito que no cumple.
+# Antes de los dos puntos, lo corto que cabe en la tarjeta.
+STAR_NO_ODDS = "No hay momios del ganador: sin ellos no se sabe quién es el favorito"
+STAR_NO_FAV = ("No hay favorito claro: el 🎯 es solo para un equipo muy favorito, que según Pinnacle gana "
+               "65 de cada 100 partidos así o más. Aquí el más favorito es {team}, con {pct} de cada 100")
+STAR_NO_PA = ("{team} es muy favorito, pero esta liga no tiene pago anticipado: gana {pct} de cada 100 según "
+              "Pinnacle, pero en esta liga PlayDoit no paga como ganada la apuesta cuando el equipo va 2 goles "
+              "arriba. Sin eso, a la larga, apostarle al favorito sale tablas")
+STAR_NO_PRICE = ("No hay momio de PlayDoit para {team}: es muy favorito ({pct} de cada 100 según Pinnacle), "
+                 "pero sin su momio no se sabe si paga lo suficiente")
+STAR_SHORT = ("{team} paga muy poco ({us}): es muy favorito ({pct} de cada 100 según Pinnacle), pero más "
+              "corto que -500 casi no deja ganancia y no entra al bono del parlay")
 
 
 def _num(v):
@@ -364,9 +381,11 @@ def lineup_check(home: str, away: str, absent: dict | None) -> tuple:
     return weak, LINEUP_OK + (": " + "; ".join(notes) if notes else "")
 
 
-def _row(r: dict, kick, display, pick_: dict | None, reason: str | None, source=None, lineup=None) -> dict:
+def _row(r: dict, kick, display, pick_: dict | None, reason: str | None, source=None, lineup=None,
+         star_note=None) -> dict:
     base = {"match": str(r["match"]).lower(), "match_date": pd.Timestamp(kick).to_pydatetime(),
-            "league": r.get("league"), "display": display, "source": source, "lineup": lineup}
+            "league": r.get("league"), "display": display, "source": source, "lineup": lineup,
+            "star_note": star_note if pick_ and reason else None}
     if not pick_:
         return {**base, **{c: None for c in ("market", "label", "family", "model_prob", "market_prob", "lean",
                                              "min_us", "best_odds", "playdoit_odds", "value")}, "reason": reason}
@@ -416,6 +435,31 @@ def strong_favourite(cs: list, league) -> dict | None:
     fav = [c for c in cs or [] if c["market"] in ("home_win", "away_win") and c["market_prob"] is not None
            and c["market_prob"] >= STRONG_FAV and c["playdoit_odds"] and c["playdoit_odds"] >= MIN_FAV_ODDS]
     return max(fav, key=lambda c: c["market_prob"]) if fav else None
+
+
+def no_star_note(cs: list, league, weak: dict | None = None, teams=("el local", "el visitante")) -> str | None:
+    """Por qué el partido no tiene 🎯, dicho por su favorito y en palabras del
+    dueño (6-nov-26). Revisa lo mismo que strong_favourite, en orden: que haya
+    momios del ganador, que el favorito llegue a STRONG_FAV, la liga con pago
+    anticipado, su momio de PlayDoit y su alineación. teams: (local, visitante)
+    como se ven. None si el favorito cumple todo (entonces es 🎯)."""
+    from src.models.early_payout import PA_LEAGUES
+    wins = [c for c in cs or [] if c["market"] in ("home_win", "away_win") and c["market_prob"] is not None]
+    if not wins:
+        return STAR_NO_ODDS
+    fav = max(wins, key=lambda c: c["market_prob"])
+    team = teams[0] if fav["market"] == "home_win" else teams[1]
+    pct = round(fav["market_prob"] * 100)
+    if fav["market_prob"] < STRONG_FAV:
+        return STAR_NO_FAV.format(team=team, pct=pct)
+    if str(league or "") not in PA_LEAGUES:
+        return STAR_NO_PA.format(team=team, pct=pct)
+    if not fav["playdoit_odds"]:
+        return STAR_NO_PRICE.format(team=team, pct=pct)
+    if fav["playdoit_odds"] < MIN_FAV_ODDS:
+        from src.utils.min_odds import fmt_american
+        return STAR_SHORT.format(team=team, pct=pct, us=fmt_american(to_american(fav["playdoit_odds"])))
+    return (weak or {}).get(fav["market"])
 
 
 def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=None, paused=()) -> tuple:
@@ -581,8 +625,13 @@ def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame |
         props = props_for(h, a, r.get("league"), r["match_date"]) if props_for else None
         weak, lineup = lineups_for(h, a, r["match_date"]) if lineups_for else ({}, None)
         pk, why = decide(r, u, then, props, ratio, bias, weak, paused)
+        note = None
+        if pk and why:                         # sin 🎯: qué le falta al favorito (6-nov-26)
+            from dashboard.display import team_name
+            teams = (u.home_team, u.away_team) if u is not None else (team_name(h), team_name(a))
+            note = no_star_note(_candidates_of(r, u, props, ratio, bias), r.get("league"), weak, teams)
         rows.append(_row(r, r["match_date"], f"{u.home_team} vs {u.away_team}" if u is not None else None, pk, why,
-                         lineup=lineup))
+                         lineup=lineup, star_note=note))
     return rows
 
 

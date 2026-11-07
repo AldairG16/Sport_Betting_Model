@@ -2096,6 +2096,25 @@ fuentes de goleadores, el mismo jugador puede quedar con la fila vieja de Unders
 contra Postgres en un esquema aislado (borra el repetido, pasa sus datos a la fila que queda, lo respalda
 y la segunda corrida no hace nada).
 
+**Textos en palabras normales (v2.9.2, 6-nov-26).** El dueño: "necesito que el texto que usas en el
+dashboard sea más amigable, no entiendo nada eso de al favorito de 65%". Casi todas las tarjetas decían
+"solo 🎯 al favorito de 65%+ con pago anticipado", también la del PSG de 83% o la del Arsenal de 75%: el
+motivo guardado (`reason`) habla del pick que se ve (más/menos goles, ambos anotan) y no de por qué el
+favorito no es 🎯. Ahora cada pick sin 🎯 guarda además `star_note` (`program_picks.no_star_note`, mismo
+orden que `strong_favourite`): "No hay favorito claro" (nadie llega a 65 de cada 100 según Pinnacle),
+"Rosenborg es muy favorito, pero esta liga no tiene pago anticipado", "Arsenal paga muy poco (-667)",
+"No hay momio de PlayDoit para…" o el motivo de la alineación. Antes de los dos puntos va lo corto que
+cabe en la tarjeta; lo largo sale al pasar el mouse. `reason` no cambia (lo leen `filter_learner`,
+`board` y la liquidación), salvo el texto de `NOT_STRONG`, que nadie lee por su texto. Los picks de
+antes de v2.9.2 no tienen nota y la página traduce su `reason` (`shortWhy` en `ui_es5.js`).
+
+En la página: arriba de Próximos, qué es 🎯 en una línea; la barra dice "de cada 100"; cada tarjeta lleva
+el pick, "sin 🎯: …" y el estado de la alineación en renglones aparte; el encabezado cuenta los 🎯 de hoy
+(decía "🎯 Hoy: 6 picks" contando todos los picks, con cero 🎯); "pasan la regla" pasa a "recomendados",
+"unidades" a "ganancia", ROI a "lo que se gana o pierde de cada 100 apostados", "mercado" a "las casas", y
+el parlay explica cómo se arma y da la probabilidad en veces ("más o menos 1 de cada 7"). Lo cubre
+`tests/test_friendly_texts.py`, que corre las funciones de la página con node.
+
 **Se mantiene abierto solo (v1.6.0).** El `.exe` es un supervisor
 (`dashboard/supervisor.py`): lanza el servidor (el mismo `.exe` con `--serve`), le
 pregunta cada 15 s a `/api/health` y lo vuelve a abrir si se cierra (esperas de 5, 15,

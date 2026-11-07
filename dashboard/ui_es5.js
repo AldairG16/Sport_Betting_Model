@@ -205,13 +205,13 @@ function marketsHtml(d){
     var us = m.min_us === null || m.min_us === undefined ? '—' : (m.min_us > 0 ? '+' : '') + m.min_us;
     rows += '<tr' + (picked ? ' style="font-weight:bold"' : '') + '><td>' + famIcon(m.family) + ' ' + esc(m.label) +
             (picked ? ' <span class="small">← pick</span>' : '') + '</td><td>' + p100(m.model) + '</td><td>' + p100(m.market_prob) +
-            (m.estimated ? '<span class="muted" title="Sin momio real de esta línea: el mercado sale de su más/menos 2.5">*</span>' : '') +
-            '</td><td class="' + (m.gap >= 0 ? 'pos' : 'neg') + '">' + (m.gap >= 0 ? '+' : '') + (m.gap * 100).toFixed(1) + ' pt</td>' +
-            '<td title="Apuesta solo si PlayDoit paga esto o más">' + us + '</td></tr>';
+            (m.estimated ? '<span class="muted" title="Sin momio real de esta línea: lo de las casas se calcula de su línea de 2.5">*</span>' : '') +
+            '</td><td class="' + (m.gap >= 0 ? 'pos' : 'neg') + '">' + (m.gap >= 0 ? '+' : '') + (m.gap * 100).toFixed(1) + '</td>' +
+            '<td title="Para que valga la pena, PlayDoit tiene que pagar esto o más">' + us + '</td></tr>';
   }
-  return '<div class="small" style="margin-top:8px"><b>Lo que vio el programa</b> <span class="muted">· programa contra el mercado sin margen; ' +
-         'propone solo donde ve más que el mercado · * mercado estimado de su 2.5 (sin momio real: no entra al pick)</span>' +
-         '<table><thead><tr><th>Mercado</th><th>Programa</th><th>Mercado</th><th>Diferencia</th><th>PlayDoit mínimo</th></tr></thead><tbody>' +
+  return '<div class="small" style="margin-top:8px"><b>Cómo ve cada apuesta</b> <span class="muted">· qué tan probable la ve el programa y qué tan probable ' +
+         'la ven las casas (de cada 100). Diferencia: cuánto más (verde) o menos (rojo) la ve el programa · * sin momio real, no puede ser el pick</span>' +
+         '<table><thead><tr><th>Apuesta</th><th>Programa</th><th>Casas</th><th>Diferencia</th><th>Momio mínimo en PlayDoit</th></tr></thead><tbody>' +
          rows + '</tbody></table></div>';
 }
 // El ángulo de goles (v2.4.7, 26-oct-26): un equipo que recibe 2+ por partido
@@ -220,24 +220,24 @@ function goalsHtml(d){
   if (!a) return '';
   var who = [], i;
   for (i = 0; i < a.teams.length; i++) who.push(esc(a.teams[i].team) + ' recibe <b>' + a.teams[i].goals_against + '</b> goles por partido');
-  var h = '<div class="small" style="margin-top:8px"><b>⚽ Ángulo de goles</b> · ' + who.join(' y ') + ' (últimos ' + a.teams[0].n + ').<br>';
+  var h = '<div class="small" style="margin-top:8px"><b>⚽ Goles</b> · ' + who.join(' y ') + ' (últimos ' + a.teams[0].n + ').<br>';
   var alt = a.alternative;
   if (alt && d.picked === alt.market) {
     h += 'El pick ya es de goles: <b>' + esc(alt.label) + '</b>.';
   } else if (alt) {
-    h += 'Alternativa de goles: <b>' + esc(alt.label) + '</b> · programa ' + p100(alt.model) + ' contra mercado ' + p100(alt.market_prob) +
-         ' (+' + (alt.gap * 100).toFixed(1) + ' pt). No es el pick: el pick tiene más diferencia o pasa reglas que esta no.';
+    h += 'Otra opción de goles: <b>' + esc(alt.label) + '</b> · el programa la ve en ' + p100(alt.model) + ' y las casas en ' + p100(alt.market_prob) +
+         '. No es el pick porque el pick le saca más ventaja a las casas.';
   } else if (a.markets.length) {
     var x = [];
-    for (i = 0; i < a.markets.length; i++) x.push(esc(a.markets[i].label) + ': programa ' + p100(a.markets[i].model) + ' · mercado ' + p100(a.markets[i].market_prob));
-    h += x.join(' · ') + '. El mercado ya cuenta con esos goles y el programa no ve más: no hay pick de goles.';
+    for (i = 0; i < a.markets.length; i++) x.push(esc(a.markets[i].label) + ': programa ' + p100(a.markets[i].model) + ' · casas ' + p100(a.markets[i].market_prob));
+    h += x.join(' · ') + '. Las casas ya cuentan con esos goles y el programa no ve nada extra: no hay pick de goles.';
   } else {
     h += 'Sin momios de goles para comparar.';
   }
   var e = a.evidence;
-  if (e && e.n) h += '<br><span class="muted">En ' + Number(e.n).toLocaleString() + ' partidos históricos así, el más de 2.5 salió ' + p100(e.hit) +
-                     ' y el mercado esperaba ' + p100(e.expected) + ': apostarlo solo porque un equipo recibe mucho dejó ' + (e.roi >= 0 ? '+' : '') + (e.roi * 100).toFixed(1) +
-                     '%. Por eso el pick de goles sale solo cuando el programa ve más que el mercado.</span>';
+  if (e && e.n) h += '<br><span class="muted">En ' + Number(e.n).toLocaleString() + ' partidos parecidos, más de 2.5 goles salió ' + p100(e.hit) +
+                     ' de las veces y las casas esperaban ' + p100(e.expected) + ': apostarlo solo porque un equipo recibe muchos goles dejó ' + (e.roi >= 0 ? '+' : '') + (e.roi * 100).toFixed(1) +
+                     '%. Por eso el pick de goles sale solo cuando el programa ve más que las casas.</span>';
   return h + '</div>';
 }
 function detailHtml(d){
@@ -277,8 +277,9 @@ function upRow(m, i){
   var pick = pk.label ? (pk.rule ? '🎯 ' : '') + famIcon(pk.family) + ' <b>' + esc(pk.label) + '</b>' +
              (pk.playdoit_us ? ' <span class="muted">' + esc(pk.playdoit_us) + '</span>' : '') + whyTag(pk) + lineupTag(pk, m.lineups_covered) :
              noPick(pk.reason);
-  var tipPick = pk.label ? 'Programa ' + p100(pk.model) + ' · mercado ' + p100(pk.market_prob) + ' · momio PlayDoit aprox.' +
-                (pk.rule ? ' · 🎯 pasa la regla' : (pk.reason ? ' · no pasa la regla: ' + pk.reason : '')) : (pk.reason || '');
+  var tipPick = pk.label ? 'Qué tan probable lo ve: el programa ' + p100(pk.model) + ', las casas ' + p100(pk.market_prob) +
+                ' · el momio es el aproximado de PlayDoit' +
+                (pk.rule ? ' · 🎯 apuesta recomendada' : (pk.star_note || pk.reason ? ' · sin 🎯: ' + (pk.star_note || pk.reason) : '')) : (pk.reason || '');
   var al = _alerts[m.match] ? ' <span title="' + esc(_alerts[m.match]) + '">⚠️</span>' : '';
   return '<div class="m" id="u' + i + '"><div class="mr" onclick="openUp(' + i + ')">' +
          '<div class="time">' + mxtime(m.match_date) + '<span class="small muted">' + esc(m.league) + '</span></div>' +
@@ -325,10 +326,11 @@ function loadUpcoming(){
     fillSelect('uleague', list.sort());
     renderDayBar();
     renderUp();
-    // hoy: cuántos picks
+    // hoy: cuántos partidos y cuántos 🎯 (hasta v2.9.1 decía "🎯 Hoy: 6 picks" contando
+    // todos los picks, aunque ninguno fuera 🎯)
     var today = mxday(), n = 0, good = 0;
-    for (var j = 0; j < _up.length; j++) if (mxday(_up[j].match_date) === today) { n++; if (_up[j].pick && _up[j].pick.label) good++; }
-    el('chiptoday').innerHTML = n ? '🎯 Hoy: <b>' + good + '</b> picks en ' + n + ' partidos' : 'Hoy: sin partidos';
+    for (var j = 0; j < _up.length; j++) if (mxday(_up[j].match_date) === today) { n++; if (_up[j].pick && _up[j].pick.label && _up[j].pick.rule) good++; }
+    el('chiptoday').innerHTML = n ? '📅 Hoy: ' + n + ' partidos · 🎯 <b>' + good + '</b> recomendado' + (good === 1 ? '' : 's') : 'Hoy: sin partidos';
     getJSON('/api/lineups', function(l){
       _alerts = {};
       for (var k = 0; k < l.matches.length; k++) if (l.matches[k].level === 'alert') _alerts[l.matches[k].match] = l.matches[k].text;
@@ -343,25 +345,36 @@ el('ufam').onchange = function(){ _upFam = this.value; renderUp(); };
 // partidos de la K-League se veían vacíos sin decir por qué)
 function noPick(reason){
   var r = String(reason || '');
-  var txt = /poca historia/i.test(r) ? 'Sin análisis · poca historia' :
-            /momio/i.test(r) ? 'Sin pick · sin momio en rango' :
-            r ? 'Sin pick · ' + r.split(':')[0] : 'Sin análisis';
+  var txt = /poca historia/i.test(r) ? 'Sin análisis · pocos partidos de estos equipos para opinar' :
+            /momio/i.test(r) ? 'Sin pick · no hay momios para comparar' :
+            r ? 'Sin pick · ' + shortWhy(r) : 'Sin análisis';
   return '<span class="muted" title="' + esc(r || 'El programa no analizó este partido') + '">' + esc(txt) + '</span>';
 }
 
-// Por qué un pick no pasa la regla, corto y a la vista (v2.4.2, 24-oct-26: el dueño
-// quiere ver el pick aunque tenga poca historia, con una breve descripción)
+// Por qué no es 🎯, en palabras normales (v2.9.2, 6-nov-26, el dueño: "necesito que el
+// texto sea más amigable, no entiendo nada eso de al favorito de 65%"). Desde v2.9.2 el
+// pick trae star_note: lo que le falta al favorito para ser 🎯 ("no hay favorito claro",
+// "Arsenal paga muy poco (-650)"…). Los picks de antes solo traen el motivo guardado
+// (reason), que aquí se traduce.
 function shortWhy(reason){
   var r = String(reason || '');
   if (!r) return '';
-  if (/^Poca historia/i.test(r)) return '⚠️ poca historia';
-  if (/^Sin ventaja/i.test(r)) return 'sin ventaja';
-  if (/demasiado/i.test(r)) return 'muy lejos del mercado';
-  if (/se movi/i.test(r)) return 'el mercado se movió en contra';
-  if (/^Alineación/i.test(r)) return '⚠️ bajas en la alineación';
-  if (/ligas distintas/i.test(r)) return 'ligas distintas';
-  if (/momio/i.test(r)) return 'sin momio en rango';
-  return r.split(':')[0].toLowerCase();
+  if (/^Poca historia/i.test(r)) return 'pocos partidos de estos equipos para opinar';
+  if (/^Sin ventaja/i.test(r)) return 'el programa ve lo mismo que las casas';
+  if (/demasiado/i.test(r)) return 'el programa no coincide con las casas';
+  if (/se movi/i.test(r)) return 'el momio se movió en contra';
+  if (/^Alineación: a /i.test(r)) return r.replace(/^Alineación: /i, '').replace(/ habituales.*$/, '');
+  if (/^Alineación/i.test(r)) return 'le faltan titulares';
+  if (/ligas distintas/i.test(r)) return 'equipos de ligas distintas';
+  if (/^Región /i.test(r)) return 'en ' + r.split(' ')[1] + ' el programa viene perdiendo';
+  if (/favorito de 65|^No es el muy favorito/i.test(r)) return 'no era el muy favorito';
+  if (/momio/i.test(r)) return 'el momio no está en rango';
+  return noteShort(r);
+}
+// Lo corto de una nota (antes de los dos puntos); con minúscula si no empieza con un equipo
+function noteShort(note){
+  var s = String(note || '').split(':')[0];
+  return /^(No|Liga|Sin) /.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s;
 }
 // Marcador de ESPN del día (v2.4.4): en vivo o final, provisional hasta la noche
 function liveTag(lv){
@@ -374,13 +387,15 @@ function liveTag(lv){
 // se recalcula con ella: ⏳ todavía no la vio, 📋 ya la vio.
 function lineupTag(pk, covered){
   if (!pk || !pk.label) return '';
-  if (pk.lineup) return ' <span title="' + esc('El pick ya vio la alineación (' + pk.lineup + ')') + '">📋</span>';
-  if (covered === false) return ' <span class="muted small" title="ESPN no publica alineaciones de esta liga: el pick no las ve. Revisa la alineación antes de apostar.">· sin alineación</span>';
-  return ' <span class="muted" title="Pick antes de la alineación: se recalcula cuando sale (~1 h antes del partido). Para apostar, espera ese pick.">⏳</span>';
+  if (pk.lineup) return '<div class="small" title="' + esc('El pick ya se revisó con la alineación (' + pk.lineup + ')') + '">📋 ya con alineación</div>';
+  if (covered === false) return '<div class="muted small" title="ESPN no publica alineaciones de esta liga: el pick no las ve. Revisa la alineación antes de apostar.">ESPN no publica alineación</div>';
+  return '<div class="muted small" title="La alineación sale ~1 h antes del partido y ahí se revisa el pick (puede cambiar). Para apostar, espera a que salga.">⏳ falta la alineación</div>';
 }
 function whyTag(pk){
-  return (pk && !pk.rule && pk.reason) ?
-    ' <span class="muted small" title="' + esc(pk.reason) + '">· ' + esc(shortWhy(pk.reason)) + '</span>' : '';
+  if (!pk || pk.rule || !(pk.reason || pk.star_note)) return '';
+  var txt = pk.star_note ? noteShort(pk.star_note) : shortWhy(pk.reason);
+  if (pk.star_note && /^Poca historia/i.test(pk.reason || '')) txt += ' · ⚠️ pocos partidos de estos equipos';
+  return '<div class="muted small" title="' + esc(pk.star_note || pk.reason) + '">sin 🎯: ' + esc(txt) + '</div>';
 }
 
 // ── Anteriores (desde septiembre) ──
@@ -398,11 +413,12 @@ function pastRow(r, i){
   if (pk && pk.none) pickTxt = noPick(pk.reason);
   else if (pk) {
     var played = pk.result === 'win' || pk.result === 'loss' || pk.result === 'half_win' || pk.result === 'half_loss';
-    pickTxt = '<span' + (pk.old_model ? ' style="opacity:.6"' : '') + ' title="' + esc(pk.label + ' · programa ' + p100(pk.model) + ' vs mercado ' + p100(pk.market) +
-              (pk.winner ? ' · tuvo razón el ' + pk.winner : '') + (pk.old_model ? ' · modelo con error (antes del 22 oct)' : '') +
-              (pk.rule ? ' · 🎯 pasa la regla' : (pk.reason ? ' · no pasa la regla: ' + pk.reason : '')) +
-              (pk.rebuilt ? ' · reconstruido con la predicción guardada antes del partido' : '') +
-              (pk.provisional ? ' · provisional: con el marcador final, cuenta en los totales cuando se liquide' : '')) + '">' + (pk.rebuilt ? '↺ ' : '') +
+    pickTxt = '<span' + (pk.old_model ? ' style="opacity:.6"' : '') + ' title="' + esc(pk.label + ' · qué tan probable lo veía: el programa ' + p100(pk.model) + ', las casas ' + p100(pk.market) +
+              (pk.winner ? ' · tuvo razón ' + (pk.winner === 'mercado' ? 'el mercado (las casas)' : 'el programa') : '') +
+              (pk.old_model ? ' · versión del programa con error (antes del 22 oct)' : '') +
+              (pk.rule ? ' · 🎯 apuesta recomendada' : (pk.star_note || pk.reason ? ' · sin 🎯: ' + (pk.star_note || pk.reason) : '')) +
+              (pk.rebuilt ? ' · rehecho con la predicción guardada antes del partido' : '') +
+              (pk.provisional ? ' · provisional: ya terminó, cuenta en los totales cuando se cobre' : '')) + '">' + (pk.rebuilt ? '↺ ' : '') +
               (played ? ok(pk.result === 'win' || pk.result === 'half_win') : '⏳') + ' ' + (pk.rule ? '🎯 ' : '') + famIcon(pk.family) + ' ' + esc(pk.label) +
               (pk.profit !== null && played ? ' <span class="' + (pk.profit >= 0 ? 'pos' : 'neg') + '">' + money(pk.profit) + '</span>' : '') + '</span>' +
               whyTag(pk);
@@ -457,14 +473,14 @@ function loadPast(fresh){
   getJSON('/api/board/past' + (fresh ? '?fresh=1' : ''), function(d){
     _past = d.rows;
     var s = d.summary;
-    el('pkpis').innerHTML = kpi(s.matches, 'Partidos desde ' + shortDate(d.since)) +
-      kpi(p100(s.model_hit), '🤖 Programa acertó el favorito (' + s.analyzed + ')') +
-      kpi(p100(s.pin_hit), '🏦 Pinnacle acertó el favorito') +
-      kpi(s.picks_fixed.n ? s.picks_fixed.won + ' / ' + s.picks_fixed.n : '—', 'Picks · modelo corregido (desde 22 oct)' +
+    el('pkpis').innerHTML = kpi(s.matches, 'Partidos desde el ' + shortDate(d.since)) +
+      kpi(p100(s.model_hit), '🤖 Veces que el programa atinó el resultado (de ' + s.analyzed + ' partidos)') +
+      kpi(p100(s.pin_hit), '🏦 Veces que Pinnacle atinó el resultado') +
+      kpi(s.picks_fixed.n ? s.picks_fixed.won + ' / ' + s.picks_fixed.n : '—', 'Picks ganados / jugados, desde el 22 oct' +
           (s.picks_fixed.priced ? ' · ' + money(s.picks_fixed.profit) : ''), s.picks_fixed.profit >= 0 ? 'pos' : 'neg') +
-      kpi(s.picks_rule.n ? s.picks_rule.won + ' / ' + s.picks_rule.n : '—', '🎯 Pasan la regla · modelo corregido' +
+      kpi(s.picks_rule.n ? s.picks_rule.won + ' / ' + s.picks_rule.n : '—', '🎯 Recomendados ganados / jugados' +
           (s.picks_rule.priced ? ' · ' + money(s.picks_rule.profit) : ''), s.picks_rule.profit >= 0 ? 'pos' : 'neg') +
-      kpi(s.picks_old.n ? s.picks_old.won + ' / ' + s.picks_old.n : '—', '↺ Picks · modelo con error (antes del 22 oct)' +
+      kpi(s.picks_old.n ? s.picks_old.won + ' / ' + s.picks_old.n : '—', '↺ Picks antes del 22 oct (versión con error)' +
           (s.picks_old.priced ? ' · ' + money(s.picks_old.profit) : ''), s.picks_old.profit >= 0 ? 'pos' : 'neg') +
       kpi(s.bets ? money(s.bets_profit) : '—', '💰 Apuestas reales (' + s.bets + ')', s.bets_profit >= 0 ? 'pos' : 'neg');
     var lg = {}, list = [];
@@ -499,9 +515,9 @@ function renderResults(){
   for (i = 0; i < pills.length; i++) if (pills[i].getAttribute('data-g'))
     pills[i].className = 'pill' + (pills[i].getAttribute('data-g') === _resGroup ? ' on' : '');
   el('rkpis').innerHTML = kpi(t.won, '✅ Ganadas', 'pos') + kpi(t.lost, '❌ Perdidas', 'neg') +
-    kpi(t.push, '↔️ Empates / anuladas') + kpi(p100(t.hit), 'Acierto (ganadas entre ganadas y perdidas)') +
-    kpi(money(t.units), 'Unidades', t.units >= 0 ? 'pos' : 'neg') +
-    kpi(t.roi === null ? '—' : (t.roi >= 0 ? '+' : '') + (t.roi * 100).toFixed(1) + '%', 'Rendimiento (ROI)', t.roi >= 0 ? 'pos' : 'neg');
+    kpi(t.push, '↔️ Devueltas / anuladas') + kpi(p100(t.hit), '% de acierto') +
+    kpi(money(t.units), 'Ganancia (1 unidad por apuesta)', t.units >= 0 ? 'pos' : 'neg') +
+    kpi(t.roi === null ? '—' : (t.roi >= 0 ? '+' : '') + (t.roi * 100).toFixed(1) + '%', 'Rendimiento: lo que se gana o pierde de cada 100 apostados', t.roi >= 0 ? 'pos' : 'neg');
   var labels = [], lost = [];
   for (i = 0; i < g.daily.dates.length; i++) { labels.push(shortDate(g.daily.dates[i])); lost.push(-g.daily.lost[i]); }
   var tick = { fontColor: '#94a3b8' };
@@ -519,7 +535,7 @@ function renderResults(){
         return ds.label + ': ' + (ds.yAxisID === 'u' ? money(it.yLabel) : Math.abs(it.yLabel)); } } } } });
   h = '';
   for (i = 0; i < g.by_type.length; i++) h += resRow(g.by_type[i], _res.min_n);
-  el('rtypes').innerHTML = h || '<tr><td colspan="5" class="muted">Sin datos todavía.</td></tr>';
+  el('rtypes').innerHTML = h || '<tr><td colspan="5" class="muted">Todavía no hay apuestas terminadas.</td></tr>';
   h = '';
   var ll = [], lu = [], lc = [];
   for (i = 0; i < g.by_league.length; i++) {
@@ -528,7 +544,7 @@ function renderResults(){
     ll.push(lg.name + ' (' + lg.won + '-' + lg.lost + ')'); lu.push(lg.units);
     lc.push(lg.few ? (lg.units >= 0 ? 'rgba(34,197,94,.35)' : 'rgba(239,68,68,.35)') : (lg.units >= 0 ? '#22c55e' : '#ef4444'));
   }
-  el('rleagues').innerHTML = h || '<tr><td colspan="5" class="muted">Sin datos todavía.</td></tr>';
+  el('rleagues').innerHTML = h || '<tr><td colspan="5" class="muted">Todavía no hay apuestas terminadas.</td></tr>';
   el('cleaguesbox').style.height = Math.max(160, 40 + 22 * ll.length) + 'px';   // una barra por liga
   chart('cleagues', { type: 'horizontalBar', data: { labels: ll, datasets: [{ data: lu, backgroundColor: lc }] },
     options: { legend: { display: false }, scales: { xAxes: [{ ticks: tick }], yAxes: [{ ticks: tick }] },
@@ -566,7 +582,7 @@ function loadResults(fresh){
 // que empiezan juntos, con las alineaciones de todos).
 var _px = null;
 function pxIcon(x){
-  if (x.pa_paid && (x.result === 'win')) return '<span title="Pago anticipado: fue 2 goles arriba">⚡✅</span>';
+  if (x.pa_paid && (x.result === 'win')) return '<span title="Pago anticipado: fue 2 goles arriba y PlayDoit la pagó como ganada">⚡✅</span>';
   if (x.result === 'win' || x.result === 'half_win') return '✅';
   if (x.result === 'loss' || x.result === 'half_loss') return '❌';
   if (x.result === 'push' || x.result === 'stale') return '<span title="Anulada: el parlay sigue con las demás">↔</span>';
@@ -579,22 +595,28 @@ function pxStatus(p){
   if (p.status === 'win') return '<span class="pos">✅ ' + money(p.profit) + '</span>' + prov;
   if (p.status === 'loss') return '<span class="neg">❌ ' + money(-1) + '</span>' + prov;
   if (p.status === 'push') return '↔ anulado' + prov;
-  return '<span class="muted">⏳ van ' + p.won_legs + ' de ' + p.k + '</span>';
+  return '<span class="muted">⏳ ' + p.won_legs + ' de ' + p.k + ' ganados hasta ahora</span>';
 }
 function pxLineup(x){
   if (x.started) return '';
-  if (x.lineup) return ' <span title="' + esc('Vio la alineación (' + x.lineup + ')') + '">📋</span>';
-  if (x.no_lineups) return ' <span class="muted small" title="ESPN no publica alineaciones de esta liga: revísala antes de apostar.">· sin alineación</span>';
-  return ' <span class="muted" title="Todavía sin alineación: sale ~1 h antes del partido.">⏳</span>';
+  if (x.lineup) return ' <span class="small" title="' + esc('Ya se revisó con la alineación (' + x.lineup + ')') + '">· 📋 con alineación</span>';
+  if (x.no_lineups) return ' <span class="muted small" title="ESPN no publica alineaciones de esta liga: revísala antes de apostar.">· ESPN no publica alineación</span>';
+  return ' <span class="muted small" title="La alineación sale ~1 h antes del partido.">· ⏳ falta la alineación</span>';
 }
 function pxReady(d){
   var p = d.parlay;
   if (!p || p.status !== 'pending') return '';
   if (p.locked) return '<span class="small muted">🔒 ya empezó: así quedó</span>';
-  var what = d.kind === 'dia' ? 'las alineaciones del primer horario' : 'las alineaciones de todos';
-  if (d.ready) return '<span class="small pos">📋 ya vio ' + what + '</span><span class="small muted">apuéstalo antes de las ' + mxtime(d.lock) + '</span>';
-  return '<span class="small muted" title="Las alineaciones salen ~1 h antes; se rehace cada 30 min y Telegram avisa">⏳ esperando ' + what +
-    ' · puede cambiar hasta las ' + mxtime(d.lock) + '</span>';
+  var what = d.kind === 'dia' ? 'la alineación del primer partido' : 'las alineaciones de todos';
+  if (d.ready) return '<span class="small pos">📋 ya revisado con ' + what + '</span><span class="small muted">apuéstalo antes de las ' + mxtime(d.lock) + '</span>';
+  return '<span class="small muted" title="Las alineaciones salen ~1 h antes; el parlay se revisa cada 30 min y Telegram avisa cuando está listo">⏳ falta ' + what +
+    ' (sale ~1 h antes) · puede cambiar hasta las ' + mxtime(d.lock) + '</span>';
+}
+// "~14%" → "1 de cada 7": la probabilidad de ganarlo dicha en veces
+function pxOdds(p){
+  if (!p) return '—';
+  var n = Math.round(1 / p);
+  return n > 1 ? 'más o menos 1 de cada ' + n + ' veces' : p100(p);
 }
 function pxName(d){
   if (d.kind === 'dia') return 'Parlay del día' + (d.seq > 1 ? ' (' + d.seq + ')' : '');
@@ -605,41 +627,46 @@ function pxBonus(p){
 }
 function pxBlock(d){
   var p = d.parlay, h = '<div class="small" style="margin:6px 0 4px"><b>' + pxName(d) + '</b> · ' + p.k + ' partidos' +
-    (d.kind === 'horario' ? ' <span class="muted">(empiezan juntos: todos con alineación)</span>' : '') + '</div>';
+    (d.kind === 'horario' ? ' <span class="muted">(empiezan a la misma hora: se arma ya con todas las alineaciones)</span>' : '') + '</div>';
   h += '<div class="tbl" style="margin-bottom:8px"><table><thead><tr><th>Hora</th><th>Partido</th><th>Apuesta</th><th>Momio</th>' +
-       '<th class="hide-sm" title="Probabilidad de Pinnacle sin margen">🏦</th><th></th></tr></thead><tbody>';
+       '<th class="hide-sm" title="De cada 100 partidos así, cuántos gana este equipo según Pinnacle">Gana</th><th></th></tr></thead><tbody>';
   for (var i = 0; i < d.legs.length; i++) {
     var x = d.legs[i];
     h += '<tr><td class="nw">' + mxtime(x.kickoff) + '</td><td>' + esc(x.match) + '<div class="small muted">' + esc(x.league) + '</div></td>' +
-         '<td><b>' + esc(x.label) + '</b>' + (x.pa ? ' <span class="small" title="Pago anticipado: si va 2 goles arriba, PlayDoit la da por ganada">PA</span>' : '') +
-         pxLineup(x) + '</td><td class="nw">' + esc(x.odds_us || '') + '</td><td class="hide-sm nw">' + p100(x.market) + '</td>' +
-         '<td class="sc"' + (x.provisional ? ' title="Provisional: con el marcador final; se confirma al liquidar"' : '') + '>' + pxIcon(x) + '</td></tr>';
+         '<td><b>' + esc(x.label) + '</b>' + (x.pa ? ' <span class="small" title="Pago anticipado: si va 2 goles arriba, PlayDoit la paga como ganada aunque luego le empaten">⚡</span>' : '') +
+         pxLineup(x) + '</td><td class="nw">' + esc(x.odds_us || '') + '</td><td class="hide-sm nw" title="De cada 100 partidos así, cuántos gana según Pinnacle">' +
+         (x.market === null || x.market === undefined ? '—' : Math.round(x.market * 100) + ' de 100') + '</td>' +
+         '<td class="sc"' + (x.provisional ? ' title="Provisional: ya terminó; se confirma cuando se cobre"' : '') + '>' + pxIcon(x) + '</td></tr>';
   }
-  h += '</tbody></table><div class="xsum"><span title="Momio del parlay en PlayDoit (el estimado de cada pierna, multiplicado)">paga <b>' + esc(p.odds_us || '—') + '</b></span>' +
-       (p.bonus ? '<span title="El bono de PlayDoit se paga sobre la ganancia">con bono ' + pxBonus(p) + ': <b class="big">' + esc(p.odds_bonus_us || '—') + '</b></span>' : '') +
-       '<span class="muted" title="Probabilidad de que salgan todas (Pinnacle sin margen; el pago anticipado suma un poco)">salen todas: ~' + p100(p.p_market) + '</span>' +
+  h += '</tbody></table><div class="xsum"><span title="Momio del parlay en PlayDoit (el aproximado de cada partido, multiplicado)">paga <b>' + esc(p.odds_us || '—') + '</b></span>' +
+       (p.bonus ? '<span title="PlayDoit suma este bono a la ganancia">con el bono de ' + pxBonus(p) + ': <b class="big">' + esc(p.odds_bonus_us || '—') + '</b></span>' : '') +
+       '<span class="muted" title="Probabilidad de que salgan todos (según Pinnacle; el pago anticipado la sube un poco): ~' + p100(p.p_market) + '">se gana ' + pxOdds(p.p_market) + '</span>' +
        '<span>' + pxStatus(p) + '</span>' + pxReady(d) + '</div></div>';
   return h;
 }
 function renderParlay(){
   if (!_px) return;
   var i, h = '', today = mxday(), r = _px.rules;
-  el('xrule').innerHTML = 'Favoritos de ' + p100(r.strong) + ' o más según Pinnacle, con pago anticipado (PA), a ' + esc(r.min_odds_us) +
-    ' o más largo · bono de PlayDoit sobre la ganancia: 3 = 5%, 4 = 7.5%, 5 = 10%, 6 = 15% · del día: de ' + r.day_min + ' a ' + r.max_legs +
-    ' · de un horario: ' + r.slot_min + ' o más que empiezan juntos (hasta ' + r.block_minutes + ' min), con alineación · ligas: ' + esc(r.leagues.join(', '));
+  el('xrule').innerHTML = '<b>Cómo se arma:</b> solo equipos muy favoritos (según Pinnacle ganan ' + Math.round(r.strong * 100) +
+    ' de cada 100 partidos así o más) que paguen ' + esc(r.min_odds_us) + ' o mejor, en ligas con pago anticipado ⚡ ' +
+    '(si el equipo va 2 goles arriba, PlayDoit la paga como ganada aunque luego le empaten). ' +
+    'PlayDoit suma un bono a la ganancia: 3 partidos +5%, 4 +7.5%, 5 +10%, 6 +15%. ' +
+    '<b>Parlay del día:</b> de ' + r.day_min + ' a ' + r.max_legs + ' partidos. <b>Parlay de un horario:</b> ' + r.slot_min +
+    ' o más que empiezan a la misma hora, ya con las alineaciones. Ligas: ' + esc(r.leagues.join(', ')) + '.';
   var next = [], lastDay = '';
   for (i = _px.parlays.length - 1; i >= 0; i--) if (_px.parlays[i].day >= today) next.push(_px.parlays[i]);   // del más próximo
   for (i = 0; i < next.length; i++) {
     if (next[i].day !== lastDay) { h += '<div class="day">' + dayLabel(next[i].day) + '</div>'; lastDay = next[i].day; }
     h += pxBlock(next[i]);
   }
-  el('xnext').innerHTML = h || '<div class="muted">Por ahora no hay parlay: ningún día junta ' + r.day_min + ' favoritos de ' + p100(r.strong) +
-    ' o más en las ligas con pago anticipado (ni ' + r.slot_min + ' en un mismo horario). Se revisa cada 30 min y Telegram avisa.</div>';
+  el('xnext').innerHTML = h || '<div class="muted">Por ahora no hay parlay: ningún día tiene ' + r.day_min + ' equipos muy favoritos en las ligas con pago anticipado ' +
+    '(ni ' + r.slot_min + ' a la misma hora). Se revisa cada 30 min y Telegram avisa.</div>';
   var t = _px.record.all, td = _px.record.dia, th = _px.record.horario;
-  el('xkpis').innerHTML = kpi(t.n, 'Parlays liquidados') + kpi(t.won, '✅ Ganados', 'pos') + kpi(t.lost, '❌ Perdidos', 'neg') +
-    kpi(money(t.units), 'Unidades (1u por parlay, con bono)', t.units >= 0 ? 'pos' : 'neg') + kpi(_roi(t.roi), 'Rendimiento (ROI)') +
-    kpi(t.legs ? t.legs_won + ' / ' + t.legs : '—', 'Piernas que salieron (' + p100(t.legs_hit) + ')') +
-    kpi(t.pa, '⚡ Cobradas por pago anticipado') +
+  el('xkpis').innerHTML = kpi(t.n, 'Parlays terminados') + kpi(t.won, '✅ Ganados', 'pos') + kpi(t.lost, '❌ Perdidos', 'neg') +
+    kpi(money(t.units), 'Ganancia (1 unidad por parlay, con bono)', t.units >= 0 ? 'pos' : 'neg') +
+    kpi(_roi(t.roi), 'Rendimiento: lo que se gana o pierde de cada 100 apostados') +
+    kpi(t.legs ? t.legs_won + ' / ' + t.legs : '—', 'Partidos de los parlays que salieron (' + p100(t.legs_hit) + ')') +
+    kpi(t.pa, '⚡ Cobrados por ir 2 goles arriba') +
     kpi(td.n ? money(td.units) + ' en ' + td.n : '—', 'Del día') + kpi(th.n ? money(th.units) + ' en ' + th.n : '—', 'De un horario');
   h = '';
   for (i = 0; i < _px.parlays.length; i++) {
@@ -761,11 +788,11 @@ function loadCharts(fresh){
     }
     chart('cfam', { type: 'horizontalBar', data: { labels: fl, datasets: [{ label: 'Unidades', data: fu, backgroundColor: fc }] },
       options: { legend: nolegend, scales: { xAxes: [{ ticks: { fontColor: '#94a3b8' } }], yAxes: [{ ticks: { fontColor: '#94a3b8' } }] },
-                 tooltips: { callbacks: { afterLabel: function(c){ return 'Acierto ' + fw[c.index] + '%'; } } } } });
+                 tooltips: { callbacks: { afterLabel: function(c){ return 'Acierto: ' + fw[c.index] + '%'; } } } } });
     chart('cpicks', { type: 'line', data: { labels: d.picks.dates, datasets: [
-      { label: '↺ Modelo con error', data: d.picks.old, borderColor: '#94a3b8', pointRadius: 0, fill: false, spanGaps: false },
-      { label: 'Modelo corregido', data: d.picks.fixed, borderColor: '#22c55e', fill: false, spanGaps: false },
-      { label: '🎯 Pasan la regla', data: d.picks.rule, borderColor: '#eab308', fill: false, spanGaps: false }] },
+      { label: '↺ Antes del 22 oct (versión con error)', data: d.picks.old, borderColor: '#94a3b8', pointRadius: 0, fill: false, spanGaps: false },
+      { label: 'Todos los picks', data: d.picks.fixed, borderColor: '#22c55e', fill: false, spanGaps: false },
+      { label: '🎯 Recomendados', data: d.picks.rule, borderColor: '#eab308', fill: false, spanGaps: false }] },
       options: { legend: legend, scales: axes } });
     var pl = [], pv = [], pc = [];
     for (var j = 0; j < d.proposals.length; j++) {
@@ -775,7 +802,7 @@ function loadCharts(fresh){
       pc.push(w.old_model ? (w.profit_1u >= 0 ? 'rgba(34,197,94,.35)' : 'rgba(239,68,68,.35)') : (w.profit_1u >= 0 ? '#22c55e' : '#ef4444'));
     }
     chart('cprops', { type: 'bar', data: { labels: pl, datasets: [{ data: pv, backgroundColor: pc }] },
-      options: { legend: nolegend, scales: axes, tooltips: { callbacks: { footer: function(it){ return d.proposals[it[0].index].old_model ? 'Modelo con error (antes del 22-oct)' : ''; } } } } });
+      options: { legend: nolegend, scales: axes, tooltips: { callbacks: { footer: function(it){ return d.proposals[it[0].index].old_model ? 'Versión del programa con error (antes del 22 oct)' : ''; } } } } });
   }, function(msg){ err('Gráficas: ' + msg); });
 }
 
