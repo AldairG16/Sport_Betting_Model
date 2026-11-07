@@ -229,10 +229,12 @@ def test_the_weekly_block_reads_the_week_and_the_total(monkeypatch):
     lines = LC.weekly_lines(engine=object(), now=now)
     text = "\n".join(lines)
     assert lines[0] == "— <b>CAMBIOS CON LA ALINEACIÓN</b> —"
-    assert "Semana: 1 picks vieron la alineación, 1 cambiaron" in text
-    assert "antes 1 apuestas -1.00u → después 0 apuestas +0.00u" in text
-    assert "Desde el 20-12: 2 cambios · 🎯 antes -2.00u → después +0.90u" in text
-    assert "Veredicto: todavía pocos datos" in text
+    # en palabras normales (6-nov-26): la ganancia apostando 100 a cada uno, sin "u" ni desviaciones
+    assert "Esta semana se revisaron 1 picks con la alineación y 1 cambiaron." in text
+    assert "con el pick de antes, 1 apuestas y -100; con el nuevo, 0 apuestas y 0." in text
+    assert "Desde el 20-12: 2 cambios · en los 🎯, con el pick de antes -200 y con el nuevo +90" in text
+    assert "¿Conviene cambiar el pick con la alineación? todavía no se sabe: van 2 de 20 cambios en 🎯" in text
+    assert not __import__("re").search(r"\du\b", text) and "desviaciones" not in text
 
 
 def test_the_weekly_block_is_quiet_before_the_columns_exist(monkeypatch):
