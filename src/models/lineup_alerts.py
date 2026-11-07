@@ -192,7 +192,8 @@ def pick_line(pick: dict | None, alerts: list, review: dict | None = None) -> st
     descartó las bajas, no."""
     if not pick or not pick.get("label"):
         return ""
-    head = f"🎯 Pick del programa: <b>{pick['label']}</b>"
+    # 🎯 solo si el pick es recomendado: decía "🎯 Pick del programa: … — no es 🎯" (6-nov-26)
+    head = f"{'🤖' if pick.get('reason') else '🎯'} Pick del programa: <b>{pick['label']}</b>"
     side = _PICK_SIDE.get(pick.get("market"))
     a0 = alerts[0] if alerts else {}
     weakened = {a["weakened"] for a in alerts}

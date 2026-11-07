@@ -223,6 +223,7 @@ def test_the_pick_line_says_when_to_bet_it():
     short = LA.pick_line(win("btts", reason="x", star_note="Arsenal paga muy poco (-667): es muy favorito"), alerts)
     assert short.endswith("no es 🎯, Arsenal paga muy poco (-667): no lo apuestes.")
     assert "regla" not in note + short + no
+    assert note.startswith("🤖 Pick del programa") and LA.pick_line(win("draw"), alerts).startswith("🎯 Pick del programa")
     assert LA.pick_line(None, alerts) == "" and "sin precio" in LA.pick_line(win("draw", min_us=None), alerts)
 
 
