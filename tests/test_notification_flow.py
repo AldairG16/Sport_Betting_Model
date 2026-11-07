@@ -225,7 +225,6 @@ class TestSendTomorrowPreviewIncludesPaper:
         nt.send_tomorrow_preview()
 
         assert len(sent_messages) == 1
-        # desde el filtro Pinnacle (25-sep-26) los días sin picks son lo
-        # esperado: el mensaje lo dice y pide no apostar
-        assert nt.NO_PICKS_TEXT in sent_messages[0] and "No apuestes nada" in sent_messages[0]
+        # sin 🎯 recomendados el mensaje lo dice en palabras normales (6-nov-26)
+        assert "no hay recomendados" in sent_messages[0] and "No hace falta apostar" in sent_messages[0]
         assert "PAPER" not in sent_messages[0]

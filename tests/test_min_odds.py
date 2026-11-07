@@ -10,7 +10,6 @@ la cuota mínima. Estas pruebas van contra los constructores que sí se envían.
 
 import math
 
-import pandas as pd
 import pytest
 
 from src.utils.min_odds import (MIN_EDGE_TO_PLACE, american_to_decimal, fmt_american,
@@ -108,16 +107,6 @@ def _no_decimal_odds(msg):
     return not any(x in msg for x in ("1.92", "1.73", "@1", "@2"))
 
 
-def test_morning_and_night_previews_show_the_playdoit_minimum():
-    """El candidato de la mañana (format_bets_message) y el de la noche
-    (send_tomorrow_preview) salen de _build_bets_by_league."""
-    from scripts.notify_telegram import _build_bets_by_league, format_bets_message
-    for msg, n in (format_bets_message(pd.DataFrame([PICK])),
-                   _build_bets_by_league(pd.DataFrame([PICK]), "PICKS DE MAÑANA")):
-        assert n == 1 and RULE in msg and _no_decimal_odds(msg)
-        assert "Número más alto = paga más" in msg
-
-
 def test_kickoff_confirmation_shows_the_playdoit_minimum():
     from scripts.revalidate_pending_bets import _format_confirmations
     msg = _format_confirmations([PICK])
@@ -129,13 +118,6 @@ def test_without_probability_the_reference_price_is_american():
     from scripts.revalidate_pending_bets import _format_confirmations
     msg = _format_confirmations([dict(PICK, probability=None)])
     assert "Mejor cuota: -109" in msg and "PlayDoit: apuesta" not in msg
-
-
-def test_evening_summary_preview_of_tomorrow():
-    from scripts.notify_telegram import _tomorrow_line
-    line = _tomorrow_line(pd.Series(PICK))
-    assert "PlayDoit -138 o mejor" in line and "home_win" not in line
-    assert _no_decimal_odds(line)
 
 
 def test_paper_section_price_is_american(tmp_path, monkeypatch):

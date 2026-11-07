@@ -2121,6 +2121,30 @@ apuestes" (lo corto de `star_note`) en lugar de "no pasa la regla del programa (
 "Se gana más o menos 1 de cada 4 veces (según Pinnacle)" y ⚡ en lugar de "Salen todas: ~24%" y "PA".
 El aviso de alineación pone 🎯 solo al pick recomendado; los demás van con 🤖 (decía "🎯 Pick… — no es 🎯").
 
+**Mensajes de la mañana, de la noche y semanal con los picks del programa (6-nov-26).** El dueño, del
+resumen de la noche: "cámbialo también". Al revisarlo salió algo peor que las palabras: los tres mensajes
+leían `bets_history`, que dejó de llenarse con el modo colección (25-sep-26). Desde entonces la mañana
+decía cada día "No apuestes nada: el sistema sigue recolectando datos en sombra", la noche "Sin apuestas
+para hoy" y el semanal "Sin apuestas jugadas esta semana", aunque el dashboard y "Partidos de hoy"
+recomendaban 🎯 y parlays. Ahora los tres salen de `src/models/telegram_reports.py`, que lee lo mismo que
+el dashboard: `program_picks` (🎯 = sin `reason`) y los parlays con bono de `program_parlays`, armados con
+`dashboard.parlay.parlay_board`.
+- **Mañana** (`notify_best_bets`): los 🎯 de hoy con "apuesta si PlayDoit paga X o más" (`min_us`), los
+  parlays con lo que pagan y "se gana más o menos 1 de cada N veces", y cuántos partidos más hay sin 🎯.
+- **Noche** (`send_evening_summary`): cómo terminó cada 🎯, cada parlay, los demás picks en una línea, los
+  🎯 desde el 22 oct (111 de 203 el 6-nov, lo mismo que el dashboard) y cuántos 🎯 hay mañana.
+- **Semanal** (`send_weekly_report`): la semana de 🎯 (mejor y peor liga), los parlays y los demás picks,
+  lo acumulado y los cambios con la alineación (`lineup_changes.format_lines`, ahora con "¿Conviene cambiar
+  el pick con la alineación?" en vez de z-scores).
+
+La ganancia se dice "apostando 100 a cada uno": el pick a 1 unidad al momio de PlayDoit × 100. Si la base
+falla no se manda nada (antes salía "Sin apuestas"). El aviso de una corrida con pasos fallidos (`send_health_check`) ya no
+muestra "Bankroll 63.40u (ROI …)" ni las "pending" de `bets_history`: dice cuántos pasos fallaron, los 🎯
+del mensaje de la mañana, los créditos y cuánto tardó. Se quitaron los formatos viejos de `bets_history`
+(`format_bets_message`, `_build_bets_by_league`, `_diversified_top`, `_tomorrow_line`, `NO_PICKS_TEXT`). Siguen
+en jerga técnica los avisos para el que mantiene el sistema: calibración, laboratorio de estrategias, salud.
+Lo cubre `tests/test_telegram_reports.py`, que también revisa que no salgan ROI, "u", Profit ni momios decimales.
+
 **Se mantiene abierto solo (v1.6.0).** El `.exe` es un supervisor
 (`dashboard/supervisor.py`): lanza el servidor (el mismo `.exe` con `--serve`), le
 pregunta cada 15 s a `/api/health` y lo vuelve a abrir si se cierra (esperas de 5, 15,

@@ -33,25 +33,3 @@ def test_swapped_dates_plan():
     fixes, skipped = plan_swaps(rows, {("c", "d", date(2026, 2, 10))}, today=date(2026, 9, 25))
     assert fixes == [(1, date(2026, 11, 3), date(2026, 3, 11))]
     assert [i for i, _ in skipped] == [2, 3, 4]
-
-
-def test_evening_summary_shows_cancelled_bets_as_cancelled(monkeypatch):
-    import scripts.notify_telegram as nt
-    day = pd.DataFrame([
-        {"match": "a vs b", "match_date": pd.Timestamp("2026-09-24 20:00"), "market": "home_win",
-         "odds": 1.9, "stake": 1.0, "result": "win", "profit": 0.9, "edge": 0.06,
-         "probability": 0.58, "league": "soccer_epl"},
-        {"match": "c vs d", "match_date": pd.Timestamp("2026-09-24 22:00"), "market": "over25",
-         "odds": 2.0, "stake": 1.0, "result": "stale", "profit": 0.0, "edge": 0.06,
-         "probability": 0.56, "league": "soccer_epl"},
-    ])
-    sent = []
-    monkeypatch.setattr(nt.pd, "read_sql",
-                        lambda sql, con=None, **k: day.copy() if "ORDER BY match_date" in str(sql)
-                        else pd.DataFrame(columns=["match", "market", "odds", "probability", "stake", "edge"]))
-    monkeypatch.setattr(nt, "send_message", lambda m: sent.append(m) or True)
-    nt.send_evening_summary(target_date=date(2026, 9, 24))
-    msg = sent[0]
-    assert "Bets hoy:   1  (1✅  0❌  0⏳)  ·  1 cancelada 🚫" in msg
-    assert "🚫 c vs d" in msg and "cancelada antes del partido" in msg
-    assert "revisar (sin resolver)" not in msg

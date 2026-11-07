@@ -15,61 +15,6 @@ from src.utils.bet_status import CANCELLED_SQL, RESOLVED_SQL
 
 
 # ============================================================
-# Reporte semanal de Telegram
-# ============================================================
-
-def _run_weekly(monkeypatch, week, total, cancelled):
-    import scripts.notify_telegram as nt
-    import src.models.bankroll_manager as bm
-    seen, sent = [], []
-
-    def fake_read_sql(sql, con=None, **kw):
-        s = str(sql)
-        seen.append(" ".join(s.split()))
-        if "COUNT(*)" in s:
-            return pd.DataFrame([{"n": cancelled}])
-        return (week if "7 days" in s else total).copy()
-
-    monkeypatch.setattr(nt.pd, "read_sql", fake_read_sql)
-    monkeypatch.setattr(nt, "send_message", lambda m: sent.append(m) or True)
-    monkeypatch.setattr(bm, "get_bankroll_stats", lambda: {
-        "current": 58.48, "initial": 100.0, "roi_pct": -41.5, "total_profit": -41.52,
-        "drawdown_pct": 45.0})
-    nt.send_weekly_report()
-    return sent[0], seen
-
-
-def _bets(results):
-    return pd.DataFrame([{"market": "home_win", "odds": 2.0, "stake": 1.0, "result": r,
-                          "profit": {"win": 1.0, "loss": -1.0, "push": 0.0,
-                                     "half_win": 0.5, "half_loss": -0.5}[r],
-                          "league": "soccer_usa_mls"} for r in results])
-
-
-def test_weekly_report_counts_only_played_bets_and_lists_cancelled_apart(monkeypatch):
-    week = _bets(["win", "win", "loss", "push"])
-    total = _bets(["win"] * 3 + ["loss"] * 5)
-    msg, seen = _run_weekly(monkeypatch, week, total, cancelled=14)
-    assert "Bets:     4  (2W / 1L / 1 nulas  67%)" in msg
-    assert "ROI:      📈 +25.0%" in msg                                # +1u / 4u
-    assert "Canceladas antes del partido (no se apostaron): 14" in msg
-    assert "Bets totales: 8  (WR: 38%)" in msg
-    # la base filtra: solo jugadas y liquidadas; las canceladas, en su conteo
-    # (el bloque de propuestas del modelo y el de cambios con la alineación,
-    # v2.8.0, no miden apuestas: son aparte)
-    assert all(RESOLVED_SQL in s for s in seen
-               if "COUNT(*)" not in s and "model_proposals" not in s and "FROM program_picks" not in s)
-    assert any("result = 'stale'" in s and CANCELLED_SQL in s for s in seen)
-
-
-def test_week_with_only_cancelled_bets_says_so(monkeypatch):
-    msg, _ = _run_weekly(monkeypatch, _bets([]).iloc[:0], _bets(["loss"]), cancelled=14)
-    assert "Sin apuestas jugadas esta semana." in msg
-    assert "Canceladas antes del partido (no se apostaron): 14" in msg
-    assert "POR MERCADO" not in msg and "Bets:     0" not in msg
-
-
-# ============================================================
 # Dashboard
 # ============================================================
 

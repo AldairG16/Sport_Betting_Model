@@ -37,7 +37,7 @@ from config.settings import (
     USER_TIMEZONE,
 )
 from src.utils.log import get_logger
-from src.utils.min_odds import HOW_TO_READ, fmt_american, min_american, playdoit_line, to_american
+from src.utils.min_odds import fmt_american, to_american
 
 log = get_logger(__name__)
 
@@ -45,18 +45,6 @@ log = get_logger(__name__)
 # en rojo si hay alguno (1-oct-26): Telegram es el único canal de alertas, y si
 # es él el que falla, el aviso solo puede llegar por el correo de GitHub.
 SEND_FAILURES: list[str] = []
-
-# Probabilidad sin margen de Pinnacle de una bet (25-sep-26): su cierre si el
-# closing ya lo capturó; si no, la del momento del pick (decision_log). Con
-# ella la cuota mínima para PlayDoit nunca queda por debajo de lo justo.
-PIN_PROB_SQL = "COALESCE(pin_close_prob, CAST(decision_log->'market_ctx'->>'pin_prob' AS float))"
-
-# Días sin picks (frecuentes desde el filtro Pinnacle): es lo esperado, no una falla.
-NO_PICKS_TEXT = ("Sin apuestas con valor real frente a Pinnacle. No apuestes nada: "
-                 "el sistema sigue recolectando datos en sombra.")
-PIN_PROB_SQL_B = ("COALESCE(b.pin_close_prob, "
-                  "CAST(b.decision_log->'market_ctx'->>'pin_prob' AS float))")
-
 
 # ── Helpers de fecha en hora local del usuario ────────────────────────────────
 def _local_today():
@@ -66,15 +54,6 @@ def _local_today():
 def _local_tomorrow():
     """Fecha de MAÑANA en la zona horaria del usuario."""
     return _local_today() + timedelta(days=1)
-
-def _tz_date_filter(col: str, date) -> str:
-    """
-    Genera el fragmento SQL que convierte una columna UTC a hora local
-    y la compara contra una fecha dada.
-    Ejemplo: (b.match_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Mexico_City')::date = '2026-04-04'
-    """
-    return f"({col} AT TIME ZONE 'UTC' AT TIME ZONE '{USER_TIMEZONE}')::date = '{date}'"
-
 
 # ── Contador de picks mostrados en la última notificación ─────────────────────
 # Lo lee `orchestrator.py` en el `finally` para construir el health-check con
@@ -393,75 +372,6 @@ _RESULT_GROUPS = [
 ]
 
 
-# ── Ligas Tier-1 garantizadas en el top de Telegram ──────────────────────────
-# Big 5 europeos: aunque su max edge histórico sea ~0.15 (vs 0.30+ de ligas
-# blandas como Brasil/Argentina/China), el usuario quiere recibir picks de
-# estas ligas por relevancia. Sin garantía explícita, el head(N) global por
-# edge nunca los selecciona.
-_TIER1_LEAGUES = {
-    "soccer_epl",
-    "soccer_germany_bundesliga",
-    "soccer_spain_la_liga",
-    "soccer_france_ligue_one",
-    "soccer_italy_serie_a",
-}
-
-# Cap de bets que se muestran en el mensaje matutino y en el resumen nocturno.
-# 15 es manejable sin saturar Telegram. Más allá pierde legibilidad.
-# Se usa tanto en _build_bets_by_league() (morning) como en send_evening_summary()
-# (evening) para que ambos mensajes muestren el MISMO conjunto de bets.
-MAX_TELEGRAM_BETS = 15
-
-
-def _diversified_top(confiables: pd.DataFrame, max_bets: int) -> pd.DataFrame:
-    """
-    Selecciona hasta `max_bets` picks priorizando cobertura de ligas tier-1.
-
-    Algoritmo:
-    1. Toma el top-N global ordenado por edge (candidato base).
-    2. Para cada liga tier-1 que NO esté representada en ese top, reserva 1
-       slot con su mejor pick disponible.
-    3. Los slots tier-1 reservados desplazan a los picks de menor edge del
-       top global (los más cercanos al corte).
-
-    Esto garantiza recibir picks de PL/Bundesliga/LaLiga/Ligue 1/Serie A
-    cuando existan, sin sacrificar más de 5 slots del top edge.
-    """
-    if confiables.empty:
-        return confiables
-
-    sorted_pool = confiables.sort_values("edge", ascending=False).reset_index(drop=True)
-
-    # Si hay menos picks que el cap, devolver todo
-    if len(sorted_pool) <= max_bets:
-        return sorted_pool
-
-    # Candidato base: top-N por edge
-    top_global = sorted_pool.head(max_bets)
-    tier1_in_top = set(top_global[top_global["league"].isin(_TIER1_LEAGUES)]["league"])
-
-    # Tier-1 que tienen picks pero quedaron fuera del top
-    missing_tier1 = []
-    for league in _TIER1_LEAGUES:
-        if league in tier1_in_top:
-            continue
-        league_picks = sorted_pool[sorted_pool["league"] == league]
-        if not league_picks.empty:
-            missing_tier1.append(league_picks.head(1))
-
-    if not missing_tier1:
-        return top_global
-
-    forced_df = pd.concat(missing_tier1)
-    n_forced = len(forced_df)
-
-    # Llenar resto con top edge global, excluyendo los forzados
-    remaining_pool = sorted_pool.drop(forced_df.index)
-    rest = remaining_pool.head(max_bets - n_forced)
-
-    return pd.concat([forced_df, rest]).sort_values("edge", ascending=False).reset_index(drop=True)
-
-
 def _dedup_correlated(bets: pd.DataFrame) -> pd.DataFrame:
     """
     Si un partido tiene tanto 'away_win' como 'dnb_away' (o 'home_win'/'dnb_home'),
@@ -482,98 +392,6 @@ def _dedup_correlated(bets: pd.DataFrame) -> pd.DataFrame:
             drop_idx = rows_b.index.tolist() if edge_a >= edge_b else rows_a.index.tolist()
             to_drop.extend(drop_idx)
     return bets.drop(index=to_drop).reset_index(drop=True) if to_drop else bets
-
-
-def _build_bets_by_league(bets: pd.DataFrame, header: str) -> tuple:
-    """
-    Construye el texto de las bets confiables agrupadas por liga.
-    Descarta las sospechosas y deduplica bets correladas del mismo partido.
-    El split en múltiples mensajes lo hace send_message() automáticamente.
-    Returns: (message_text, num_bets_included)
-    """
-    # Solo confiables
-    confiables = bets[bets.apply(_is_suspicious, axis=1) == False].copy()
-
-    # Deduplicar bets correladas (away_win + dnb_away → solo el mejor)
-    confiables = _dedup_correlated(confiables)
-
-    if confiables.empty:
-        return f"{header}\n\nSin value bets confiables.", 0
-
-    # ── TOP 15 con diversificación tier-1 (Big 5 europeos garantizados) ──
-    # Antes: head(15) global por edge → ligas blandas (Brasil/Argentina/China,
-    # max edge 0.30-0.50) ocupaban todos los slots y las europeas (max edge
-    # ~0.15) nunca aparecían. Ahora reservamos 1 slot por tier-1 con picks.
-    confiables = _diversified_top(confiables, MAX_TELEGRAM_BETS)
-
-    confiables = confiables.sort_values(["league", "edge"], ascending=[True, False])
-
-    lines = [header, ""]
-
-    # Agrupar por liga
-    bet_num = 1
-    for league_key, group in confiables.groupby("league", sort=True):
-        league_label = LEAGUE_LABELS.get(league_key, league_key or "Otras")
-        lines.append(f"🏆 <b>{league_label}</b>")
-
-        for _, bet in group.iterrows():
-            market_label = _get_market_label(bet.get("market", ""), bet.get("match", ""))
-            edge_pct     = round(float(bet.get("edge", 0)) * 100, 1)
-            prob_pct     = round(float(bet.get("probability", 0)) * 100, 1)
-            stake_val    = round(float(bet.get("stake", 0)), 2)
-
-            date_match = ""
-            if bet.get("match_date"):
-                try:
-                    dt = pd.to_datetime(bet["match_date"])
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    dt_local = dt.astimezone(ZoneInfo(USER_TIMEZONE))
-                    date_match = dt_local.strftime("%d/%m %H:%M")
-                except Exception:
-                    pass
-
-            # La cuota guardada es la MEJOR entre casas europeas; el dueño
-            # apuesta en PlayDoit, que ninguna API ve. Lo que le sirve es
-            # hasta dónde puede bajar PlayDoit y todavía valer la pena, en el
-            # formato americano en que PlayDoit la muestra (24-sep-26).
-            rule = playdoit_line(bet.get("probability"), pin_prob=bet.get("pin_prob"))
-            price = rule or f"Mejor cuota: {fmt_american(to_american(bet.get('odds')))}"
-            lines.append(
-                f"✅ {bet_num}. <b>{bet.get('match', '')}</b>  {date_match}\n"
-                f"   🎯 {market_label}\n"
-                f"   {price}\n"
-                f"   📈 Edge: +{edge_pct}%  |  Prob: {prob_pct}%  |  💰 {stake_val}u"
-            )
-            bet_num += 1
-
-        lines.append("")   # línea en blanco entre ligas
-
-    total = bet_num - 1
-    lines += [
-        f"<i>Total: {total} apuesta{'s' if total != 1 else ''} confiable{'s' if total != 1 else ''}</i>",
-        f"<i>{HOW_TO_READ}</i>",
-        "⚠️ <i>Modelo estadistico — apuesta con responsabilidad.</i>",
-    ]
-
-    return "\n".join(lines), total
-
-
-def format_bets_message(bets: pd.DataFrame) -> tuple:
-    """
-    Devuelve (mensaje, n_picks_confiables_incluidos).
-    El n_picks lo usa notify_best_bets() para registrar cuántos se mostraron
-    (distinto de len(bets), que incluye sospechosas y duplicadas correladas).
-    """
-    now      = datetime.now(ZoneInfo(USER_TIMEZONE))
-    date_str = now.strftime("%d/%m/%Y %H:%M")
-    # 14-sep-26: el morning es PREVIEW informativo — las apuestas OFICIALES
-    # se confirman pre-kickoff (send_kickoff_confirmations en el closing),
-    # cuando la cuota ya está revalidada y las alineaciones verificadas.
-    header   = (f"📋 <b>CANDIDATOS DEL DÍA — {date_str}</b>\n"
-                "<i>ℹ️ Informativo — las apuestas OFICIALES se confirman "
-                "~1h antes de cada partido (cuota final verificada)</i>")
-    return _build_bets_by_league(bets, header)
 
 
 # ============================================================
@@ -723,75 +541,34 @@ def _format_paper_bets_section(target_date, days_ahead: int = 0) -> str:
 # ============================================================
 # MAIN
 # ============================================================
+def _day_message(day, when: str = "Hoy") -> tuple[str, int]:
+    """El mensaje de un día con los 🎯 y los parlays del programa (los del
+    dashboard), en palabras normales (src/models/telegram_reports.py)."""
+    from src.models import telegram_reports as TR
+    tz = ZoneInfo(USER_TIMEZONE)
+    a, b = TR.day_bounds(day, tz)
+    return TR.morning_text(day, TR.load_picks(engine, a, b), TR.load_parlays(engine, day), tz, when=when)
+
+
 def notify_best_bets():
-    """Lee las bets de HOY (hora local) de la DB y las envia por Telegram."""
+    """La mañana: los 🎯 recomendados de HOY (hora local) y sus parlays.
+    Hasta v2.9.3 leía bets_history, que dejó de llenarse con el modo
+    colección (25-sep-26), y decía cada día "No apuestes nada" aunque el
+    dashboard sí recomendaba 🎯 (6-nov-26)."""
     print("\n📲 ENVIANDO NOTIFICACION TELEGRAM...\n")
-
     today = _local_today()
-
     try:
-        # u_dedup: dedup upcoming_matches por (home_norm, away_norm, sport_key)
-        # quedándonos con la row más reciente. Evita matchear con rows stale
-        # (mismo partido con fecha vieja) cuando la API corrige la fecha.
-        bets = pd.read_sql(f"""
-            WITH u_dedup AS (
-                SELECT DISTINCT ON (home_team_norm, away_team_norm, sport_key)
-                       home_team, away_team, sport_key, updated_at
-                FROM upcoming_matches
-                ORDER BY home_team_norm, away_team_norm, sport_key,
-                         updated_at DESC NULLS LAST
-            )
-            SELECT DISTINCT ON (match, market)
-                   b.match, b.match_date, b.market,
-                   b.probability, b.odds, b.edge, b.stake,
-                   {PIN_PROB_SQL_B} AS pin_prob,
-                   COALESCE(u.sport_key, b.league, '') as league
-            FROM bets_history b
-            LEFT JOIN u_dedup u
-              ON LOWER(u.home_team) = LOWER(SPLIT_PART(b.match, ' vs ', 1))
-             AND LOWER(u.away_team) = LOWER(SPLIT_PART(b.match, ' vs ', 2))
-            WHERE {_tz_date_filter('b.match_date', today)}
-              AND b.result = 'pending'
-            ORDER BY match, market, b.edge DESC
-        """, engine)
+        msg, n_star = _day_message(today, "Hoy")
     except Exception as e:
-        log.error(f"❌ Telegram: no se pudieron leer las bets de hoy — mensaje no enviado: {e}")
+        log.error(f"❌ Telegram: no se pudieron leer los picks de hoy — mensaje no enviado: {e}")
         return
-
-    # Paper-trading section (Mundial 2026, etc.) — se agrega aunque NO haya
-    # confiables reales. Usuario debe ver predicciones del Mundial aunque
-    # estén desactivadas para apuesta real.
-    # days_ahead=2: muestra paper picks de hoy + mañana + pasado (ventana de predicción)
-    # Necesario para el Mundial — los picks se generan 1-3 días antes del partido.
+    # Paper-trading (Mundial 2026): days_ahead=2 muestra hoy + mañana + pasado
     paper_section = _format_paper_bets_section(today, days_ahead=2)
-
-    if bets.empty:
-        print("⚠️  Sin value bets para hoy")
-        if paper_section:
-            msg = (
-                f"⚽ <b>BETTING MODEL — {today.strftime('%d/%m/%Y')}</b>\n\n"
-                "Sin value bets confiables para apostar hoy."
-                f"\n{paper_section}"
-            )
-        else:
-            msg = (
-                f"⚽ <b>BETTING MODEL — {today.strftime('%d/%m/%Y')}</b>\n\n"
-                f"{NO_PICKS_TEXT}"
-            )
-        send_message(msg)
-        _set_last_picks_shown(0)
-        return
-
-    msg, n_sent = format_bets_message(bets)
     if paper_section:
         msg = msg + "\n" + paper_section
-    ok  = send_message(msg)
-
-    if ok:
-        _set_last_picks_shown(n_sent)
-        print(f"✅ Enviados {n_sent} picks confiables a Telegram (de {len(bets)} pending crudas)")
-        if paper_section:
-            print("📝 Sección [PAPER] añadida al mensaje (Mundial / paper-only).")
+    if send_message(msg):
+        _set_last_picks_shown(n_star)
+        print(f"✅ Mensaje de la mañana enviado: {n_star} 🎯 recomendados")
     else:
         print("❌ No se pudo enviar a Telegram")
 
@@ -800,75 +577,21 @@ def notify_best_bets():
 # PREVIEW DE MAÑANA (para recibir de noche)
 # ============================================================
 def send_tomorrow_preview():
-    """
-    Consulta las bets pendientes para MAÑANA y las envía por Telegram.
-    Se llama desde run_evening() para que el usuario pueda preparar
-    sus apuestas antes de dormir, aunque su laptop esté apagada de mañana.
-    """
+    """Los 🎯 recomendados de MAÑANA y sus parlays (si la corrida de la
+    mañana cae después del mediodía)."""
     print("\n🌙 ENVIANDO PREVIEW DE MAÑANA...\n")
-
     tomorrow = _local_tomorrow()
-
     try:
-        bets = pd.read_sql(f"""
-            WITH u_dedup AS (
-                SELECT DISTINCT ON (home_team_norm, away_team_norm, sport_key)
-                       home_team, away_team, sport_key, updated_at
-                FROM upcoming_matches
-                ORDER BY home_team_norm, away_team_norm, sport_key,
-                         updated_at DESC NULLS LAST
-            )
-            SELECT DISTINCT ON (match, market)
-                   b.match, b.match_date, b.market,
-                   b.probability, b.odds, b.edge, b.stake,
-                   {PIN_PROB_SQL_B} AS pin_prob,
-                   COALESCE(u.sport_key, b.league, '') as league
-            FROM bets_history b
-            LEFT JOIN u_dedup u
-              ON LOWER(u.home_team) = LOWER(SPLIT_PART(b.match, ' vs ', 1))
-             AND LOWER(u.away_team) = LOWER(SPLIT_PART(b.match, ' vs ', 2))
-            WHERE {_tz_date_filter('b.match_date', tomorrow)}
-              AND b.result = 'pending'
-            ORDER BY match, market, b.edge DESC
-        """, engine)
+        msg, n_star = _day_message(tomorrow, "Mañana")
     except Exception as e:
-        log.error(f"❌ Telegram: no se pudieron leer las bets de mañana — preview no enviado: {e}")
+        log.error(f"❌ Telegram: no se pudieron leer los picks de mañana — preview no enviado: {e}")
         return
-
     paper_section = _format_paper_bets_section(tomorrow)
-
-    if bets.empty:
-        print("Sin bets para mañana")
-        if paper_section:
-            msg = (
-                f"🌙 <b>PICKS DE MAÑANA — {tomorrow.strftime('%d/%m/%Y')}</b>\n\n"
-                "Sin value bets confiables para apostar mañana."
-                f"\n{paper_section}"
-            )
-        else:
-            msg = (
-                f"🌙 <b>PICKS DE MAÑANA — {tomorrow.strftime('%d/%m/%Y')}</b>\n\n"
-                f"{NO_PICKS_TEXT}"
-            )
-        send_message(msg)
-        _set_last_picks_shown(0)
-        return
-
-    date_str = tomorrow.strftime("%d/%m/%Y")
-    header   = (
-        f"🌙 <b>PICKS DE MAÑANA — {date_str}</b>\n"
-        "<i>Prepara tus apuestas esta noche</i>"
-    )
-    msg, n_sent = _build_bets_by_league(bets, header)
     if paper_section:
         msg = msg + "\n" + paper_section
-    ok  = send_message(msg)
-
-    if ok:
-        _set_last_picks_shown(n_sent)
-        print(f"✅ Preview de mañana enviado ({n_sent} bets mostradas de {len(bets)} totales)")
-        if paper_section:
-            print("📝 Sección [PAPER] añadida al preview (Mundial / paper-only).")
+    if send_message(msg):
+        _set_last_picks_shown(n_star)
+        print(f"✅ Preview de mañana enviado: {n_star} 🎯 recomendados")
     else:
         print("❌ No se pudo enviar preview a Telegram")
 
@@ -1074,36 +797,30 @@ def send_pre_kickoff_verdict(verdicts: list) -> bool:
 # ============================================================
 # HEALTH CHECK
 # ============================================================
+MODE_NAMES = {"morning": "de la mañana", "evening": "de la noche", "full": "completa"}
+
+
 def send_health_check(
     mode: str,
     picks_today: int,
-    pending_total: int,
-    elapsed_seconds: float,
-    steps_ok: int,
-    steps_total: int,
-    picks_label: str = "Picks del día",
+    pending_total: int | None = None,
+    elapsed_seconds: float = 0.0,
+    steps_ok: int = 0,
+    steps_total: int = 0,
+    picks_label: str | None = None,
 ):
     """
-    Envia un resumen de salud del pipeline a Telegram al finalizar cada modo.
+    El aviso de que una corrida terminó con pasos fallidos (solo se manda si
+    algo falló), en palabras normales (6-nov-26). Ya no muestra el bankroll ni
+    las "pending" de bets_history, que dejó de llenarse el 25-sep-26 (decía
+    "Bankroll 63.40u (ROI …)" y "Pending totales en DB: 0").
 
-    Args:
-        mode:             modo del orchestrator (morning, evening, etc.)
-        picks_today:      picks confiables incluidos en la notificación enviada
-                          (mismo número que el "Total: N apuestas confiables" del
-                           mensaje de picks). 0 si no se envió notificación.
-        pending_total:    total de bets pending futuras en la DB (incluye picks
-                          de mañana, pasado mañana, etc.). Útil como diagnóstico
-                          pero NO refleja lo que el usuario verá en el mensaje.
-        elapsed_seconds:  tiempo total de ejecucion en segundos
-        steps_ok:         pasos que terminaron sin error
-        steps_total:      total de pasos ejecutados
-        picks_label:      etiqueta a usar en el mensaje (varía morning vs evening:
-                          "Picks de hoy" / "Picks de mañana").
+    picks_today: los 🎯 que llevó el mensaje de la mañana (get_last_picks_shown);
+    solo se dice en la corrida de la mañana. pending_total y picks_label se
+    aceptan por compatibilidad y no se usan.
     """
-    from src.models.bankroll_manager import get_bankroll_stats
     from scripts.update_upcoming_matches import CREDITS_LOG
 
-    # Leer creditos restantes del log
     credits_remaining = "?"
     try:
         if CREDITS_LOG.exists():
@@ -1115,32 +832,17 @@ def send_health_check(
     except Exception:
         pass
 
-    # Bankroll stats
-    try:
-        stats = get_bankroll_stats()
-        bankroll_line = (
-            f"💰 Bankroll: <b>{stats['current']:.2f}u</b> "
-            f"(ROI: {stats['roi_pct']:+.1f}%  |  DD: {stats['drawdown_pct']:.1f}%)"
-        )
-    except Exception:
-        bankroll_line = "💰 Bankroll: no disponible"
-
-    status_icon = "✅" if steps_ok == steps_total else "⚠️"
-    elapsed_str = f"{elapsed_seconds:.0f}s" if elapsed_seconds < 120 else f"{elapsed_seconds/60:.1f}m"
-
-    msg = (
-        f"{status_icon} <b>Pipeline OK — {mode.upper()}</b>\n\n"
-        f"🎯 {picks_label}: <b>{picks_today}</b>\n"
-        f"📋 Pending totales en DB: {pending_total}\n"
-        f"{bankroll_line}\n"
-        f"💳 Créditos API restantes: {credits_remaining}\n"
-        f"⚙️  Pasos: {steps_ok}/{steps_total} exitosos\n"
-        f"⏱️  Tiempo: {elapsed_str}\n"
-    )
-
-    if steps_ok < steps_total:
-        msg += f"\n⚠️ {steps_total - steps_ok} paso(s) con error — revisar log"
-
+    failed = max(steps_total - steps_ok, 0)
+    elapsed_str = f"{elapsed_seconds:.0f} s" if elapsed_seconds < 120 else f"{elapsed_seconds / 60:.0f} min"
+    name = MODE_NAMES.get(mode, mode)
+    msg = (f"{'⚠️' if failed else '✅'} <b>La corrida {name} "
+           f"{'tuvo fallas' if failed else 'terminó bien'}</b>\n\n")
+    if failed:
+        msg += f"⚙️ {failed} de {steps_total} pasos fallaron: hay que revisar el log.\n"
+    if mode == "morning":
+        msg += f"🎯 Recomendados en el mensaje de hoy: <b>{picks_today}</b>\n"
+    msg += (f"💳 Créditos de The Odds API que quedan: {credits_remaining}\n"
+            f"⏱️ Tardó: {elapsed_str}")
     send_message(msg)
     print("📋 Health check enviado a Telegram")
 
@@ -1148,174 +850,34 @@ def send_health_check(
 # ============================================================
 # REPORTE SEMANAL
 # ============================================================
-def _wlp(df: pd.DataFrame) -> tuple[int, int, int]:
-    """(ganadas, perdidas, nulas) de apuestas liquidadas; las medias cuentan
-    de su lado. El % de acierto es ganadas / (ganadas + perdidas)."""
-    r = df["result"]
-    return (int(r.isin(["win", "half_win"]).sum()),
-            int(r.isin(["loss", "half_loss"]).sum()),
-            int((r == "push").sum()))
-
-
 def send_weekly_report():
-    """
-    Genera y envía por Telegram un reporte de rendimiento de los últimos 7 días.
-
-    Incluye:
-      - Bets jugadas en la semana: ganadas / perdidas / nulas, profit y ROI
-      - Canceladas antes del partido (aparte: no se apostaron)
-      - ROI total acumulado
-      - Bankroll actual vs inicial
-      - Top 3 ligas por ROI y peor liga
-      - ROI por mercado
-
-    Solo cuentan las apuestas jugadas y liquidadas (RESOLVED_SQL): hasta el
-    28-sep-26 contaba también las 'stale' (canceladas y sin fuente de
-    resultado) como apuestas con profit 0.
-    """
-    from sqlalchemy import text
-    from src.utils.bet_status import CANCELLED_SQL, RESOLVED_SQL
-
+    """El reporte de la semana en palabras normales: los 🎯 recomendados, los
+    parlays y los demás picks de los últimos 7 días, lo acumulado desde el
+    22-oct y los cambios con la alineación. Lee lo mismo que el dashboard
+    (program_picks, program_parlays); hasta v2.9.3 leía bets_history, que
+    dejó de llenarse el 25-sep-26 ("Sin apuestas jugadas esta semana")."""
+    from src.models import telegram_reports as TR
     print("\n📊 GENERANDO REPORTE SEMANAL...\n")
-
-    # ── La semana: partidos jugados en los últimos 7 días ─────────────────
-    week_df = pd.read_sql(text(f"""
-        SELECT market, odds, stake, result, profit, league
-        FROM bets_history
-        WHERE {RESOLVED_SQL}
-          AND match_date >= NOW() - INTERVAL '7 days'
-    """), engine)
-    cancelled_week = int(pd.read_sql(text(f"""
-        SELECT COUNT(*) AS n FROM bets_history
-        WHERE result = 'stale' AND {CANCELLED_SQL}
-          AND match_date >= NOW() - INTERVAL '7 days'
-    """), engine).iloc[0]["n"])
-
-    # ── Stats totales (todo el historial) ─────────────────────────────────
+    tz = ZoneInfo(USER_TIMEZONE)
+    now = datetime.now(timezone.utc)
+    loc = now.astimezone(tz)
+    lines = [f"📊 <b>REPORTE DE LA SEMANA — {TR.day_name(loc.date())}</b>",
+             "<i>Los últimos 7 días · la ganancia es apostando 100 a cada uno al momio de PlayDoit</i>", ""]
     try:
-        all_df = pd.read_sql(text(f"""
-            SELECT stake, profit, result, league, market
-            FROM bets_history
-            WHERE {RESOLVED_SQL}
-        """), engine)
-    except Exception:
-        all_df = pd.DataFrame()
-
-    # ── Bankroll ──────────────────────────────────────────────────────────
-    try:
-        from src.models.bankroll_manager import get_bankroll_stats
-        bk = get_bankroll_stats()
-    except Exception:
-        bk = {"current": 100, "initial": 100, "roi_pct": 0, "total_profit": 0, "drawdown_pct": 0}
-
-    now_str  = datetime.now(ZoneInfo(USER_TIMEZONE)).strftime("%d/%m/%Y")
-    lines    = [f"📊 <b>REPORTE SEMANAL — {now_str}</b>", ""]
-
-    # ── Sección: esta semana ───────────────────────────────────────────────
-    cancelled_line = (f"🚫 Canceladas antes del partido (no se apostaron): {cancelled_week}"
-                      if cancelled_week else None)
-    if week_df.empty:
-        lines.append("Sin apuestas jugadas esta semana.")
-        if cancelled_line:
-            lines.append(cancelled_line)
-        lines.append("")
-    else:
-        wins, losses, pushes = _wlp(week_df)
-        decided   = wins + losses
-        win_rate  = wins / decided * 100 if decided > 0 else 0
-        profit_w  = float(week_df["profit"].sum())
-        staked_w  = float(week_df["stake"].sum())
-        roi_w     = profit_w / staked_w * 100 if staked_w > 0 else 0
-        roi_emoji = "📈" if roi_w >= 0 else "📉"
-
-        lines += [
-            "— <b>ESTA SEMANA</b> —",
-            f"Bets:     {len(week_df)}  ({wins}W / {losses}L"
-            f"{f' / {pushes} nulas' if pushes else ''}  {win_rate:.0f}%)",
-            f"Profit:   {'+' if profit_w >= 0 else ''}{profit_w:.2f}u",
-            f"ROI:      {roi_emoji} {'+' if roi_w >= 0 else ''}{roi_w:.1f}%",
-        ]
-        if cancelled_line:
-            lines.append(cancelled_line)
-        lines.append("")
-
-        # ── Top ligas esta semana ────────────────────────────────────────
-        if "league" in week_df.columns:
-            by_league = (
-                week_df.groupby("league")
-                       .agg(profit=("profit", "sum"), staked=("stake", "sum"))
-                       .assign(roi=lambda x: x["profit"] / x["staked"].replace(0, 1) * 100)
-                       .sort_values("roi", ascending=False)
-            )
-            if not by_league.empty:
-                lines.append("— <b>POR LIGA (semana)</b> —")
-                for lg, lr in by_league.head(3).iterrows():
-                    label = LEAGUE_LABELS.get(lg, lg)
-                    sign  = "+" if lr["roi"] >= 0 else ""
-                    lines.append(f"  {label}: {sign}{lr['roi']:.1f}% ({'+' if lr['profit'] >= 0 else ''}{lr['profit']:.2f}u)")
-                # Peor liga
-                worst = by_league[by_league["roi"] < 0].tail(1)
-                if not worst.empty:
-                    wlg = worst.index[0]
-                    wr  = worst.iloc[0]
-                    lines.append(f"  ⚠️ Peor: {LEAGUE_LABELS.get(wlg, wlg)} {wr['roi']:.1f}%")
-                lines.append("")
-
-        # ── Top mercados esta semana ─────────────────────────────────────
-        if "market" in week_df.columns:
-            by_mkt = (
-                week_df.groupby("market")
-                       .agg(profit=("profit", "sum"), staked=("stake", "sum"), n=("profit", "count"))
-                       .assign(roi=lambda x: x["profit"] / x["staked"].replace(0, 1) * 100)
-                       .sort_values("roi", ascending=False)
-            )
-            if not by_mkt.empty:
-                lines.append("— <b>POR MERCADO (semana)</b> —")
-                for mkt, mr in by_mkt.iterrows():
-                    label = _get_market_label(mkt)
-                    sign  = "+" if mr["roi"] >= 0 else ""
-                    lines.append(f"  {label} ({int(mr['n'])}): {sign}{mr['roi']:.1f}%")
-                lines.append("")
-
-    # ── Sección: acumulado total ───────────────────────────────────────────
-    if not all_df.empty:
-        total_bets   = len(all_df)
-        total_profit = float(all_df["profit"].sum())
-        total_staked = float(all_df["stake"].sum())
-        total_roi    = total_profit / total_staked * 100 if total_staked > 0 else 0
-        total_wins, total_losses, _ = _wlp(all_df)
-        total_wr     = total_wins / (total_wins + total_losses) * 100 if total_wins + total_losses else 0
-
-        lines += [
-            "— <b>ACUMULADO TOTAL</b> —",
-            f"Bets totales: {total_bets}  (WR: {total_wr:.0f}%)",
-            f"Profit total: {'+' if total_profit >= 0 else ''}{total_profit:.2f}u",
-            f"ROI total:    {'+' if total_roi >= 0 else ''}{total_roi:.1f}%",
-            "",
-        ]
-
-    # ── Lo que el modelo propuso (apostado o descartado) y cómo habría ido ──
-    from src.models.proposals import weekly_lines
-    lines += weekly_lines()
+        week = TR.load_picks(engine, now - timedelta(days=7), now)
+        parlays = TR.load_parlays(engine, (loc - timedelta(days=7)).date(), loc.date())
+        lines += TR.weekly_lines(week, parlays, TR.load_since(engine, now))
+    except Exception as e:
+        log.error(f"❌ Reporte semanal: no se pudieron leer los picks — no enviado: {e}")
+        return
 
     # ── ¿Los cambios de pick con la alineación ayudan o estorban? (v2.8.0) ──
     from src.models import lineup_changes
     lines += lineup_changes.weekly_lines(engine)
-
-    # ── Bankroll ──────────────────────────────────────────────────────────
-    drawdown_str = f"  Max DD: -{bk['drawdown_pct']:.1f}%" if bk["drawdown_pct"] > 0 else ""
-    lines += [
-        "— <b>BANKROLL</b> —",
-        f"Actual:  {bk['current']:.2f}u  (inicio: {bk['initial']:.2f}u)",
-        f"ROI BR:  {'+' if bk['roi_pct'] >= 0 else ''}{bk['roi_pct']:.1f}%{drawdown_str}",
-        "",
-        "<i>Modelo estadístico — apuesta con responsabilidad.</i>",
-    ]
+    lines.append("<i>Apuesta con responsabilidad.</i>")
 
     msg = "\n".join(lines)
-    ok  = send_message(msg)
-
-    if ok:
+    if send_message(msg):
         print("✅ Reporte semanal enviado a Telegram")
     else:
         print("❌ Error enviando reporte semanal")
@@ -1325,208 +887,41 @@ def send_weekly_report():
 # ============================================================
 # RESUMEN NOCTURNO
 # ============================================================
-def _tomorrow_line(b) -> str:
-    """Línea del avance de mañana: el mínimo para PlayDoit en formato
-    americano, no la cuota decimal europea ni la clave cruda del mercado."""
-    label = _get_market_label(str(b.get("market") or ""), str(b.get("match") or ""))
-    a = min_american(b.get("probability"), pin_prob=b.get("pin_prob"))
-    price = (f"PlayDoit {fmt_american(a)} o mejor" if a is not None
-             else f"mejor cuota {fmt_american(to_american(b.get('odds')))}")
-    return f"  • {b.get('match', '')} — {label} ({price})"
-
-
 def send_evening_summary(target_date=None):
     """
-    Envia resumen de resultados del día a Telegram (ciclo 21:00 MX).
-    Muestra: bets de hoy ganadas/perdidas/pendientes + profit del día,
-    y al final un avance compacto de las apuestas de MAÑANA.
+    El resumen de la noche (ciclo 21:00 MX) en palabras normales: cómo
+    terminó cada 🎯 recomendado de hoy, los parlays, los demás picks en una
+    línea, lo acumulado desde el 22-oct y cuántos 🎯 hay mañana. Lee lo mismo
+    que el dashboard (src/models/telegram_reports.py); hasta v2.9.3 leía
+    bets_history y decía "Sin apuestas para hoy" (6-nov-26).
 
     target_date: fecha local que este run debe resumir. El orchestrator
     la pasa anclada a la HORA PROGRAMADA del cron (no a la hora real de
     ejecución) — así, si GitHub retrasa el run pasadas las 12 de la
-    noche, el resumen NO salta un día atrás ni el preview uno adelante
-    (bug del 12-sep: resumen decía 11/09 y preview 13/09 en el mismo
-    minuto).
+    noche, el resumen NO salta un día atrás ni el avance uno adelante
+    (bug del 12-sep).
     """
+    from src.models import telegram_reports as TR
     print("\n📲 ENVIANDO RESUMEN NOCTURNO...\n")
-
-    from zoneinfo import ZoneInfo
-    from config.settings import USER_TIMEZONE
-    now_local = datetime.now(ZoneInfo(USER_TIMEZONE))
+    tz = ZoneInfo(USER_TIMEZONE)
+    now = datetime.now(timezone.utc)
     if target_date is not None:
         today = target_date
     else:
-        # Fallback legacy si nadie pasa target_date (heurística antigua):
-        # si corre antes del mediodía local, recapitula el día anterior.
-        if now_local.hour < 12:
-            today = (now_local - timedelta(days=1)).date()
-        else:
-            today = now_local.date()
-    date_str = today.strftime("%d/%m/%Y")
-
+        # sin target_date: antes del mediodía local recapitula el día anterior
+        loc = now.astimezone(tz)
+        today = (loc - timedelta(days=1)).date() if loc.hour < 12 else loc.date()
     try:
-        # Fix: usar _tz_date_filter para que el día se calcule en USER_TIMEZONE
-        # (consistente con notify_best_bets y send_tomorrow_preview).
-        # Antes: `match_date::date = today` evaluaba la fecha en UTC, mientras
-        # que `today` venía en hora local — desfase de hasta 6h en MX.
-        # Incluimos edge/probability/match_date para poder aplicar el mismo
-        # filtro de confiables que la notificación matutina.
-        df_all = pd.read_sql(f"""
-            SELECT match, match_date, market, odds, stake, result, profit,
-                   edge, probability, COALESCE(league, '') AS league
-            FROM bets_history
-            WHERE {_tz_date_filter('match_date', today)}
-            ORDER BY match_date
-        """, engine)
+        a, b = TR.day_bounds(today, tz)
+        picks = TR.load_picks(engine, a, b)
+        msg = TR.evening_text(today, picks, TR.load_parlays(engine, today), TR.load_since(engine, now),
+                              TR.tomorrow_counts(engine, today, tz), now, tz)
     except Exception as e:
-        log.error(f"❌ Resumen nocturno: no se pudieron leer las bets — no enviado: {e}")
+        log.error(f"❌ Resumen nocturno: no se pudieron leer los picks — no enviado: {e}")
         return
-
-    # ── Filtrar para alinear con la notificación matutina ────────────────
-    # Antes: el resumen mostraba 58 bets (TODAS las del día), mientras que
-    # el morning mandó solo 15 (post `_is_suspicious` + dedup + diversified
-    # top 15). El usuario solo apuesta las 15 que recibió, así que el
-    # resumen debe contar y mostrar exclusivamente esas. La DB sigue
-    # guardando todo (las descartadas no se borran).
-    if not df_all.empty:
-        df = df_all[df_all.apply(_is_suspicious, axis=1) == False].copy()
-        df = _dedup_correlated(df)
-        # Mismo cap + diversificación que el morning para que el subset
-        # mostrado aquí sea exactamente el mismo que se notificó.
-        df = _diversified_top(df, MAX_TELEGRAM_BETS)
-        # Re-ordenar por hora del partido (el resumen del día es cronológico,
-        # no por edge — más fácil de leer al final del día).
-        if not df.empty:
-            df = df.sort_values("match_date").reset_index(drop=True)
-    else:
-        df = df_all
-
-    # ── Diagnóstico: si todas las bets siguen pending, el problema NO es el
-    # filtro de fecha sino que step_fetch_results / step_results no resolvió.
-    n_total      = len(df)
-    n_total_all  = len(df_all)
-    n_resolved   = int(df["result"].isin(["win", "loss", "push", "half_win", "half_loss"]).sum()) if n_total else 0
-    n_pending    = int((df["result"] == "pending").sum()) if n_total else 0
-    n_descartado = n_total_all - n_total
-    print(f"🌙 Resumen del día: today={today} ({USER_TIMEZONE})")
-    print(f"   Bets totales en DB: {n_total_all}  |  confiables: {n_total}  |  descartadas: {n_descartado}")
-    print(f"   Confiables: resueltas={n_resolved}  pendientes={n_pending}")
-    # n_pending, no n_total: las canceladas del día ('stale') no son pendientes
-    if n_pending > 0 and n_resolved == 0:
-        print("   ⚠️  TODAS pendientes — investigar step_fetch_results / step_results")
-
-    lines = [f"🌙 <b>RESUMEN DEL DÍA — {date_str}</b>", ""]
-
-    if df.empty:
-        if n_total_all > 0:
-            lines.append(f"Sin apuestas confiables para hoy ({n_total_all} descartadas por filtro).")
-        else:
-            lines.append("Sin apuestas para hoy.")
-        send_message("\n".join(lines))
-        return
-
-    wins     = df[df["result"] == "win"]
-    losses   = df[df["result"] == "loss"]
-    pending  = df[df["result"] == "pending"]
-    resolved = df[df["result"].isin(["win", "loss", "half_win", "half_loss"])]
-    # 'stale' del mismo día = cancelada antes del kickoff (la revalidación o
-    # el lineup guard): no se apostó. Salía como "❓ revisar (sin resolver)".
-    cancelled = df[df["result"] == "stale"]
-
-    profit_day  = float(resolved["profit"].sum()) if not resolved.empty else 0
-    staked_day  = float(resolved["stake"].sum())  if not resolved.empty else 0
-    roi_day     = profit_day / staked_day * 100   if staked_day > 0 else 0
-    roi_emoji   = "📈" if profit_day >= 0 else "📉"
-
-    lines += [
-        f"Bets hoy:   {len(df) - len(cancelled)}  ({len(wins)}✅  {len(losses)}❌  {len(pending)}⏳)"
-        + (f"  ·  {len(cancelled)} cancelada{'s' if len(cancelled) != 1 else ''} 🚫"
-           if len(cancelled) else ""),
-    ]
-
-    if not resolved.empty:
-        lines += [
-            f"Profit:     {'+' if profit_day >= 0 else ''}{profit_day:.2f}u",
-            f"ROI hoy:    {roi_emoji} {'+' if roi_day >= 0 else ''}{roi_day:.1f}%",
-        ]
-
-    # Detalle por bet
-    if not df.empty:
-        lines.append("")
-        # Mercados que típicamente dependen del backup fbdata.co.uk
-        # (corners + cards). Esos se resuelven cuando fbdata sube el CSV,
-        # típicamente 24-36h después del partido. Si están pending al
-        # cierre del evening, no es bug — es delay del proveedor.
-        DATA_LAG_MARKETS = ("corners_", "cards_")
-        now_utc = datetime.now(timezone.utc)
-
-        for _, bet in df.iterrows():
-            mkt    = _get_market_label(bet["market"])
-            result = bet["result"]
-            if result == "win":
-                icon = "✅"
-                pnl  = f"+{float(bet['profit']):.2f}u"
-            elif result == "loss":
-                icon = "❌"
-                pnl  = f"{float(bet['profit']):.2f}u"
-            elif result == "stale":
-                icon = "🚫"
-                pnl  = "cancelada antes del partido (no se apostó)"
-            else:
-                # Distinguir POR QUÉ sigue pending. Antes todo era "pendiente"
-                # y el usuario no podía saber si era un bug o estaba esperando.
-                kickoff = pd.to_datetime(bet["match_date"])
-                if kickoff.tzinfo is None:
-                    kickoff = kickoff.tz_localize("UTC")
-                mins_since = (now_utc - kickoff.to_pydatetime()).total_seconds() / 60
-                market_raw = str(bet.get("market", "")).lower()
-                is_lag_market = any(market_raw.startswith(p) for p in DATA_LAG_MARKETS)
-
-                if mins_since < 0:
-                    icon = "🕒"
-                    pnl  = "aún no inicia"
-                elif mins_since < 120:
-                    icon = "🕒"
-                    pnl  = "jugándose / recién acabó"
-                elif is_lag_market:
-                    icon = "⌛"
-                    pnl  = "esperando data (corners/cards)"
-                elif mins_since < 360:
-                    icon = "⌛"
-                    pnl  = "esperando data"
-                else:
-                    icon = "❓"
-                    pnl  = "revisar (sin resolver)"
-            lines.append(f"{icon} {bet['match']}  <i>{mkt}</i>  {pnl}")
-
-    # El diagnóstico "Analista pre-kickoff stale" se retiró (13-sep-26):
-    # el analista pre-kickoff está desactivado desde mayo y su job externo
-    # fue eliminado — el aviso solo era ruido en cada resumen.
-
-    # ── Avance compacto de MAÑANA (reemplaza el mensaje separado de
-    # preview — antes el usuario recibía dos mensajes enormes que
-    # duplicaban la misma información) ─────────────────────────────────
-    try:
-        tomorrow = today + timedelta(days=1)
-        bets_tom = pd.read_sql(f"""
-            SELECT match, market, odds, probability, stake, edge, {PIN_PROB_SQL} AS pin_prob
-            FROM bets_history
-            WHERE {_tz_date_filter('match_date', tomorrow)}
-              AND result = 'pending'
-            ORDER BY edge DESC
-        """, engine)
-        lines.append("")
-        lines.append(f"🌙 <b>MAÑANA ({tomorrow.strftime('%d/%m')})</b>: "
-                     f"{len(bets_tom)} apuestas pendientes")
-        for _, b in bets_tom.head(3).iterrows():
-            lines.append(_tomorrow_line(b))
-        if len(bets_tom) > 3:
-            lines.append(f"  … y {len(bets_tom) - 3} más (detalles en el morning)")
-    except Exception as e:
-        log.error(f"❌ Resumen nocturno: el avance de mañana se omitió: {e}")
-
-    msg = "\n".join(lines)
-    ok  = send_message(msg)
+    n_star = sum(1 for r in picks if TR.is_star(r))
+    print(f"🌙 Resumen del día: {today} ({USER_TIMEZONE}) · {len(picks)} picks, {n_star} 🎯")
+    ok = send_message(msg)
     print("✅ Resumen nocturno enviado" if ok else "❌ Error enviando resumen nocturno")
 
 

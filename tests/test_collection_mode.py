@@ -35,17 +35,10 @@ PICK = {"match": "alpha vs beta", "league": "soccer_spain_la_liga", "market": "h
 
 
 def test_every_message_uses_the_pinnacle_floor():
-    from scripts.notify_telegram import _build_bets_by_league, _tomorrow_line
+    # los mensajes de la mañana y de la noche de bets_history se quitaron en
+    # 6-nov-26 (ahora salen de los picks del programa: test_telegram_reports)
     from scripts.revalidate_pending_bets import _format_confirmations
-    msg, n = _build_bets_by_league(pd.DataFrame([PICK]), "HOY")
-    assert n == 1 and "paga -112 o mejor" in msg
     assert "paga -112 o mejor" in _format_confirmations([PICK])
-    assert "PlayDoit -112 o mejor" in _tomorrow_line(pd.Series(PICK))
-
-
-def test_no_picks_message_says_not_to_bet():
-    import scripts.notify_telegram as nt
-    assert "No apuestes nada" in nt.NO_PICKS_TEXT and "Pinnacle" in nt.NO_PICKS_TEXT
 
 
 # ============================================================

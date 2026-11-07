@@ -121,23 +121,39 @@ def summarize(rows: list) -> dict:
 
 
 def _u(x: float) -> str:
-    return f"{x:+.2f}u"
+    """La ganancia a 1 unidad dicha apostando 100 (6-nov-26: el dueño no entendía "u")."""
+    from src.models.telegram_reports import money
+    return money(x)
+
+
+def plain_verdict(total: dict) -> str:
+    """¿Conviene cambiar el pick con la alineación?, en palabras normales."""
+    z, n = total.get("z"), int(total.get("n_star") or 0)
+    if n < MIN_N:
+        return f"todavía no se sabe: van {n} de {MIN_N} cambios en 🎯"
+    if z is not None and z >= Z_VERDICT:
+        return "sí, los cambios ayudan"
+    if z is not None and z <= -Z_VERDICT:
+        return "no, los cambios estorban"
+    return "no se nota diferencia"
 
 
 def format_lines(week: dict, total: dict, since) -> list:
-    """El bloque del reporte semanal (HTML de Telegram)."""
+    """El bloque del reporte semanal (HTML de Telegram), en palabras normales
+    (6-nov-26); la ganancia, apostando 100 a cada uno."""
     lines = ["— <b>CAMBIOS CON LA ALINEACIÓN</b> —"]
     if week["changed"]:
-        lines += [f"Semana: {week['seen']} picks vieron la alineación, {week['changed']} cambiaron",
-                  f"  Aciertos de los que cambiaron: antes {week['hits_before']} → después {week['hits_after']}",
-                  f"  🎯 (lo que se apuesta): antes {week['bets_before']} apuestas {_u(week['units_before'])}"
-                  f" → después {week['bets_after']} apuestas {_u(week['units_after'])}"]
+        lines += [f"Esta semana se revisaron {week['seen']} picks con la alineación y {week['changed']} cambiaron.",
+                  f"  De los que cambiaron, el pick de antes ganó {week['hits_before']} y el nuevo ganó "
+                  f"{week['hits_after']}.",
+                  f"  En los 🎯: con el pick de antes, {week['bets_before']} apuestas y {_u(week['units_before'])};"
+                  f" con el nuevo, {week['bets_after']} apuestas y {_u(week['units_after'])}."]
     else:
-        lines.append(f"Semana: {week['seen']} picks vieron la alineación, ninguno cambió")
-    lines.append(f"Desde el {since:%d-%m}: {total['changed']} cambios · 🎯 antes {_u(total['units_before'])}"
-                 f" → después {_u(total['units_after'])}"
-                 + (f" ({total['unknown']} ganados sin momio guardado, fuera de las unidades)" if total["unknown"] else ""))
-    lines += [f"Veredicto: {total['verdict']}", ""]
+        lines.append(f"Esta semana se revisaron {week['seen']} picks con la alineación y ninguno cambió.")
+    lines.append(f"Desde el {since:%d-%m}: {total['changed']} cambios · en los 🎯, con el pick de antes "
+                 f"{_u(total['units_before'])} y con el nuevo {_u(total['units_after'])}"
+                 + (f" ({total['unknown']} sin momio guardado no cuentan en la ganancia)" if total["unknown"] else ""))
+    lines += [f"¿Conviene cambiar el pick con la alineación? {plain_verdict(total)}", ""]
     return lines
 
 
