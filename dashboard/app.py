@@ -921,17 +921,32 @@ def api_board_team():
     return jsonify({"ok": True, **_b.team_view(t, m, up, extra)})
 
 
+@app.route("/api/board/header")
+def api_board_header():
+    """El encabezado (v2.11.0, 8-nov-26): los 🎯 ya cobrados desde el 22-oct y
+    lo que dejan apostando 100, lo mismo que la noche de Telegram y "Por liga".
+    Hasta v2.10.0 decía "Bankroll 63.4u" de la tabla bankroll, que dejó de
+    moverse con el modo colección (25-sep-26): el dueño, "arregla también lo
+    del bankroll del encabezado"."""
+    from src.models import telegram_reports as TR
+    rows = _q(TR.SINCE_SQL, {"s": TR.FIXED_SINCE.to_pydatetime(), "n": pd.Timestamp.now(tz="UTC").to_pydatetime()})
+    if g.get("db_down"):
+        return _no_data()
+    return jsonify({"ok": True, "since": TR.FIXED_SINCE.strftime("%Y-%m-%d"), **TR.record(rows.to_dict("records"))})
+
+
 @app.route("/api/board/charts")
 def api_board_charts():
+    """Las gráficas. v2.11.0: sin la del bankroll (bankroll_history dejó de
+    moverse el 25-sep-26 y salía una línea plana)."""
     from dashboard import board as _b
-    hist = _q("SELECT date, balance FROM bankroll_history ORDER BY date, id")
     picks = _q("SELECT match_date, result, profit, reason FROM program_picks")
     props = _q("""
         SELECT DISTINCT ON (match, market) match_date, market, odds, result
         FROM model_proposals ORDER BY match, market, evaluated_at DESC
     """)
     rows = _past_rows()
-    return jsonify({"ok": True, "bankroll": _b.bankroll_series(hist), "picks": _b.picks_series(picks),
+    return jsonify({"ok": True, "picks": _b.picks_series(picks),
                     "accuracy": _b.weekly_accuracy(rows), "proposals": _vis.proposal_weeks(props),
                     "families": _b.summary(rows)["families"]})
 
@@ -1169,7 +1184,7 @@ PAGE = """<!DOCTYPE html>
 </style></head><body>
 <header>
   <h1>⚽ Apuestas <span id="ver" class="muted small"></span></h1>
-  <span class="chip" id="chipbank">Bankroll …</span>
+  <span class="chip" id="chiptarget">🎯 …</span>
   <span class="chip" id="chiptoday">Hoy …</span>
   <button class="chip rf" id="refresh" title="Vuelve a leer todo ahora (solo se actualiza sola cada 5 min)">🔄 Actualizar</button>
   <span class="small muted" id="updated"></span>
@@ -1268,15 +1283,12 @@ PAGE = """<!DOCTYPE html>
 
 <div class="pane" id="tab-graficas">
   <div class="grid2">
-    <div class="cb"><h3>Bankroll</h3><canvas id="cbank"></canvas></div>
+    <div class="cb"><h3>Ganancia acumulada de los picks (1 unidad cada uno)</h3><canvas id="cpicks"></canvas></div>
     <div class="cb"><h3>% de veces que ganó el favorito, por semana</h3><canvas id="cacc"></canvas></div>
   </div>
   <div class="grid2">
-    <div class="cb"><h3>Ganancia acumulada de los picks (1 unidad cada uno)</h3><canvas id="cpicks"></canvas></div>
-    <div class="cb"><h3>Ganancia por semana de las apuestas que propone el modelo (unidades)</h3><canvas id="cprops"></canvas></div>
-  </div>
-  <div class="grid2">
     <div class="cb"><h3>Ganancia por tipo de apuesta desde el 22 oct (unidades)</h3><canvas id="cfam"></canvas></div>
+    <div class="cb"><h3>Ganancia por semana de las apuestas que propone el modelo (unidades)</h3><canvas id="cprops"></canvas></div>
   </div>
 </div>
 <script src="/ui_es5.js?v=__V__"></script></body></html>""".replace("__HOW_TO_READ__", HOW_TO_READ)

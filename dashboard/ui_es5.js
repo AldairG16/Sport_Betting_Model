@@ -905,13 +905,9 @@ function loadCharts(fresh){
   getJSON('/api/board/charts' + (fresh ? '?fresh=1' : ''), function(d){
     var axes = { xAxes: [{ ticks: { maxTicksLimit: 8, fontColor: '#94a3b8' } }], yAxes: [{ ticks: { fontColor: '#94a3b8' } }] };
     var nolegend = { display: false }, legend = { labels: { fontColor: '#94a3b8', boxWidth: 12 } };
-    var bl = [];
-    for (var b = 0; b < d.bankroll.dates.length; b++) bl.push(shortDate(d.bankroll.dates[b]));
     var pkl = [];
     for (var c = 0; c < d.picks.dates.length; c++) pkl.push(shortDate(d.picks.dates[c]));
     d.picks.dates = pkl;
-    chart('cbank', { type: 'line', data: { labels: bl, datasets: [{ data: d.bankroll.values, borderColor: '#eab308', pointRadius: 0, borderWidth: 2, fill: false }] },
-      options: { legend: nolegend, scales: axes } });
     var wl = [], wm = [], wp = [];
     for (var i = 0; i < d.accuracy.length; i++) { wl.push(shortDate(d.accuracy[i].week)); wm.push(Math.round(d.accuracy[i].model * 100)); wp.push(Math.round(d.accuracy[i].pin * 100)); }
     chart('cacc', { type: 'line', data: { labels: wl, datasets: [
@@ -947,8 +943,14 @@ function loadCharts(fresh){
 // ── Encabezado ──
 function loadHeader(){
   getJSON('/api/version', function(d){ el('ver').textContent = 'v' + d.current; }, function(){});
-  getJSON('/api/kpis', function(d){
-    el('chipbank').innerHTML = '💰 Bankroll <b>' + (d.bankroll === null ? '—' : d.bankroll.toFixed(1) + 'u') + '</b>';
+  // v2.11.0: los 🎯 desde el 22 oct, como la noche de Telegram (decía "Bankroll 63.4u",
+  // de una tabla que dejó de moverse el 25-sep-26)
+  getJSON('/api/board/header', function(d){
+    var c = el('chiptarget');
+    c.innerHTML = d.n ? '🎯 Desde el 22 oct: <b>' + d.won + '</b> de ' + d.n + ' ganados · <b class="' +
+      (d.units >= 0 ? 'pos' : 'neg') + '">' + cien(d.units) + '</b>' : '🎯 Desde el 22 oct: todavía ninguno terminado';
+    c.title = 'Los 🎯 recomendados ya cobrados desde el 22 oct (cuando se corrigió el programa): cuántos se ganaron ' +
+      'y lo que van dejando apostando 100 a cada uno al momio de PlayDoit. Lo mismo que el resumen de la noche en Telegram.';
   }, function(){});
 }
 

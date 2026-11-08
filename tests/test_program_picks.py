@@ -368,7 +368,7 @@ def test_dashboard_endpoints_and_tabs(monkeypatch):
     html = c.get("/").get_data(as_text=True)
     for tab in ("proximos", "anteriores", "equipos", "graficas"):                     # v2.0
         assert f'data-tab="{tab}"' in html and f'id="tab-{tab}"' in html
-    for el in ("uplist", "daybar", "pkpis", "pastbody", "teamlist", "cbank", "cacc", "cpicks", "cprops"):
+    for el in ("uplist", "daybar", "pkpis", "pastbody", "teamlist", "chiptarget", "cacc", "cpicks", "cprops"):
         assert f'id="{el}"' in html
 
 

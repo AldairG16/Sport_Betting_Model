@@ -2205,6 +2205,15 @@ El dueño eligió solo 🎯 y parlays, en la última revisión. `src/models/fina
   - El aviso de alineación aparte: `run_lineup_alerts(notify=False)` la guarda y la revisa con Claude, y el
     dashboard la muestra.
 - Los textos de la mañana y los del dashboard (pestaña Parlay) dicen cuándo llega el pick final.
+
+**Encabezado del dashboard sin el bankroll congelado (v2.11.0, 8-nov-26).** El dueño: "arregla también lo del
+bankroll del encabezado". Decía "💰 Bankroll 63.4u", de la tabla `bankroll`, quieta desde el modo colección
+(25-sep-26). La gráfica "Bankroll" de Gráficas (`bankroll_history`) era una línea plana desde esa fecha.
+- Ahora el encabezado dice "🎯 Desde el 22 oct: 118 de 210 ganados · +224" (`/api/board/header`). Es la misma
+  consulta que la noche de Telegram (`telegram_reports.SINCE_SQL`) y da lo mismo que "Por liga" (🎯, desde el
+  22 oct).
+- La gráfica del bankroll se quitó, junto con `board.bankroll_series`.
+- `/api/kpis` sigue (lo usan las pruebas de la API vieja), pero la página ya no lo pide.
 Lo cubre `tests/test_telegram_reports.py`, que también revisa que no salgan ROI, "u", Profit ni momios decimales.
 
 **Se mantiene abierto solo (v1.6.0).** El `.exe` es un supervisor

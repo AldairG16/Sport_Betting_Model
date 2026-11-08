@@ -10,7 +10,8 @@ anteriores desde septiembre y los próximos". Funciones puras para:
     el programa, con lo que dijo el programa, el pick y las apuestas reales;
   - weekly_accuracy(): % de acierto del favorito por semana, programa y Pinnacle;
   - team_list() / team_view(): cada equipo con sus partidos y promedios;
-  - bankroll_series() y picks_series(): las líneas de las gráficas.
+  - picks_series(): la línea de las gráficas (la del bankroll se quitó en
+    v2.11.0: bankroll_history dejó de moverse el 25-sep-26).
 dashboard/app.py hace las consultas.
 """
 
@@ -568,16 +569,6 @@ def team_view(team: str, matches: pd.DataFrame, upcoming: pd.DataFrame, extra: p
                     "cf": avg([r["cf"] for r in off if r["cf"] is not None]),
                     "ca": avg([r["ca"] for r in off if r["ca"] is not None]),
                     "cards": avg([r["cards"] for r in off if r["cards"] is not None])} if n else None}
-
-
-def bankroll_series(hist: pd.DataFrame) -> dict:
-    """El bankroll al cierre de cada día (bankroll_history: date, balance)."""
-    if hist.empty:
-        return {"dates": [], "values": []}
-    h = hist.copy()
-    h["d"] = pd.to_datetime(h["date"], utc=True).dt.strftime("%Y-%m-%d")
-    last = h.groupby("d")["balance"].last()
-    return {"dates": list(last.index), "values": [round(float(v), 2) for v in last.values]}
 
 
 def picks_series(picks: pd.DataFrame) -> dict:

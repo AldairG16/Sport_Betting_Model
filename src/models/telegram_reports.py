@@ -362,13 +362,18 @@ def load_parlays(engine, d0, d1=None) -> list:
     return df.to_dict("records")
 
 
+# los 🎯 liquidados desde el modelo corregido: la noche de Telegram y el
+# encabezado del dashboard (v2.11.0) leen lo mismo
+SINCE_SQL = """
+    SELECT market, reason, result, profit FROM program_picks
+    WHERE match_date >= :s AND match_date < :n AND market IS NOT NULL AND reason IS NULL
+      AND result IN ('win', 'loss', 'push', 'half_win', 'half_loss')
+"""
+
+
 def load_since(engine, now: datetime) -> list:
     """Los 🎯 liquidados desde el modelo corregido (22-oct), lo del dashboard."""
-    return pd.read_sql(text("""
-        SELECT market, reason, result, profit FROM program_picks
-        WHERE match_date >= :s AND match_date < :n AND market IS NOT NULL AND reason IS NULL
-          AND result IN ('win', 'loss', 'push', 'half_win', 'half_loss')
-    """), engine, params={"s": FIXED_SINCE.to_pydatetime(), "n": now}).to_dict("records")
+    return pd.read_sql(text(SINCE_SQL), engine, params={"s": FIXED_SINCE.to_pydatetime(), "n": now}).to_dict("records")
 
 
 def tomorrow_counts(engine, day, tz) -> dict:
