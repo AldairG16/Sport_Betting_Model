@@ -7,7 +7,7 @@ perdieron, y necesito que eso también me lo muestres en el dashboard", y luego:
 "solamente quiero ver los partidos de hoy". La pestaña "Por liga" abre en Hoy
 (los terminados, aunque se cobren en la noche, y los que faltan) y tiene
 "Desde el 22 oct" (todo lo cobrado): cada liga en orden alfabético con sus
-ganados y perdidos, la ganancia apostando 100 a cada uno y, al tocarla, sus
+ganados y perdidos, la ganancia apostando 50 a cada uno (8-nov-26) y, al tocarla, sus
 partidos. Sin DB.
 """
 
@@ -122,7 +122,8 @@ def _block():
     b = JS.index("function renderLeagues")
     one = lambda n: re.search(r"^function " + n + r"\(.*$", JS, re.M).group(0)
     return ("function _storeGet(k, d){ return d; }\n" + one("esc") + "\n" + one("shortDate") + "\n" +
-            re.search(r"^var MESES = .*$", JS, re.M).group(0) + "\n" +
+            re.search(r"^var STAKE = .*$", JS, re.M).group(0) + "\n" + one("signed") + "\n" + one("money") + "\n" +
+            one("_units") + "\n" + re.search(r"^var MESES = .*$", JS, re.M).group(0) + "\n" +
             re.search(r"^var DIAS = .*$", JS, re.M).group(0) + "\n" + JS[a:b])
 
 
@@ -138,7 +139,7 @@ def test_the_table_says_it_in_plain_words():
                                     rule: true, status: 'done', provisional: false, clock: '', time: ''};
                            for (var k in o) b[k] = o[k]; return b; };
       console.log(JSON.stringify([
-        cien(0.64), cien(-1), cien(0), cien(-0.004), cien(null),
+        money(0.64), money(-1), money(0), money(-0.004), money(null),
         txt(lgRow(lg, false, 5, false)), txt(lgRow(lg, true, 5, false)),
         lgRow(lg, false, 5, false).indexOf('Pocos partidos: menos de 5') >= 0,
         txt(lgMatch(m({date: '2026-10-24', result: 'win', profit: 0.9}), true, false)),
@@ -160,23 +161,23 @@ def test_the_table_says_it_in_plain_words():
     out = subprocess.run(["node", "-e", code], capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert out.returncode == 0, out.stderr
     got = json.loads(out.stdout)
-    assert got[:5] == ["+64", "-100", "0", "0", "0"]
+    assert got[:5] == ["+32", "-50", "0", "0", "0"]              # apostando 50
     # desde el 22 oct
-    assert got[5] == "▸ Serie A4 (1 anulado)2167+64 *" and got[6].startswith("▾ Serie A")
+    assert got[5] == "▸ Serie A4 (1 anulado)2167+32 *" and got[6].startswith("▾ Serie A")
     assert got[7] is True
-    assert got[8] == "✅ 24 oct · A vs B · 🎯 Gana el local · +90"
-    assert got[9] == "❌ 26 oct · C vs D · Más de 2.5 goles · -100"
+    assert got[8] == "✅ 24 oct · A vs B · 🎯 Gana el local · +45"
+    assert got[9] == "❌ 26 oct · C vs D · Más de 2.5 goles · -50"
     assert got[10] == "↔️ 25 oct · E vs F · Gana el local · —"          # sin 🎯 en la vista de solo recomendados
     assert got[11] == ["B", "C", "A"] and got[12] == ["C", "B", "A"] and got[13] == ["A", "B", "C"]
     # hoy: la columna de los que faltan, sin "pocos partidos"
-    assert got[14] == "▸ Liga MX411250-36" and got[15] is False
-    assert got[16] == "✅ Tigres vs Cruz Azul · Más de 9.5 córners · +64 · por confirmar"
+    assert got[14] == "▸ Liga MX411250-18" and got[15] is False
+    assert got[16] == "✅ Tigres vs Cruz Azul · Más de 9.5 córners · +32 · por confirmar"
     assert got[17] == "● Pumas vs América · Gana el visitante · en vivo 63'"
     assert got[18] == "⏳ Central Córdoba vs Lanús · Menos de 2.5 goles · esperando el resultado"
     assert got[19] == "🕒 23:00 FC Seoul vs Ulsan · Gana el local · todavía no empieza"
-    assert got[20] == "✅ A vs B · 🎯 Gana el local · +40"
+    assert got[20] == "✅ A vs B · 🎯 Gana el local · +20"
     assert got[21] == ["Liga", "Partidos", "✅ Ganados", "❌ Perdidos", "⏳ Faltan", "Ganados de cada 100",
-                       "Apostando 100 a cada uno"] and got[22] == 6
+                       "Apostando 50 a cada uno"] and got[22] == 6
     assert got[23] == "sábado 7 nov"
     assert got[24] == '✅<span class="hide-sm"> Ganados</span>'               # en el celular, solo el ícono
     for s in [x for x in got if isinstance(x, str) and len(x) > 6]:

@@ -121,7 +121,7 @@ def summarize(rows: list) -> dict:
 
 
 def _u(x: float) -> str:
-    """La ganancia a 1 unidad dicha apostando 100 (6-nov-26: el dueño no entendía "u")."""
+    """La ganancia a 1 unidad dicha apostando 50 (6-nov-26: el dueño no entendía "u"; 50 desde el 8-nov)."""
     from src.models.telegram_reports import money
     return money(x)
 
@@ -140,7 +140,7 @@ def plain_verdict(total: dict) -> str:
 
 def format_lines(week: dict, total: dict, since) -> list:
     """El bloque del reporte semanal (HTML de Telegram), en palabras normales
-    (6-nov-26); la ganancia, apostando 100 a cada uno."""
+    (6-nov-26); la ganancia, apostando 50 a cada uno."""
     lines = ["— <b>CAMBIOS CON LA ALINEACIÓN</b> —"]
     if week["changed"]:
         lines += [f"Esta semana se revisaron {week['seen']} picks con la alineación y {week['changed']} cambiaron.",

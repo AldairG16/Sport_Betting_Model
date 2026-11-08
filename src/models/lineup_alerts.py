@@ -318,12 +318,14 @@ def load_upcoming_lineups(engine, window_min: tuple = (5, 80)) -> list:
 
 
 def run_lineup_alerts(engine=None, window_min: tuple = (5, 80), send=None, use_review: bool = True,
-                      capture: bool = True) -> list:
+                      capture: bool = True, notify: bool = True) -> list:
     """Closing: lee las alineaciones publicadas, detecta bajas y avisa una sola
     vez por equipo y partido, en un mensaje por partido. Devuelve las alertas
     nuevas. capture=False (26-oct-26): las toma de la tabla, guardadas por el
     paso "Alineaciones publicadas" antes de recalcular los picks, así el
-    mensaje trae el pick que ya vio la alineación."""
+    mensaje trae el pick que ya vio la alineación. notify=False (v2.11.0,
+    8-nov-26): se guarda y se revisa (el dashboard lo muestra) pero no sale
+    aparte; quién falta va en los picks finales (src/models/final_alerts.py)."""
     if engine is None:
         from config.database import engine
     if capture:
@@ -374,7 +376,7 @@ def run_lineup_alerts(engine=None, window_min: tuple = (5, 80), send=None, use_r
     # Fuera de la transacción: la revisión de Claude tarda ~10-20 s por partido.
     if new:
         from src.models.lineup_review import review_alert
-        if send is None:
+        if send is None and notify:
             from scripts.notify_telegram import send_message as send
         groups = {}
         for a in new:                                           # un grupo por partido (23-oct-26)
@@ -397,7 +399,8 @@ def run_lineup_alerts(engine=None, window_min: tuple = (5, 80), send=None, use_r
             except Exception as e:                  # el aviso sale igual, sin el pick
                 log.warning(f"⚠️  Alineación: pick del programa ilegible ({type(e).__name__}: {e})")
                 pick = None
-            send(format_match(group, both, pick, review))
+            if notify:
+                send(format_match(group, both, pick, review))
     print(f"📋 Alineaciones: {len(rows) // 2} partidos con alineación, {len(new)} alertas nuevas")
     return new
 

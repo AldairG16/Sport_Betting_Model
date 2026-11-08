@@ -100,15 +100,19 @@ def test_team_list_and_team_view():
 
 
 def test_chart_series():
-    hist = pd.DataFrame([{"date": "2026-10-20 10:00", "balance": 64.0}, {"date": "2026-10-20 12:00", "balance": 63.9},
-                         {"date": "2026-10-21 23:00", "balance": 63.39}])
-    assert B.bankroll_series(hist) == {"dates": ["2026-10-20", "2026-10-21"], "values": [63.9, 63.39]}
-    picks = pd.DataFrame([{"match_date": "2026-10-20T01:00:00Z", "result": "loss", "profit": -1.0, "reason": None},  # modelo con error
-                          {"match_date": "2026-10-22T01:00:00Z", "result": "win", "profit": 0.59, "reason": None},
-                          {"match_date": "2026-10-22T03:00:00Z", "result": "loss", "profit": -1.0, "reason": "Sin ventaja"},
-                          {"match_date": "2026-10-23T01:00:00Z", "result": None, "profit": None, "reason": None}])
-    assert B.picks_series(picks) == {"dates": ["2026-10-20", "2026-10-22"], "old": [-1.0, None], "fixed": [None, -0.41],
-                                     "rule": [None, 0.59]}           # 🎯 solo los que pasan la regla
+    """v2.11.0: la gráfica usa los mismos picks que Anteriores y Ganadas y perdidas."""
+    prov = _row("2026-10-23", "Serie A", "G", "H", "Gana el local", "win", 0.9, 0.6)
+    prov["pick"]["provisional"] = True
+    rows = [_row("2026-10-20", "Serie A", "A", "B", "Gana el local", "loss", -1.0, 0.6, old=True),   # modelo con error
+            _row("2026-10-22", "Serie A", "C", "D", "Gana el local", "win", 0.59, 0.6),
+            _row("2026-10-22", "Serie A", "E", "F", "Ambos anotan", "loss", -1.0, 0.5, rule=False),
+            _row("2026-10-22", "Serie A", "I", "J", "Gana el local", "win", 2.0, 0.6, rule=False, low=True),  # poca historia
+            prov,                                                                                       # sin cobrar
+            _row("2026-10-23", "Serie A", "K", "L", "Gana el local", "win", 0.7, 0.6, started=True),    # en juego
+            _row("2026-10-23", "Serie A", "M", "N", "Gana el local", "win", None, 0.6)]                 # sin momio
+    assert B.picks_series(rows) == {"dates": ["2026-10-20", "2026-10-22"], "old": [-1.0, None], "fixed": [None, -0.41],
+                                    "rule": [None, 0.59]}            # 🎯 solo los recomendados
+    assert B.picks_series([]) == {"dates": [], "old": [], "fixed": [], "rule": []}
 
 
 @pytest.fixture
@@ -132,8 +136,6 @@ def dash(monkeypatch):
             return PICKS
         if "FROM bets_history" in s:
             return BETS
-        if "FROM bankroll_history" in s:
-            return pd.DataFrame([{"date": "2026-10-21", "balance": 63.39}])
         if "FROM model_proposals" in s:
             return pd.DataFrame(columns=["match_date", "market", "odds", "result"])
         if "FROM live_scores" in s:                  # marcadores del día (v2.4.4): ninguno aquí
@@ -154,7 +156,7 @@ def test_board_endpoints(dash):
     v = c.get("/api/board/team?name=Real Madrid").get_json()
     assert v["ok"] and v["team"] == "Real Madrid" and len(v["matches"]) == 3
     ch = c.get("/api/board/charts").get_json()
-    assert ch["ok"] and ch["bankroll"]["values"] == [63.39] and ch["picks"]["fixed"] == [0.59]
+    assert ch["ok"] and "bankroll" not in ch and ch["picks"]["fixed"] == [0.59]      # v2.11.0: sin la línea plana
 
 
 def test_the_page_is_never_cached_and_carries_its_version(dash):
@@ -243,3 +245,31 @@ def test_leagues_endpoint_and_tab(dash):
     from pathlib import Path
     js = (Path(dash.__file__).parent / "ui_es5.js").read_text(encoding="utf-8")
     assert "'ligas'" in js and "loadLeagues(true)" in js          # la pestaña y el botón Actualizar
+
+
+def test_the_header_shows_the_targets_since_oct_22_not_the_frozen_bankroll(monkeypatch):
+    """v2.11.0 (8-nov-26), el dueño: "arregla también lo del bankroll del encabezado". Decía
+    "Bankroll 63.4u" de la tabla bankroll, quieta desde el modo colección (25-sep-26). Ahora los 🎯
+    cobrados desde el 22 oct, con la misma consulta que la noche de Telegram (telegram_reports.SINCE_SQL)."""
+    import inspect
+    from pathlib import Path
+    import dashboard.app as A
+    from src.models import telegram_reports as TR
+    seen = []
+
+    def fake_q(sql, params=None, optional=False):
+        seen.append(sql)
+        return pd.DataFrame([{"market": "home_win", "reason": None, "result": r, "profit": p}
+                             for r, p in (("win", 0.45), ("win", 0.3), ("loss", -1.0), ("push", 0.0))])
+    monkeypatch.setattr(A, "_q", fake_q)
+    d = A.app.test_client().get("/api/board/header").get_json()
+    assert d == {"ok": True, "since": "2026-10-22", "n": 4, "won": 2, "lost": 1, "void": 1, "units": -0.25, "priced": 4}
+    assert seen == [TR.SINCE_SQL]
+    html = A.app.test_client().get("/").get_data(as_text=True)
+    import re
+    js = re.sub(r"(^|\s)//.*$", "", (Path(A.__file__).parent / "ui_es5.js").read_text(encoding="utf-8"),
+                flags=re.M)                                                     # lo que se ve, sin comentarios
+    assert 'id="chiptarget"' in html and "Bankroll" not in html and 'id="cbank"' not in html
+    assert "/api/board/header" in js and "Bankroll" not in js and "chipbank" not in js and "cbank" not in js
+    for fn in (A.api_board_header, A.api_board_charts):
+        assert "FROM bankroll" not in inspect.getsource(fn)                       # nada de las tablas quietas

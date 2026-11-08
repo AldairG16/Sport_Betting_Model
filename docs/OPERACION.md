@@ -1905,7 +1905,7 @@ partidos y 🎯 solo recomendados:
 
 Lo que se ve:
 - indicadores: partidos, ganados, perdidos, anulados (si hay), los que faltan (en Hoy), ganados de cada 100
-  y la ganancia apostando 100 a cada uno;
+  y la ganancia apostando 50 a cada uno;
 - una fila por liga en orden alfabético (sin que los acentos manden al final); un toque al título ordena
   por esa columna, y en el celular los títulos son solo ✅ ❌ ⏳ para que la tabla quepa;
 - tocar la liga abre sus partidos: en Hoy, primero los que se juegan, luego los terminados y al final los
@@ -2165,12 +2165,74 @@ el dashboard: `program_picks` (🎯 = sin `reason`) y los parlays con bono de `p
   lo acumulado y los cambios con la alineación (`lineup_changes.format_lines`, ahora con "¿Conviene cambiar
   el pick con la alineación?" en vez de z-scores).
 
-La ganancia se dice "apostando 100 a cada uno": el pick a 1 unidad al momio de PlayDoit × 100. Si la base
+La ganancia se dice "apostando 50 a cada uno" (hasta el 8-nov-26, 100): el pick a 1 unidad al momio de PlayDoit × 50. Si la base
 falla no se manda nada (antes salía "Sin apuestas"). El aviso de una corrida con pasos fallidos (`send_health_check`) ya no
 muestra "Bankroll 63.40u (ROI …)" ni las "pending" de `bets_history`: dice cuántos pasos fallaron, los 🎯
 del mensaje de la mañana, los créditos y cuánto tardó. Se quitaron los formatos viejos de `bets_history`
 (`format_bets_message`, `_build_bets_by_league`, `_diversified_top`, `_tomorrow_line`, `NO_PICKS_TEXT`). Siguen
 en jerga técnica los avisos para el que mantiene el sistema: calibración, laboratorio de estrategias, salud.
+
+**Picks finales en Telegram: un solo aviso por partido (v2.11.0, 8-nov-26).** El dueño: "me llegan muchas alertas
+de cambios de pick, a veces también son 2 veces antes del partido, y todo eso se me pierde en el telegram, quiero
+que solo llegue el último cambio, necesito que revises cuánto tiempo antes del partido cambia el pick para que ese
+sea el límite… y si hay parley también mandarlo".
+
+Lo medido en 281 partidos (31-oct a 7-nov, `program_picks.changed_at`): el último cambio llega hasta la última
+revisión antes del partido y nunca después.
+- 30 de esos cambios fueron entre 5 y 35 min antes.
+- No hay cambios más tarde porque el closing corre a las :00 y :30 (cron-job.org) y a `KICK_LOCK_MIN` del partido
+  ya no lo toca.
+- La alineación se ve casi siempre en esa revisión (mediana 28 min antes).
+- El sábado 7-nov llegaron 22 avisos de "Cambió el pick" (36 cambios), 2 de parlay y hasta 11 de alineación.
+
+El dueño eligió solo 🎯 y parlays, en la última revisión. `src/models/final_alerts.py`, paso "Picks finales
+(Telegram)" del closing, después de "Picks del programa":
+- **Cuándo** (`cutoff`): van los partidos que ya no toca ninguna revisión regular, los que empiezan antes de la
+  siguiente (:00 o :30) + `KICK_LOCK_MIN`. Un partido de las 13:00 sale en la de las 12:30 (~28 min antes); uno de
+  las 13:15 o 13:45, ~13 min antes.
+- **Qué**: un mensaje por corrida, y solo si hay algo que decir.
+  - Los 🎯, con el momio mínimo, ⚡, si ya vio la alineación y quién falta (de `lineup_alerts`).
+  - Los que salieron 🎯 en el mensaje de la mañana o en el avance de la noche y ya no lo son, con el porqué.
+  - Los parlays con bono que se fijan ahí (`parlay_alerts.alert_text`).
+  - El 🎯 que no estaba en la mañana va marcado "nuevo". Solo en un día cuyo mensaje quedó guardado:
+    `notify_telegram._remember_announced` guarda en `model_state 'telegram_announced'` los 🎯 y el día.
+- **Una vez**: cada partido y cada parlay sale una sola vez (`model_state 'telegram_final_picks'`). Si una corrida
+  de más (los cron de GitHub) lo cambia antes del partido, sale otra vez marcado "cambió a última hora". Si
+  Telegram falla, no queda como mandado y se reintenta en la siguiente corrida.
+- **Lo que ya no sale**:
+  - "Cambió el pick": `today_board` solo edita "Partidos de hoy", sin sonar, con 🔄.
+  - "Parlay listo" y "Cambió el parlay": `parlay_alerts` ya no manda nada, solo arma el texto.
+  - El aviso de alineación aparte: `run_lineup_alerts(notify=False)` la guarda y la revisa con Claude, y el
+    dashboard la muestra.
+- Los textos de la mañana y los del dashboard (pestaña Parlay) dicen cuándo llega el pick final.
+
+**Encabezado del dashboard sin el bankroll congelado (v2.11.0, 8-nov-26).** El dueño: "arregla también lo del
+bankroll del encabezado". Decía "💰 Bankroll 63.4u", de la tabla `bankroll`, quieta desde el modo colección
+(25-sep-26). La gráfica "Bankroll" de Gráficas (`bankroll_history`) era una línea plana desde esa fecha.
+- Ahora el encabezado dice "🎯 Desde el 22 oct: 118 de 210 ganados · +112" (`/api/board/header`). Es la misma
+  consulta que la noche de Telegram (`telegram_reports.SINCE_SQL`) y da lo mismo que "Por liga" (🎯, desde el
+  22 oct).
+- La gráfica del bankroll se quitó, junto con `board.bankroll_series`.
+- `/api/kpis` sigue (lo usan las pruebas de la API vieja), pero la página ya no lo pide.
+
+**Todo apostando 50 (v2.11.0, 8-nov-26).** El dueño: "1, todo a 50". Toda ganancia, en Telegram y en el dashboard
+(encabezado, Por liga, Anteriores, Ganadas y perdidas, Gráficas, Parlay), se dice "apostando 50 a cada uno": el pick a
+1 unidad al momio de PlayDoit × 50.
+- **Dónde está el 50:** `telegram_reports.STAKE` y `STAKE` en `ui_es5.js`.
+- **Redondeo:** el mismo en los dos, al entero, hacia arriba en el medio y sin el ruido del decimal
+  (-0.55 × 50 = -27.500000000000004 es -27).
+- **Lo que se quitó:** "u", "Unidades" y "Rendimiento" (el ROI en %) en Ganadas y perdidas y en Parlay. Las gráficas
+  multiplican sus datos por 50.
+- **Apuestas reales de `bets_history`:** se dicen por unidad apostada (profit / stake, `board._per_unit`), porque cada
+  una tenía stake distinto.
+- **Sin cambio:** los reportes técnicos del domingo (laboratorio de estrategias, Pinnacle, alertas de alineación)
+  siguen en unidades.
+- **La gráfica "Ganancia acumulada de los picks"** (`board.picks_series`) usa las mismas filas que Anteriores y
+  Ganadas y perdidas (`past_matches`). Antes leía `program_picks` aparte y no cuadraba:
+  - "todos" terminaba en -660 contra -784, porque contaba los de poca historia;
+  - "antes del 22 oct" terminaba en -833 contra -894, por 7 picks de segundas divisiones que Anteriores no lista.
+
+  Ahora las tres dicen -784, +112 (🎯) y -894.
 Lo cubre `tests/test_telegram_reports.py`, que también revisa que no salgan ROI, "u", Profit ni momios decimales.
 
 **Se mantiene abierto solo (v1.6.0).** El `.exe` es un supervisor

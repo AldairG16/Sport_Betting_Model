@@ -13,7 +13,8 @@ aunque el dashboard y "Partidos de hoy" sí recomendaban 🎯 y parlays.
 Ahora leen lo mismo que el dashboard: los picks del programa
 (`program_picks`; 🎯 = el que no trae `reason`) y los parlays con bono
 (`program_parlays`, armados con `dashboard.parlay`). La ganancia se dice
-"apostando 100 a cada uno" (el pick a 1 unidad al momio de PlayDoit, × 100)
+"apostando 50 a cada uno" (el pick a 1 unidad al momio de PlayDoit, × STAKE; hasta el
+8-nov-26 era × 100: el dueño, "todo a 50")
 y los momios en americano.
 
 - morning_text: los 🎯 de hoy con su momio mínimo, los parlays y cuántos
@@ -37,6 +38,7 @@ FIXED_SINCE = pd.Timestamp("2026-10-22", tz="UTC")     # = dashboard.board.MODEL
 PLAYED = ("win", "loss", "push", "half_win", "half_loss")
 WIN_LIKE = ("win", "half_win")
 LOSS_LIKE = ("loss", "half_loss")
+STAKE = 50                                              # "apostando 50 a cada uno" (el dueño, 8-nov-26)
 LAG_FAMILIES = ("Córners", "Tarjetas")                 # su dato oficial llega 1-2 días después
 MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
 DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
@@ -87,8 +89,10 @@ def day_bounds(day, tz) -> tuple[datetime, datetime]:
 
 
 def money(units) -> str:
-    """La ganancia a 1 unidad dicha apostando 100: 0.45 → '+45', -1 → '-100'."""
-    v = round((_num(units) or 0.0) * 100)
+    """La ganancia a 1 unidad dicha apostando STAKE (50): 0.45 → '+23', -1 → '-50'.
+    Redondeo hacia arriba en el medio, como Math.round del dashboard (signed),
+    sin el ruido del decimal: -0.55 × 50 = -27.500000000000004 es -27.5 → -27."""
+    v = math.floor(round((_num(units) or 0.0) * STAKE, 6) + 0.5)
     return f"+{v}" if v > 0 else str(v)
 
 
@@ -141,7 +145,7 @@ def record(rows: list) -> dict:
 
 
 def record_text(rec: dict) -> str:
-    """'2 ganados y 1 perdido · apostando 100 a cada uno: +45'."""
+    """'2 ganados y 1 perdido · apostando 50 a cada uno: +23'."""
     if not rec["n"]:
         return "todavía no termina ninguno"
     parts = [f"{rec['won']} ganado{'s' if rec['won'] != 1 else ''}",
@@ -150,7 +154,7 @@ def record_text(rec: dict) -> str:
         parts.append(f"{rec['void']} anulado{'s' if rec['void'] != 1 else ''}")
     s = ", ".join(parts[:-1]) + " y " + parts[-1]
     if rec["priced"]:
-        s += f" · apostando 100 a cada uno: <b>{money(rec['units'])}</b>"
+        s += f" · apostando {STAKE} a cada uno: <b>{money(rec['units'])}</b>"
     return s
 
 
@@ -239,14 +243,16 @@ def morning_text(day, picks: list, parlay_rows: list, tz, when: str = "Hoy") -> 
             odds = times_text(p.get("p_market"))
             lines.append(f"{parlay_name(d, tz)} · {p['k']} partidos · {pay}"
                          + (f"\n   se gana {odds}" if odds else ""))
-        lines += ["<i>Espera el aviso \"Parlay listo\": llega cuando salen las alineaciones.</i>", ""]
+        lines += ["<i>El parlay final llega con los picks finales, en la última revisión antes de su primer "
+                  "partido.</i>", ""]
     if others:
         lines.append(f"🤖 Otro partido de {hoy} no tiene 🎯: sale" if others == 1 else
                      f"🤖 Otros {others} partidos de {hoy} no tienen 🎯: salen")
         lines[-1] += " en \"Partidos de hoy\" (mensaje fijado) y en el dashboard, solo para seguirlos."
     if stars:
         lines.append("<i>⚡ = pago anticipado: si el equipo va 2 goles arriba, PlayDoit la paga como ganada. "
-                     "Los picks se revisan otra vez con la alineación (~1 h antes) y si cambian, Telegram avisa.</i>")
+                     "El pick final llega en la última revisión antes de cada partido: unos 30 min antes (15 si "
+                     "empieza a y cuarto o a menos cuarto), ya con la alineación si salió.</i>")
     return "\n".join(lines).rstrip(), len(stars)
 
 
@@ -274,10 +280,10 @@ def evening_text(day, picks: list, parlay_rows: list, since_rows: list, tomorrow
             p = d["parlay"]
             name = f"{parlay_name(d, tz)} ({p['k']} partidos)"
             if p["status"] == "win":
-                lines.append(f"✅ {name}: ganado · apostando 100: <b>{money(p['profit'])}</b>"
+                lines.append(f"✅ {name}: ganado · apostando {STAKE}: <b>{money(p['profit'])}</b>"
                              + (f" · {p['pa_legs']} cobrado(s) por ir 2 goles arriba ⚡" if p["pa_legs"] else ""))
             elif p["status"] == "loss":
-                lines.append(f"❌ {name}: perdido ({p['won_legs']} de {p['k']} ganados) · apostando 100: -100")
+                lines.append(f"❌ {name}: perdido ({p['won_legs']} de {p['k']} ganados) · apostando {STAKE}: {money(-1)}")
             elif p["status"] == "push":
                 lines.append(f"↔️ {name}: anulado, se devuelve lo apostado")
             else:
@@ -291,7 +297,7 @@ def evening_text(day, picks: list, parlay_rows: list, since_rows: list, tomorrow
     tot = record([r for r in since_rows if is_star(r)])
     if tot["n"]:
         lines.append(f"📈 <b>Desde el 22 oct</b>, 🎯 recomendados: {tot['won']} de {tot['n']} ganados"
-                     + (f" · apostando 100 a cada uno: <b>{money(tot['units'])}</b>" if tot["priced"] else ""))
+                     + (f" · apostando {STAKE} a cada uno: <b>{money(tot['units'])}</b>" if tot["priced"] else ""))
     n_star, n_parlay = int(tomorrow.get("stars") or 0), int(tomorrow.get("parlays") or 0)
     if n_star or n_parlay:
         lines.append(f"🗓️ <b>Mañana</b>: {n_star} 🎯 recomendado{'s' if n_star != 1 else ''}"
@@ -330,7 +336,7 @@ def weekly_lines(picks: list, parlay_rows: list, since_rows: list) -> list:
         lost = sum(1 for d in done if d["parlay"]["status"] == "loss")
         units = sum(d["parlay"]["profit"] or 0 for d in done)
         lines.append(f"🧩 Parlays: {won} ganado{'s' if won != 1 else ''} y {lost} perdido{'s' if lost != 1 else ''}"
-                     f" · apostando 100 a cada uno: <b>{money(units)}</b>")
+                     f" · apostando {STAKE} a cada uno: <b>{money(units)}</b>")
     orec = record(others)
     if orec["n"]:
         lines.append(f"🤖 Los demás picks (solo para seguirlos): {record_text(orec)}")
@@ -339,7 +345,7 @@ def weekly_lines(picks: list, parlay_rows: list, since_rows: list) -> list:
     if tot["n"]:
         lines += ["— <b>DESDE EL 22 OCT</b> —",
                   f"🎯 Recomendados: {tot['won']} de {tot['n']} ganados"
-                  + (f" · apostando 100 a cada uno: <b>{money(tot['units'])}</b>" if tot["priced"] else ""), ""]
+                  + (f" · apostando {STAKE} a cada uno: <b>{money(tot['units'])}</b>" if tot["priced"] else ""), ""]
     return lines
 
 
@@ -360,13 +366,18 @@ def load_parlays(engine, d0, d1=None) -> list:
     return df.to_dict("records")
 
 
+# los 🎯 liquidados desde el modelo corregido: la noche de Telegram y el
+# encabezado del dashboard (v2.11.0) leen lo mismo
+SINCE_SQL = """
+    SELECT market, reason, result, profit FROM program_picks
+    WHERE match_date >= :s AND match_date < :n AND market IS NOT NULL AND reason IS NULL
+      AND result IN ('win', 'loss', 'push', 'half_win', 'half_loss')
+"""
+
+
 def load_since(engine, now: datetime) -> list:
     """Los 🎯 liquidados desde el modelo corregido (22-oct), lo del dashboard."""
-    return pd.read_sql(text("""
-        SELECT market, reason, result, profit FROM program_picks
-        WHERE match_date >= :s AND match_date < :n AND market IS NOT NULL AND reason IS NULL
-          AND result IN ('win', 'loss', 'push', 'half_win', 'half_loss')
-    """), engine, params={"s": FIXED_SINCE.to_pydatetime(), "n": now}).to_dict("records")
+    return pd.read_sql(text(SINCE_SQL), engine, params={"s": FIXED_SINCE.to_pydatetime(), "n": now}).to_dict("records")
 
 
 def tomorrow_counts(engine, day, tz) -> dict:

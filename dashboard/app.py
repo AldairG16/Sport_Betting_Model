@@ -784,7 +784,7 @@ def _load_past_rows() -> list:
     picks = _q("""SELECT match, match_date, league, label, family, market, reason, model_prob, market_prob, result,
                          profit, source, playdoit_odds, star_note
                   FROM program_picks WHERE match_date >= CAST(:s AS date) - 2""", p)
-    bets = _q("""SELECT match, match_date, market, result, profit FROM bets_history
+    bets = _q("""SELECT match, match_date, market, result, profit, stake FROM bets_history
                  WHERE match_date >= CAST(:s AS date) - 2""", p)
     # marcador de ESPN (v2.4.4): el de los que ya empezaron y, desde v2.5.1, los
     # córners y tarjetas que `matches` no tiene (closing y evening la llenan)
@@ -921,17 +921,31 @@ def api_board_team():
     return jsonify({"ok": True, **_b.team_view(t, m, up, extra)})
 
 
+@app.route("/api/board/header")
+def api_board_header():
+    """El encabezado (v2.11.0, 8-nov-26): los 🎯 ya cobrados desde el 22-oct y
+    lo que dejan apostando 50, lo mismo que la noche de Telegram y "Por liga".
+    Hasta v2.10.0 decía "Bankroll 63.4u" de la tabla bankroll, que dejó de
+    moverse con el modo colección (25-sep-26): el dueño, "arregla también lo
+    del bankroll del encabezado"."""
+    from src.models import telegram_reports as TR
+    rows = _q(TR.SINCE_SQL, {"s": TR.FIXED_SINCE.to_pydatetime(), "n": pd.Timestamp.now(tz="UTC").to_pydatetime()})
+    if g.get("db_down"):
+        return _no_data()
+    return jsonify({"ok": True, "since": TR.FIXED_SINCE.strftime("%Y-%m-%d"), **TR.record(rows.to_dict("records"))})
+
+
 @app.route("/api/board/charts")
 def api_board_charts():
+    """Las gráficas. v2.11.0: sin la del bankroll (bankroll_history dejó de
+    moverse el 25-sep-26 y salía una línea plana)."""
     from dashboard import board as _b
-    hist = _q("SELECT date, balance FROM bankroll_history ORDER BY date, id")
-    picks = _q("SELECT match_date, result, profit, reason FROM program_picks")
     props = _q("""
         SELECT DISTINCT ON (match, market) match_date, market, odds, result
         FROM model_proposals ORDER BY match, market, evaluated_at DESC
     """)
     rows = _past_rows()
-    return jsonify({"ok": True, "bankroll": _b.bankroll_series(hist), "picks": _b.picks_series(picks),
+    return jsonify({"ok": True, "picks": _b.picks_series(rows),
                     "accuracy": _b.weekly_accuracy(rows), "proposals": _vis.proposal_weeks(props),
                     "families": _b.summary(rows)["families"]})
 
@@ -1169,7 +1183,7 @@ PAGE = """<!DOCTYPE html>
 </style></head><body>
 <header>
   <h1>⚽ Apuestas <span id="ver" class="muted small"></span></h1>
-  <span class="chip" id="chipbank">Bankroll …</span>
+  <span class="chip" id="chiptarget">🎯 …</span>
   <span class="chip" id="chiptoday">Hoy …</span>
   <button class="chip rf" id="refresh" title="Vuelve a leer todo ahora (solo se actualiza sola cada 5 min)">🔄 Actualizar</button>
   <span class="small muted" id="updated"></span>
@@ -1210,17 +1224,17 @@ PAGE = """<!DOCTYPE html>
     <span class="pill on" data-g="picks" title="Todos los picks del programa desde el 22 oct">🤖 Todos los picks</span>
     <span class="pill" data-g="rule" title="Solo las apuestas recomendadas (🎯)">🎯 Recomendados</span>
     <span class="pill" data-g="bets" title="Las apuestas con dinero real registradas">💰 Apuestas reales</span>
-    <span class="small muted" style="margin-left:auto">Solo partidos ya terminados y cobrados · cada pick cuenta como 1 unidad apostada al momio de PlayDoit</span>
+    <span class="small muted" style="margin-left:auto">Solo partidos ya terminados y cobrados · la ganancia es apostando 50 a cada uno al momio de PlayDoit</span>
   </div>
   <div class="kpis" id="rkpis"></div>
-  <div class="cb wide"><h3>Ganadas y perdidas por día · ganancia acumulada (unidades)</h3><canvas id="cdaily"></canvas></div>
+  <div class="cb wide"><h3>Ganadas y perdidas por día · ganancia acumulada apostando 50 a cada uno</h3><canvas id="cdaily"></canvas></div>
   <div class="grid2">
-    <div class="tbl"><table><thead><tr><th>Tipo de apuesta</th><th title="Ganadas - perdidas">G-P</th><th>Acierto</th><th>Ganancia</th><th class="hide-sm" title="Lo que se gana o pierde de cada 100 apostados">Rendimiento</th></tr></thead>
+    <div class="tbl"><table><thead><tr><th>Tipo de apuesta</th><th title="Ganadas - perdidas">G-P</th><th>Acierto</th><th title="Apostando 50 a cada uno">Ganancia</th></tr></thead>
       <tbody id="rtypes"></tbody></table></div>
-    <div class="tbl"><table><thead><tr><th>Liga</th><th title="Ganadas - perdidas">G-P</th><th>Acierto</th><th>Ganancia</th><th class="hide-sm" title="Lo que se gana o pierde de cada 100 apostados">Rendimiento</th></tr></thead>
+    <div class="tbl"><table><thead><tr><th>Liga</th><th title="Ganadas - perdidas">G-P</th><th>Acierto</th><th title="Apostando 50 a cada uno">Ganancia</th></tr></thead>
       <tbody id="rleagues"></tbody></table></div>
   </div>
-  <div class="cb free"><h3>Ganancia por liga (unidades)</h3><div class="chartbox" id="cleaguesbox"><canvas id="cleagues"></canvas></div></div>
+  <div class="cb free"><h3>Ganancia por liga, apostando 50 a cada uno</h3><div class="chartbox" id="cleaguesbox"><canvas id="cleagues"></canvas></div></div>
   <div class="grid2">
     <div class="tbl"><table><thead><tr><th colspan="4">✅ Mejores aciertos</th></tr></thead><tbody id="rbest"></tbody></table></div>
     <div class="tbl"><table><thead><tr><th colspan="4">❌ Fallos en los que el programa estaba más seguro</th></tr></thead><tbody id="rworst"></tbody></table></div>
@@ -1268,15 +1282,12 @@ PAGE = """<!DOCTYPE html>
 
 <div class="pane" id="tab-graficas">
   <div class="grid2">
-    <div class="cb"><h3>Bankroll</h3><canvas id="cbank"></canvas></div>
+    <div class="cb"><h3>Ganancia acumulada de los picks, apostando 50 a cada uno</h3><canvas id="cpicks"></canvas></div>
     <div class="cb"><h3>% de veces que ganó el favorito, por semana</h3><canvas id="cacc"></canvas></div>
   </div>
   <div class="grid2">
-    <div class="cb"><h3>Ganancia acumulada de los picks (1 unidad cada uno)</h3><canvas id="cpicks"></canvas></div>
-    <div class="cb"><h3>Ganancia por semana de las apuestas que propone el modelo (unidades)</h3><canvas id="cprops"></canvas></div>
-  </div>
-  <div class="grid2">
-    <div class="cb"><h3>Ganancia por tipo de apuesta desde el 22 oct (unidades)</h3><canvas id="cfam"></canvas></div>
+    <div class="cb"><h3>Ganancia por tipo de apuesta desde el 22 oct, apostando 50 a cada uno</h3><canvas id="cfam"></canvas></div>
+    <div class="cb"><h3>Ganancia por semana de las apuestas que propone el modelo, apostando 50 a cada una</h3><canvas id="cprops"></canvas></div>
   </div>
 </div>
 <script src="/ui_es5.js?v=__V__"></script></body></html>""".replace("__HOW_TO_READ__", HOW_TO_READ)

@@ -12,9 +12,10 @@ ver su última actualización".
   lo EDITA en cada corrida (cada 30 min) sin sonar; al empezar el día va uno
   nuevo, fijado arriba del chat. Si no cabe, va en varios. Estado en
   model_state 'telegram_today'.
-- Un aviso aparte (con sonido) cuando cambia el pick de un partido que empieza
-  en las próximas CHANGE_ALERT_HOURS. Cada cambio sale una vez
-  (model_state 'telegram_pick_changes').
+- v2.11.0 (8-nov-26): ya no hay aviso aparte (con sonido) por cada cambio del
+  pick. El dueño: "me llegan muchas alertas de cambios de pick… quiero que solo
+  llegue el último cambio". El pick final de los 🎯 y el parlay llegan en la
+  última revisión antes del partido (src/models/final_alerts.py).
 
 El cambio lo anota snapshot_picks (program_picks.prev_label, prev_star,
 changed_at). Las funciones de formato son puras; run_today_board hace las
@@ -33,8 +34,6 @@ from src.utils.log import get_logger
 log = get_logger(__name__)
 
 BOARD_KEY = "telegram_today"
-CHANGES_KEY = "telegram_pick_changes"
-CHANGE_ALERT_HOURS = 6           # aviso de cambio solo para lo que empieza pronto
 CHANGED_RECENT_H = 24            # 🔄 en la lista si cambió en las últimas 24 h
 CHUNK_CHARS = 3800               # Telegram corta en 4096
 FEATURED_FAMILIES = ("Ganador", "Goles")   # sus cuotas vienen del fetch de la liga
@@ -147,42 +146,14 @@ def board_texts(rows: list, now: datetime, tz) -> list:
     return chunks
 
 
-def change_alert(rows: list, now: datetime, tz) -> str | None:
-    """El aviso de los picks que cambiaron (None si no hay)."""
-    if not rows:
-        return None
-    parts = ["🔄 <b>Cambió el pick</b>"]
-    for r in sorted(rows, key=lambda r: _ts(r["match_date"])):
-        name = html.escape(str(r.get("display") or r.get("match")))
-        why = str(r.get("lineup") or "")
-        parts.append(f"<b>{_hm(_ts(r['match_date']), tz)}</b> {name}\n"
-                     f"Antes: {html.escape(pick_text(r.get('prev_label'), bool(r.get('prev_star'))))}\n"
-                     f"Ahora: {html.escape(pick_text(r.get('label'), _star(r), r.get('min_us'), r.get('reason')))}"
-                     + (f"\n<i>{html.escape(why)}</i>" if why.startswith("confirmada") else ""))
-    return "\n\n".join(parts)
-
-
-def changes_to_alert(rows: list, since: datetime | None, now: datetime) -> list:
-    """Los cambios nuevos (después de `since`) de lo que empieza en las
-    próximas CHANGE_ALERT_HOURS."""
-    out = []
-    for r in rows:
-        changed, ko = _ts(r.get("changed_at")), _ts(r["match_date"])
-        if changed is None or (since is not None and changed <= since):
-            continue
-        if now < ko <= now + timedelta(hours=CHANGE_ALERT_HOURS):
-            out.append(r)
-    return out
-
-
-def run_today_board(engine=None, now: datetime | None = None, edit=None, send=None, pin=None,
+def run_today_board(engine=None, now: datetime | None = None, edit=None, pin=None,
                     load_state=None, save_state=None) -> dict:
-    """Closing: actualiza "Partidos de hoy" y avisa los picks que cambiaron."""
+    """Closing: actualiza "Partidos de hoy" (sin sonar)."""
     if engine is None:
         from config.database import engine
-    if edit is None or send is None or pin is None:
+    if edit is None or pin is None:
         from scripts import notify_telegram as nt
-        edit, send, pin = edit or nt.edit_or_send, send or nt.send_message, pin or nt.pin_message
+        edit, pin = edit or nt.edit_or_send, pin or nt.pin_message
     if load_state is None or save_state is None:
         from src.utils import model_state as ms
         load_state, save_state = load_state or ms.load_state, save_state or ms.save_state
@@ -191,10 +162,7 @@ def run_today_board(engine=None, now: datetime | None = None, edit=None, send=No
     now = now or datetime.now(timezone.utc)
     loc = now.astimezone(tz)
     start = datetime(loc.year, loc.month, loc.day, tzinfo=tz).astimezone(timezone.utc)
-    # lo de hoy y, para los avisos, lo que empieza en las próximas horas aunque sea mañana
-    end = max(start + timedelta(days=1), now + timedelta(hours=CHANGE_ALERT_HOURS))
-    rows = pd.read_sql(text(_SQL), engine, params={"a": start, "b": end}).to_dict("records")
-    today = [r for r in rows if _ts(r["match_date"]) < start + timedelta(days=1)]
+    today = pd.read_sql(text(_SQL), engine, params={"a": start, "b": start + timedelta(days=1)}).to_dict("records")
 
     st = load_state(BOARD_KEY) or {}
     same_day = st.get("day") == loc.date().isoformat()
@@ -211,18 +179,7 @@ def run_today_board(engine=None, now: datetime | None = None, edit=None, send=No
         pin(ids[0], unpin=list(st.get("ids") or [])[:1])
     save_state(BOARD_KEY, {"day": loc.date().isoformat(), "ids": ids or old}, history=False)
 
-    cst = load_state(CHANGES_KEY) or {}
-    since = _ts(cst.get("last"))
-    changes = changes_to_alert(rows, since, now)
-    msg = change_alert(changes, now, tz)
-    if msg:
-        send(msg)
-    seen = [_ts(r.get("changed_at")) for r in rows if _ts(r.get("changed_at"))]
-    last = max([t for t in (since, *seen) if t is not None], default=None)
-    if last is not None and last != since:
-        save_state(CHANGES_KEY, {"last": last.isoformat()}, history=False)
-
     n_up = sum(1 for r in today if _ts(r["match_date"]) > now)
     print(f"📋 Partidos de hoy en Telegram: {n_up} por empezar, {len(today) - n_up} ya empezaron, "
-          f"{len(texts)} mensaje(s), {len(changes)} cambio(s) avisado(s)")
-    return {"upcoming": n_up, "messages": len(texts), "changes": len(changes)}
+          f"{len(texts)} mensaje(s)")
+    return {"upcoming": n_up, "messages": len(texts)}
