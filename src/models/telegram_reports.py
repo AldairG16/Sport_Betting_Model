@@ -34,6 +34,9 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 from sqlalchemy import text
 
+# El dashboard solo lo tiene el dueño: el canal de los partidos (8-nov-26)
+# recibe el mismo mensaje sin esto (for_channel).
+DASHBOARD_BIT = " y en el dashboard"
 FIXED_SINCE = pd.Timestamp("2026-10-22", tz="UTC")     # = dashboard.board.MODEL_FIXED
 PLAYED = ("win", "loss", "push", "half_win", "half_loss")
 WIN_LIKE = ("win", "half_win")
@@ -55,6 +58,12 @@ PARLAYS_SQL = "SELECT * FROM program_parlays WHERE rule = 'bono' AND day >= :d0 
 
 
 # ─── piezas ──────────────────────────────────────────────────────────────────
+
+
+def for_channel(text: str) -> str:
+    """El mensaje para el canal de los partidos: sin lo que solo tiene el
+    dueño (el dashboard)."""
+    return text.replace(DASHBOARD_BIT, "")
 
 def _num(v):
     try:
@@ -248,7 +257,7 @@ def morning_text(day, picks: list, parlay_rows: list, tz, when: str = "Hoy") -> 
     if others:
         lines.append(f"🤖 Otro partido de {hoy} no tiene 🎯: sale" if others == 1 else
                      f"🤖 Otros {others} partidos de {hoy} no tienen 🎯: salen")
-        lines[-1] += " en \"Partidos de hoy\" (mensaje fijado) y en el dashboard, solo para seguirlos."
+        lines[-1] += f" en \"Partidos de hoy\" (mensaje fijado){DASHBOARD_BIT}, solo para seguirlos."
     if stars:
         lines.append("<i>⚡ = pago anticipado: si el equipo va 2 goles arriba, PlayDoit la paga como ganada. "
                      "El pick final llega en la última revisión antes de cada partido: unos 30 min antes (15 si "

@@ -15,6 +15,10 @@ terminar dispara su relevo. El closing (scripts/heartbeat_dispatch.py) lo
 vuelve a lanzar si la cadena se corta. Solo responde al chat del dueño
 (TELEGRAM_CHAT_ID); cualquier otro se ignora.
 
+Canal de los partidos (8-nov-26): si el dueño reenvía un mensaje de un canal
+(sin imagen), lo guarda como el canal al que se copian los partidos;
+«quitar canal» lo borra (src/models/telegram_channel.py).
+
 Costo: Claude Haiku 5.5 con una imagen, ~2,000 tokens de entrada y ~500 de
 salida: una fracción de centavo por captura. Tope diario propio
 (PLAYDOIT_CHECKER_DAILY_USD, 0.25) además del de toda la cuenta.
@@ -53,7 +57,9 @@ HELP = ("🔎 <b>Revisor de PlayDoit</b>\n"
         "Mándame una <b>captura</b> de PlayDoit (un partido, una lista o un momio mejorado) y te digo "
         "momio por momio si vale la pena: ✅ apuesta / ❌ no, con el mínimo que necesita.\n"
         "Reviso: ganador (1X2), doble oportunidad, empate anula, más/menos 2.5 goles y ambos anotan, "
-        "de los partidos que el sistema sigue en los próximos días.")
+        "de los partidos que el sistema sigue en los próximos días.\n\n"
+        "📣 <b>Canal de los partidos:</b> para que los partidos lleguen también a un canal, agrega este "
+        "bot como administrador del canal y reenvíame cualquier mensaje de ahí.")
 
 SYSTEM = """\
 Lees capturas de pantalla de la casa de apuestas PlayDoit (México). Extrae CADA momio de fútbol que
@@ -208,8 +214,27 @@ def read_screenshot(image: bytes, media_type: str, engine=None, client=None) -> 
 # Un mensaje
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _channel_command(message: dict, token: str, http, load_state=None, save_state=None) -> str | None:
+    """El canal de los partidos: un mensaje reenviado de un canal (sin imagen:
+    una captura reenviada se sigue revisando) lo guarda; «quitar canal» lo
+    borra. None si el mensaje no es de esto."""
+    from src.models import telegram_channel as TC
+    channel = TC.forwarded_channel(message)
+    image = bool(message.get("photo")) or \
+        str((message.get("document") or {}).get("mime_type", "")).startswith("image/")
+    stop = TC.is_stop(message.get("text"))
+    if not stop and (not channel or image):
+        return None
+    if load_state is None or save_state is None:
+        from src.utils import model_state as ms
+        load_state, save_state = load_state or ms.load_state, save_state or ms.save_state
+    if stop:
+        return TC.unregister(load_state, save_state)
+    return TC.register(channel, lambda m, **p: _tg(m, token, http, **p), load_state, save_state)
+
+
 def handle_message(message: dict, token: str, owner_chat: str, engine=None, client=None,
-                   http=requests, fixtures=None) -> str | None:
+                   http=requests, fixtures=None, load_state=None, save_state=None) -> str | None:
     """Procesa un mensaje del chat del dueño y devuelve lo que se respondió
     (None si se ignoró)."""
     from src.models import playdoit_prices as PP
@@ -217,6 +242,10 @@ def handle_message(message: dict, token: str, owner_chat: str, engine=None, clie
     chat = str((message.get("chat") or {}).get("id"))
     if chat != str(owner_chat):
         return None                                   # solo el chat del dueño
+    text = _channel_command(message, token, http, load_state, save_state)
+    if text is not None:
+        reply(token, chat, text, reply_to=message.get("message_id"), http=http)
+        return text
     if engine is None:
         from config.database import engine
     img = download_photo(message, token, http)

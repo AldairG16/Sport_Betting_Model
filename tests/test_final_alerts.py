@@ -197,7 +197,7 @@ def test_the_closing_sends_once_and_retries_if_telegram_fails(monkeypatch):
     picks, legs, announced = _world()
     _fake_db(monkeypatch, picks, legs, [])
     state = {FA.ANNOUNCED_KEY: announced}
-    kw = dict(engine=object(), now=NOW, load_state=state.get, covered=COVERED,
+    kw = dict(engine=object(), now=NOW, load_state=state.get, covered=COVERED, share=lambda t, what: None,
               save_state=lambda k, v, history=True: state.__setitem__(k, v))
     RUN_ISSUES.reset()
     out = FA.run_final_alerts(send=lambda t: False, **kw)
