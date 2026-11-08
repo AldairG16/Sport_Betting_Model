@@ -816,12 +816,27 @@ def api_board_results():
 
 @app.route("/api/board/leagues")
 def api_board_leagues():
-    """Por liga: ganados y perdidos de cada liga con sus partidos (v2.10.0)."""
+    """Por liga: ganados y perdidos de cada liga con sus partidos, de hoy y
+    desde el 22-oct (v2.10.0)."""
     from dashboard import board as _b
     rows = _past_rows()
     if not rows:
         return _no_data("Sin partidos jugados desde septiembre")
-    return jsonify({"ok": True, **_b.league_board(rows)})
+    now = pd.Timestamp.now(tz="UTC")
+    start = pd.Timestamp(_b._mx_day(now), tz="UTC") + pd.Timedelta(hours=6)     # 00:00 de México
+    up = _q("""SELECT match, match_date, league, label, reason FROM program_picks
+               WHERE match_date > :n AND match_date < :e AND market IS NOT NULL AND result IS NULL""",
+            {"n": now.to_pydatetime(), "e": (start + pd.Timedelta(days=1)).to_pydatetime()}, optional=True)
+    upcoming = []
+    for p in (up.to_dict("records") if up is not None and not up.empty else []):
+        when = pd.Timestamp(p["match_date"])
+        when = when.tz_convert("UTC") if when.tzinfo else when.tz_localize("UTC")
+        if not now < when < start + pd.Timedelta(days=1):
+            continue
+        upcoming.append({"match": match_name(p["match"]), "league": league_name(p.get("league")),
+                         "type": p.get("label"), "rule": not (p.get("reason") or ""),
+                         "time": (when - pd.Timedelta(hours=6)).strftime("%H:%M")})
+    return jsonify({"ok": True, **_b.league_board(rows, now=now, upcoming=upcoming)})
 
 
 @app.route("/api/board/parlay")
@@ -1213,16 +1228,17 @@ PAGE = """<!DOCTYPE html>
 </div>
 
 <div class="pane" id="tab-ligas">
+  <div class="bar" id="lperiods">
+    <span class="pill on" data-p="today" title="Los partidos de hoy: los que ya terminaron y los que faltan">📅 Hoy</span>
+    <span class="pill" data-p="since" title="Todos los partidos ya cobrados desde el 22 oct">📊 Desde el 22 oct</span>
+  </div>
   <div class="bar" id="lgroups">
     <span class="pill on" data-g="picks" title="El pick de cada partido que analizó el programa">🤖 Todos los partidos</span>
     <span class="pill" data-g="rule" title="Solo las apuestas recomendadas">🎯 Solo recomendados</span>
   </div>
-  <div class="small muted" style="margin:0 0 10px">Desde el 22 oct (cuando se corrigió el programa), solo partidos ya terminados y cobrados.
-    La ganancia es apostando 100 a cada pick al momio de PlayDoit. Toca una liga para ver sus partidos; toca un título para ordenar.</div>
+  <div class="small muted" id="lnote" style="margin:0 0 10px"></div>
   <div class="kpis" id="lkpis"></div>
-  <div class="tbl"><table><thead><tr id="lhead"><th data-s="name">Liga</th><th data-s="n" class="sc">Partidos</th>
-    <th data-s="won" class="sc">✅ Ganados</th><th data-s="lost" class="sc">❌ Perdidos</th>
-    <th data-s="hit" class="hide-sm">Ganados de cada 100</th><th data-s="units" class="sc">Apostando 100 a cada uno</th></tr></thead>
+  <div class="tbl"><table><thead><tr id="lhead"></tr></thead>
     <tbody id="lbody"><tr><td colspan="6" class="muted">Cargando…</td></tr></tbody></table></div>
 </div>
 

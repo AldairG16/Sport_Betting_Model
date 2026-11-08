@@ -1891,18 +1891,31 @@ historia. Por grupo muestra:
 
 **Pestaña "Por liga" (v2.10.0, 7-nov-26).** El dueño: "necesito que me des un resumen de los partidos que
 tenemos hasta hoy, pero me lo ordenes por ligas, dime cuántas se ganaron y cuántas se perdieron, y necesito
-que eso también me lo muestres en el dashboard". `/api/board/leagues` → `board.league_board`, con los mismos
-picks que "Ganadas y perdidas" (`board._played`, que ahora usan las dos). Dos vistas, 🤖 todos los partidos y
-🎯 solo recomendados:
-- indicadores: partidos terminados, ganados, perdidos, anulados (si hay), ganados de cada 100 y la ganancia
-  apostando 100 a cada uno;
-- una fila por liga en orden alfabético (sin que los acentos manden al final), con partidos, ✅ ganados,
-  ❌ perdidos, ganados de cada 100 y apostando 100; un toque al título ordena por esa columna;
-- tocar la liga abre sus partidos, el más reciente primero: ✅/❌, fecha, partido, pick (🎯 si lo era) y lo
-  que dejó;
+que eso también me lo muestres en el dashboard", y luego: "solamente quiero ver los partidos de hoy".
+`/api/board/leagues` → `board.league_board(rows, now, upcoming)`. Dos periodos, cada uno con 🤖 todos los
+partidos y 🎯 solo recomendados:
+- **📅 Hoy** (abre aquí; el día de México, UTC-6): todos los picks del día, también los de poca historia.
+  Cuentan como ganados o perdidos los ya cobrados y los terminados que todavía no se cobran (el provisional
+  de `_provisional`, "por confirmar"). En "⏳ Faltan" van:
+  - los que se están jugando (● en vivo, con el reloj de ESPN);
+  - los que esperan el resultado;
+  - los que todavía no empiezan (`program_picks` de hoy con `match_date > NOW()`, 🕒 hora).
+- **📊 Desde el 22 oct:** los mismos picks que "Ganadas y perdidas" (`board._played`, que ahora usan las
+  dos): ya cobrados, sin los de poca historia ni los provisionales.
+
+Lo que se ve:
+- indicadores: partidos, ganados, perdidos, anulados (si hay), los que faltan (en Hoy), ganados de cada 100
+  y la ganancia apostando 100 a cada uno;
+- una fila por liga en orden alfabético (sin que los acentos manden al final); un toque al título ordena
+  por esa columna, y en el celular los títulos son solo ✅ ❌ ⏳ para que la tabla quepa;
+- tocar la liga abre sus partidos: en Hoy, primero los que se juegan, luego los terminados y al final los
+  que no empiezan; desde el 22 oct, el más reciente primero, con la fecha;
 - "*" junto a la ganancia: picks sin momio de PlayDoit, que cuentan en ganados y perdidos pero no en la
   ganancia;
-- menos de 5 partidos, en gris ("pocos partidos").
+- desde el 22 oct, las ligas con menos de 5 partidos van en gris ("pocos partidos").
+
+Un partido que empezó y se suspendió hasta el día siguiente (Nacional vs Académico de Viseu, 7-nov) no sale
+en Hoy: su pick tiene otro renglón más tarde y `past_matches` lo trata como reprogramado.
 
 Con 192 picks (29-oct) cada liga tiene 3-29: el ranking describe lo que pasó, no predice.
 

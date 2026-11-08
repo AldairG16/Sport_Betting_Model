@@ -389,35 +389,84 @@ def _fold(s: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFD", s or "") if not unicodedata.combining(c)).casefold()
 
 
-def league_board(rows: list) -> dict:
+_DAY_ORDER = {"live": 0, "waiting": 1, "done": 2, "upcoming": 3}
+
+
+def _mx_day(now=None) -> str:
+    """El día de México (UTC-6, como la página) de `now`."""
+    now = pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz="UTC")
+    now = now.tz_convert("UTC") if now.tzinfo else now.tz_localize("UTC")
+    return (now - pd.Timedelta(hours=6)).strftime("%Y-%m-%d")
+
+
+def _day_items(rows: list, day: str, upcoming: list) -> list:
+    """Todos los picks del día, también los de poca historia (nunca se esconde un
+    pick): los terminados (cobrados o con el final ya conocido, "por confirmar"),
+    los que se están jugando, los que esperan el resultado y los que todavía no
+    empiezan (`upcoming`: {match, league, type, rule, time})."""
+    items = []
+    for r in rows:
+        p = r.get("pick") or {}
+        if r["date"] != day or not p.get("label") or p.get("result") == "stale":
+            continue
+        live = r.get("live") or {}
+        status = "done" if p.get("result") in PLAYED else "live" if live.get("status") == "live" else "waiting"
+        items.append({"date": day, "league": r.get("league") or "", "match": f"{r['home']} vs {r['away']}",
+                      "type": p["label"], "rule": bool(p.get("rule")), "status": status,
+                      "result": p["result"] if status == "done" else None,
+                      "profit": p.get("profit") if status == "done" else None,
+                      "provisional": bool(p.get("provisional")), "clock": live.get("clock") or "", "time": ""})
+    for u in upcoming:
+        items.append({"date": day, "league": u["league"], "match": u["match"], "type": u["type"], "rule": u["rule"],
+                      "status": "upcoming", "result": None, "profit": None, "provisional": False, "clock": "",
+                      "time": u["time"]})
+    return items
+
+
+def league_board(rows: list, now=None, upcoming: list | None = None) -> dict:
     """Por liga (v2.10.0, 7-nov-26). El dueño: "necesito que me des un resumen
     de los partidos que tenemos hasta hoy, pero me lo ordenes por ligas, dime
     cuántas se ganaron y cuántas se perdieron, y necesito que eso también me lo
-    muestres en el dashboard".
+    muestres en el dashboard", y luego: "solamente quiero ver los partidos de hoy".
 
-    Los mismos picks que "Ganadas y perdidas" (`_played`), con y sin 🎯: cada
-    liga en orden alfabético con sus ganados, perdidos y anulados, la ganancia
-    a 1 unidad (la página la dice apostando 100) y sus partidos, el más reciente
-    primero. `priced`: los que tienen momio de PlayDoit (los otros cuentan en
-    ganados y perdidos, no en la ganancia)."""
-    picks, _ = _played(rows)
+    Dos periodos, cada uno con y sin 🎯 y cada liga en orden alfabético:
+    - `today`: los partidos de hoy (día de México), todos: ganados y perdidos
+      (también los ya terminados que se cobran en la noche) y los que faltan
+      (en juego, esperando el resultado o por empezar);
+    - `since`: los mismos picks que "Ganadas y perdidas" (`_played`, desde el
+      22-oct, ya cobrados, sin los de poca historia).
+    Por liga: ganados, perdidos, anulados, los que faltan, la ganancia a 1
+    unidad (la página la dice apostando 100) y sus partidos. `priced`: los
+    terminados con momio de PlayDoit (los otros no cuentan en la ganancia)."""
+    day = _mx_day(now)
+    since, _ = _played(rows)
+    for i in since:
+        i.update(status="done", provisional=False, clock="", time="")
+    today = _day_items(rows, day, upcoming or [])
 
-    def leagues(items: list) -> list:
+    def record(items: list) -> dict:
+        done = [i for i in items if i["status"] == "done"]
+        return {**_record(done), "n": len(items), "pending": len(items) - len(done),
+                "priced": sum(1 for i in done if i["profit"] is not None), "few": len(items) < RESULTS_MIN_N}
+
+    def leagues(items: list, by_day: bool) -> list:
         out = []
         for name in sorted({i["league"] for i in items}, key=_fold):
-            its = sorted((i for i in items if i["league"] == name), key=lambda i: (i["date"], i["match"]), reverse=True)
-            out.append({"name": name or "—", **_record(its),
-                        "priced": sum(1 for i in its if i["profit"] is not None),
-                        "matches": [{k: i[k] for k in ("date", "match", "type", "result", "profit", "rule")}
-                                    for i in its]})
+            its = [i for i in items if i["league"] == name]
+            its = (sorted(its, key=lambda i: (_DAY_ORDER[i["status"]], i["time"], i["match"])) if by_day else
+                   sorted(its, key=lambda i: (i["date"], i["match"]), reverse=True))
+            out.append({"name": name or "—", **record(its),
+                        "matches": [{k: i[k] for k in ("date", "match", "type", "result", "profit", "rule", "status",
+                                                        "provisional", "clock", "time")} for i in its]})
         return out
 
-    def group(items: list) -> dict:
-        return {"total": {**_record(items), "priced": sum(1 for i in items if i["profit"] is not None)},
-                "leagues": leagues(items)}
+    def groups(items: list, by_day: bool) -> dict:
+        def group(its):
+            return {"total": record(its), "leagues": leagues(its, by_day)}
+        return {"picks": group(items), "rule": group([i for i in items if i["rule"]])}
 
-    return {"groups": {"picks": group(picks), "rule": group([p for p in picks if p["rule"]])},
-            "since": MODEL_FIXED.strftime("%Y-%m-%d"), "min_n": RESULTS_MIN_N}
+    return {"periods": {"today": groups(today, True), "since": groups(since, False)},
+            "today": day, "since": MODEL_FIXED.strftime("%Y-%m-%d"), "min_n": RESULTS_MIN_N}
 
 
 def results_board(rows: list) -> dict:
