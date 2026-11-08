@@ -227,3 +227,19 @@ def test_results_endpoint_and_tab(dash):
     for el_id in ('data-tab="resultados"', 'id="cdaily"', 'id="rtypes"', 'id="rleagues"', 'id="cleagues"',
                   'id="rbest"', 'id="rworst"'):
         assert el_id in html
+
+
+def test_leagues_endpoint_and_tab(dash):
+    """Por liga (v2.10.0): el resto en tests/test_league_board.py."""
+    c = dash.app.test_client()
+    r = c.get("/api/board/leagues").get_json()
+    assert r["ok"] and set(r["groups"]) == {"picks", "rule"} and r["since"] == "2026-10-22"
+    for g in r["groups"].values():
+        assert set(g) == {"total", "leagues"}
+    html = c.get("/").get_data(as_text=True)
+    for el_id in ('data-tab="ligas"', 'id="tab-ligas"', 'id="lgroups"', 'id="lkpis"', 'id="lhead"', 'id="lbody"',
+                  "Apostando 100 a cada uno", "Toca una liga para ver sus partidos"):
+        assert el_id in html
+    from pathlib import Path
+    js = (Path(dash.__file__).parent / "ui_es5.js").read_text(encoding="utf-8")
+    assert "'ligas'" in js and "loadLeagues(true)" in js          # la pestaña y el botón Actualizar

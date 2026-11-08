@@ -814,6 +814,16 @@ def api_board_results():
     return jsonify({"ok": True, "since": _since(), **_b.results_board(rows)})
 
 
+@app.route("/api/board/leagues")
+def api_board_leagues():
+    """Por liga: ganados y perdidos de cada liga con sus partidos (v2.10.0)."""
+    from dashboard import board as _b
+    rows = _past_rows()
+    if not rows:
+        return _no_data("Sin partidos jugados desde septiembre")
+    return jsonify({"ok": True, **_b.league_board(rows)})
+
+
 @app.route("/api/board/parlay")
 def api_board_parlay():
     """Los parlays con bono (v2.9.0; la pestaña nació en v2.6.0): las piernas
@@ -1123,6 +1133,14 @@ PAGE = """<!DOCTYPE html>
   .xsum { padding:10px 14px; font-size:.9rem; display:flex; gap:14px; flex-wrap:wrap; align-items:center; }
   .xsum b.big { font-size:1.25rem; }
   .tbl tr.out td { opacity:.45; }
+  /* por liga */
+  #lhead th { cursor:pointer; user-select:none; white-space:normal; vertical-align:bottom; } #lhead th.on { color:var(--text); }
+  #tab-ligas .tbl { overflow-x:auto; }
+  .wl { display:inline-flex; width:64px; height:8px; border-radius:4px; overflow:hidden; vertical-align:middle;
+        background:var(--line); margin-right:6px; }
+  .wl .w { background:var(--green); } .wl .l { background:var(--red); }
+  .tbl tr.sub td { background:#151c2b; font-size:.8rem; padding:4px 6px 4px 26px; }
+  .tbl tr.tot td { font-weight:700; border-top:2px solid var(--line); }
   #err { color:var(--red); font-size:.85rem; margin:8px 0; display:none; }
   @media (max-width:900px) {
     body { padding:10px; }
@@ -1130,6 +1148,7 @@ PAGE = """<!DOCTYPE html>
     .mr .pbw { grid-column:1 / -1; order:5; }
     .mr .pk { grid-column:1 / 3; order:6; } .mr .ic { order:7; }
     .two, .grid2 { grid-template-columns:1fr; }
+    #tab-ligas th, #tab-ligas td { padding:5px 3px; } #tab-ligas tr.sub td { padding-left:14px; }
     .hide-sm { display:none; }
   }
 </style></head><body>
@@ -1146,6 +1165,7 @@ PAGE = """<!DOCTYPE html>
   <button class="tab" data-tab="parlay">Parlay</button>
   <button class="tab" data-tab="anteriores">Anteriores</button>
   <button class="tab" data-tab="resultados">Ganadas y perdidas</button>
+  <button class="tab" data-tab="ligas">Por liga</button>
   <button class="tab" data-tab="equipos">Equipos</button>
   <button class="tab" data-tab="graficas">Gráficas</button>
 </div>
@@ -1190,6 +1210,20 @@ PAGE = """<!DOCTYPE html>
     <div class="tbl"><table><thead><tr><th colspan="4">✅ Mejores aciertos</th></tr></thead><tbody id="rbest"></tbody></table></div>
     <div class="tbl"><table><thead><tr><th colspan="4">❌ Fallos en los que el programa estaba más seguro</th></tr></thead><tbody id="rworst"></tbody></table></div>
   </div>
+</div>
+
+<div class="pane" id="tab-ligas">
+  <div class="bar" id="lgroups">
+    <span class="pill on" data-g="picks" title="El pick de cada partido que analizó el programa">🤖 Todos los partidos</span>
+    <span class="pill" data-g="rule" title="Solo las apuestas recomendadas">🎯 Solo recomendados</span>
+  </div>
+  <div class="small muted" style="margin:0 0 10px">Desde el 22 oct (cuando se corrigió el programa), solo partidos ya terminados y cobrados.
+    La ganancia es apostando 100 a cada pick al momio de PlayDoit. Toca una liga para ver sus partidos; toca un título para ordenar.</div>
+  <div class="kpis" id="lkpis"></div>
+  <div class="tbl"><table><thead><tr id="lhead"><th data-s="name">Liga</th><th data-s="n" class="sc">Partidos</th>
+    <th data-s="won" class="sc">✅ Ganados</th><th data-s="lost" class="sc">❌ Perdidos</th>
+    <th data-s="hit" class="hide-sm">Ganados de cada 100</th><th data-s="units" class="sc">Apostando 100 a cada uno</th></tr></thead>
+    <tbody id="lbody"><tr><td colspan="6" class="muted">Cargando…</td></tr></tbody></table></div>
 </div>
 
 <div class="pane" id="tab-anteriores">

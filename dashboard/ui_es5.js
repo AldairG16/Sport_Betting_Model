@@ -113,6 +113,7 @@ function refreshAll(manual){
   loadUpcoming();
   if (cur === 'anteriores') loadPast(true);
   else if (cur === 'resultados') loadResults(true);
+  else if (cur === 'ligas') loadLeagues(true);
   else if (cur === 'parlay') loadParlay();
   else if (manual && cur === 'equipos') loadTeams();
   else if (manual && cur === 'graficas') loadCharts(true);
@@ -132,7 +133,7 @@ function refreshDone(){
 }
 
 // ── Pestañas ──
-var TABS = ['proximos', 'parlay', 'anteriores', 'resultados', 'equipos', 'graficas'], _loaded = {};
+var TABS = ['proximos', 'parlay', 'anteriores', 'resultados', 'ligas', 'equipos', 'graficas'], _loaded = {};
 function showTab(name){
   if (TABS.indexOf(name) < 0) name = 'proximos';
   var b = el('tabs').getElementsByTagName('button');
@@ -144,6 +145,7 @@ function showTab(name){
   if (name === 'anteriores') loadPast();
   else if (name === 'parlay') loadParlay();
   else if (name === 'resultados') loadResults();
+  else if (name === 'ligas') loadLeagues();
   else if (name === 'equipos') loadTeams();
   else if (name === 'graficas') loadCharts();
 }
@@ -573,6 +575,97 @@ function loadResults(fresh){
   var pills = el('rgroups').getElementsByTagName('span');
   for (var i = 0; i < pills.length; i++) if (pills[i].getAttribute('data-g'))
     pills[i].onclick = function(){ _resGroup = this.getAttribute('data-g'); _storeSet('rgroup', _resGroup); renderResults(); };
+})();
+
+// ── Por liga (v2.10.0, 7-nov-26) ──
+// El dueño: "necesito que me des un resumen de los partidos que tenemos hasta
+// hoy, pero me lo ordenes por ligas, dime cuántas se ganaron y cuántas se
+// perdieron". Cada liga (en orden alfabético, o por la columna que toque) con
+// sus ganados y perdidos; al tocarla se ven sus partidos.
+var _lg = null, _lgGroup = _storeGet('lgroup', 'picks'), _lgSort = _storeGet('lsort', 'name'), _lgOpen = {};
+var LG_SORTS = ['name', 'n', 'won', 'lost', 'hit', 'units'];
+// la ganancia a 1 unidad dicha apostando 100 (0.64 → +64)
+function cien(v){ var n = Math.round((v || 0) * 100); return (n > 0 ? '+' : '') + n; }
+function _cien(v){ return '<span class="' + ((v || 0) >= 0 ? 'pos' : 'neg') + '">' + cien(v) + '</span>'; }
+function wlBar(won, lost){
+  var n = won + lost;
+  return n ? '<span class="wl"><span class="w" style="width:' + (won / n * 100) + '%"></span>' +
+             '<span class="l" style="width:' + (lost / n * 100) + '%"></span></span>' : '';
+}
+function lgIcon(r){
+  if (r === 'win' || r === 'half_win') return '✅';
+  if (r === 'loss' || r === 'half_loss') return '❌';
+  return '↔️';
+}
+function lgSorted(list, key){
+  var out = list.slice();
+  if (key === 'name') return out;                          // ya viene en orden alfabético
+  out.sort(function(a, b){
+    var x = a[key] === null ? -1 : a[key], y = b[key] === null ? -1 : b[key];
+    return (y - x) || (a.name < b.name ? -1 : 1);
+  });
+  return out;
+}
+function lgCells(x){
+  var unpriced = x.n - x.priced;
+  return '<td class="sc">' + x.n + (x.push ? ' <span class="small muted">(' + x.push + (x.push === 1 ? ' anulado' : ' anulados') + ')</span>' : '') + '</td>' +
+    '<td class="sc pos">' + x.won + '</td><td class="sc neg">' + x.lost + '</td>' +
+    '<td class="hide-sm nw">' + wlBar(x.won, x.lost) + (x.hit === null ? '—' : Math.round(x.hit * 100)) + '</td>' +
+    '<td class="sc">' + _cien(x.units) + (unpriced > 0 ? ' <span class="small muted" title="' + unpriced +
+      (unpriced === 1 ? ' partido sin momio de PlayDoit: cuenta en ganados y perdidos, no en la ganancia'
+                      : ' partidos sin momio de PlayDoit: cuentan en ganados y perdidos, no en la ganancia') + '">*</span>' : '') + '</td>';
+}
+function lgRow(lg, open, minN){
+  return '<tr class="r' + (lg.few ? ' few' : '') + '" data-lg="' + esc(lg.name) + '" title="' +
+    (lg.few ? 'Pocos partidos: menos de ' + minN + ', todavía no dice mucho. ' : '') + 'Toca para ver sus partidos">' +
+    '<td>' + (open ? '▾ ' : '▸ ') + esc(lg.name) + '</td>' + lgCells(lg) + '</tr>';
+}
+function lgMatch(m, showStar){
+  var gain = m.profit === null || m.profit === undefined ? '<span class="muted" title="Sin momio de PlayDoit">—</span>' : _cien(m.profit);
+  return '<tr class="sub"><td colspan="6">' + lgIcon(m.result) + ' <span class="muted">' + shortDate(m.date) + '</span> · ' +
+    esc(m.match) + ' · ' + (showStar && m.rule ? '🎯 ' : '') + esc(m.type) + ' · ' + gain + '</td></tr>';
+}
+function renderLeagues(){
+  if (!_lg) return;
+  if (!_lg.groups[_lgGroup]) _lgGroup = 'picks';
+  if (LG_SORTS.indexOf(_lgSort) < 0) _lgSort = 'name';
+  var g = _lg.groups[_lgGroup], t = g.total, i, j, h = '';
+  var pills = el('lgroups').getElementsByTagName('span');
+  for (i = 0; i < pills.length; i++) if (pills[i].getAttribute('data-g'))
+    pills[i].className = 'pill' + (pills[i].getAttribute('data-g') === _lgGroup ? ' on' : '');
+  var ths = el('lhead').getElementsByTagName('th');
+  for (i = 0; i < ths.length; i++)
+    ths[i].className = ths[i].className.replace(/(^|\s)on(?=\s|$)/g, '') + (ths[i].getAttribute('data-s') === _lgSort ? ' on' : '');
+  el('lkpis').innerHTML = kpi(t.n, t.n === 1 ? 'Partido terminado' : 'Partidos terminados') +
+    kpi(t.won, '✅ Ganados', 'pos') + kpi(t.lost, '❌ Perdidos', 'neg') +
+    (t.push ? kpi(t.push, '↔️ Anulados') : '') +
+    kpi(t.hit === null ? '—' : Math.round(t.hit * 100), 'Ganados de cada 100') +
+    kpi(cien(t.units), 'Apostando 100 a cada uno', t.units >= 0 ? 'pos' : 'neg') +
+    kpi(g.leagues.length, g.leagues.length === 1 ? 'Liga' : 'Ligas');
+  var ls = lgSorted(g.leagues, _lgSort);
+  for (i = 0; i < ls.length; i++) {
+    var open = !!_lgOpen[ls[i].name];
+    h += lgRow(ls[i], open, _lg.min_n);
+    if (open) for (j = 0; j < ls[i].matches.length; j++) h += lgMatch(ls[i].matches[j], _lgGroup === 'picks');
+  }
+  h = ls.length ? h + '<tr class="tot"><td>Total</td>' + lgCells(t) + '</tr>'
+                : '<tr><td colspan="6" class="muted">Todavía no hay partidos terminados.</td></tr>';
+  el('lbody').innerHTML = h;
+  var trs = el('lbody').getElementsByTagName('tr');
+  for (i = 0; i < trs.length; i++) if (trs[i].getAttribute('data-lg') !== null)
+    trs[i].onclick = function(){ var n = this.getAttribute('data-lg'); _lgOpen[n] = !_lgOpen[n]; renderLeagues(); };
+}
+function loadLeagues(fresh){
+  getJSON('/api/board/leagues' + (fresh ? '?fresh=1' : ''), function(d){ _lg = d; renderLeagues(); },
+    function(msg){ el('lbody').innerHTML = '<tr><td colspan="6" class="muted">' + esc(msg) + '</td></tr>'; });
+}
+(function(){
+  var pills = el('lgroups').getElementsByTagName('span');
+  for (var i = 0; i < pills.length; i++) if (pills[i].getAttribute('data-g'))
+    pills[i].onclick = function(){ _lgGroup = this.getAttribute('data-g'); _storeSet('lgroup', _lgGroup); renderLeagues(); };
+  var ths = el('lhead').getElementsByTagName('th');
+  for (var j = 0; j < ths.length; j++)
+    ths[j].onclick = function(){ _lgSort = this.getAttribute('data-s'); _storeSet('lsort', _lgSort); renderLeagues(); };
 })();
 
 // ── Parlay (v2.6.0, 3-nov-26; con bono desde v2.9.0, 6-nov-26) ──

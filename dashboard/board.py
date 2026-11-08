@@ -363,6 +363,63 @@ def _ranked(items: list, key) -> list:
     return sorted(({"name": k, **_record(v)} for k, v in groups.items()), key=lambda g: (-g["units"], -g["n"]))
 
 
+def _played(rows: list) -> tuple[list, list]:
+    """Los picks (desde el 22-oct, ya cobrados, sin los de poca historia ni los
+    provisionales) y las apuestas reales jugadas, uno por renglón."""
+    picks, bets = [], []
+    for r in rows:
+        if r.get("started"):
+            continue
+        base = {"date": r["date"], "league": r.get("league") or "", "match": f"{r['home']} vs {r['away']}"}
+        p = r.get("pick") or {}
+        if (p.get("result") in PLAYED and not p.get("old_model") and not p.get("low") and p.get("label")
+                and not p.get("provisional")):
+            picks.append({**base, "type": p["label"], "family": p.get("family"), "result": p["result"],
+                          "profit": p.get("profit"), "model": p.get("model"), "rule": bool(p.get("rule"))})
+        for b in r.get("bets") or []:
+            if b["result"] in PLAYED:
+                bets.append({**base, "type": b["market"], "family": None, "result": b["result"],
+                             "profit": b.get("profit"), "model": None, "rule": False})
+    return picks, bets
+
+
+def _fold(s: str) -> str:
+    """Para ordenar sin que los acentos manden al final ("Súper Lig" junto a "Super League")."""
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", s or "") if not unicodedata.combining(c)).casefold()
+
+
+def league_board(rows: list) -> dict:
+    """Por liga (v2.10.0, 7-nov-26). El dueño: "necesito que me des un resumen
+    de los partidos que tenemos hasta hoy, pero me lo ordenes por ligas, dime
+    cuántas se ganaron y cuántas se perdieron, y necesito que eso también me lo
+    muestres en el dashboard".
+
+    Los mismos picks que "Ganadas y perdidas" (`_played`), con y sin 🎯: cada
+    liga en orden alfabético con sus ganados, perdidos y anulados, la ganancia
+    a 1 unidad (la página la dice apostando 100) y sus partidos, el más reciente
+    primero. `priced`: los que tienen momio de PlayDoit (los otros cuentan en
+    ganados y perdidos, no en la ganancia)."""
+    picks, _ = _played(rows)
+
+    def leagues(items: list) -> list:
+        out = []
+        for name in sorted({i["league"] for i in items}, key=_fold):
+            its = sorted((i for i in items if i["league"] == name), key=lambda i: (i["date"], i["match"]), reverse=True)
+            out.append({"name": name or "—", **_record(its),
+                        "priced": sum(1 for i in its if i["profit"] is not None),
+                        "matches": [{k: i[k] for k in ("date", "match", "type", "result", "profit", "rule")}
+                                    for i in its]})
+        return out
+
+    def group(items: list) -> dict:
+        return {"total": {**_record(items), "priced": sum(1 for i in items if i["profit"] is not None)},
+                "leagues": leagues(items)}
+
+    return {"groups": {"picks": group(picks), "rule": group([p for p in picks if p["rule"]])},
+            "since": MODEL_FIXED.strftime("%Y-%m-%d"), "min_n": RESULTS_MIN_N}
+
+
 def results_board(rows: list) -> dict:
     """Ganadas y perdidas (v2.5.3, 29-oct-26). El dueño: "necesito gráficas y
     datos de ganadas y perdidas, ver los picks más ganadores y perdedores, y las
@@ -374,19 +431,7 @@ def results_board(rows: list) -> dict:
     totales, ganadas/perdidas por día con las unidades acumuladas, el ranking por
     tipo de pick y por liga, los mejores aciertos y los fallos en los que el
     programa estaba más seguro."""
-    done = [r for r in rows if not r.get("started")]
-    picks, bets = [], []
-    for r in done:
-        base = {"date": r["date"], "league": r.get("league") or "", "match": f"{r['home']} vs {r['away']}"}
-        p = r.get("pick") or {}
-        if (p.get("result") in PLAYED and not p.get("old_model") and not p.get("low") and p.get("label")
-                and not p.get("provisional")):
-            picks.append({**base, "type": p["label"], "family": p.get("family"), "result": p["result"],
-                          "profit": p.get("profit"), "model": p.get("model"), "rule": bool(p.get("rule"))})
-        for b in r.get("bets") or []:
-            if b["result"] in PLAYED:
-                bets.append({**base, "type": b["market"], "family": None, "result": b["result"],
-                             "profit": b.get("profit"), "model": None, "rule": False})
+    picks, bets = _played(rows)
 
     def group(items: list) -> dict:
         days = sorted({i["date"] for i in items})

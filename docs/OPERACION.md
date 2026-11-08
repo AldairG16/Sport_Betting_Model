@@ -1889,6 +1889,21 @@ historia. Por grupo muestra:
 - mejores aciertos, con su momio americano;
 - fallos donde el programa estaba más seguro.
 
+**Pestaña "Por liga" (v2.10.0, 7-nov-26).** El dueño: "necesito que me des un resumen de los partidos que
+tenemos hasta hoy, pero me lo ordenes por ligas, dime cuántas se ganaron y cuántas se perdieron, y necesito
+que eso también me lo muestres en el dashboard". `/api/board/leagues` → `board.league_board`, con los mismos
+picks que "Ganadas y perdidas" (`board._played`, que ahora usan las dos). Dos vistas, 🤖 todos los partidos y
+🎯 solo recomendados:
+- indicadores: partidos terminados, ganados, perdidos, anulados (si hay), ganados de cada 100 y la ganancia
+  apostando 100 a cada uno;
+- una fila por liga en orden alfabético (sin que los acentos manden al final), con partidos, ✅ ganados,
+  ❌ perdidos, ganados de cada 100 y apostando 100; un toque al título ordena por esa columna;
+- tocar la liga abre sus partidos, el más reciente primero: ✅/❌, fecha, partido, pick (🎯 si lo era) y lo
+  que dejó;
+- "*" junto a la ganancia: picks sin momio de PlayDoit, que cuentan en ganados y perdidos pero no en la
+  ganancia;
+- menos de 5 partidos, en gris ("pocos partidos").
+
 Con 192 picks (29-oct) cada liga tiene 3-29: el ranking describe lo que pasó, no predice.
 
 **Pestaña "Parlay" (v2.6.0, 3-nov-26).** El dueño: "quiero agregar la función parley, donde seleccione
