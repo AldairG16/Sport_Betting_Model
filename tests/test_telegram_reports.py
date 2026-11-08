@@ -177,8 +177,9 @@ def test_the_three_messages_read_the_program_picks_not_bets_history(monkeypatch)
     monkeypatch.setattr(nt, "_local_today", lambda: DAY)
     monkeypatch.setattr(nt, "PAPER_LOG_PATH", nt.Path("/nonexistent/paper.jsonl"))
     monkeypatch.setattr(lineup_changes, "weekly_lines", lambda engine: ["— <b>CAMBIOS CON LA ALINEACIÓN</b> —"])
-    announced = []
+    announced, shared = [], []
     monkeypatch.setattr(nt, "_remember_announced", lambda day, stars: announced.append((day, stars)))
+    monkeypatch.setattr(nt, "share_message", lambda t, what="": shared.append(what) or True)
     nt.notify_best_bets()
     nt.send_evening_summary(target_date=DAY)
     nt.send_weekly_report()
@@ -188,6 +189,7 @@ def test_the_three_messages_read_the_program_picks_not_bets_history(monkeypatch)
     assert [(d, [r["match"] for r in st]) for d, st in announced] == [(DAY, ["rb leipzig vs augsburg"])]
     assert "Así terminó el sábado 7 nov" in sent[1] and "ganado (+23)" in sent[1]
     assert "REPORTE DE LA SEMANA" in sent[2] and "CAMBIOS CON LA ALINEACIÓN" in sent[2]
+    assert shared == ["el mensaje de la mañana", "el resumen de la noche"]          # el canal, sin el domingo
     assert all("bets_history" not in s for s in seen) and any("program_picks" in s for s in seen)
     for m in sent:
         _plain(m)

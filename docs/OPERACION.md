@@ -2235,6 +2235,36 @@ bankroll del encabezado". Decía "💰 Bankroll 63.4u", de la tabla `bankroll`, 
   Ahora las tres dicen -784, +112 (🎯) y -894.
 Lo cubre `tests/test_telegram_reports.py`, que también revisa que no salgan ROI, "u", Profit ni momios decimales.
 
+**El canal de los partidos (8-nov-26).** El dueño: "como puedo unir a personas a mi chat de telegram donde mandamos
+los partidos". El chat del bot es privado y además lleva lo que es solo del dueño (avisos técnicos, el revisor de
+capturas), así que eligió "un canal solo para los partidos". `src/models/telegram_channel.py`:
+- **Cómo se guarda, sin copiar números ni tocar secretos o workflows:**
+  1. El dueño crea el canal y agrega al bot como administrador (publicar, editar y fijar).
+  2. Le reenvía al bot, en su chat, cualquier mensaje del canal.
+  3. El revisor de capturas (`playdoit_checker._channel_command`, solo el chat del dueño) revisa con
+     `getChatMember` que el bot pueda publicar, manda la bienvenida al canal y lo guarda en
+     `model_state 'telegram_channel'`.
+  - Una captura reenviada de un canal se sigue revisando como captura. «quitar canal» lo borra.
+  - **El revisor escucha en tandas de ~5 h 45 min.** Un cambio a `playdoit_checker.py` entra hasta su siguiente
+    relevo (la concurrencia del workflow no corta la escucha en curso).
+- **Qué se copia** (`notify_telegram.share_message`, solo si al dueño le llegó):
+  - la mañana y el avance de mañana, sin la sección del Mundial ni "y en el dashboard" (`telegram_reports.for_channel`);
+  - los picks finales (`final_alerts.run_final_alerts(share=…)`);
+  - el resumen de la noche;
+  - "Partidos de hoy", con sus propios mensajes fijados y editados (`today_board.post_board`, estado
+    `telegram_today_channel`).
+- **Qué no se copia:** el reporte del domingo, los avisos técnicos y las respuestas del revisor.
+- **Si el canal falla:**
+  - No va a `SEND_FAILURES` (`_send_to_bot(record=False)`, `edit_or_send(chat_id=…)`), así que no pone la corrida
+    en rojo.
+  - Se registra como warning, no como error: un error saldría en "errores tolerados", con un Telegram en cada corrida
+    (cada 30 min).
+  - `notify_telegram.channel_result` lo anota (`TC.mark`) y le avisa al dueño en su chat una vez al día, en
+    palabras normales (`TC.plain_error`).
+  - El chequeo de salidas §19 (`TC.problems`) lo marca mientras no vuelva a llegar nada, o si un canal guardado pasa
+    26 h sin recibir nada.
+- Lo cubre `tests/test_telegram_channel.py`.
+
 **Se mantiene abierto solo (v1.6.0).** El `.exe` es un supervisor
 (`dashboard/supervisor.py`): lanza el servidor (el mismo `.exe` con `--serve`), le
 pregunta cada 15 s a `/api/health` y lo vuelve a abrir si se cierra (esperas de 5, 15,

@@ -1007,6 +1007,18 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
         if "does not exist" not in str(e):
             problems.append(f"Parlay con bono: no se pudo revisar sus piernas ({type(e).__name__})")
 
+    # 19) el canal de los partidos (8-nov-26): si hay uno guardado, le llega
+    #     lo de cada día. Una falla suya no pone la corrida en rojo; aquí sí sale
+    try:
+        from src.models import telegram_channel as TC
+        ch = state(TC.KEY)
+        bad = TC.problems(ch)
+        problems += bad
+        if ch and ch.get("chat_id") and not bad:
+            seen.append(f"canal «{ch.get('title')}» al día")
+    except Exception as e:
+        problems.append(f"Canal: no se pudo revisar ({type(e).__name__})")
+
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")
     if not problems:

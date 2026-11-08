@@ -45,6 +45,9 @@ log = get_logger(__name__)
 # en rojo si hay alguno (1-oct-26): Telegram es el único canal de alertas, y si
 # es él el que falla, el aviso solo puede llegar por el correo de GitHub.
 SEND_FAILURES: list[str] = []
+# Lo último que contestó Telegram cuando algo no pasó: el aviso del canal
+# de los partidos lo dice en palabras normales (8-nov-26).
+LAST_ERROR = {"text": ""}
 
 # ── Helpers de fecha en hora local del usuario ────────────────────────────────
 def _local_today():
@@ -99,11 +102,13 @@ def _retry_after(r) -> int:
         return 5
 
 
-def _send_to_bot(text: str, bot_token: str, chat_id: str, label: str = "Telegram") -> bool:
+def _send_to_bot(text: str, bot_token: str, chat_id: str, label: str = "Telegram", record: bool = True) -> bool:
     """
     Implementación interna que manda un texto a (bot_token, chat_id) específicos.
     Maneja chunking, retry con backoff exponencial y rate-limiting (429).
     `label` se usa solo para los logs (distinguir bot principal vs prekickoff).
+    record=False (el canal de los partidos): una falla no va a SEND_FAILURES,
+    no pone la corrida en rojo.
     """
     if not bot_token or not chat_id:
         log.error(f"❌ {label} no configurado (token o chat_id vacíos): mensaje no enviado")
@@ -145,8 +150,10 @@ def _send_to_bot(text: str, bot_token: str, chat_id: str, label: str = "Telegram
                     time.sleep(retry_after)
                     continue
                 else:
+                    LAST_ERROR["text"] = r.text[:200]
                     print(f"❌ {label} error {r.status_code} (intento {attempt+1}/3): {r.text[:200]}")
             except requests.RequestException as e:
+                LAST_ERROR["text"] = str(e)[:200]
                 print(f"❌ Error de red {label} (intento {attempt+1}/3): {e}")
 
             if attempt < 2:
@@ -156,8 +163,11 @@ def _send_to_bot(text: str, bot_token: str, chat_id: str, label: str = "Telegram
                 time.sleep(wait)
 
         if not sent:
-            log.error(f"❌ {label}: mensaje no enviado tras 3 intentos")
-            SEND_FAILURES.append(f"{label}: {chunk[:60]!r}")
+            if record:
+                log.error(f"❌ {label}: mensaje no enviado tras 3 intentos")
+                SEND_FAILURES.append(f"{label}: {chunk[:60]!r}")
+            else:                     # el canal: un error iría a "errores tolerados" en cada corrida
+                log.warning(f"⚠️  {label}: mensaje no enviado tras 3 intentos")
             all_ok = False
 
     return all_ok
@@ -176,18 +186,20 @@ def send_message(text: str) -> bool:
     return _send_to_bot(text, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Telegram")
 
 
-def edit_or_send(text: str, message_id: int | None = None, silent: bool = True) -> int | None:
+def edit_or_send(text: str, message_id: int | None = None, silent: bool = True, chat_id=None) -> int | None:
     """Edita el mensaje `message_id` del bot principal con `text` (un solo
     fragmento, < TELEGRAM_MAX_CHARS) o, si no hay o ya no se puede editar
     (borrado, de hace más de 48 h), manda uno nuevo. Devuelve el id del mensaje
     que quedó, o None si no se pudo (30-oct-26: "Partidos de hoy", que se
-    actualiza en cada closing sin mandar un mensaje nuevo cada vez)."""
+    actualiza en cada closing sin mandar un mensaje nuevo cada vez).
+    chat_id: otro chat (el canal de los partidos, 8-nov-26); su falla no va a
+    SEND_FAILURES."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         log.error("❌ Telegram no configurado (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID): mensaje no enviado")
         SEND_FAILURES.append("Telegram: sin configurar")
         return None
     base = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML",
+    payload = {"chat_id": chat_id or TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML",
                "disable_web_page_preview": True}
     if message_id:
         try:
@@ -205,28 +217,35 @@ def edit_or_send(text: str, message_id: int | None = None, silent: bool = True) 
                 return int(r.json()["result"]["message_id"])
             if r.status_code == 429:
                 wait = _retry_after(r)
+            LAST_ERROR["text"] = r.text[:200]
             print(f"❌ Telegram error {r.status_code} (intento {attempt + 1}/3): {r.text[:200]}")
         except (requests.RequestException, KeyError, ValueError) as e:
+            LAST_ERROR["text"] = str(e)[:200]
             print(f"❌ Error de red Telegram (intento {attempt + 1}/3): {e}")
         if attempt < 2:
             import time
             time.sleep(wait)
-    log.error("❌ Telegram: mensaje no enviado tras 3 intentos")
-    SEND_FAILURES.append(f"Telegram: {text[:60]!r}")
+    if chat_id:
+        log.warning("⚠️  Canal: mensaje no enviado tras 3 intentos")
+    else:
+        log.error("❌ Telegram: mensaje no enviado tras 3 intentos")
+        SEND_FAILURES.append(f"Telegram: {text[:60]!r}")
     return None
 
 
-def pin_message(message_id: int, unpin: list | None = None) -> bool:
+def pin_message(message_id: int, unpin: list | None = None, chat_id=None) -> bool:
     """Fija `message_id` arriba del chat (sin sonido) y quita el de `unpin`.
-    Mejor esfuerzo: si Telegram no deja, el mensaje sigue igual."""
+    Mejor esfuerzo: si Telegram no deja, el mensaje sigue igual. chat_id:
+    otro chat (el canal de los partidos)."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return False
+    chat = chat_id or TELEGRAM_CHAT_ID
     base = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
     try:
         for old in unpin or []:
-            requests.post(f"{base}/unpinChatMessage", json={"chat_id": TELEGRAM_CHAT_ID, "message_id": old},
+            requests.post(f"{base}/unpinChatMessage", json={"chat_id": chat, "message_id": old},
                           timeout=10)
-        r = requests.post(f"{base}/pinChatMessage", json={"chat_id": TELEGRAM_CHAT_ID, "message_id": message_id,
+        r = requests.post(f"{base}/pinChatMessage", json={"chat_id": chat, "message_id": message_id,
                                                           "disable_notification": True}, timeout=10)
         if r.status_code != 200:
             print(f"   (no se pudo fijar el mensaje {message_id}: {r.status_code} {r.text[:120]})")
@@ -234,6 +253,45 @@ def pin_message(message_id: int, unpin: list | None = None) -> bool:
     except requests.RequestException as e:
         print(f"   (no se pudo fijar el mensaje {message_id}: {e})")
         return False
+
+
+def channel_result(ok: bool, what: str, st: dict) -> None:
+    """Anota cómo le fue al canal y, en la primera falla del día, le avisa al
+    dueño en su chat (src/models/telegram_channel.py)."""
+    from src.models import telegram_channel as TC
+    from src.utils import model_state as ms
+    err = LAST_ERROR["text"]
+    try:
+        alert = TC.mark(ok, ms.load_state, ms.save_state, error=err)
+    except Exception as e:
+        log.warning(f"⚠️  Canal: no se pudo anotar el envío ({type(e).__name__}: {str(e)[:120]})")
+        alert = not ok
+    if not ok:                        # warning: un error saldría en "errores tolerados" cada 30 min;
+                                      # el dueño recibe este aviso una vez al día y el chequeo §19
+        log.warning(f"⚠️  Canal «{st.get('title')}»: {what} no llegó ({TC.plain_error(err)}: {err[:120]})")
+        if alert:
+            send_message(TC.alert_text(what, st, err))
+
+
+def share_message(text: str, what: str = "los partidos") -> bool | None:
+    """Copia `text` al canal de los partidos, si el dueño guardó uno (8-nov-26,
+    src/models/telegram_channel.py). None si no hay canal. Una falla no pone
+    la corrida en rojo: se anota y se le avisa al dueño una vez al día."""
+    from src.models import telegram_channel as TC
+    from src.utils import model_state as ms
+    try:
+        st = TC.current(ms.load_state)
+    except Exception as e:
+        log.warning(f"⚠️  Canal: no se pudo leer cuál es ({type(e).__name__}): {what} no se copió al canal")
+        return False
+    if not st:
+        return None
+    LAST_ERROR["text"] = ""
+    ok = bool(TELEGRAM_BOT_TOKEN) and _send_to_bot(text, TELEGRAM_BOT_TOKEN, st["chat_id"], "Canal", record=False)
+    channel_result(ok, what, st)
+    if ok:
+        print(f"📣 Canal «{st.get('title')}»: {what} copiado")
+    return ok
 
 
 def send_message_prekickoff(text: str) -> bool:
@@ -563,6 +621,13 @@ def _remember_announced(day, stars: list) -> None:
                   f"({type(e).__name__}: {str(e)[:120]})")
 
 
+def _share_day(msg: str, what: str) -> None:
+    """El mensaje del día al canal, sin lo que solo tiene el dueño (sin la
+    sección del Mundial en papel ni el dashboard)."""
+    from src.models import telegram_reports as TR
+    share_message(TR.for_channel(msg), what)
+
+
 def notify_best_bets():
     """La mañana: los 🎯 recomendados de HOY (hora local) y sus parlays.
     Hasta v2.9.3 leía bets_history, que dejó de llenarse con el modo
@@ -575,6 +640,7 @@ def notify_best_bets():
     except Exception as e:
         log.error(f"❌ Telegram: no se pudieron leer los picks de hoy — mensaje no enviado: {e}")
         return
+    base = msg
     # Paper-trading (Mundial 2026): days_ahead=2 muestra hoy + mañana + pasado
     paper_section = _format_paper_bets_section(today, days_ahead=2)
     if paper_section:
@@ -583,6 +649,7 @@ def notify_best_bets():
         _set_last_picks_shown(n_star)
         _remember_announced(today, stars)
         print(f"✅ Mensaje de la mañana enviado: {n_star} 🎯 recomendados")
+        _share_day(base, "el mensaje de la mañana")
     else:
         print("❌ No se pudo enviar a Telegram")
 
@@ -600,6 +667,7 @@ def send_tomorrow_preview():
     except Exception as e:
         log.error(f"❌ Telegram: no se pudieron leer los picks de mañana — preview no enviado: {e}")
         return
+    base = msg
     paper_section = _format_paper_bets_section(tomorrow)
     if paper_section:
         msg = msg + "\n" + paper_section
@@ -607,6 +675,7 @@ def send_tomorrow_preview():
         _set_last_picks_shown(n_star)
         _remember_announced(tomorrow, stars)
         print(f"✅ Preview de mañana enviado: {n_star} 🎯 recomendados")
+        _share_day(base, "el avance de mañana")
     else:
         print("❌ No se pudo enviar preview a Telegram")
 
@@ -938,6 +1007,8 @@ def send_evening_summary(target_date=None):
     print(f"🌙 Resumen del día: {today} ({USER_TIMEZONE}) · {len(picks)} picks, {n_star} 🎯")
     ok = send_message(msg)
     print("✅ Resumen nocturno enviado" if ok else "❌ Error enviando resumen nocturno")
+    if ok:
+        share_message(TR.for_channel(msg), "el resumen de la noche")
 
 
 if __name__ == "__main__":

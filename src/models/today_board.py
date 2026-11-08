@@ -146,9 +146,29 @@ def board_texts(rows: list, now: datetime, tz) -> list:
     return chunks
 
 
+def post_board(texts: list, loc: datetime, key: str, edit, pin, load_state, save_state) -> bool:
+    """Edita (o manda) los mensajes del tablero de un chat; el primero del día
+    va fijado. Estado en model_state[key]. True si llegaron todos."""
+    st = load_state(key) or {}
+    same_day = st.get("day") == loc.date().isoformat()
+    old = list(st.get("ids") or []) if same_day else []
+    ids = []
+    for i, t in enumerate(texts):
+        mid = edit(t, old[i] if i < len(old) else None, silent=True)
+        if mid:
+            ids.append(mid)
+    for extra in old[len(texts):]:                 # sobraban mensajes de antes
+        edit("📋 <i>Partidos de hoy: todo cabe en el mensaje de arriba.</i>", extra, silent=True)
+    if ids and not same_day:
+        pin(ids[0], unpin=list(st.get("ids") or [])[:1])
+    save_state(key, {"day": loc.date().isoformat(), "ids": ids or old}, history=False)
+    return len(ids) == len(texts)
+
+
 def run_today_board(engine=None, now: datetime | None = None, edit=None, pin=None,
-                    load_state=None, save_state=None) -> dict:
-    """Closing: actualiza "Partidos de hoy" (sin sonar)."""
+                    load_state=None, save_state=None, channel_result=None) -> dict:
+    """Closing: actualiza "Partidos de hoy" (sin sonar), en el chat del dueño y
+    en el canal de los partidos si hay uno."""
     if engine is None:
         from config.database import engine
     if edit is None or pin is None:
@@ -164,20 +184,20 @@ def run_today_board(engine=None, now: datetime | None = None, edit=None, pin=Non
     start = datetime(loc.year, loc.month, loc.day, tzinfo=tz).astimezone(timezone.utc)
     today = pd.read_sql(text(_SQL), engine, params={"a": start, "b": start + timedelta(days=1)}).to_dict("records")
 
-    st = load_state(BOARD_KEY) or {}
-    same_day = st.get("day") == loc.date().isoformat()
-    old = list(st.get("ids") or []) if same_day else []
     texts = board_texts(today, now, tz)
-    ids = []
-    for i, t in enumerate(texts):
-        mid = edit(t, old[i] if i < len(old) else None, silent=True)
-        if mid:
-            ids.append(mid)
-    for extra in old[len(texts):]:                 # sobraban mensajes de antes
-        edit("📋 <i>Partidos de hoy: todo cabe en el mensaje de arriba.</i>", extra, silent=True)
-    if ids and not same_day:
-        pin(ids[0], unpin=list(st.get("ids") or [])[:1])
-    save_state(BOARD_KEY, {"day": loc.date().isoformat(), "ids": ids or old}, history=False)
+    post_board(texts, loc, BOARD_KEY, edit, pin, load_state, save_state)
+
+    # el canal de los partidos (8-nov-26): el mismo tablero, con sus propios mensajes
+    from src.models import telegram_channel as TC
+    ch = TC.current(load_state)
+    if ch:
+        cid = ch["chat_id"]
+        ok = post_board(texts, loc, TC.BOARD_KEY,
+                        lambda t, mid, silent=True: edit(t, mid, silent=silent, chat_id=cid),
+                        lambda mid, unpin=None: pin(mid, unpin=unpin, chat_id=cid), load_state, save_state)
+        if channel_result is None:
+            from scripts.notify_telegram import channel_result
+        channel_result(ok, "\"Partidos de hoy\"", ch)
 
     n_up = sum(1 for r in today if _ts(r["match_date"]) > now)
     print(f"📋 Partidos de hoy en Telegram: {n_up} por empezar, {len(today) - n_up} ya empezaron, "

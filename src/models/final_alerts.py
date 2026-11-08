@@ -256,13 +256,15 @@ def remember_announced(day, stars: list, now: datetime | None = None, load_state
 
 
 def run_final_alerts(engine=None, now: datetime | None = None, send=None, load_state=None, save_state=None,
-                     covered=None) -> dict:
+                     covered=None, share=None) -> dict:
     """Closing, después de rehacer picks y parlays: los picks finales de los
     partidos que ya no vuelve a tocar ninguna revisión."""
     if engine is None:
         from config.database import engine
     if send is None:
         from scripts.notify_telegram import send_message as send
+    if share is None:                              # el canal de los partidos (8-nov-26)
+        from scripts.notify_telegram import share_message as share
     if load_state is None or save_state is None:
         from src.utils import model_state as ms
         load_state, save_state = load_state or ms.load_state, save_state or ms.save_state
@@ -295,8 +297,11 @@ def run_final_alerts(engine=None, now: datetime | None = None, send=None, load_s
             sent += 1
     if sent < len(texts):                           # se reintenta en la siguiente corrida
         log.error(f"❌ Picks finales: {len(texts) - sent} de {len(texts)} mensaje(s) no se mandaron a Telegram")
-    elif new_state != st:
-        save_state(STATE_KEY, new_state, history=False)
+    else:
+        if new_state != st:
+            save_state(STATE_KEY, new_state, history=False)
+        for t in texts:                             # al canal, una vez: solo si al dueño le llegó todo
+            share(t, "los picks finales")
     count = {k: sum(1 for i in items if i["kind"] == k) for k in ("star", "lost", "parlay")}
     print(f"⏰ Picks finales en Telegram (hasta las {cutoff(now).astimezone(tz):%H:%M}): {count['star']} 🎯, "
           f"{count['lost']} que ya no son 🎯, {count['parlay']} parlay(s) · {sent} mensaje(s)")
