@@ -80,7 +80,7 @@ def test_a_morning_without_targets_says_there_is_no_need_to_bet():
 NIGHT = datetime(2026, 11, 8, 3, 5, tzinfo=timezone.utc)
 
 
-def test_the_evening_says_how_each_target_ended_and_the_gain_on_100():
+def test_the_evening_says_how_each_target_ended_and_the_gain_on_50():
     picks = [_pick("rb leipzig vs augsburg", "14:30", result="win", profit=0.45, pa_paid=True),
              _pick("mainz vs bayern", "14:30", market="away_win", result="loss", profit=-1.0, odds=1.3),
              _pick("toulouse vs strasbourg", "19:45", market="corners_under_9.5", reason="Sin ventaja: x",
@@ -93,12 +93,12 @@ def test_the_evening_says_how_each_target_ended_and_the_gain_on_100():
              for r, p in [("win", 0.4)] * 111 + [("loss", -1.0)] * 92]
     msg = TR.evening_text(DAY, picks, legs, since, {"stars": 11, "parlays": 3}, NIGHT, MX)
     assert "🌙 <b>Así terminó el sábado 7 nov</b>" in msg
-    assert "🎯 <b>Recomendados</b>: 1 ganado y 1 perdido · apostando 100 a cada uno: <b>-55</b>" in msg
-    assert "✅ Rb Leipzig vs Augsburg — Gana Rb Leipzig: ganado ⚡ (cobrado por ir 2 goles arriba) (+45)" in msg
-    assert "❌ Mainz vs Bayern — Gana Bayern: perdido (-100)" in msg
-    assert "❌ Parlay del día (3 partidos): perdido (2 de 3 ganados) · apostando 100: -100" in msg
-    assert "🤖 Los demás picks (solo para seguirlos): 1 ganado y 0 perdidos · apostando 100 a cada uno: <b>+85</b>" in msg
-    assert "📈 <b>Desde el 22 oct</b>, 🎯 recomendados: 111 de 203 ganados · apostando 100 a cada uno: <b>-4760</b>" in msg
+    assert "🎯 <b>Recomendados</b>: 1 ganado y 1 perdido · apostando 50 a cada uno: <b>-27</b>" in msg
+    assert "✅ Rb Leipzig vs Augsburg — Gana Rb Leipzig: ganado ⚡ (cobrado por ir 2 goles arriba) (+23)" in msg
+    assert "❌ Mainz vs Bayern — Gana Bayern: perdido (-50)" in msg
+    assert "❌ Parlay del día (3 partidos): perdido (2 de 3 ganados) · apostando 50: -50" in msg
+    assert "🤖 Los demás picks (solo para seguirlos): 1 ganado y 0 perdidos · apostando 50 a cada uno: <b>+43</b>" in msg
+    assert "📈 <b>Desde el 22 oct</b>, 🎯 recomendados: 111 de 203 ganados · apostando 50 a cada uno: <b>-2380</b>" in msg
     assert "🗓️ <b>Mañana</b>: 11 🎯 recomendados y 3 parlays" in msg
     assert "Toulouse" not in msg                                       # no es 🎯: va en la línea de los demás
     _plain(msg)
@@ -122,7 +122,7 @@ def test_a_won_parlay_shows_its_gain_with_the_bonus():
     legs = [_leg(i, f"t{i} vs u{i}", 1.3, "win") for i in range(1, 5)]
     msg = TR.evening_text(DAY, [], legs, [], {}, NIGHT, MX)
     # 1.3^4 = 2.8561 → ganancia 1.8561 × 1.075 de bono = 1.9953
-    assert "✅ Parlay del día (4 partidos): ganado · apostando 100: <b>+200</b>" in msg
+    assert "✅ Parlay del día (4 partidos): ganado · apostando 50: <b>+100</b>" in msg
     assert "🎯 Hoy no hubo recomendados." in msg
 
 
@@ -137,16 +137,18 @@ def test_the_weekly_report_counts_targets_parlays_and_the_rest():
     since = [{"market": "home_win", "reason": None, "result": "win", "profit": 0.4}] * 4
     lines = TR.weekly_lines(picks, legs, since)
     msg = "\n".join(lines)
-    assert "🎯 Recomendados: 3 ganados y 1 perdido · apostando 100 a cada uno: <b>+20</b>" in msg
-    assert "Mejor liga: Bundesliga (3 de 3, +120)" in msg and "Peor liga: LaLiga (0 de 1, -100)" in msg
-    assert "🧩 Parlays: 1 ganado y 0 perdidos · apostando 100 a cada uno: <b>+200</b>" in msg
+    assert "🎯 Recomendados: 3 ganados y 1 perdido · apostando 50 a cada uno: <b>+10</b>" in msg
+    assert "Mejor liga: Bundesliga (3 de 3, +60)" in msg and "Peor liga: LaLiga (0 de 1, -50)" in msg
+    assert "🧩 Parlays: 1 ganado y 0 perdidos · apostando 50 a cada uno: <b>+100</b>" in msg
     assert "🤖 Los demás picks (solo para seguirlos): 0 ganados y 1 perdido" in msg
-    assert "🎯 Recomendados: 4 de 4 ganados · apostando 100 a cada uno: <b>+160</b>" in msg
+    assert "🎯 Recomendados: 4 de 4 ganados · apostando 50 a cada uno: <b>+80</b>" in msg
     _plain(msg)
 
 
-def test_money_is_said_betting_100():
-    assert TR.money(0.45) == "+45" and TR.money(-1) == "-100" and TR.money(0.001) == "0"
+def test_money_is_said_betting_50():
+    # todo a 50 (el dueño, 8-nov-26), con el mismo redondeo que el dashboard
+    assert TR.money(0.45) == "+23" and TR.money(-1) == "-50" and TR.money(0.001) == "0"
+    assert TR.money(-0.55) == "-27" and TR.money(-0.25) == "-12" and TR.money(2.2419) == "+112"
     assert TR.money(None) == "0"
 
 
@@ -184,7 +186,7 @@ def test_the_three_messages_read_the_program_picks_not_bets_history(monkeypatch)
     assert "Gana Rb Leipzig" in sent[0] and nt.get_last_picks_shown() == 1
     # v2.11.0: los 🎯 del mensaje quedan guardados para los picks finales
     assert [(d, [r["match"] for r in st]) for d, st in announced] == [(DAY, ["rb leipzig vs augsburg"])]
-    assert "Así terminó el sábado 7 nov" in sent[1] and "ganado (+45)" in sent[1]
+    assert "Así terminó el sábado 7 nov" in sent[1] and "ganado (+23)" in sent[1]
     assert "REPORTE DE LA SEMANA" in sent[2] and "CAMBIOS CON LA ALINEACIÓN" in sent[2]
     assert all("bets_history" not in s for s in seen) and any("program_picks" in s for s in seen)
     for m in sent:

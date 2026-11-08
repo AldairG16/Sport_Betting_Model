@@ -147,6 +147,13 @@ def _shown_rank(info: dict) -> int:
     return 1 if info.get("result") == "stale" else 2
 
 
+def _per_unit(b: dict):
+    """La ganancia de una apuesta real por unidad apostada (profit / stake);
+    sin stake, la de la tabla."""
+    profit, stake = _num(b.get("profit")), _num(b.get("stake"))
+    return round(profit / stake, 4) if profit is not None and stake else profit
+
+
 def _pick_info(p: dict) -> dict:
     """El pick guardado tal como lo ve la tabla de anteriores."""
     res_p = _str(p.get("result")) or "pending"
@@ -220,8 +227,10 @@ def past_matches(matches: pd.DataFrame, mvs: pd.DataFrame, picks: pd.DataFrame, 
         # publica (1-3 días). Mientras, salía ⏳ con el final ya en la tabla.
         if pick and pick.get("label") and pick["result"] == "pending":
             pick = _provisional(pick, raw, _final_of(r))
+        # la ganancia de cada apuesta real por unidad apostada (v2.11.0): la página la dice
+        # apostando 50 a cada una, como los picks; antes eran unidades del bankroll con stakes distintos
         bets_out = [{"market": market_name(b["market"]), "result": _str(b.get("result")) or "pending",
-                     "profit": _num(b.get("profit"))}
+                     "profit": _per_unit(b)}
                     for b in _near(bt, key, r["date"]) if _str(b.get("result")) != "stale"]
         out.append({"date": day.strftime("%Y-%m-%d"), "league": league_name(r["league"]),
                     "league_key": r["league"], "home": team_name(r["h"]), "away": team_name(r["a"]),
@@ -437,7 +446,7 @@ def league_board(rows: list, now=None, upcoming: list | None = None) -> dict:
     - `since`: los mismos picks que "Ganadas y perdidas" (`_played`, desde el
       22-oct, ya cobrados, sin los de poca historia).
     Por liga: ganados, perdidos, anulados, los que faltan, la ganancia a 1
-    unidad (la página la dice apostando 100) y sus partidos. `priced`: los
+    unidad (la página la dice apostando 50) y sus partidos. `priced`: los
     terminados con momio de PlayDoit (los otros no cuentan en la ganancia)."""
     day = _mx_day(now)
     since, _ = _played(rows)
@@ -571,26 +580,31 @@ def team_view(team: str, matches: pd.DataFrame, upcoming: pd.DataFrame, extra: p
                     "cards": avg([r["cards"] for r in off if r["cards"] is not None])} if n else None}
 
 
-def picks_series(picks: pd.DataFrame) -> dict:
+def picks_series(rows: list) -> dict:
     """Unidades acumuladas de los picks del programa por día: una línea para
     el modelo con error (antes del 22-oct), otra para el corregido y otra
-    para los del corregido que pasan la regla (reason vacío)."""
-    empty = {"dates": [], "old": [], "fixed": [], "rule": []}
-    if picks.empty:
-        return empty
-    p = picks[picks["result"].isin(PLAYED)].copy()
-    p["profit"] = pd.to_numeric(p["profit"], errors="coerce")
-    p = p.dropna(subset=["profit"])
-    if p.empty:
-        return empty
-    when = pd.to_datetime(p["match_date"], utc=True)
-    p["d"] = when.dt.strftime("%Y-%m-%d")
-    p["old"] = when < MODEL_FIXED
-    rule = (p["reason"].isna() | (p["reason"].astype(str).str.strip() == "")) if "reason" in p.columns \
-        else pd.Series(True, index=p.index)
+    para los del corregido que pasan la regla (🎯).
+
+    v2.11.0 (8-nov-26): con las filas de past_matches, los mismos picks que
+    Anteriores y Ganadas y perdidas: ya cobrados, sin los de poca historia ni
+    los provisionales. Leía program_picks aparte y no cuadraba: la línea de
+    todos terminaba en -660 y los totales decían -784 (contaba los de poca
+    historia), y la de antes del 22 oct contaba 7 picks de segundas
+    divisiones que Anteriores no lista (-833 contra -894)."""
+    recs = []
+    for r in rows:
+        p = r.get("pick") or {}
+        if (r.get("started") or not p.get("label") or p.get("provisional") or p.get("low")
+                or p.get("result") not in PLAYED or p.get("profit") is None):
+            continue
+        recs.append({"d": r["date"], "old": bool(p.get("old_model")), "rule": bool(p.get("rule")),
+                     "profit": float(p["profit"])})
+    if not recs:
+        return {"dates": [], "old": [], "fixed": [], "rule": []}
+    p = pd.DataFrame(recs)
     dates = sorted(p["d"].unique())
     out = {"dates": dates}
-    for name, mask in (("old", p["old"]), ("fixed", ~p["old"]), ("rule", ~p["old"] & rule)):
+    for name, mask in (("old", p["old"]), ("fixed", ~p["old"]), ("rule", ~p["old"] & p["rule"])):
         daily = p[mask].groupby("d")["profit"].sum()
         if daily.empty:
             out[name] = [None] * len(dates)

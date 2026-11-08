@@ -100,12 +100,19 @@ def test_team_list_and_team_view():
 
 
 def test_chart_series():
-    picks = pd.DataFrame([{"match_date": "2026-10-20T01:00:00Z", "result": "loss", "profit": -1.0, "reason": None},  # modelo con error
-                          {"match_date": "2026-10-22T01:00:00Z", "result": "win", "profit": 0.59, "reason": None},
-                          {"match_date": "2026-10-22T03:00:00Z", "result": "loss", "profit": -1.0, "reason": "Sin ventaja"},
-                          {"match_date": "2026-10-23T01:00:00Z", "result": None, "profit": None, "reason": None}])
-    assert B.picks_series(picks) == {"dates": ["2026-10-20", "2026-10-22"], "old": [-1.0, None], "fixed": [None, -0.41],
-                                     "rule": [None, 0.59]}           # 🎯 solo los que pasan la regla
+    """v2.11.0: la gráfica usa los mismos picks que Anteriores y Ganadas y perdidas."""
+    prov = _row("2026-10-23", "Serie A", "G", "H", "Gana el local", "win", 0.9, 0.6)
+    prov["pick"]["provisional"] = True
+    rows = [_row("2026-10-20", "Serie A", "A", "B", "Gana el local", "loss", -1.0, 0.6, old=True),   # modelo con error
+            _row("2026-10-22", "Serie A", "C", "D", "Gana el local", "win", 0.59, 0.6),
+            _row("2026-10-22", "Serie A", "E", "F", "Ambos anotan", "loss", -1.0, 0.5, rule=False),
+            _row("2026-10-22", "Serie A", "I", "J", "Gana el local", "win", 2.0, 0.6, rule=False, low=True),  # poca historia
+            prov,                                                                                       # sin cobrar
+            _row("2026-10-23", "Serie A", "K", "L", "Gana el local", "win", 0.7, 0.6, started=True),    # en juego
+            _row("2026-10-23", "Serie A", "M", "N", "Gana el local", "win", None, 0.6)]                 # sin momio
+    assert B.picks_series(rows) == {"dates": ["2026-10-20", "2026-10-22"], "old": [-1.0, None], "fixed": [None, -0.41],
+                                    "rule": [None, 0.59]}            # 🎯 solo los recomendados
+    assert B.picks_series([]) == {"dates": [], "old": [], "fixed": [], "rule": []}
 
 
 @pytest.fixture

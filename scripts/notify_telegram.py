@@ -877,7 +877,7 @@ def send_weekly_report():
     now = datetime.now(timezone.utc)
     loc = now.astimezone(tz)
     lines = [f"📊 <b>REPORTE DE LA SEMANA — {TR.day_name(loc.date())}</b>",
-             "<i>Los últimos 7 días · la ganancia es apostando 100 a cada uno al momio de PlayDoit</i>", ""]
+             f"<i>Los últimos 7 días · la ganancia es apostando {TR.STAKE} a cada uno al momio de PlayDoit</i>", ""]
     try:
         week = TR.load_picks(engine, now - timedelta(days=7), now)
         parlays = TR.load_parlays(engine, (loc - timedelta(days=7)).date(), loc.date())

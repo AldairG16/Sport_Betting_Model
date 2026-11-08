@@ -17,7 +17,12 @@ window.onerror = function(msg, src, line){
 // ── Helpers ──
 function el(id){ return document.getElementById(id); }
 function esc(s){ return String(s === null || s === undefined ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function money(v){ return (v >= 0 ? '+' : '') + Number(v).toFixed(2) + 'u'; }
+// la ganancia a 1 unidad dicha apostando 50 a cada uno (el dueño, 8-nov-26: "todo a 50"; decía +0.45u)
+var STAKE = 50;
+// sin el ruido del decimal (-0.55 × 50 = -27.500000000000004 → -27), como telegram_reports.money
+function signed(n){ n = Math.round(Math.round((n || 0) * 1e6) / 1e6); return (n > 0 ? '+' : '') + n; }
+function money(v){ return signed((v || 0) * STAKE); }
+function staked(list){ var o = []; for (var i = 0; i < list.length; i++) o.push(list[i] === null || list[i] === undefined ? null : Math.round(list[i] * STAKE)); return o; }
 function p100(v){ return v === null || v === undefined ? '—' : Math.round(v * 100) + '%'; }
 function p2(n){ return (n < 10 ? '0' : '') + n; }
 var MESES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
@@ -479,12 +484,12 @@ function loadPast(fresh){
       kpi(p100(s.model_hit), '🤖 Veces que el programa atinó el resultado (de ' + s.analyzed + ' partidos)') +
       kpi(p100(s.pin_hit), '🏦 Veces que Pinnacle atinó el resultado') +
       kpi(s.picks_fixed.n ? s.picks_fixed.won + ' / ' + s.picks_fixed.n : '—', 'Picks ganados / jugados, desde el 22 oct' +
-          (s.picks_fixed.priced ? ' · ' + money(s.picks_fixed.profit) : ''), s.picks_fixed.profit >= 0 ? 'pos' : 'neg') +
+          (s.picks_fixed.priced ? ' · apostando 50: ' + money(s.picks_fixed.profit) : ''), s.picks_fixed.profit >= 0 ? 'pos' : 'neg') +
       kpi(s.picks_rule.n ? s.picks_rule.won + ' / ' + s.picks_rule.n : '—', '🎯 Recomendados ganados / jugados' +
-          (s.picks_rule.priced ? ' · ' + money(s.picks_rule.profit) : ''), s.picks_rule.profit >= 0 ? 'pos' : 'neg') +
+          (s.picks_rule.priced ? ' · apostando 50: ' + money(s.picks_rule.profit) : ''), s.picks_rule.profit >= 0 ? 'pos' : 'neg') +
       kpi(s.picks_old.n ? s.picks_old.won + ' / ' + s.picks_old.n : '—', '↺ Picks antes del 22 oct (versión con error)' +
-          (s.picks_old.priced ? ' · ' + money(s.picks_old.profit) : ''), s.picks_old.profit >= 0 ? 'pos' : 'neg') +
-      kpi(s.bets ? money(s.bets_profit) : '—', '💰 Apuestas reales (' + s.bets + ')', s.bets_profit >= 0 ? 'pos' : 'neg');
+          (s.picks_old.priced ? ' · apostando 50: ' + money(s.picks_old.profit) : ''), s.picks_old.profit >= 0 ? 'pos' : 'neg') +
+      kpi(s.bets ? money(s.bets_profit) : '—', '💰 Apuestas reales (' + s.bets + ') · apostando 50 a cada una', s.bets_profit >= 0 ? 'pos' : 'neg');
     var lg = {}, list = [];
     for (var i = 0; i < _past.length; i++) if (!lg[_past[i].league]) { lg[_past[i].league] = 1; list.push(_past[i].league); }
     fillSelect('pleague', list.sort());
@@ -501,14 +506,11 @@ el('pmore').onclick = function(){ _pastShown += 150; renderPast(); };
 // ganadores y perdedores, y las ligas, cómo van en las apuestas, si se ganan
 // bien ahí o no". Tres grupos: todos los picks, los 🎯 y las apuestas reales.
 var _res = null, _resGroup = _storeGet('rgroup', 'picks');
-function _units(v){ return '<span class="' + (v >= 0 ? 'pos' : 'neg') + '">' + money(v) + '</span>'; }
-// ROI: lo que se gana por cada unidad apostada, en % (0.002 → +0.2%)
-function _roi(v){ return v === null || v === undefined ? '—' :
-  '<span class="' + (v >= 0 ? 'pos' : 'neg') + '">' + (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%</span>'; }
+function _units(v){ return '<span class="' + ((v || 0) >= 0 ? 'pos' : 'neg') + '">' + money(v) + '</span>'; }
 function resRow(g, minN){
   return '<tr' + (g.few ? ' class="few" title="Pocos datos: menos de ' + minN + ' picks, todavía no dice mucho"' : '') + '>' +
     '<td>' + esc(g.name || '—') + '</td><td class="sc">' + g.won + '-' + g.lost + '</td><td>' + p100(g.hit) + '</td>' +
-    '<td>' + _units(g.units) + '</td><td class="hide-sm">' + _roi(g.roi) + '</td></tr>';
+    '<td>' + _units(g.units) + '</td></tr>';
 }
 function renderResults(){
   if (!_res) return;
@@ -518,35 +520,34 @@ function renderResults(){
     pills[i].className = 'pill' + (pills[i].getAttribute('data-g') === _resGroup ? ' on' : '');
   el('rkpis').innerHTML = kpi(t.won, '✅ Ganadas', 'pos') + kpi(t.lost, '❌ Perdidas', 'neg') +
     kpi(t.push, '↔️ Devueltas / anuladas') + kpi(p100(t.hit), '% de acierto') +
-    kpi(money(t.units), 'Ganancia (1 unidad por apuesta)', t.units >= 0 ? 'pos' : 'neg') +
-    kpi(t.roi === null ? '—' : (t.roi >= 0 ? '+' : '') + (t.roi * 100).toFixed(1) + '%', 'Rendimiento: lo que se gana o pierde de cada 100 apostados', t.roi >= 0 ? 'pos' : 'neg');
+    kpi(money(t.units), 'Apostando 50 a cada uno', t.units >= 0 ? 'pos' : 'neg');
   var labels = [], lost = [];
   for (i = 0; i < g.daily.dates.length; i++) { labels.push(shortDate(g.daily.dates[i])); lost.push(-g.daily.lost[i]); }
   var tick = { fontColor: '#94a3b8' };
   chart('cdaily', { type: 'bar', data: { labels: labels, datasets: [
       { label: '✅ Ganadas', data: g.daily.won, backgroundColor: '#22c55e', stack: 'gp', yAxisID: 'n' },
       { label: '❌ Perdidas', data: lost, backgroundColor: '#ef4444', stack: 'gp', yAxisID: 'n' },
-      { label: 'Unidades acumuladas', data: g.daily.units, type: 'line', borderColor: '#60a5fa', fill: false, yAxisID: 'u' }] },
+      { label: 'Ganancia acumulada (apostando 50)', data: staked(g.daily.units), type: 'line', borderColor: '#60a5fa', fill: false, yAxisID: 'u' }] },
     options: { legend: { labels: { fontColor: '#94a3b8', boxWidth: 12 } },
       scales: { xAxes: [{ stacked: true, ticks: { maxTicksLimit: 12, fontColor: '#94a3b8' } }],
                 yAxes: [{ id: 'n', stacked: true, position: 'left', ticks: { fontColor: '#94a3b8', callback: function(v){ return Math.abs(v); } } },
                         { id: 'u', position: 'right', gridLines: { drawOnChartArea: false },
-                          ticks: { fontColor: '#60a5fa', callback: function(v){ return v + 'u'; } } }] },
+                          ticks: { fontColor: '#60a5fa', callback: function(v){ return signed(v); } } }] },
       tooltips: { callbacks: { label: function(it, data){
         var ds = data.datasets[it.datasetIndex];
-        return ds.label + ': ' + (ds.yAxisID === 'u' ? money(it.yLabel) : Math.abs(it.yLabel)); } } } } });
+        return ds.label + ': ' + (ds.yAxisID === 'u' ? signed(it.yLabel) : Math.abs(it.yLabel)); } } } } });
   h = '';
   for (i = 0; i < g.by_type.length; i++) h += resRow(g.by_type[i], _res.min_n);
-  el('rtypes').innerHTML = h || '<tr><td colspan="5" class="muted">Todavía no hay apuestas terminadas.</td></tr>';
+  el('rtypes').innerHTML = h || '<tr><td colspan="4" class="muted">Todavía no hay apuestas terminadas.</td></tr>';
   h = '';
   var ll = [], lu = [], lc = [];
   for (i = 0; i < g.by_league.length; i++) {
     var lg = g.by_league[i];
     h += resRow(lg, _res.min_n);
-    ll.push(lg.name + ' (' + lg.won + '-' + lg.lost + ')'); lu.push(lg.units);
+    ll.push(lg.name + ' (' + lg.won + '-' + lg.lost + ')'); lu.push(Math.round(lg.units * STAKE));
     lc.push(lg.few ? (lg.units >= 0 ? 'rgba(34,197,94,.35)' : 'rgba(239,68,68,.35)') : (lg.units >= 0 ? '#22c55e' : '#ef4444'));
   }
-  el('rleagues').innerHTML = h || '<tr><td colspan="5" class="muted">Todavía no hay apuestas terminadas.</td></tr>';
+  el('rleagues').innerHTML = h || '<tr><td colspan="4" class="muted">Todavía no hay apuestas terminadas.</td></tr>';
   el('cleaguesbox').style.height = Math.max(160, 40 + 22 * ll.length) + 'px';   // una barra por liga
   chart('cleagues', { type: 'horizontalBar', data: { labels: ll, datasets: [{ data: lu, backgroundColor: lc }] },
     options: { legend: { display: false }, scales: { xAxes: [{ ticks: tick }], yAxes: [{ ticks: tick }] },
@@ -587,9 +588,6 @@ function loadResults(fresh){
 var _lg = null, _lgPeriod = _storeGet('lperiod', 'today'), _lgGroup = _storeGet('lgroup', 'picks'),
     _lgSort = _storeGet('lsort', 'name'), _lgOpen = {};
 var LG_SORTS = ['name', 'n', 'won', 'lost', 'pending', 'hit', 'units'];
-// la ganancia a 1 unidad dicha apostando 100 (0.64 → +64)
-function cien(v){ var n = Math.round((v || 0) * 100); return (n > 0 ? '+' : '') + n; }
-function _cien(v){ return '<span class="' + ((v || 0) >= 0 ? 'pos' : 'neg') + '">' + cien(v) + '</span>'; }
 function wlBar(won, lost){
   var n = won + lost;
   return n ? '<span class="wl"><span class="w" style="width:' + (won / n * 100) + '%"></span>' +
@@ -606,7 +604,7 @@ function lgCols(today){
   var c = [['name', 'Liga', ''], ['n', 'Partidos', 'sc'], ['won', '✅<span class="hide-sm"> Ganados</span>', 'sc'],
            ['lost', '❌<span class="hide-sm"> Perdidos</span>', 'sc']];
   if (today) c.push(['pending', '⏳<span class="hide-sm"> Faltan</span>', 'sc']);
-  c.push(['hit', 'Ganados de cada 100', 'hide-sm'], ['units', 'Apostando 100 a cada uno', 'sc']);
+  c.push(['hit', 'Ganados de cada 100', 'hide-sm'], ['units', 'Apostando 50 a cada uno', 'sc']);
   return c;
 }
 function lgIcon(r){
@@ -629,7 +627,7 @@ function lgCells(x, today){
     '<td class="sc pos">' + x.won + '</td><td class="sc neg">' + x.lost + '</td>' +
     (today ? '<td class="sc">' + (x.pending ? x.pending : '<span class="muted">—</span>') + '</td>' : '') +
     '<td class="hide-sm nw">' + wlBar(x.won, x.lost) + (x.hit === null ? '—' : Math.round(x.hit * 100)) + '</td>' +
-    '<td class="sc">' + _cien(x.units) + (unpriced > 0 ? ' <span class="small muted" title="' + unpriced +
+    '<td class="sc">' + _units(x.units) + (unpriced > 0 ? ' <span class="small muted" title="' + unpriced +
       (unpriced === 1 ? ' partido sin momio de PlayDoit: cuenta en ganados y perdidos, no en la ganancia'
                       : ' partidos sin momio de PlayDoit: cuentan en ganados y perdidos, no en la ganancia') + '">*</span>' : '') + '</td>';
 }
@@ -651,7 +649,7 @@ function lgMatch(m, showStar, today, span){
     head = '🕒 <span class="muted">' + esc(m.time) + '</span>'; tail = ' · <span class="muted">todavía no empieza</span>';
   } else {
     head = lgIcon(m.result) + (today ? '' : ' <span class="muted">' + shortDate(m.date) + '</span> ·');
-    tail = ' · ' + (m.profit === null || m.profit === undefined ? '<span class="muted" title="Sin momio de PlayDoit">—</span>' : _cien(m.profit)) +
+    tail = ' · ' + (m.profit === null || m.profit === undefined ? '<span class="muted" title="Sin momio de PlayDoit">—</span>' : _units(m.profit)) +
       (m.provisional ? ' <span class="small muted" title="Ya terminó: se cobra en la noche (córners y tarjetas, en 1 o 2 días)">· por confirmar</span>' : '');
   }
   return '<tr class="sub"><td colspan="' + (span || 6) + '">' + head + ' ' + pick + tail + '</td></tr>';
@@ -671,13 +669,13 @@ function renderLeagues(){
     ? 'Los partidos de hoy, <b>' + esc(longDay(_lg.today)) + '</b>. Los que ya terminaron cuentan aunque se cobren en la noche ' +
       '(córners y tarjetas, en 1 o 2 días): salen "por confirmar".'
     : 'Desde el 22 oct (cuando se corrigió el programa), solo partidos ya terminados y cobrados.') +
-    ' La ganancia es apostando 100 a cada pick al momio de PlayDoit. Toca una liga para ver sus partidos; toca un título para ordenar.';
+    ' La ganancia es apostando 50 a cada pick al momio de PlayDoit. Toca una liga para ver sus partidos; toca un título para ordenar.';
   el('lkpis').innerHTML = kpi(t.n, today ? (t.n === 1 ? 'Partido hoy' : 'Partidos hoy') : (t.n === 1 ? 'Partido terminado' : 'Partidos terminados')) +
     kpi(t.won, '✅ Ganados', 'pos') + kpi(t.lost, '❌ Perdidos', 'neg') +
     (t.push ? kpi(t.push, '↔️ Anulados') : '') +
     (today ? kpi(t.pending, '⏳ Faltan: en juego o por empezar') : '') +
     kpi(t.hit === null ? '—' : Math.round(t.hit * 100), 'Ganados de cada 100') +
-    kpi(cien(t.units), 'Apostando 100 a cada uno', t.units >= 0 ? 'pos' : 'neg') +
+    kpi(money(t.units), 'Apostando 50 a cada uno', t.units >= 0 ? 'pos' : 'neg') +
     kpi(g.leagues.length, g.leagues.length === 1 ? 'Liga' : 'Ligas');
   for (i = 0; i < cols.length; i++)
     h += '<th data-s="' + cols[i][0] + '" class="' + cols[i][2] + (cols[i][0] === _lgSort ? ' on' : '') + '">' + cols[i][1] + '</th>';
@@ -801,8 +799,7 @@ function renderParlay(){
     '(ni ' + r.slot_min + ' a la misma hora). Se revisa cada 30 min; Telegram manda el parlay en la última revisión antes de su primer partido.</div>';
   var t = _px.record.all, td = _px.record.dia, th = _px.record.horario;
   el('xkpis').innerHTML = kpi(t.n, 'Parlays terminados') + kpi(t.won, '✅ Ganados', 'pos') + kpi(t.lost, '❌ Perdidos', 'neg') +
-    kpi(money(t.units), 'Ganancia (1 unidad por parlay, con bono)', t.units >= 0 ? 'pos' : 'neg') +
-    kpi(_roi(t.roi), 'Rendimiento: lo que se gana o pierde de cada 100 apostados') +
+    kpi(money(t.units), 'Apostando 50 a cada parlay (con el bono)', t.units >= 0 ? 'pos' : 'neg') +
     kpi(t.legs ? t.legs_won + ' / ' + t.legs : '—', 'Partidos de los parlays que salieron (' + p100(t.legs_hit) + ')') +
     kpi(t.pa, '⚡ Cobrados por ir 2 goles arriba') +
     kpi(td.n ? money(td.units) + ' en ' + td.n : '—', 'Del día') + kpi(th.n ? money(th.units) + ' en ' + th.n : '—', 'De un horario');
@@ -917,22 +914,22 @@ function loadCharts(fresh){
     for (var f in d.families) {
       var x = d.families[f];
       fl.push(famIcon(f) + ' ' + f + ' (' + x.won + '/' + x.n + ')');
-      fu.push(x.profit); fc.push(x.profit >= 0 ? '#22c55e' : '#ef4444');
+      fu.push(Math.round(x.profit * STAKE)); fc.push(x.profit >= 0 ? '#22c55e' : '#ef4444');
       fw.push(x.n ? Math.round(x.won / x.n * 100) : 0);
     }
-    chart('cfam', { type: 'horizontalBar', data: { labels: fl, datasets: [{ label: 'Unidades', data: fu, backgroundColor: fc }] },
+    chart('cfam', { type: 'horizontalBar', data: { labels: fl, datasets: [{ label: 'Apostando 50 a cada uno', data: fu, backgroundColor: fc }] },
       options: { legend: nolegend, scales: { xAxes: [{ ticks: { fontColor: '#94a3b8' } }], yAxes: [{ ticks: { fontColor: '#94a3b8' } }] },
                  tooltips: { callbacks: { afterLabel: function(c){ return 'Acierto: ' + fw[c.index] + '%'; } } } } });
     chart('cpicks', { type: 'line', data: { labels: d.picks.dates, datasets: [
-      { label: '↺ Antes del 22 oct (versión con error)', data: d.picks.old, borderColor: '#94a3b8', pointRadius: 0, fill: false, spanGaps: false },
-      { label: 'Todos los picks', data: d.picks.fixed, borderColor: '#22c55e', fill: false, spanGaps: false },
-      { label: '🎯 Recomendados', data: d.picks.rule, borderColor: '#eab308', fill: false, spanGaps: false }] },
+      { label: '↺ Antes del 22 oct (versión con error)', data: staked(d.picks.old), borderColor: '#94a3b8', pointRadius: 0, fill: false, spanGaps: false },
+      { label: 'Todos los picks', data: staked(d.picks.fixed), borderColor: '#22c55e', fill: false, spanGaps: false },
+      { label: '🎯 Recomendados', data: staked(d.picks.rule), borderColor: '#eab308', fill: false, spanGaps: false }] },
       options: { legend: legend, scales: axes } });
     var pl = [], pv = [], pc = [];
     for (var j = 0; j < d.proposals.length; j++) {
       var w = d.proposals[j];
       pl.push(shortDate(w.week) + (w.old_model ? ' *' : ''));
-      pv.push(w.profit_1u);
+      pv.push(Math.round(w.profit_1u * STAKE));
       pc.push(w.old_model ? (w.profit_1u >= 0 ? 'rgba(34,197,94,.35)' : 'rgba(239,68,68,.35)') : (w.profit_1u >= 0 ? '#22c55e' : '#ef4444'));
     }
     chart('cprops', { type: 'bar', data: { labels: pl, datasets: [{ data: pv, backgroundColor: pc }] },
@@ -948,9 +945,9 @@ function loadHeader(){
   getJSON('/api/board/header', function(d){
     var c = el('chiptarget');
     c.innerHTML = d.n ? '🎯 Desde el 22 oct: <b>' + d.won + '</b> de ' + d.n + ' ganados · <b class="' +
-      (d.units >= 0 ? 'pos' : 'neg') + '">' + cien(d.units) + '</b>' : '🎯 Desde el 22 oct: todavía ninguno terminado';
+      (d.units >= 0 ? 'pos' : 'neg') + '">' + money(d.units) + '</b>' : '🎯 Desde el 22 oct: todavía ninguno terminado';
     c.title = 'Los 🎯 recomendados ya cobrados desde el 22 oct (cuando se corrigió el programa): cuántos se ganaron ' +
-      'y lo que van dejando apostando 100 a cada uno al momio de PlayDoit. Lo mismo que el resumen de la noche en Telegram.';
+      'y lo que van dejando apostando 50 a cada uno al momio de PlayDoit. Lo mismo que el resumen de la noche en Telegram.';
   }, function(){});
 }
 

@@ -229,10 +229,10 @@ def test_the_weekly_block_reads_the_week_and_the_total(monkeypatch):
     lines = LC.weekly_lines(engine=object(), now=now)
     text = "\n".join(lines)
     assert lines[0] == "— <b>CAMBIOS CON LA ALINEACIÓN</b> —"
-    # en palabras normales (6-nov-26): la ganancia apostando 100 a cada uno, sin "u" ni desviaciones
+    # en palabras normales (6-nov-26): la ganancia apostando 50 a cada uno (8-nov-26), sin "u" ni desviaciones
     assert "Esta semana se revisaron 1 picks con la alineación y 1 cambiaron." in text
-    assert "con el pick de antes, 1 apuestas y -100; con el nuevo, 0 apuestas y 0." in text
-    assert "Desde el 20-12: 2 cambios · en los 🎯, con el pick de antes -200 y con el nuevo +90" in text
+    assert "con el pick de antes, 1 apuestas y -50; con el nuevo, 0 apuestas y 0." in text
+    assert "Desde el 20-12: 2 cambios · en los 🎯, con el pick de antes -100 y con el nuevo +45" in text
     assert "¿Conviene cambiar el pick con la alineación? todavía no se sabe: van 2 de 20 cambios en 🎯" in text
     assert not __import__("re").search(r"\du\b", text) and "desviaciones" not in text
 
