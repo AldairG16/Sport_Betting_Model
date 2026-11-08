@@ -18,25 +18,24 @@ v2.9.0 (6-nov-26), el parlay con bono (program_parlays). Hay dos tipos:
 Si a READY_LATE_MIN minutos de fijarse todavía no está listo, avisa igual y lo
 dice: antes un parlay sin alineaciones no avisaba nunca. El mensaje trae el
 momio con el bono de PlayDoit sobre la ganancia y marca el pago anticipado.
+
+v2.11.0 (8-nov-26): ya no hay "Parlay listo" ni "Cambió el parlay" aparte. El
+dueño: "quiero que solo llegue el último cambio… y si hay parley también
+mandarlo". El parlay sale una vez, con los picks finales, en la última revisión
+antes de su primer partido (src/models/final_alerts.py, que usa este texto).
 """
 
 import html
 import math
-from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
 
 import pandas as pd
-from sqlalchemy import text
 
 from src.models import program_parlays as PL
 from src.utils.log import get_logger
 
 log = get_logger(__name__)
 
-ALERT_KEY = "telegram_parlays"
-AHEAD_HOURS = 3              # las alineaciones salen ~1 h antes: más adelante nada está listo
-READY_LATE_MIN = 40          # a 40 min de su primer partido avisa aunque falten alineaciones
-KEEP_DAYS = 2                # lo avisado se olvida a los 2 días
 DIAS = ("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
 MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
 
@@ -44,7 +43,7 @@ _SQL = """
     SELECT slot, rank, kind, seq, match, display, match_date, league, label, market, model_prob, market_prob,
            playdoit_odds, lineup, pa
     FROM program_parlays
-    WHERE result IS NULL AND rule = :rule AND slot > :now AND slot <= :end
+    WHERE result IS NULL AND rule = :rule AND slot > :now AND slot <= :end    -- los que se fijan ya
     ORDER BY slot, kind, seq, rank
 """
 
@@ -136,69 +135,3 @@ def alert_text(legs: list, tz, changed: bool = False, late: bool = False) -> str
         notes.insert(0, "Faltan alineaciones del primer horario y ya casi se fija: revísalas antes de apostar")
     parts.append("<i>" + "\n".join(notes) + "</i>")
     return "\n\n".join(parts)
-
-
-def to_alert(rows: list, sent: dict, covered=None, now: datetime | None = None) -> list:
-    """[(parlay, piernas, ¿cambió?, ¿tarde?)] de los parlays listos (o a
-    READY_LATE_MIN de fijarse) que todavía no se avisaron así (sent: {parlay: firma})."""
-    now = now or datetime.now(timezone.utc)
-    by = {}
-    for r in rows:
-        by.setdefault(key_of(r), []).append(r)
-    out = []
-    for key in sorted(by):
-        legs = by[key]
-        need = PL.DAY_MIN_LEGS if legs[0].get("kind") == "dia" else PL.SLOT_MIN_LEGS
-        if len(legs) < need:
-            continue
-        ready = is_ready(legs, covered)
-        late = not ready and _ts(legs[0]["slot"]) - now <= timedelta(minutes=READY_LATE_MIN)
-        if (ready or late) and sent.get(key) != signature(legs):
-            out.append((key, legs, key in sent, late))
-    return out
-
-
-def run_parlay_alerts(engine=None, now: datetime | None = None, send=None, load_state=None, save_state=None,
-                      covered=None) -> dict:
-    """Closing, después de rehacer el parlay: avisa los que ya vieron sus
-    alineaciones (o están por fijarse) y los que cambiaron después del aviso."""
-    if engine is None:
-        from config.database import engine
-    if send is None:
-        from scripts.notify_telegram import send_message as send
-    if load_state is None or save_state is None:
-        from src.utils import model_state as ms
-        load_state, save_state = load_state or ms.load_state, save_state or ms.save_state
-    if covered is None:
-        from src.features.espn_lineups import espn_leagues
-        covered = set(espn_leagues())
-    from config.settings import USER_TIMEZONE
-    tz = ZoneInfo(USER_TIMEZONE)
-    now = now or datetime.now(timezone.utc)
-    try:
-        rows = pd.read_sql(text(_SQL), engine, params={"now": now, "end": now + timedelta(hours=AHEAD_HOURS),
-                                                       "rule": PL.RULE})
-    except Exception as e:
-        if "does not exist" in str(e):          # la columna rule nace con el primer snapshot de v2.9.0
-            print("🧩 Parlay listo en Telegram: todavía no hay parlays con bono")
-            return {"sent": 0, "waiting": 0}
-        raise
-    rows = rows.to_dict("records")
-    st = load_state(ALERT_KEY) or {}
-    sent = {k: v for k, v in (st.get("sent") or {}).items()
-            if (_ts(k.split("|")[0]) or now) >= now - timedelta(days=KEEP_DAYS)}
-    pending = to_alert(rows, sent, covered, now)
-    done = 0
-    for key, legs, changed, late in pending:
-        if send(alert_text(legs, tz, changed, late)):
-            sent[key] = signature(legs)
-            done += 1
-        else:                                    # sin Telegram: se reintenta en el siguiente closing
-            log.error(f"❌ Aviso del parlay {key} no se mandó a Telegram")
-    if sent != (st.get("sent") or {}):
-        save_state(ALERT_KEY, {"sent": sent}, history=False)
-    keys = {key_of(r) for r in rows}
-    waiting = len(keys) - sum(1 for k in keys if is_ready([r for r in rows if key_of(r) == k], covered))
-    print(f"🧩 Parlay listo en Telegram: {done} aviso(s)"
-          + (f" · {waiting} parlay(s) esperando alineaciones" if waiting else ""))
-    return {"sent": done, "waiting": waiting}

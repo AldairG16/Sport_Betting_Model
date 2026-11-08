@@ -199,6 +199,7 @@ class TestSendTomorrowPreviewIncludesPaper:
         sent_messages = []
         monkeypatch.setattr(nt, "send_message", lambda msg: sent_messages.append(msg) or True)
         monkeypatch.setattr(nt, "_set_last_picks_shown", lambda n: None)
+        monkeypatch.setattr(nt, "_remember_announced", lambda day, stars: None)
 
         nt.send_tomorrow_preview()
 
@@ -221,6 +222,7 @@ class TestSendTomorrowPreviewIncludesPaper:
         sent_messages = []
         monkeypatch.setattr(nt, "send_message", lambda msg: sent_messages.append(msg) or True)
         monkeypatch.setattr(nt, "_set_last_picks_shown", lambda n: None)
+        monkeypatch.setattr(nt, "_remember_announced", lambda day, stars: None)
 
         nt.send_tomorrow_preview()
 

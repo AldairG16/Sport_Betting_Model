@@ -1133,14 +1133,15 @@ def run_closing(logger: Logger):
     cada partido: el último antes del partido es el que cuenta. 26-oct-26:
     el pick se recalcula DESPUÉS de guardar las alineaciones publicadas
     (el dueño: "ponemos los picks mucho antes de que la lista de alineaciones
-    esté lista"), y el aviso de alineación sale al final, con ese pick."""
+    esté lista"). v2.11.0 (8-nov-26): Telegram recibe solo los picks finales,
+    en la última revisión antes de cada partido, con el parlay y quién falta."""
     run_step(logger, "Pre-kickoff closing odds", step_pre_kickoff_closing)
     run_step(logger, "Marcadores del día (ESPN)", step_live_scores)
     run_step(logger, "Alineaciones publicadas", step_capture_lineups)
     run_step(logger, "Picks del programa", step_program_picks)
     run_step(logger, "Alertas de alineación", step_lineup_alerts)
     run_step(logger, "Partidos de hoy (Telegram)", step_today_board)
-    run_step(logger, "Parlay listo (Telegram)", step_parlay_alerts)
+    run_step(logger, "Picks finales (Telegram)", step_final_alerts)
 
 
 def step_espn_finals():
@@ -1167,28 +1168,28 @@ def step_capture_lineups():
 
 
 def step_lineup_alerts():
-    """Si a un equipo le faltan 4+ titulares habituales, el momio mínimo que
-    debe pagar PlayDoit por el rival y el pick del programa (ya recalculado
-    con la alineación). Falla = paso en rojo: es un aviso al dueño."""
+    """Si a un equipo le faltan 4+ titulares habituales, la alerta con el
+    momio mínimo del rival y la revisión de Claude (el dashboard la muestra).
+    v2.11.0: ya no sale aparte en Telegram; quién falta va en los picks finales."""
     from src.models.lineup_alerts import run_lineup_alerts
-    run_lineup_alerts(capture=False)
+    run_lineup_alerts(capture=False, notify=False)
 
 
 def step_today_board():
     """El mensaje "Partidos de hoy" de Telegram (30-oct-26): hora de inicio, pick,
-    de cuándo son sus cuotas y si cambió. Se edita en cada closing; un aviso
-    aparte si cambia el pick de algo que empieza pronto (src/models/today_board.py)."""
+    de cuándo son sus cuotas y si cambió. Se edita en cada closing sin sonar
+    (src/models/today_board.py)."""
     from src.models.today_board import run_today_board
     run_today_board()
 
 
-def step_parlay_alerts():
-    """El aviso de Telegram del parlay de un horario cuando ya vio las
-    alineaciones de todos sus partidos (v2.7.0, 4-nov-26). Va después de
-    "Picks del programa", que rehace el parlay con ellas
-    (src/models/parlay_alerts.py)."""
-    from src.models.parlay_alerts import run_parlay_alerts
-    run_parlay_alerts()
+def step_final_alerts():
+    """Los picks finales en Telegram (v2.11.0, 8-nov-26): en la última revisión
+    antes de cada partido, los 🎯, los que dejaron de serlo y el parlay que se
+    fija ahí, una sola vez. Va después de "Picks del programa", que rehace
+    picks y parlays (src/models/final_alerts.py)."""
+    from src.models.final_alerts import run_final_alerts
+    run_final_alerts()
 
 
 def run_weekly(logger: Logger):

@@ -175,11 +175,15 @@ def test_the_three_messages_read_the_program_picks_not_bets_history(monkeypatch)
     monkeypatch.setattr(nt, "_local_today", lambda: DAY)
     monkeypatch.setattr(nt, "PAPER_LOG_PATH", nt.Path("/nonexistent/paper.jsonl"))
     monkeypatch.setattr(lineup_changes, "weekly_lines", lambda engine: ["— <b>CAMBIOS CON LA ALINEACIÓN</b> —"])
+    announced = []
+    monkeypatch.setattr(nt, "_remember_announced", lambda day, stars: announced.append((day, stars)))
     nt.notify_best_bets()
     nt.send_evening_summary(target_date=DAY)
     nt.send_weekly_report()
     assert len(sent) == 3
     assert "Gana Rb Leipzig" in sent[0] and nt.get_last_picks_shown() == 1
+    # v2.11.0: los 🎯 del mensaje quedan guardados para los picks finales
+    assert [(d, [r["match"] for r in st]) for d, st in announced] == [(DAY, ["rb leipzig vs augsburg"])]
     assert "Así terminó el sábado 7 nov" in sent[1] and "ganado (+45)" in sent[1]
     assert "REPORTE DE LA SEMANA" in sent[2] and "CAMBIOS CON LA ALINEACIÓN" in sent[2]
     assert all("bets_history" not in s for s in seen) and any("program_picks" in s for s in seen)
@@ -195,6 +199,7 @@ def test_a_database_error_sends_nothing_instead_of_an_empty_summary(monkeypatch)
     monkeypatch.setattr(TR.pd, "read_sql", boom)
     sent = []
     monkeypatch.setattr(nt, "send_message", lambda m: sent.append(m) or True)
+    monkeypatch.setattr(nt, "_remember_announced", lambda day, stars: sent.append("guardó"))
     nt.send_evening_summary(target_date=DAY)
     nt.notify_best_bets()
     nt.send_weekly_report()

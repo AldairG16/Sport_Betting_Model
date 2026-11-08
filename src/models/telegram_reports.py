@@ -239,14 +239,16 @@ def morning_text(day, picks: list, parlay_rows: list, tz, when: str = "Hoy") -> 
             odds = times_text(p.get("p_market"))
             lines.append(f"{parlay_name(d, tz)} · {p['k']} partidos · {pay}"
                          + (f"\n   se gana {odds}" if odds else ""))
-        lines += ["<i>Espera el aviso \"Parlay listo\": llega cuando salen las alineaciones.</i>", ""]
+        lines += ["<i>El parlay final llega con los picks finales, en la última revisión antes de su primer "
+                  "partido.</i>", ""]
     if others:
         lines.append(f"🤖 Otro partido de {hoy} no tiene 🎯: sale" if others == 1 else
                      f"🤖 Otros {others} partidos de {hoy} no tienen 🎯: salen")
         lines[-1] += " en \"Partidos de hoy\" (mensaje fijado) y en el dashboard, solo para seguirlos."
     if stars:
         lines.append("<i>⚡ = pago anticipado: si el equipo va 2 goles arriba, PlayDoit la paga como ganada. "
-                     "Los picks se revisan otra vez con la alineación (~1 h antes) y si cambian, Telegram avisa.</i>")
+                     "El pick final llega en la última revisión antes de cada partido: unos 30 min antes (15 si "
+                     "empieza a y cuarto o a menos cuarto), ya con la alineación si salió.</i>")
     return "\n".join(lines).rstrip(), len(stars)
 
 

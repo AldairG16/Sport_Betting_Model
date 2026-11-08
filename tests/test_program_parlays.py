@@ -245,9 +245,10 @@ def test_the_closing_saves_the_parlay_right_after_the_picks(monkeypatch):
 def test_the_closing_warns_after_redoing_the_parlay_with_the_lineups(monkeypatch):
     from tests.test_program_picks import _steps
     names, steps, O = _steps(monkeypatch, "run_closing")
-    assert names.index("Parlay listo (Telegram)") > names.index("Picks del programa")
+    # v2.11.0: el parlay va en los picks finales (src/models/final_alerts.py)
+    assert names.index("Picks finales (Telegram)") > names.index("Picks del programa")
     assert names.index("Picks del programa") > names.index("Alineaciones publicadas")
-    assert steps["Parlay listo (Telegram)"] is O.step_parlay_alerts
+    assert steps["Picks finales (Telegram)"] is O.step_final_alerts and "Parlay listo (Telegram)" not in names
 
 
 def test_a_rescheduled_match_voids_its_parlay_leg_too():
@@ -382,34 +383,6 @@ def _alert(rank, match, lineup="confirmada", odds=1.5, kick=None, kind="horario"
             "pa": True}
 
 
-def test_a_slot_parlay_is_announced_once_when_every_leg_saw_its_lineup():
-    rows = [_alert(1, "napoli vs lecce"), _alert(2, "roma vs como", lineup=None), _alert(3, "inter vs genoa")]
-    covered = {"soccer_italy_serie_a"}
-    early = pd.Timestamp("2030-01-05 16:30", tz="UTC").to_pydatetime()
-    assert PA.to_alert(rows, {}, covered, early) == []               # falta la alineación de roma
-    rows[1]["lineup"] = "confirmada: Como con 4 fuera"
-    ((key, legs, changed, late),) = PA.to_alert(rows, {}, covered, early)
-    assert key == f"{SLOT.isoformat()}|horario|1" and not changed and not late
-    sent = {key: PA.signature(legs)}
-    assert PA.to_alert(rows, sent, covered, early) == []             # ya avisado
-    assert PA.to_alert(rows[:2], {}, covered, early) == []           # 2 no son parlay
-
-
-def test_a_day_parlay_only_needs_the_lineups_of_its_first_slot():
-    rows = [_alert(1, "a vs b", kind="dia"), _alert(2, "c vs d", kind="dia", kick=SLOT + pd.Timedelta(minutes=20)),
-            _alert(3, "e vs f", kind="dia", lineup=None, kick=SLOT + pd.Timedelta(hours=4)),
-            _alert(4, "g vs h", kind="dia", lineup=None, kick=SLOT + pd.Timedelta(hours=6))]
-    early = pd.Timestamp("2030-01-05 16:30", tz="UTC").to_pydatetime()
-    ((key, _, _, late),) = PA.to_alert(rows, {}, {"soccer_italy_serie_a"}, early)
-    assert key.endswith("|dia|1") and not late
-    rows[1]["lineup"] = None                                         # falta una del primer horario
-    assert PA.to_alert(rows, {}, {"soccer_italy_serie_a"}, early) == []
-    # a 40 min de fijarse avisa igual y lo dice
-    ((_, _, _, late),) = PA.to_alert(rows, {}, {"soccer_italy_serie_a"},
-                                     pd.Timestamp("2030-01-05 17:25", tz="UTC").to_pydatetime())
-    assert late
-
-
 def test_the_announcement_shows_the_bonus_the_early_payout_and_american_odds():
     rows = [_alert(1, "napoli vs lecce", kind="dia"), _alert(2, "roma vs como", kind="dia", odds=1.4,
                                                             kick=SLOT + pd.Timedelta(hours=2), lineup=None),
@@ -423,43 +396,6 @@ def test_the_announcement_shows_the_bonus_the_early_payout_and_american_odds():
     assert PA.times_text(0.14) == "más o menos 1 de cada 7 veces" and PA.times_text(0.7) == "70 de cada 100 veces"
     assert "Cambió el parlay del día" in PA.alert_text(rows, MX, changed=True)
     assert "Faltan alineaciones" in PA.alert_text(rows, MX, late=True)
-
-
-def test_the_closing_sends_each_ready_parlay_and_remembers_it(monkeypatch):
-    rows = pd.DataFrame([_alert(1, "napoli vs lecce"), _alert(2, "roma vs como"), _alert(3, "inter vs genoa")])
-    monkeypatch.setattr(PA.pd, "read_sql", lambda *a, **k: rows)
-    state, sent = {}, []
-    kw = dict(engine=object(), now=pd.Timestamp("2030-01-05 17:00", tz="UTC").to_pydatetime(),
-              load_state=lambda k: state.get(k), save_state=lambda k, v, history=True: state.__setitem__(k, v),
-              covered={"soccer_italy_serie_a"})
-    assert PA.run_parlay_alerts(send=lambda t: sent.append(t) or True, **kw)["sent"] == 1
-    assert list(state[PA.ALERT_KEY]["sent"]) == [f"{SLOT.isoformat()}|horario|1"]
-    assert PA.run_parlay_alerts(send=lambda t: sent.append(t) or True, **kw)["sent"] == 0   # una sola vez
-    assert len(sent) == 1
-
-
-def test_a_failed_announcement_is_retried_on_the_next_closing(monkeypatch):
-    RUN_ISSUES.reset()
-    rows = pd.DataFrame([_alert(1, "napoli vs lecce"), _alert(2, "roma vs como"), _alert(3, "inter vs genoa")])
-    monkeypatch.setattr(PA.pd, "read_sql", lambda *a, **k: rows)
-    state = {}
-    out = PA.run_parlay_alerts(engine=object(), now=pd.Timestamp("2030-01-05 17:00", tz="UTC").to_pydatetime(),
-                               send=lambda t: False, load_state=lambda k: state.get(k),
-                               save_state=lambda k, v, history=True: state.__setitem__(k, v),
-                               covered={"soccer_italy_serie_a"})
-    assert out["sent"] == 0 and PA.ALERT_KEY not in state            # no quedó como avisado
-    assert any("no se mandó a Telegram" in e for e in RUN_ISSUES.errors())
-    RUN_ISSUES.reset()
-
-
-def test_old_announcements_are_forgotten(monkeypatch):
-    now = pd.Timestamp("2030-01-10 12:00", tz="UTC").to_pydatetime()
-    keep = f"{pd.Timestamp('2030-01-10 18:00', tz='UTC').isoformat()}|dia|1"
-    state = {PA.ALERT_KEY: {"sent": {SLOT.isoformat(): "x", keep: "y"}}}        # uno de antes de v2.9.0
-    monkeypatch.setattr(PA.pd, "read_sql", lambda *a, **k: pd.DataFrame(columns=["slot"]))
-    PA.run_parlay_alerts(engine=object(), now=now, send=lambda t: True, load_state=lambda k: state.get(k),
-                         save_state=lambda k, v, history=True: state.__setitem__(k, v), covered=set())
-    assert list(state[PA.ALERT_KEY]["sent"]) == [keep]
 
 
 # ─── el chequeo diario ─────────────────────────────────────────────────────

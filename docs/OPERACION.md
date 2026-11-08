@@ -2171,6 +2171,40 @@ muestra "Bankroll 63.40u (ROI …)" ni las "pending" de `bets_history`: dice cu�
 del mensaje de la mañana, los créditos y cuánto tardó. Se quitaron los formatos viejos de `bets_history`
 (`format_bets_message`, `_build_bets_by_league`, `_diversified_top`, `_tomorrow_line`, `NO_PICKS_TEXT`). Siguen
 en jerga técnica los avisos para el que mantiene el sistema: calibración, laboratorio de estrategias, salud.
+
+**Picks finales en Telegram: un solo aviso por partido (v2.11.0, 8-nov-26).** El dueño: "me llegan muchas alertas
+de cambios de pick, a veces también son 2 veces antes del partido, y todo eso se me pierde en el telegram, quiero
+que solo llegue el último cambio, necesito que revises cuánto tiempo antes del partido cambia el pick para que ese
+sea el límite… y si hay parley también mandarlo".
+
+Lo medido en 281 partidos (31-oct a 7-nov, `program_picks.changed_at`): el último cambio llega hasta la última
+revisión antes del partido y nunca después.
+- 30 de esos cambios fueron entre 5 y 35 min antes.
+- No hay cambios más tarde porque el closing corre a las :00 y :30 (cron-job.org) y a `KICK_LOCK_MIN` del partido
+  ya no lo toca.
+- La alineación se ve casi siempre en esa revisión (mediana 28 min antes).
+- El sábado 7-nov llegaron 22 avisos de "Cambió el pick" (36 cambios), 2 de parlay y hasta 11 de alineación.
+
+El dueño eligió solo 🎯 y parlays, en la última revisión. `src/models/final_alerts.py`, paso "Picks finales
+(Telegram)" del closing, después de "Picks del programa":
+- **Cuándo** (`cutoff`): van los partidos que ya no toca ninguna revisión regular, los que empiezan antes de la
+  siguiente (:00 o :30) + `KICK_LOCK_MIN`. Un partido de las 13:00 sale en la de las 12:30 (~28 min antes); uno de
+  las 13:15 o 13:45, ~13 min antes.
+- **Qué**: un mensaje por corrida, y solo si hay algo que decir.
+  - Los 🎯, con el momio mínimo, ⚡, si ya vio la alineación y quién falta (de `lineup_alerts`).
+  - Los que salieron 🎯 en el mensaje de la mañana o en el avance de la noche y ya no lo son, con el porqué.
+  - Los parlays con bono que se fijan ahí (`parlay_alerts.alert_text`).
+  - El 🎯 que no estaba en la mañana va marcado "nuevo". Solo en un día cuyo mensaje quedó guardado:
+    `notify_telegram._remember_announced` guarda en `model_state 'telegram_announced'` los 🎯 y el día.
+- **Una vez**: cada partido y cada parlay sale una sola vez (`model_state 'telegram_final_picks'`). Si una corrida
+  de más (los cron de GitHub) lo cambia antes del partido, sale otra vez marcado "cambió a última hora". Si
+  Telegram falla, no queda como mandado y se reintenta en la siguiente corrida.
+- **Lo que ya no sale**:
+  - "Cambió el pick": `today_board` solo edita "Partidos de hoy", sin sonar, con 🔄.
+  - "Parlay listo" y "Cambió el parlay": `parlay_alerts` ya no manda nada, solo arma el texto.
+  - El aviso de alineación aparte: `run_lineup_alerts(notify=False)` la guarda y la revisa con Claude, y el
+    dashboard la muestra.
+- Los textos de la mañana y los del dashboard (pestaña Parlay) dicen cuándo llega el pick final.
 Lo cubre `tests/test_telegram_reports.py`, que también revisa que no salgan ROI, "u", Profit ni momios decimales.
 
 **Se mantiene abierto solo (v1.6.0).** El `.exe` es un supervisor

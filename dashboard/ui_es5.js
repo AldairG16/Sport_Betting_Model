@@ -747,7 +747,7 @@ function pxReady(d){
   if (p.locked) return '<span class="small muted">🔒 ya empezó: así quedó</span>';
   var one = d.kind === 'dia', what = one ? 'la alineación del primer partido' : 'las alineaciones de todos';
   if (d.ready) return '<span class="small pos">📋 ya revisado con ' + what + '</span><span class="small muted">apuéstalo antes de las ' + mxtime(d.lock) + '</span>';
-  return '<span class="small muted" title="Las alineaciones salen ~1 h antes; el parlay se revisa cada 30 min y Telegram avisa cuando está listo">⏳ ' +
+  return '<span class="small muted" title="Las alineaciones salen ~1 h antes; el parlay se revisa cada 30 min y Telegram lo manda en la última revisión antes de su primer partido">⏳ ' +
     (one ? 'falta ' : 'faltan ') + what + (one ? ' (sale' : ' (salen') + ' ~1 h antes) · puede cambiar hasta las ' + mxtime(d.lock) + '</span>';
 }
 // "~14%" → "1 de cada 7": la probabilidad de ganarlo dicha en veces
@@ -798,7 +798,7 @@ function renderParlay(){
     h += pxBlock(next[i]);
   }
   el('xnext').innerHTML = h || '<div class="muted">Por ahora no hay parlay: ningún día tiene ' + r.day_min + ' equipos muy favoritos en las ligas con pago anticipado ' +
-    '(ni ' + r.slot_min + ' a la misma hora). Se revisa cada 30 min y Telegram avisa.</div>';
+    '(ni ' + r.slot_min + ' a la misma hora). Se revisa cada 30 min; Telegram manda el parlay en la última revisión antes de su primer partido.</div>';
   var t = _px.record.all, td = _px.record.dia, th = _px.record.horario;
   el('xkpis').innerHTML = kpi(t.n, 'Parlays terminados') + kpi(t.won, '✅ Ganados', 'pos') + kpi(t.lost, '❌ Perdidos', 'neg') +
     kpi(money(t.units), 'Ganancia (1 unidad por parlay, con bono)', t.units >= 0 ? 'pos' : 'neg') +

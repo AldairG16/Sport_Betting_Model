@@ -541,13 +541,26 @@ def _format_paper_bets_section(target_date, days_ahead: int = 0) -> str:
 # ============================================================
 # MAIN
 # ============================================================
-def _day_message(day, when: str = "Hoy") -> tuple[str, int]:
+def _day_message(day, when: str = "Hoy") -> tuple[str, int, list]:
     """El mensaje de un día con los 🎯 y los parlays del programa (los del
-    dashboard), en palabras normales (src/models/telegram_reports.py)."""
+    dashboard), en palabras normales (src/models/telegram_reports.py), y sus 🎯."""
     from src.models import telegram_reports as TR
     tz = ZoneInfo(USER_TIMEZONE)
     a, b = TR.day_bounds(day, tz)
-    return TR.morning_text(day, TR.load_picks(engine, a, b), TR.load_parlays(engine, day), tz, when=when)
+    picks = TR.load_picks(engine, a, b)
+    msg, n_star = TR.morning_text(day, picks, TR.load_parlays(engine, day), tz, when=when)
+    return msg, n_star, [r for r in picks if TR.is_star(r)]
+
+
+def _remember_announced(day, stars: list) -> None:
+    """Los 🎯 que salieron en el mensaje (v2.11.0): el de los picks finales,
+    ~30 min antes de cada partido, avisa si alguno deja de serlo."""
+    try:
+        from src.models.final_alerts import remember_announced
+        remember_announced(day, stars)
+    except Exception as e:
+        log.error(f"❌ No se guardaron los 🎯 del mensaje: los picks finales no sabrán si alguno deja de serlo "
+                  f"({type(e).__name__}: {str(e)[:120]})")
 
 
 def notify_best_bets():
@@ -558,7 +571,7 @@ def notify_best_bets():
     print("\n📲 ENVIANDO NOTIFICACION TELEGRAM...\n")
     today = _local_today()
     try:
-        msg, n_star = _day_message(today, "Hoy")
+        msg, n_star, stars = _day_message(today, "Hoy")
     except Exception as e:
         log.error(f"❌ Telegram: no se pudieron leer los picks de hoy — mensaje no enviado: {e}")
         return
@@ -568,6 +581,7 @@ def notify_best_bets():
         msg = msg + "\n" + paper_section
     if send_message(msg):
         _set_last_picks_shown(n_star)
+        _remember_announced(today, stars)
         print(f"✅ Mensaje de la mañana enviado: {n_star} 🎯 recomendados")
     else:
         print("❌ No se pudo enviar a Telegram")
@@ -582,7 +596,7 @@ def send_tomorrow_preview():
     print("\n🌙 ENVIANDO PREVIEW DE MAÑANA...\n")
     tomorrow = _local_tomorrow()
     try:
-        msg, n_star = _day_message(tomorrow, "Mañana")
+        msg, n_star, stars = _day_message(tomorrow, "Mañana")
     except Exception as e:
         log.error(f"❌ Telegram: no se pudieron leer los picks de mañana — preview no enviado: {e}")
         return
@@ -591,6 +605,7 @@ def send_tomorrow_preview():
         msg = msg + "\n" + paper_section
     if send_message(msg):
         _set_last_picks_shown(n_star)
+        _remember_announced(tomorrow, stars)
         print(f"✅ Preview de mañana enviado: {n_star} 🎯 recomendados")
     else:
         print("❌ No se pudo enviar preview a Telegram")

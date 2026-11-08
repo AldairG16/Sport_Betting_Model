@@ -69,18 +69,6 @@ def test_a_long_day_is_split_in_messages_that_fit_telegram():
     assert texts[1].startswith("📋 <b>Partidos de hoy</b> (sigue)")
 
 
-def test_only_new_changes_of_what_kicks_off_soon_are_alerted():
-    rows = [_r("Pronto vs A", 2, changed_h=0.2, prev="Gana el local"),
-            _r("Mañana vs B", 30, changed_h=0.2, prev="Gana el local"),          # lejos: solo en la lista
-            _r("Viejo vs C", 2, changed_h=3, prev="Gana el local"),              # ya avisado
-            _r("Sin cambio vs D", 2)]
-    got = TB.changes_to_alert(rows, NOW - timedelta(hours=1), NOW)
-    assert [r["display"] for r in got] == ["Pronto vs A"]
-    msg = TB.change_alert(got, NOW, MX)
-    assert msg.startswith("🔄 <b>Cambió el pick</b>") and "Antes: Gana el local" in msg
-    assert "Ahora: 🎯 Gana el local · mín. +120" in msg and "<b>15:30</b> Pronto vs A" in msg   # ganó el 🎯
-
-
 class _World:
     def __init__(self, monkeypatch, rows):
         self.rows, self.state, self.edits, self.sent, self.pins = rows, {}, [], [], []
@@ -95,7 +83,7 @@ class _World:
         return self.next_id
 
     def run(self, now):
-        return TB.run_today_board(engine=object(), now=now, edit=self.edit, send=self.sent.append,
+        return TB.run_today_board(engine=object(), now=now, edit=self.edit,
                                   pin=lambda mid, unpin=None: self.pins.append((mid, unpin)),
                                   load_state=self.state.get,
                                   save_state=lambda k, v, **kw: self.state.__setitem__(k, v))
@@ -112,12 +100,16 @@ def test_the_message_is_edited_all_day_and_a_new_one_starts_each_day(monkeypatch
     assert w.state[TB.BOARD_KEY]["ids"] == [102]
 
 
-def test_a_change_is_alerted_once(monkeypatch):
+def test_a_change_only_marks_the_board_without_a_separate_alert(monkeypatch):
+    """v2.11.0 (8-nov-26), el dueño: "me llegan muchas alertas de cambios de pick… quiero que
+    solo llegue el último cambio". El cambio se ve en la lista (sin sonar); el pick final llega
+    en la última revisión antes del partido (src/models/final_alerts.py)."""
+    import inspect
     w = _World(monkeypatch, [_r("Arsenal vs Chelsea", 2, prev="Gana el visitante", changed_h=0.1, odds=NOW)])
-    w.run(NOW)
-    assert len(w.sent) == 1 and "Antes: Gana el visitante" in w.sent[0]
-    w.run(NOW + timedelta(minutes=30))
-    assert len(w.sent) == 1                                                  # ya avisado
+    out = w.run(NOW)
+    assert "🔄 cambió" in w.edits[-1][1] and w.sent == [] and "changes" not in out
+    assert "send" not in inspect.signature(TB.run_today_board).parameters
+    assert not hasattr(TB, "change_alert") and not hasattr(TB, "CHANGES_KEY")
 
 
 def test_the_closing_runs_the_board_after_the_picks_and_their_alerts():
@@ -127,7 +119,8 @@ def test_the_closing_runs_the_board_after_the_picks_and_their_alerts():
     i = src.index('run_step(logger, "Picks del programa"')
     j = src.index('run_step(logger, "Alertas de alineación"')
     k = src.index('run_step(logger, "Partidos de hoy (Telegram)"')
-    assert i < j < k
+    f = src.index('run_step(logger, "Picks finales (Telegram)"')
+    assert i < j < k < f
 
 
 def test_the_live_snapshot_records_when_a_pick_changes():
