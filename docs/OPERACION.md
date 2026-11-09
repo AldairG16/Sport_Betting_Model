@@ -2141,8 +2141,13 @@ Los dos contaban doble en la historia de los equipos y de sus rivales (forma, El
   marcador, un equipo escrito igual y el otro parecido. Un equipo no juega dos partidos de liga en días
   seguidos. Queda la fila con más datos; si empatan, la fecha de después, porque un partido se pospone,
   no se adelanta.
-- **La fusión y el chequeo miran toda la historia.** Son ~120 mil partidos: la fusión tarda ~2 s (con
-  diccionarios: el groupby de pandas tardaba 75 s) y el chequeo ~6 s.
+- **La fusión y el chequeo miran toda la historia.**
+  - El chequeo cuenta en la base, ~6 s.
+  - La fusión lee completos solo los últimos 60 días. De lo de antes, la base le pasa solo los candidatos
+    (`_OLD_CANDIDATES_SQL`: un equipo escrito igual, ±1 día y el mismo marcador), que son unos cuantos.
+  - La primera versión (#124) leía los ~120 mil partidos en cada corrida de resultados, y ese mismo día
+    Neon cortó la base por pasarse de la cuota del plan gratis (v2.11.1 lo corrigió).
+  - La búsqueda usa diccionarios: con el groupby de pandas, toda la historia tardaba 75 s.
 - **Béisbol nunca.** `matches` guarda la MLB de 2021-25, y ahí una serie juega días seguidos y un doble
   juego el mismo día, con los mismos equipos y a veces el mismo marcador. Con la regla del chequeo
   salían unos 90 que no lo son.
@@ -2151,6 +2156,36 @@ Los dos contaban doble en la historia de los equipos y de sus rivales (forma, El
   solo ve la misma fecha, y la siguiente descarga lo traía de vuelta. TheSportsDB usa el mismo INSERT.
 - **Los 28 que había los fusiona la primera corrida con la regla nueva** (paso "Partidos repetidos"),
   con respaldo en `matches_identity_backup`.
+
+**Pospuestos y reprogramados con la fecha equivocada (v2.11.1, auditoría 9-nov-26).** Siguiendo por qué
+Portugal y Noruega se pedían en cada corrida de resultados, salieron tres defectos silenciosos:
+- **ESPN da un pospuesto por terminado sin jugarse** (estado `post`, sin terminar, "Postponed", 0-0).
+  `live_scores.parse_live` lo guardaba `live` 0-0, así que el dashboard lo mostraba en vivo. Ahora se
+  guarda `postponed`, sin marcador, y el dashboard dice "se pospuso" (⏸).
+- **Ese horario pospuesto valía como la fecha de ESPN de un reprogramado.** Nacional vs Académico de
+  Viseu pasó del 7 al 8-nov. `rescheduled.void_rescheduled` se quedó con el 7: anuló el pick y el
+  análisis del 8, y el pick del 7 se cobró (perdido) con el 1-0 del 8. Ahora la fecha de ESPN no
+  cuenta un pospuesto.
+- **Anular no tenía vuelta.** Kristiansund vs Vålerenga pasó del 7 al 9-nov:
+  - a las 15:02 del 7 ya había empezado la primera fecha y valía la escrita más recientemente, la del 7,
+    así que se anularon las 8 candidatas sombra del 9;
+  - a las 15:55 el feed ya solo traía el 9 y se anularon las del 7. El partido real se quedó sin ellas.
+
+  Ahora, en la fecha que vale, se recupera (`RESTORE_SQL`) lo que se anuló ANTES de su partido. Solo esta
+  regla anula antes del partido: las demás ("sin datos") lo hacen días después, así que son justo las
+  que anuló una decisión anterior. `model_vs_sharp` no se recupera, porque su `skipped_at` también lo
+  pone `side_bias.mark_skipped`.
+
+Además:
+- El horario viejo de un reprogramado y un pospuesto ya no cuentan como "marcadores que faltan"
+  (`output_checks.PLAYED_ANALYSIS_SQL`). Antes hacían pedir su liga en cada corrida de resultados, a 2
+  créditos cada una.
+- **Chequeo nuevo §20** (`rescheduled.check_dates`, en la noche):
+  - filas anuladas en la fecha que vale (quedan solo si la recuperación falló);
+  - picks cobrados de un horario que ESPN dio por pospuesto.
+- Los datos de antes se arreglaron una vez: los 2 pospuestos de `live_scores` (Nacional el 7, Estoril
+  vs Marítimo el 8) pasaron a `postponed`, y `void_rescheduled` recuperó el 8 de Nacional y el 9 de
+  Kristiansund, y anuló el 7 de Nacional.
 
 **Textos en palabras normales (v2.9.2, 6-nov-26).** El dueño: "necesito que el texto que usas en el
 dashboard sea más amigable, no entiendo nada eso de al favorito de 65%". Casi todas las tarjetas decían

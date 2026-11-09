@@ -26,6 +26,23 @@ un horario que no se jugó:
 bets_history no se toca: dos apuestas al mismo partido a distinta hora son
 dos apuestas, y el bankroll las contó así.
 
+9-nov-26, dos huecos que anulaban el partido real:
+  - **Un horario pospuesto contaba como el de ESPN.** Nacional vs Académico de
+    Viseu pasó del 7 al 8-nov; ESPN da el del 7 por terminado sin jugarse
+    ("Postponed") y se guardaba en live_scores como 'live' 0-0. Valía como la
+    fecha de ESPN: se anuló el del 8 y el del 7 se liquidó con su resultado.
+    Ahora live_scores lo guarda 'postponed' y aquí no cuenta.
+  - **Anular no tenía vuelta.** Kristiansund vs Vålerenga pasó del 7 al 9-nov:
+    a las 15:02 del 7 ya había empezado la primera fecha y valía la escrita más
+    recientemente, la del 7, así que se anularon las del 9; a las 15:55 el feed
+    ya solo traía el 9 y se anularon las del 7. Las 8 candidatas sombra del 9
+    quedaron anuladas para siempre. Ahora, en la fecha que vale, se recuperan
+    (RESTORE_SQL) las filas anuladas ANTES de su partido: solo esta regla anula
+    antes del partido (las demás, "sin datos", días después), así que son
+    justo las que anuló una decisión anterior. model_vs_sharp no se recupera:
+    su skipped_at también lo pone side_bias.mark_skipped cuando el partido ya no
+    se evalúa.
+
 6-nov-26: lo mismo con el nombre de antes de un alias (alias_twins). Un
 partido analizado antes y después de que se aprendiera el alias de un club
 quedaba dos veces a la misma hora ("pumas unam" y "unam pumas"): se anula la
@@ -56,6 +73,13 @@ VOID_SQL = {
     "model_vs_sharp": "UPDATE model_vs_sharp SET skipped_at = NOW() "
                       "WHERE match = :match AND match_date = :match_date AND skipped_at IS NULL",
 }
+# Lo que una decisión anterior anuló en la fecha que ahora vale (9-nov-26): anulado
+# antes de su partido, que solo lo hace VOID_SQL
+RESTORE_SQL = {
+    t: f"UPDATE {t} SET result = NULL, profit = NULL, resolved_at = NULL "
+       "WHERE match = :match AND match_date = :match_date AND result = 'stale' AND resolved_at < match_date"
+    for t in ("program_picks", "program_parlays", "shadow_bets", "model_proposals")
+}
 
 
 def _ts(v) -> pd.Timestamp:
@@ -72,7 +96,8 @@ def phantom_dates(rows: list, espn: dict | None = None, window_days: int = WINDO
     tiene otra fecha que vale, a window_days días o menos. Vale la de ESPN; si
     ESPN no lo tiene, la del feed si trae una sola; si tampoco y ya pasó la
     primera de las fechas, la escrita más recientemente. Antes de eso no se
-    decide nada: anular no tiene vuelta.
+    decide nada. Si una decisión cambia después, void_rescheduled recupera lo
+    anulado en la fecha que vale (RESTORE_SQL, 9-nov-26).
 
     El feed va antes que lo escrito desde el 6-nov-26: el closing reescribe
     cada 30 min el pick de las dos fechas a la vez (mismo NOW()), así que antes
@@ -80,6 +105,21 @@ def phantom_dates(rows: list, espn: dict | None = None, window_days: int = WINDO
     anulado su horario real y le habría dado su resultado al viejo. Un feed con
     dos horarios del mismo partido (América vs Pachuca a la 01:00 y a la 01:05
     en la misma foto) no decide."""
+    window = pd.Timedelta(days=window_days)
+    out = set()
+    for match, (cur, ds) in _decide(rows, espn, window_days, feed, now).items():
+        out |= {(match, d) for d in ds if d != cur and abs(d - cur) <= window}
+    return out
+
+
+def current_dates(rows: list, espn: dict | None = None, window_days: int = WINDOW_DAYS,
+                  feed: dict | None = None, now=None) -> dict:
+    """Función pura: {match: la fecha que vale} de los partidos con más de una
+    fecha en los que ya se decidió (la misma regla que phantom_dates)."""
+    return {m: cur for m, (cur, _) in _decide(rows, espn, window_days, feed, now).items()}
+
+
+def _decide(rows, espn, window_days, feed, now) -> dict:
     now = _ts(now) if now is not None else pd.Timestamp.now(tz="UTC")
     window = pd.Timedelta(days=window_days)
     dates, latest = {}, {}
@@ -92,7 +132,7 @@ def phantom_dates(rows: list, espn: dict | None = None, window_days: int = WINDO
         key = (_ts(w), d)                                   # en empate, la fecha más tardía
         if r["match"] not in latest or key > latest[r["match"]]:
             latest[r["match"]] = key
-    out = set()
+    decided = {}
     for match, ds in dates.items():
         if len(ds) < 2:
             continue
@@ -110,8 +150,8 @@ def phantom_dates(rows: list, espn: dict | None = None, window_days: int = WINDO
             cur = latest.get(match, (None, None))[1]
         if cur is None:
             continue
-        out |= {(match, d) for d in ds if d != cur and abs(d - cur) <= window}
-    return out
+        decided[match] = (cur, ds)
+    return decided
 
 
 def alias_twins(rows: list, normalize) -> set:
@@ -130,13 +170,9 @@ def alias_twins(rows: list, normalize) -> set:
     return {(t, m, d) for t, m, d in have if canon(m) != m and (t, canon(m), d) in have}
 
 
-def void_rescheduled(engine=None, days: int | None = 30) -> dict:
-    """Anula en cada tabla las filas de un horario que no se jugó y las del
-    nombre de antes de un alias. days=None revisa toda la historia. Corre
-    antes de liquidar (evening, resultados y weekly) y, desde el 6-nov-26,
-    antes de guardar los picks en cada closing."""
-    if engine is None:
-        from config.database import engine
+def _inputs(engine, days: int | None):
+    """(filas de las 5 tablas, tablas que existen, {match: [hora de ESPN]},
+    {match: [fecha del feed de momios]}) de los últimos `days` días."""
     since = "" if days is None else f"WHERE match_date >= NOW() - INTERVAL '{int(days)} days'"
     rows, present = [], []
     for table, col in WRITTEN.items():
@@ -153,8 +189,12 @@ def void_rescheduled(engine=None, days: int | None = 30) -> dict:
     multi = {m for m, n in pd.Series([r["match"] for r in rows]).value_counts().items() if n > 1}
     if multi:
         try:
+            # un horario pospuesto no es la fecha de ESPN (9-nov-26): ni 'postponed' ni el
+            # 'live' de un "Postponed" guardado antes de que live_scores lo distinguiera
             ls = pd.read_sql(text("SELECT home, away, kickoff FROM live_scores"
-                                  + (f" WHERE kickoff >= NOW() - INTERVAL '{int(days) + WINDOW_DAYS} days'"
+                                  " WHERE status IS DISTINCT FROM 'postponed'"
+                                  " AND COALESCE(clock, '') NOT ILIKE 'postponed%%'"
+                                  + (f" AND kickoff >= NOW() - INTERVAL '{int(days) + WINDOW_DAYS} days'"
                                      if days is not None else "")), engine)
             for r in ls.to_dict("records"):
                 m = f"{r['home']} vs {r['away']}"
@@ -174,15 +214,32 @@ def void_rescheduled(engine=None, days: int | None = 30) -> dict:
         except Exception as e:
             if "does not exist" not in str(e):
                 raise
+    return rows, present, espn, feed
+
+
+def void_rescheduled(engine=None, days: int | None = 30) -> dict:
+    """Anula en cada tabla las filas de un horario que no se jugó y las del
+    nombre de antes de un alias. days=None revisa toda la historia. Corre
+    antes de liquidar (evening, resultados y weekly) y, desde el 6-nov-26,
+    antes de guardar los picks en cada closing."""
+    if engine is None:
+        from config.database import engine
+    rows, present, espn, feed = _inputs(engine, days)
     from src.utils.team_normalizer import normalize_team
     phantoms = phantom_dates(rows, espn, feed=feed)
+    current = current_dates(rows, espn, feed=feed)
     twins = alias_twins(rows, normalize_team)
+    back = sorted((t, m, d) for m, d in current.items() for t in present if t in RESTORE_SQL)
     # el horario viejo se anula en todas las tablas; el nombre viejo, solo donde está el nuevo
     todo = sorted({(t, m, d) for m, d in phantoms for t in present} | twins, key=lambda x: (x[1], x[2], x[0]))
     out = {t: 0 for t in present}
+    restored = {t: 0 for t in present if t in RESTORE_SQL}
     new = set()                                     # los que tenían algo por anular en esta corrida
-    if todo:
+    if todo or back:
         with engine.begin() as conn:
+            for table, m, d in back:                # primero lo que se anuló de más; luego se anula
+                restored[table] += conn.execute(text(RESTORE_SQL[table]),
+                                                {"match": m, "match_date": d.to_pydatetime()}).rowcount or 0
             for table, m, d in todo:
                 n = conn.execute(text(VOID_SQL[table]), {"match": m, "match_date": d.to_pydatetime()}).rowcount or 0
                 out[table] += n
@@ -194,5 +251,62 @@ def void_rescheduled(engine=None, days: int | None = 30) -> dict:
           + (f" ({', '.join(sorted(new)[:3])}) · filas de la fecha vieja anuladas: "
              + ", ".join(f"{t} {n}" for t, n in out.items()) if new else "")
           + (f" · {len(names) - len(new)} ya anulados antes" if len(names) > len(new) else "")
-          + (f" · {tn} con el nombre de antes de un alias" if (tn := len({m for _, m, _ in twins if m in new})) else ""))
-    return {"matches": names, "new": sorted(new), "twins": sorted({m for _, m, _ in twins}), **out}
+          + (f" · {tn} con el nombre de antes de un alias" if (tn := len({m for _, m, _ in twins if m in new})) else "")
+          + (" · recuperadas en la fecha que vale (las anuló una decisión anterior): "
+             + ", ".join(f"{t} {n}" for t, n in restored.items() if n) if any(restored.values()) else ""))
+    return {"matches": names, "new": sorted(new), "twins": sorted({m for _, m, _ in twins}),
+            "restored": restored, **out}
+
+
+PLAYED = ("win", "loss", "push", "half_win", "half_loss")
+
+
+def date_problems(current: dict, voided_before: list, settled: list, postponed: set) -> list:
+    """Función pura, chequeo de salidas §20 (9-nov-26): un reprogramado con la
+    fecha equivocada.
+    - current: {match: la fecha que vale} (current_dates);
+    - voided_before: [{table, match, match_date}] anuladas antes de su partido;
+    - settled: [{match, match_date}] picks cobrados;
+    - postponed: {(match, kickoff)} que ESPN dio por pospuestos.
+    Devuelve los avisos: filas anuladas en la fecha que vale (void_rescheduled
+    las recupera, así que quedan solo si eso falló) y picks cobrados de un
+    horario que no se jugó."""
+    out = []
+    bad = sorted({(r["table"], r["match"]) for r in voided_before
+                  if r["match"] in current and _ts(r["match_date"]) == current[r["match"]]})
+    if bad:
+        out.append(f"Reprogramados: {len(bad)} con filas anuladas en la fecha que vale "
+                   f"({'; '.join(f'{m} [{t}]' for t, m in bad[:3])})")
+    gone = {(m, _ts(k)) for m, k in postponed}
+    wrong = sorted({r["match"] for r in settled if (r["match"], _ts(r["match_date"])) in gone})
+    if wrong:
+        out.append(f"Reprogramados: {len(wrong)} picks cobrados de un horario que ESPN dio por pospuesto "
+                   f"({'; '.join(wrong[:3])})")
+    return out
+
+
+def check_dates(engine, days: int = 30) -> list:
+    """Lo que lee date_problems, de la base."""
+    rows, present, espn, feed = _inputs(engine, days)
+    current = current_dates(rows, espn, feed=feed)
+    voided = []
+    for t in present:
+        if t not in RESTORE_SQL:
+            continue
+        df = pd.read_sql(text(f"SELECT DISTINCT match, match_date FROM {t} WHERE result = 'stale' "
+                              f"AND resolved_at < match_date AND match_date >= NOW() - INTERVAL '{int(days)} days'"),
+                         engine)
+        voided += [{**r, "table": t} for r in df.to_dict("records")]
+    settled = [] if "program_picks" not in present else pd.read_sql(      # nace con el primer closing
+        text(f"SELECT match, match_date FROM program_picks WHERE result IN {PLAYED} "
+             f"AND match_date >= NOW() - INTERVAL '{int(days)} days'"), engine).to_dict("records")
+    try:
+        ls = pd.read_sql(text("SELECT home, away, kickoff FROM live_scores WHERE (status = 'postponed' "
+                              "OR COALESCE(clock, '') ILIKE 'postponed%%') "
+                              f"AND kickoff >= NOW() - INTERVAL '{int(days)} days'"), engine)
+        postponed = {(f"{r['home']} vs {r['away']}", r["kickoff"]) for r in ls.to_dict("records")}
+    except Exception as e:
+        if "does not exist" not in str(e):
+            raise
+        postponed = set()
+    return date_problems(current, voided, settled, postponed)

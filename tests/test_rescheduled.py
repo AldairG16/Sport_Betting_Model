@@ -90,7 +90,13 @@ def test_void_marks_the_phantom_in_every_table_and_leaves_bets_alone(monkeypatch
     assert not any("bets_history" in s for s in sqls)
     assert any("SET result = 'stale'" in s and "program_picks" in s for s in sqls)
     assert any("SET skipped_at = NOW()" in s for s in sqls)
-    assert all(p["match_date"] == pd.Timestamp("2026-10-25 19:45", tz="UTC") for _, p in eng.log)
+    voids = [p for s, p in eng.log if "SET result = 'stale'" in s or "SET skipped_at" in s]
+    assert voids and all(p["match_date"] == pd.Timestamp("2026-10-25 19:45", tz="UTC") for p in voids)
+    # 9-nov-26: en la fecha que vale se recupera lo que una decisión anterior anuló
+    backs = [(s.split()[1], p["match_date"]) for s, p in eng.log if "SET result = NULL" in s]
+    assert sorted(backs) == [("program_picks", pd.Timestamp("2026-10-26 19:30", tz="UTC")),
+                             ("shadow_bets", pd.Timestamp("2026-10-26 19:30", tz="UTC"))]
+    assert out["restored"] == {"program_picks": 1, "shadow_bets": 1}
     assert out["new"] == [PSG]
     assert "Partidos reprogramados: 1 nuevos (paris saint germain vs lyon)" in capsys.readouterr().out
 
