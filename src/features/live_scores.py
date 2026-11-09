@@ -65,6 +65,8 @@ ALTERS = ("ALTER TABLE live_scores ADD COLUMN IF NOT EXISTS home_max_lead INT",
           "ALTER TABLE live_scores ADD COLUMN IF NOT EXISTS away_max_lead INT")
 SCORE_COLS = ("home_goals", "away_goals", "home_corners", "away_corners", "home_cards", "away_cards",
               "status", "clock", "home_max_lead", "away_max_lead")
+POSTPONED = "postponed"     # ESPN lo da por terminado sin jugarse (9-nov-26): sin marcador
+POSTPONED_TEXT = "se pospuso"
 LOOKBACK_H = 6              # partidos que empezaron en las últimas horas
 AHEAD_H = 3                 # y la hora de ESPN de los que empiezan en las próximas
 KICK_DIFF_MIN = 5           # más diferencia que esto con la hora del sistema se avisa en el log
@@ -98,7 +100,8 @@ def parse_live(data: dict | None) -> list:
     marcador, córners y tarjetas (amarilla o roja = 1, como PlayDoit) y si
     terminó ('final') o sigue ('live'). Desde v2.9.0 también la ventaja más
     grande de cada equipo (early_payout.max_leads; None si los goles no dan
-    el marcador)."""
+    el marcador). Desde el 9-nov-26, el que ESPN da por terminado sin jugarse
+    (pospuesto o cancelado) sale como POSTPONED, sin marcador."""
     from src.models.early_payout import max_leads
     out = []
     for ev in (data or {}).get("events", []):
@@ -108,6 +111,18 @@ def parse_live(data: dict | None) -> list:
             continue
         side = {t.get("homeAway"): t for t in c.get("competitors", [])}
         if "home" not in side or "away" not in side or not ev.get("date"):
+            continue
+        if st.get("state") == "post" and not st.get("completed"):
+            # Pospuesto o cancelado (9-nov-26): ESPN lo da por terminado sin
+            # jugarse ("Postponed", 0-0). Se guardaba 'live' 0-0: el dashboard
+            # lo mostraba en vivo, y el horario viejo de Nacional vs Académico
+            # de Viseu (7-nov) pasó por la fecha que vale de un reprogramado
+            # (rescheduled.void_rescheduled): se anuló el partido real del 8.
+            out.append({"event": str(ev.get("id")), "kick": pd.Timestamp(ev["date"]).to_pydatetime(),
+                        "status": POSTPONED, "clock": POSTPONED_TEXT,
+                        "home": side["home"].get("team", {}).get("displayName", ""),
+                        "away": side["away"].get("team", {}).get("displayName", ""),
+                        **{col: None for col in SCORE_COLS if col not in ("status", "clock")}})
             continue
         details = c.get("details") or []
         cards = {}
@@ -184,8 +199,9 @@ def capture_live_scores(engine=None, get=None, now=None) -> int:
         log.warning(f"⏰ {d['home']} vs {d['away']}: ESPN dice {d['espn_kickoff']:%d-%m %H:%M} UTC y el sistema "
                     f"{d['kickoff']:%H:%M} — el pick y el parlay quedan fijos a la más temprana")
     final = sum(1 for r in rows if r["status"] == "final")
-    print(f"⚽ Marcadores del día (ESPN): {len(rows)} partidos ({final} terminados, {len(rows) - final} en juego)"
-          f" · hora de ESPN de {len(kicks)}")
+    off = sum(1 for r in rows if r["status"] == POSTPONED)
+    print(f"⚽ Marcadores del día (ESPN): {len(rows)} partidos ({final} terminados, {len(rows) - final - off} en juego"
+          + (f", {off} pospuesto{'s' if off != 1 else ''}" if off else "") + f") · hora de ESPN de {len(kicks)}")
     return len(rows)
 
 

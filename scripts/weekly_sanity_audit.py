@@ -208,6 +208,35 @@ def name_counts(conn, names) -> dict:
     return {r[0]: int(r[1]) for r in rows}
 
 
+RECENT_DAYS = 60
+_COLS = f"id, date, league, home_team, away_team, home_goals, away_goals, {', '.join(_STAT_COLS)}"
+_NOT_BASEBALL = "COALESCE(league, '') NOT LIKE 'baseball%%'"
+# La historia vieja: solo los partidos que la base ve como posibles repetidos
+# (un equipo escrito igual, ±1 día, el mismo marcador; sin béisbol). Dos joins
+# por igualdad, que Postgres resuelve rápido. find_duplicate_pairs decide.
+_OLD_CANDIDATES_SQL = f"""
+    WITH hist AS (
+        SELECT id, date, league, LOWER(home_team) AS h, LOWER(away_team) AS a, home_goals, away_goals
+        FROM matches
+        WHERE home_goals IS NOT NULL AND date < CURRENT_DATE - {RECENT_DAYS} + 1 AND {_NOT_BASEBALL}
+    ), p AS (
+        SELECT x.id AS i, y.id AS j FROM hist x JOIN hist y
+          ON x.h = y.h AND x.id < y.id AND x.home_goals = y.home_goals AND x.away_goals = y.away_goals
+         AND ABS(x.date - y.date) <= 1
+        UNION
+        SELECT x.id, y.id FROM hist x JOIN hist y
+          ON x.a = y.a AND x.id < y.id AND x.home_goals = y.home_goals AND x.away_goals = y.away_goals
+         AND ABS(x.date - y.date) <= 1
+    )
+    SELECT {_COLS} FROM matches WHERE id IN (SELECT i FROM p UNION SELECT j FROM p)
+"""
+
+
+def _read(where: str) -> pd.DataFrame:
+    return pd.read_sql(text(f"SELECT {_COLS} FROM matches WHERE {where} AND home_goals IS NOT NULL "
+                            f"AND {_NOT_BASEBALL} ORDER BY date, id"), engine)
+
+
 def audit_duplicate_matches(days: int | None = None) -> tuple[str, str]:
     """
     AUTO-REPARADOR: detecta pares duplicados (misma fecha, mismo marcador,
@@ -218,20 +247,26 @@ def audit_duplicate_matches(days: int | None = None) -> tuple[str, str]:
     ajuste Dixon-Coles (step_team_names_check); aquí, al final, queda de
     red por si el weekly no llegó a ese paso.
 
-    Mira toda la historia desde el 9-nov-26 (`days` la acota). Miraba 60
-    días por la fecha del partido, y una carga de historia que mete gemelos
-    con fechas viejas quedaba fuera. Pasó el ~20-oct-26: 19 partidos de China
-    de 2023-25 repetidos como "China" y "China PR". Toda la historia, sin
-    béisbol, son ~120 mil partidos: ~2 s.
+    Desde el 9-nov-26 mira también la historia vieja. Miraba 60 días por la
+    fecha del partido, y una carga de historia que mete gemelos con fechas
+    viejas quedaba fuera: pasó el ~20-oct-26, con 19 partidos de China de
+    2023-25 repetidos como "China" y "China PR".
+    - Los últimos RECENT_DAYS días se leen completos.
+    - De lo de antes, solo los candidatos que la base encuentra
+      (_OLD_CANDIDATES_SQL): un equipo escrito igual, ±1 día y el mismo
+      marcador. Son unos cuantos.
+
+    La primera versión (PR #124) leía los ~120 mil partidos en cada corrida
+    de resultados. Ese mismo día Neon cortó la base por pasarse de la cuota
+    del plan gratis. `days` lee completos esos días y nada más.
     """
-    since = f"date >= CURRENT_DATE - {int(days)} AND " if days else ""
-    df = pd.read_sql(text(f"""
-        SELECT id, date, league, home_team, away_team, home_goals, away_goals,
-               {", ".join(_STAT_COLS)}
-        FROM matches
-        WHERE {since}home_goals IS NOT NULL AND COALESCE(league, '') NOT LIKE 'baseball%%'
-        ORDER BY date, id
-    """), engine)
+    if days:
+        df = _read(f"date >= CURRENT_DATE - {int(days)}")
+    else:
+        recent = _read(f"date >= CURRENT_DATE - {RECENT_DAYS}")
+        old = pd.read_sql(text(_OLD_CANDIDATES_SQL), engine)
+        df = (pd.concat([recent, old], ignore_index=True) if len(old) else recent)
+        df = df.drop_duplicates("id").sort_values(["date", "id"]).reset_index(drop=True)
     dups = find_duplicate_pairs(df)
 
     if not dups:

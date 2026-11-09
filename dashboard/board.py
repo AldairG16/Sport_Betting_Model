@@ -19,6 +19,8 @@ import math
 
 import pandas as pd
 
+from src.features.live_scores import POSTPONED
+
 from dashboard.display import league_name, market_name, team_name
 from dashboard.visibility import who_was_right
 from src.models.program_picks import LOW_HISTORY
@@ -264,9 +266,11 @@ def past_matches(matches: pd.DataFrame, mvs: pd.DataFrame, picks: pd.DataFrame, 
             sc = _live_for(lv, k, when)
             score, live_status = None, None
             if sc:
-                score = [int(sc["home_goals"]), int(sc["away_goals"])]
+                hg, ag = _num(sc.get("home_goals")), _num(sc.get("away_goals"))
+                # pospuesto (9-nov-26): ESPN lo da por terminado sin jugarse y sin marcador
+                score = [int(hg), int(ag)] if hg is not None and ag is not None else None
                 live_status = {"status": sc.get("status"), "clock": _str(sc.get("clock")) or ""}
-                if sc.get("status") == "final":
+                if sc.get("status") == "final" and score:
                     res = _outcome(*score)
                     if fav:
                         fav = {**fav, "model_hit": fav["model"] == res,
@@ -287,11 +291,12 @@ def past_matches(matches: pd.DataFrame, mvs: pd.DataFrame, picks: pd.DataFrame, 
 
 
 def _live_for(index: dict, key: str, when) -> dict | None:
-    """El marcador de ESPN del partido (mismo inicio ±3 h)."""
+    """El marcador de ESPN del partido (mismo inicio ±3 h), o que se pospuso."""
     for r in index.get(key, []):
         k = pd.Timestamp(r["kickoff"])
         k = k.tz_convert("UTC") if k.tzinfo else k.tz_localize("UTC")
-        if abs((k - when).total_seconds()) <= 3 * 3600 and _num(r.get("home_goals")) is not None:
+        if abs((k - when).total_seconds()) <= 3 * 3600 and (_num(r.get("home_goals")) is not None
+                                                            or r.get("status") == POSTPONED):
             return r
     return None
 
@@ -399,7 +404,7 @@ def _fold(s: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFD", s or "") if not unicodedata.combining(c)).casefold()
 
 
-_DAY_ORDER = {"live": 0, "waiting": 1, "done": 2, "upcoming": 3}
+_DAY_ORDER = {"live": 0, "waiting": 1, "postponed": 1, "done": 2, "upcoming": 3}
 
 
 def _mx_day(now=None) -> str:
@@ -420,7 +425,8 @@ def _day_items(rows: list, day: str, upcoming: list) -> list:
         if r["date"] != day or not p.get("label") or p.get("result") == "stale":
             continue
         live = r.get("live") or {}
-        status = "done" if p.get("result") in PLAYED else "live" if live.get("status") == "live" else "waiting"
+        status = ("done" if p.get("result") in PLAYED else "live" if live.get("status") == "live"
+                  else "postponed" if live.get("status") == POSTPONED else "waiting")
         items.append({"date": day, "league": r.get("league") or "", "match": f"{r['home']} vs {r['away']}",
                       "type": p["label"], "rule": bool(p.get("rule")), "status": status,
                       "result": p["result"] if status == "done" else None,

@@ -386,6 +386,7 @@ function noteShort(note){
 // Marcador de ESPN del día (v2.4.4): en vivo o final, provisional hasta la noche
 function liveTag(lv){
   if (!lv) return '';
+  if (lv.status === 'postponed') return ' <span class="small muted" title="ESPN dice que no se jugó a esta hora">se pospuso</span>';
   return lv.status === 'live' ? ' <span class="small muted" title="En juego (ESPN)">● ' + esc(lv.clock || 'en vivo') + '</span>' :
          ' <span class="small muted" title="Marcador final de ESPN; se confirma en la corrida de la noche">final</span>';
 }
@@ -432,6 +433,7 @@ function pastRow(r, i){
   }
   return '<tr class="r" onclick="openPast(' + i + ')"><td class="hide-sm muted small">' + esc(r.league) + '</td><td style="text-align:right">' + esc(r.home) +
          '</td><td class="sc">' + (r.score ? r.score[0] + ' - ' + r.score[1] + liveTag(r.live) :
+                                  r.live && r.live.status === 'postponed' ? liveTag(r.live) :
                                   '<span class="muted" title="Ya empezó; el marcador llega en unos minutos">⏳</span>') +
          '</td><td>' + esc(r.away) + '</td><td>' +
          (r.corners ? r.corners[0] + '-' + r.corners[1] : '<span class="muted">—</span>') + '</td><td class="hide-sm">' +
@@ -645,6 +647,8 @@ function lgMatch(m, showStar, today, span){
     tail = ' · <span style="color:var(--yellow)">en vivo' + (m.clock ? ' ' + esc(m.clock) : '') + '</span>';
   } else if (m.status === 'waiting') {
     head = '⏳'; tail = ' · <span class="muted">esperando el resultado</span>';
+  } else if (m.status === 'postponed') {
+    head = '⏸'; tail = ' · <span class="muted">se pospuso: no se jugó a esta hora</span>';
   } else if (m.status === 'upcoming') {
     head = '🕒 <span class="muted">' + esc(m.time) + '</span>'; tail = ' · <span class="muted">todavía no empieza</span>';
   } else {
@@ -723,6 +727,7 @@ function pxIcon(x){
   if (x.result === 'loss' || x.result === 'half_loss') return '❌';
   if (x.result === 'push' || x.result === 'stale') return '<span title="Anulada: el parlay sigue con las demás">↔</span>';
   if (x.live && x.live.status === 'live') return '<span class="small muted">● ' + esc(x.live.clock || 'en vivo') + '</span>';
+  if (x.live && x.live.status === 'postponed') return '<span class="muted" title="Se pospuso: no se jugó a esta hora">⏸</span>';
   return x.started ? '<span class="muted" title="Ya empezó">⏳</span>' : '<span class="muted">·</span>';
 }
 function pxStatus(p){
@@ -963,4 +968,14 @@ loadHeader();
 loadUpcoming();
 showTab((location.hash || '').replace('#', '') || _storeGet('tab2', 'proximos'));
 refreshDone();
-setInterval(function(){ refreshAll(false); }, 5 * 60000);   // datos cada 5 min
+// datos cada 5 min, solo con la página a la vista (9-nov-26): Neon apaga la base tras
+// 5 min sin consultas, y una pestaña abierta todo el día en segundo plano la tenía
+// despierta las 24 h. Ese día se pasó la cuota del plan gratis
+var AUTO_MS = 5 * 60000, _lastAuto = new Date().getTime();
+function autoRefresh(){
+  if (document.hidden || new Date().getTime() - _lastAuto < AUTO_MS - 1000) return;
+  _lastAuto = new Date().getTime();
+  refreshAll(false);
+}
+setInterval(autoRefresh, AUTO_MS);
+if (document.addEventListener) document.addEventListener('visibilitychange', autoRefresh);

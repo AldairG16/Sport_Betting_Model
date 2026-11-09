@@ -157,12 +157,16 @@ def leagues_needing_results(days_from: int = 2) -> set | None:
     cada corrida, 2 créditos cada una, ~114 al día, y en las de las 6:00 y las
     12:30 casi todas ya estaban). None si no se pudo leer: se piden todas."""
     import pandas as pd
-    from src.utils.output_checks import missing_results
+    from src.utils.output_checks import PLAYED_ANALYSIS_SQL, missing_results
     window = {"d": days_from}
     try:
+        # sin el horario viejo de un reprogramado ni un pospuesto de ESPN (9-nov-26):
+        # Kristiansund vs Vålerenga (del 7 al 9-nov) y Estoril vs Marítimo (pospuesto
+        # el 8) hacían pedir Noruega y Portugal en cada corrida, 2 créditos cada una
         played = pd.read_sql(text("""
             SELECT match, match_date, league FROM model_vs_sharp
             WHERE match_date BETWEEN NOW() - make_interval(days => :d) AND NOW() - INTERVAL '2 hours'
+        """ + PLAYED_ANALYSIS_SQL + """
             UNION ALL
             SELECT match, match_date, league FROM bets_history
             WHERE result = 'pending'

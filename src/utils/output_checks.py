@@ -304,6 +304,17 @@ def legs_off_target(legs: list, picks: list) -> list:
     return sorted({f"{x['match']} {x['market']}" for x in legs if target.get(key(x)) != x.get("market")})
 
 
+# Lo analizado que sí se jugó en ese horario (9-nov-26): sin el horario viejo de
+# un reprogramado (skipped_at) ni uno que ESPN dio por pospuesto. Contaban como
+# marcadores que faltan y hacían pedir su liga en cada corrida (fetch_results).
+PLAYED_ANALYSIS_SQL = """
+    AND skipped_at IS NULL
+    AND NOT EXISTS (SELECT 1 FROM live_scores s
+                    WHERE s.home || ' vs ' || s.away = model_vs_sharp.match AND s.kickoff = model_vs_sharp.match_date
+                      AND (s.status = 'postponed' OR COALESCE(s.clock, '') ILIKE 'postponed%%'))
+"""
+
+
 def missing_results(analyzed: list, matches: list, normalize=None) -> list:
     """Partidos analizados (model_vs_sharp: match, match_date) sin marcador."""
     idx = _match_index(matches)
@@ -710,9 +721,14 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
 
     # 2) resultados que faltan
     try:
-        an = q("""SELECT match, match_date, league FROM model_vs_sharp
-                  WHERE match_date BETWEEN NOW() - make_interval(days => :d) AND NOW() - INTERVAL '8 hours'""",
-               d=days).to_dict("records")
+        head = """SELECT match, match_date, league FROM model_vs_sharp
+                  WHERE match_date BETWEEN NOW() - make_interval(days => :d) AND NOW() - INTERVAL '8 hours'"""
+        try:
+            an = q(head + PLAYED_ANALYSIS_SQL, d=days).to_dict("records")
+        except Exception as e:                       # instalación nueva: live_scores nace con el closing
+            if "live_scores" not in str(e) or "does not exist" not in str(e):
+                raise
+            an = q(head + " AND skipped_at IS NULL", d=days).to_dict("records")
         miss = missing_results(an, matches, normalize)
         if len(an) >= MIN_ROWS and len(miss) / len(an) > MAX_MISSING_RESULTS:
             problems.append(f"Resultados: {len(miss)} de {len(an)} partidos analizados sin marcador "
@@ -1025,6 +1041,19 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
             seen.append(f"canal «{ch.get('title')}» al día")
     except Exception as e:
         problems.append(f"Canal: no se pudo revisar ({type(e).__name__})")
+
+    # 20) un reprogramado con la fecha que vale (9-nov-26): Nacional vs Académico
+    #     de Viseu (del 7 al 8-nov) se quedó con el horario pospuesto y anuló el
+    #     real; Kristiansund vs Vålerenga perdió sus candidatas de la fecha real.
+    #     Nada lo veía: el 10 solo revisa que no cuente dos veces
+    try:
+        from src.models import rescheduled as RS
+        bad = RS.check_dates(engine, days=max(days, 30))
+        problems += bad
+        if not bad:
+            seen.append("reprogramados en su fecha")
+    except Exception as e:
+        problems.append(f"Reprogramados en su fecha: no se pudo revisar ({type(e).__name__})")
 
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")

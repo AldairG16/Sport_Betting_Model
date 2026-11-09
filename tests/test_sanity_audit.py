@@ -233,9 +233,13 @@ def test_the_merge_and_the_check_look_at_all_history_without_baseball(monkeypatc
         [_match(231516, "Thailand", "China PR", league="soccer_afc", date="2023-11-16", hg=1, ag=2),
          _match(2050818, "Thailand", "China", league="soccer_afc", date="2023-11-16", hg=1, ag=2)]).iloc[:0])
     assert sa.audit_duplicate_matches() == ("ok", "sin duplicados ✓")
-    assert "CURRENT_DATE" not in seen[0] and "baseball" in seen[0]
-    sa.audit_duplicate_matches(days=60)
-    assert "CURRENT_DATE - 60" in seen[1]
+    # los últimos 60 días completos; de antes, solo los candidatos que encuentra la base
+    # (la primera versión leía los ~120 mil partidos en cada corrida: Neon cortó por cuota)
+    assert "date >= CURRENT_DATE - 60" in seen[0] and "baseball" in seen[0]
+    assert "WITH hist AS" in seen[1] and "x.h = y.h" in seen[1] and "x.a = y.a" in seen[1]
+    assert "ABS(x.date - y.date) <= 1" in seen[1] and "baseball" in seen[1]
+    sa.audit_duplicate_matches(days=400)
+    assert "CURRENT_DATE - 400" in seen[2] and len(seen) == 3
     df = pd.DataFrame([_match(231516, "Thailand", "China PR", league="soccer_afc", date="2023-11-16", hg=1, ag=2),
                        _match(2050818, "Thailand", "China", league="soccer_afc", date="2023-11-16", hg=1, ag=2)])
     (pair,) = sa.find_duplicate_pairs(df)
