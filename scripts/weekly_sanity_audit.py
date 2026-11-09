@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pandas as pd
 import difflib
+from collections import defaultdict
 from sqlalchemy import text
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -71,29 +72,86 @@ def _sql_value(v):
         return None
 
 
+def _league(r) -> str:
+    v = r.get("league")
+    return v if isinstance(v, str) else ""
+
+
+def _not_soccer(r) -> bool:
+    """Béisbol (matches guarda la MLB de 2021-25): una serie juega días
+    seguidos y un doble juego el mismo día. Los mismos equipos con el mismo
+    marcador ahí son dos partidos, no uno."""
+    return _league(r).startswith("baseball")
+
+
+def _similar(x, y) -> bool:
+    """ratio() > 0.62. Las dos cotas de antes (real_quick_ratio y quick_ratio)
+    nunca son menores que ratio() y salen más baratas: descartan casi todos
+    los pares sin calcularlo."""
+    m = difflib.SequenceMatcher(None, str(x), str(y))
+    return m.real_quick_ratio() > 0.62 and m.quick_ratio() > 0.62 and m.ratio() > 0.62
+
+
 def find_duplicate_pairs(df: pd.DataFrame) -> list[tuple[dict, dict]]:
     """
-    Pares candidatos a duplicado: misma fecha y marcador, nombres parecidos
-    (>0.62 en local y visitante). Nunca empareja dos ligas distintas cuando
-    ambas filas tienen liga: el mismo día y marcador en dos competiciones
-    con nombres parecidos son dos partidos, no uno. Función pura.
+    Pares candidatos a duplicado, función pura.
+
+    - **El mismo día.** Mismo marcador y nombres parecidos (>0.62 en local y
+      visitante). Nunca empareja dos ligas distintas cuando ambas filas
+      tienen liga: el mismo día y marcador en dos competiciones con nombres
+      parecidos son dos partidos, no uno.
+    - **Un día de diferencia (9-nov-26).** Nacional vs Académico de Viseu, que
+      pasaron del sábado 7 al domingo 8: The Odds API mandó el marcador con
+      la fecha de antes y football-data con la buena. La fusión solo juntaba
+      el mismo día y el repetido no se iba nunca, aunque el chequeo de salidas
+      (data_health 'duplicate', ±1 día) lo marcaba. Pasa también con un
+      partido de noche en América, que en UTC ya es el día siguiente. Aquí
+      se pide más: la misma liga de fútbol, el mismo marcador, uno de los dos
+      equipos escrito igual y el otro parecido. Un equipo no juega dos
+      partidos de liga en días seguidos.
+    - Béisbol nunca (_not_soccer).
     """
+    # Con diccionarios y no con groupby de pandas: toda la historia son ~120
+    # mil partidos y ~100 mil grupos, y pandas tarda ~1 ms por grupo (70 s).
+    recs = df.to_dict("records")
+    days = (pd.to_datetime(df["date"]).dt.normalize() - pd.Timestamp("1970-01-01")).dt.days.tolist()
     pairs = []
-    for _, g in df.groupby(["date", "home_goals", "away_goals"]):
-        if len(g) < 2:
-            continue
-        rows = g.to_dict("records")
+    same_day = defaultdict(list)
+    for r, d in zip(recs, days):
+        same_day[(d, r["home_goals"], r["away_goals"])].append(r)
+    for rows in same_day.values():
         for i in range(len(rows)):
             for j in range(i + 1, len(rows)):
                 a, b = rows[i], rows[j]
-                la, lb = a.get("league"), b.get("league")
-                if (isinstance(la, str) and la and isinstance(lb, str) and lb
-                        and la != lb):
+                la, lb = _league(a), _league(b)
+                if (la and lb and la != lb) or _not_soccer(a) or _not_soccer(b):
                     continue
-                sh = difflib.SequenceMatcher(None, a["home_team"], b["home_team"]).ratio()
-                sa = difflib.SequenceMatcher(None, a["away_team"], b["away_team"]).ratio()
-                if sh > 0.62 and sa > 0.62:
+                if _similar(a["home_team"], b["home_team"]) and _similar(a["away_team"], b["away_team"]):
                     pairs.append((a, b))
+
+    # Un día de diferencia: por liga, marcador y un equipo escrito igual
+    # (local o visitante), en orden de fecha
+    seen = {frozenset((a["id"], b["id"])) for a, b in pairs}
+    for side, other in (("home_team", "away_team"), ("away_team", "home_team")):
+        buckets = defaultdict(list)
+        for r, d in zip(recs, days):
+            if _league(r).startswith("soccer"):
+                buckets[(_league(r), r["home_goals"], r["away_goals"], str(r[side]).lower())].append((d, r["id"], r))
+        for rows in buckets.values():
+            if len(rows) < 2:
+                continue
+            rows.sort(key=lambda x: (x[0], x[1]))
+            for i in range(len(rows)):
+                for j in range(i + 1, len(rows)):
+                    gap = rows[j][0] - rows[i][0]
+                    if gap > 1:
+                        break
+                    a, b = rows[i][2], rows[j][2]
+                    key = frozenset((a["id"], b["id"]))
+                    if gap == 1 and key not in seen and (str(a[other]).lower() == str(b[other]).lower()
+                                                         or _similar(a[other], b[other])):
+                        seen.add(key)
+                        pairs.append((a, b))
     return pairs
 
 
@@ -122,7 +180,13 @@ def choose_keep(a: dict, b: dict, freq: dict | None = None) -> tuple[dict, dict]
         return a, b
     if freq and known(a) != known(b):
         return (a, b) if known(a) > known(b) else (b, a)
-    return (a, b) if stats_count(a) >= stats_count(b) else (b, a)
+    if stats_count(a) != stats_count(b):
+        return (a, b) if stats_count(a) > stats_count(b) else (b, a)
+    # Con un día de diferencia y nada más que las separe, la fecha de después:
+    # un partido se pospone, no se adelanta (9-nov-26)
+    if pd.Timestamp(b["date"]) > pd.Timestamp(a["date"]):
+        return b, a
+    return a, b
 
 
 def merge_params(keep: dict, donor: dict) -> dict:
@@ -144,7 +208,7 @@ def name_counts(conn, names) -> dict:
     return {r[0]: int(r[1]) for r in rows}
 
 
-def audit_duplicate_matches() -> tuple[str, str]:
+def audit_duplicate_matches(days: int | None = None) -> tuple[str, str]:
     """
     AUTO-REPARADOR: detecta pares duplicados (misma fecha, mismo marcador,
     nombres similares) y los fusiona en el acto — stats hacia la fila con
@@ -153,13 +217,20 @@ def audit_duplicate_matches() -> tuple[str, str]:
     (13-sep-26). Desde el 5-oct-26 la corre también el weekly, antes del
     ajuste Dixon-Coles (step_team_names_check); aquí, al final, queda de
     red por si el weekly no llegó a ese paso.
+
+    Mira toda la historia desde el 9-nov-26 (`days` la acota). Miraba 60
+    días por la fecha del partido, y una carga de historia que mete gemelos
+    con fechas viejas quedaba fuera. Pasó el ~20-oct-26: 19 partidos de China
+    de 2023-25 repetidos como "China" y "China PR". Toda la historia, sin
+    béisbol, son ~120 mil partidos: ~2 s.
     """
+    since = f"date >= CURRENT_DATE - {int(days)} AND " if days else ""
     df = pd.read_sql(text(f"""
         SELECT id, date, league, home_team, away_team, home_goals, away_goals,
                {", ".join(_STAT_COLS)}
         FROM matches
-        WHERE date >= CURRENT_DATE - 60 AND home_goals IS NOT NULL
-        ORDER BY date
+        WHERE {since}home_goals IS NOT NULL AND COALESCE(league, '') NOT LIKE 'baseball%%'
+        ORDER BY date, id
     """), engine)
     dups = find_duplicate_pairs(df)
 

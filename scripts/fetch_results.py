@@ -94,6 +94,34 @@ def fetch_scores_for_league(sport_key: str, days_from: int = 2) -> tuple[list, b
     return results, True
 
 
+_INSERT = """
+    INSERT INTO matches
+        (date, home_team, away_team, home_goals, away_goals, league)
+    VALUES
+        (:date, :home_team, :away_team, :home_goals, :away_goals, :league)
+    ON CONFLICT (date, home_team, away_team) DO NOTHING
+"""
+
+# El mismo partido con un día de diferencia ya está guardado (9-nov-26).
+# Nacional vs Académico de Viseu pasó del sábado 7 al domingo 8: The Odds API
+# mandó el marcador con la fecha de antes y football-data con la buena.
+# Fusionado el repetido (weekly_sanity_audit.find_duplicate_pairs), la
+# siguiente descarga lo volvía a meter con la fecha vieja: ON CONFLICT solo ve
+# la misma fecha. Solo fútbol: en béisbol los mismos equipos juegan días
+# seguidos.
+_INSERT_SOCCER = """
+    INSERT INTO matches
+        (date, home_team, away_team, home_goals, away_goals, league)
+    SELECT CAST(:date AS date), :home_team, :away_team, :home_goals, :away_goals, :league
+     WHERE NOT EXISTS (
+        SELECT 1 FROM matches m
+         WHERE LOWER(m.home_team) = LOWER(:home_team) AND LOWER(m.away_team) = LOWER(:away_team)
+           AND m.home_goals = :home_goals AND m.away_goals = :away_goals
+           AND m.date BETWEEN CAST(:date AS date) - 1 AND CAST(:date AS date) + 1)
+    ON CONFLICT (date, home_team, away_team) DO NOTHING
+"""
+
+
 def insert_results(results: list) -> tuple[int, int]:
     """
     Inserta resultados en la tabla matches.
@@ -110,13 +138,8 @@ def insert_results(results: list) -> tuple[int, int]:
                 # revierte el lote entero (resultados que no llegan → bets
                 # que no se liquidan).
                 with conn.begin_nested():
-                    res = conn.execute(text("""
-                        INSERT INTO matches
-                            (date, home_team, away_team, home_goals, away_goals, league)
-                        VALUES
-                            (:date, :home_team, :away_team, :home_goals, :away_goals, :league)
-                        ON CONFLICT (date, home_team, away_team) DO NOTHING
-                    """), r)
+                    res = conn.execute(text(_INSERT_SOCCER if str(r.get("league") or "").startswith("soccer")
+                                            else _INSERT), r)
                 if res.rowcount > 0:
                     inserted += 1
                 else:
