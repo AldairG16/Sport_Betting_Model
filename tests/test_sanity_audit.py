@@ -147,6 +147,121 @@ def test_merged_duplicates_are_backed_up_before_the_delete(monkeypatch):
 
 
 # ============================================================
+# Repetidos con un día de diferencia (9-nov-26)
+# ============================================================
+
+PT = "soccer_portugal_primeira_liga"
+
+
+def _nacional_rows():
+    """El caso real: The Odds API con la fecha de antes de que lo pasaran al
+    domingo (sin stats), football-data con la buena (con stats)."""
+    return [_match(2067044, "nacional", "academico de viseu", league=PT, date="2026-11-07", hg=1, ag=0),
+            _match(2067553, "nacional", "academico de viseu", league=PT, date="2026-11-08", hg=1, ag=0,
+                   home_corners=6, away_corners=5, home_shots=19)]
+
+
+def test_one_day_apart_is_a_duplicate_and_the_row_with_stats_stays():
+    pairs = sa.find_duplicate_pairs(pd.DataFrame(_nacional_rows()))
+    assert len(pairs) == 1
+    keep, donor = sa.choose_keep(*pairs[0], {"nacional": 300, "academico de viseu": 40})
+    assert keep["id"] == 2067553 and donor["id"] == 2067044
+
+
+def test_one_day_apart_with_nothing_else_keeps_the_later_date():
+    """Un partido se pospone, no se adelanta."""
+    a = _match(1, "nacional", "academico de viseu", league=PT, date="2026-11-07", hg=1, ag=0)
+    b = _match(2, "nacional", "academico de viseu", league=PT, date="2026-11-08", hg=1, ag=0)
+    for x, y in ((a, b), (b, a)):
+        keep, donor = sa.choose_keep(x, y)
+        assert keep["id"] == 2 and donor["id"] == 1
+
+
+def test_one_day_apart_with_one_team_written_differently():
+    df = pd.DataFrame([_match(1, "preston", "sheffield utd", league="soccer_efl_champ", date="2026-11-03"),
+                       _match(2, "preston", "sheffield united", league="soccer_efl_champ", date="2026-11-04")])
+    assert len(sa.find_duplicate_pairs(df)) == 1
+
+
+@pytest.mark.parametrize("rows", [
+    # otra liga, o sin liga: no se puede saber que es el mismo partido
+    [_match(1, "nacional", "academico de viseu", league=PT, date="2026-11-07"),
+     _match(2, "nacional", "academico de viseu", league="soccer_portugal_segunda_liga", date="2026-11-08")],
+    [_match(1, "nacional", "academico de viseu", league=None, date="2026-11-07"),
+     _match(2, "nacional", "academico de viseu", league=PT, date="2026-11-08")],
+    # dos días
+    [_match(1, "nacional", "academico de viseu", league=PT, date="2026-11-06"),
+     _match(2, "nacional", "academico de viseu", league=PT, date="2026-11-08")],
+    # otro marcador
+    [_match(1, "nacional", "academico de viseu", league=PT, date="2026-11-07", hg=1, ag=0),
+     _match(2, "nacional", "academico de viseu", league=PT, date="2026-11-08", hg=2, ag=0)],
+    # un equipo igual y el otro distinto
+    [_match(1, "nacional", "benfica", league=PT, date="2026-11-07"),
+     _match(2, "nacional", "arouca", league=PT, date="2026-11-08")],
+    # béisbol: una serie juega días seguidos y un doble juego el mismo día
+    [_match(1, "New York Yankees", "Boston Red Sox", league="baseball_mlb", date="2025-07-04", hg=3, ag=2),
+     _match(2, "New York Yankees", "Boston Red Sox", league="baseball_mlb", date="2025-07-05", hg=3, ag=2)],
+    [_match(1, "New York Yankees", "Boston Red Sox", league="baseball_mlb", date="2025-07-04", hg=3, ag=2),
+     _match(2, "New York Yankees", "Boston Red Sox", league="baseball_mlb", date="2025-07-04", hg=3, ag=2)],
+])
+def test_not_a_duplicate(rows):
+    assert sa.find_duplicate_pairs(pd.DataFrame(rows)) == []
+
+
+def test_a_pair_found_both_ways_is_merged_once(monkeypatch):
+    """Los dos equipos iguales: el par sale por el local y por el visitante."""
+    from tests.fake_db import FakeEngine
+    eng = FakeEngine()
+    monkeypatch.setattr(sa, "engine", eng)
+    monkeypatch.setattr(sa.pd, "read_sql", lambda *a, **k: pd.DataFrame(_nacional_rows()))
+    status, msg = sa.audit_duplicate_matches()
+    assert status == "ok" and msg.startswith("1 duplicados")
+    assert eng.statements("DELETE FROM matches")[0][1]["ids"] == [2067044]
+    assert eng.statements("UPDATE matches")[0][1]["kid"] == 2067553
+
+
+def test_the_merge_and_the_check_look_at_all_history_without_baseball(monkeypatch):
+    """~20-oct-26 una carga de historia metió 19 partidos de China de 2023-25
+    como "China" junto a "China PR": la fusión (60 días) y el chequeo (120
+    días) miraban por la fecha del partido y no los vieron."""
+    from src.utils.output_checks import DATA_HEALTH_SQL
+    for k in ("duplicate", "renamed"):
+        assert "CURRENT_DATE" not in DATA_HEALTH_SQL[k] and "baseball" in DATA_HEALTH_SQL[k]
+    seen = []
+    monkeypatch.setattr(sa, "engine", None)
+    monkeypatch.setattr(sa.pd, "read_sql", lambda sql, *a, **k: seen.append(str(sql)) or pd.DataFrame(
+        [_match(231516, "Thailand", "China PR", league="soccer_afc", date="2023-11-16", hg=1, ag=2),
+         _match(2050818, "Thailand", "China", league="soccer_afc", date="2023-11-16", hg=1, ag=2)]).iloc[:0])
+    assert sa.audit_duplicate_matches() == ("ok", "sin duplicados ✓")
+    assert "CURRENT_DATE" not in seen[0] and "baseball" in seen[0]
+    sa.audit_duplicate_matches(days=60)
+    assert "CURRENT_DATE - 60" in seen[1]
+    df = pd.DataFrame([_match(231516, "Thailand", "China PR", league="soccer_afc", date="2023-11-16", hg=1, ag=2),
+                       _match(2050818, "Thailand", "China", league="soccer_afc", date="2023-11-16", hg=1, ag=2)])
+    (pair,) = sa.find_duplicate_pairs(df)
+    keep, donor = sa.choose_keep(*pair, {"Thailand": 90, "China PR": 19, "China": 19})
+    assert keep["id"] == 231516 and donor["id"] == 2050818
+
+
+def test_the_results_download_does_not_bring_back_the_old_date(monkeypatch):
+    """Fusionado el repetido, The Odds API lo volvía a mandar con la fecha de
+    antes: ON CONFLICT solo ve la misma fecha. En fútbol el INSERT busca el
+    partido ±1 día con el mismo marcador; en béisbol no."""
+    import scripts.fetch_results as FR
+    from tests.fake_db import FakeEngine, FakeResult
+    eng = FakeEngine(lambda sql, p: FakeResult(rowcount=0 if p["league"] == PT else 1))
+    monkeypatch.setattr(FR, "engine", eng)
+    rows = [{"date": "2026-11-07", "home_team": "nacional", "away_team": "academico de viseu",
+             "home_goals": 1, "away_goals": 0, "league": PT},
+            {"date": "2025-07-05", "home_team": "New York Yankees", "away_team": "Boston Red Sox",
+             "home_goals": 3, "away_goals": 2, "league": "baseball_mlb"}]
+    assert FR.insert_results(rows) == (1, 1)
+    soccer, baseball = (s for s, _ in eng.statements("INSERT INTO matches"))
+    assert "NOT EXISTS" in soccer and "CAST(:date AS date) - 1" in soccer
+    assert "NOT EXISTS" not in baseball
+
+
+# ============================================================
 # Sanidad del xG proxy
 # ============================================================
 

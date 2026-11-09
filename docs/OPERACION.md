@@ -2124,6 +2124,34 @@ fuentes de goleadores, el mismo jugador puede quedar con la fila vieja de Unders
 contra Postgres en un esquema aislado (borra el repetido, pasa sus datos a la fila que queda, lo respalda
 y la segunda corrida no hace nada).
 
+**Repetidos con un día de diferencia o con fecha vieja (auditoría 9-nov-26).** La auditoría del
+sistema dio "1 partidos repetidos". Era Nacional vs Académico de Viseu, que pasaron del sábado 7 al domingo
+8. The Odds API mandó el 1-0 con la fecha de antes y football-data con la buena. La fusión
+(`weekly_sanity_audit.find_duplicate_pairs`) tenía dos huecos:
+- **Solo juntaba el mismo día**, así que el repetido no se iba nunca, aunque el chequeo
+  (`data_health 'duplicate'`) mira ±1 día.
+- **Miraba 60 días por la fecha del partido.** Al buscar en toda la historia salieron otros 27 que nadie
+  veía:
+  - 19 partidos de China de 2023-25 repetidos como "China" y "China PR", metidos por una carga de historia
+    ~20-oct;
+  - 8 del Mundial de junio, con mayúsculas y sin ellas, el mismo día o uno después.
+
+Los dos contaban doble en la historia de los equipos y de sus rivales (forma, Elo, Dixon-Coles). Ahora:
+- **La fusión junta también un día de diferencia**, con más condiciones: misma liga de fútbol, mismo
+  marcador, un equipo escrito igual y el otro parecido. Un equipo no juega dos partidos de liga en días
+  seguidos. Queda la fila con más datos; si empatan, la fecha de después, porque un partido se pospone,
+  no se adelanta.
+- **La fusión y el chequeo miran toda la historia.** Son ~120 mil partidos: la fusión tarda ~2 s (con
+  diccionarios: el groupby de pandas tardaba 75 s) y el chequeo ~6 s.
+- **Béisbol nunca.** `matches` guarda la MLB de 2021-25, y ahí una serie juega días seguidos y un doble
+  juego el mismo día, con los mismos equipos y a veces el mismo marcador. Con la regla del chequeo
+  salían unos 90 que no lo son.
+- **La descarga de marcadores ya no vuelve a meter la fecha vieja** (`fetch_results._INSERT_SOCCER`):
+  en fútbol, el INSERT no entra si ya está el mismo partido ±1 día con el mismo marcador. `ON CONFLICT`
+  solo ve la misma fecha, y la siguiente descarga lo traía de vuelta. TheSportsDB usa el mismo INSERT.
+- **Los 28 que había los fusiona la primera corrida con la regla nueva** (paso "Partidos repetidos"),
+  con respaldo en `matches_identity_backup`.
+
 **Textos en palabras normales (v2.9.2, 6-nov-26).** El dueño: "necesito que el texto que usas en el
 dashboard sea más amigable, no entiendo nada eso de al favorito de 65%". Casi todas las tarjetas decían
 "solo 🎯 al favorito de 65%+ con pago anticipado", también la del PSG de 83% o la del Arsenal de 75%: el

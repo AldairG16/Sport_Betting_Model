@@ -357,6 +357,8 @@ FEED_MAX_AGE_DAYS = {         # tabla: (columna de fecha, días)
     "program_picks": ("picked_at", 1),      # los picks del dashboard
 }
 
+_NOT_BASEBALL = "COALESCE(a.league, '') NOT LIKE 'baseball%%' AND COALESCE(b.league, '') NOT LIKE 'baseball%%'"
+
 DATA_HEALTH_SQL = {
     # la fecha espejo (6-feb ↔ 2-jun) con los mismos equipos y marcador: el
     # cargador de FBref dejó 2,271 así en Argentina
@@ -370,22 +372,27 @@ DATA_HEALTH_SQL = {
                  WHERE a.date >= CURRENT_DATE - 400""",
     # partido con resultado y fecha futura: día y mes cruzados
     "future": "SELECT COUNT(*) FROM matches WHERE home_goals IS NOT NULL AND date > CURRENT_DATE + 1",
-    # el mismo partido dos veces (±1 día, mismo marcador, mismos equipos)
-    "duplicate": """SELECT COUNT(*) FROM matches a JOIN matches b
+    # el mismo partido dos veces (±1 día, mismo marcador, mismos equipos).
+    # Toda la historia desde el 9-nov-26: miraba 120 días por la fecha del
+    # partido y una carga de historia con fechas viejas quedaba fuera (~20-oct:
+    # 19 partidos de China de 2023-25 repetidos como "China" y "China PR";
+    # junio: 8 del Mundial). Sin béisbol: una serie juega días seguidos y un
+    # doble juego el mismo día, con los mismos equipos. ~1 s
+    "duplicate": f"""SELECT COUNT(*) FROM matches a JOIN matches b
                       ON LOWER(a.home_team) = LOWER(b.home_team) AND LOWER(a.away_team) = LOWER(b.away_team)
                      AND a.id < b.id AND ABS(a.date::date - b.date::date) <= 1
                      AND a.home_goals = b.home_goals AND a.away_goals = b.away_goals
-                    WHERE a.date >= CURRENT_DATE - 120""",
+                    WHERE {_NOT_BASEBALL}""",
     # el mismo partido con UN equipo escrito distinto (6-nov-26: Preston vs
     # "sheffield utd" junto a Preston vs Sheffield United): misma liga, ±1 día,
     # mismo marcador y solo uno de los dos nombres igual. "duplicate" no lo veía
-    # (pide los dos nombres iguales) y la fusión del evening lo deja en 0
-    "renamed": """SELECT COUNT(*) FROM matches a JOIN matches b
+    # (pide los dos nombres iguales) y la fusión del evening lo deja en 0. ~6 s
+    "renamed": f"""SELECT COUNT(*) FROM matches a JOIN matches b
                     ON a.id < b.id AND ABS(a.date::date - b.date::date) <= 1
                    AND COALESCE(a.league, '') = COALESCE(b.league, '')
                    AND a.home_goals = b.home_goals AND a.away_goals = b.away_goals
                    AND ((LOWER(a.home_team) = LOWER(b.home_team)) <> (LOWER(a.away_team) = LOWER(b.away_team)))
-                  WHERE a.date >= CURRENT_DATE - 120 AND a.home_goals IS NOT NULL""",
+                  WHERE a.home_goals IS NOT NULL AND {_NOT_BASEBALL}""",
 }
 
 
@@ -400,10 +407,10 @@ def data_health(counts: dict, ages: dict) -> list:
     if int(counts.get("future") or 0) > 0:
         out.append(f"Datos: {counts['future']} partidos con resultado y fecha futura (día y mes cruzados)")
     if int(counts.get("duplicate") or 0) > 0:
-        out.append(f"Datos: {counts['duplicate']} partidos repetidos en los últimos 120 días")
+        out.append(f"Datos: {counts['duplicate']} partidos repetidos (la fusión no los unió: scripts/weekly_sanity_audit.find_duplicate_pairs)")
     if int(counts.get("renamed") or 0) > 0:
-        out.append(f"Datos: {counts['renamed']} partidos repetidos con un equipo escrito distinto en los últimos "
-                   f"120 días (la fusión no los unió: falta el alias en src/utils/team_alias_map.py)")
+        out.append(f"Datos: {counts['renamed']} partidos repetidos con un equipo escrito distinto "
+                   f"(la fusión no los unió: falta el alias en src/utils/team_alias_map.py)")
     for table, age in ages.items():
         if table not in FEED_MAX_AGE_DAYS:
             continue
