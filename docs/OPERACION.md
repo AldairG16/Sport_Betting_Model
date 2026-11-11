@@ -2198,8 +2198,14 @@ Portugal y Noruega se pedían en cada corrida de resultados, salieron tres defec
 
   Ahora, en la fecha que vale, se recupera (`RESTORE_SQL`) lo que se anuló ANTES de su partido. Solo esta
   regla anula antes del partido: las demás ("sin datos") lo hacen días después, así que son justo las
-  que anuló una decisión anterior. `model_vs_sharp` no se recupera, porque su `skipped_at` también lo
-  pone `side_bias.mark_skipped`.
+  que anuló una decisión anterior.
+- **El análisis también se recupera (11-nov-26).** En `model_vs_sharp`, `skipped_at` lo pone además
+  `side_bias.mark_skipped` cuando la última corrida ya no evaluó el partido. Por eso la anulación de esta
+  regla deja `skip_reason = 'reprogramado'` y solo eso se recupera; `mark_skipped` y un análisis nuevo lo
+  dejan en NULL. Lo descubrió la reparación del 11-nov: Nacional vs Académico de Viseu recuperó su pick
+  del 8, pero su análisis del 8 (anulado por el morning del 8-nov a las 12:04) seguía fuera del
+  aprendizaje. Se recuperó a mano; era el único en todo el historial de reprogramados. El chequeo 20 lo
+  ve en `VOIDED_BEFORE_SQL`.
 
 Además:
 - El horario viejo de un reprogramado y un pospuesto ya no cuentan como "marcadores que faltan"

@@ -39,9 +39,11 @@ dos apuestas, y el bankroll las contó así.
     quedaron anuladas para siempre. Ahora, en la fecha que vale, se recuperan
     (RESTORE_SQL) las filas anuladas ANTES de su partido: solo esta regla anula
     antes del partido (las demás, "sin datos", días después), así que son
-    justo las que anuló una decisión anterior. model_vs_sharp no se recupera:
-    su skipped_at también lo pone side_bias.mark_skipped cuando el partido ya no
-    se evalúa.
+    justo las que anuló una decisión anterior. model_vs_sharp, desde el 11-nov,
+    también: su skipped_at lo pone además side_bias.mark_skipped cuando el
+    partido ya no se evalúa, así que solo se recupera lo que anuló esta regla
+    (skip_reason = 'reprogramado'). El 8-nov el análisis de Nacional vs Académico
+    de Viseu quedó anulado en su fecha real y se recuperó a mano.
 
 6-nov-26: lo mismo con el nombre de antes de un alias (alias_twins). Un
 partido analizado antes y después de que se aprendiera el alias de un club
@@ -70,7 +72,7 @@ VOID_SQL = {
                    "WHERE match = :match AND match_date = :match_date AND result IS DISTINCT FROM 'stale'",
     "model_proposals": "UPDATE model_proposals SET result = 'stale', profit = NULL, resolved_at = NOW() "
                        "WHERE match = :match AND match_date = :match_date AND result IS DISTINCT FROM 'stale'",
-    "model_vs_sharp": "UPDATE model_vs_sharp SET skipped_at = NOW() "
+    "model_vs_sharp": "UPDATE model_vs_sharp SET skipped_at = NOW(), skip_reason = 'reprogramado' "
                       "WHERE match = :match AND match_date = :match_date AND skipped_at IS NULL",
 }
 # Lo que una decisión anterior anuló en la fecha que ahora vale (9-nov-26): anulado
@@ -80,6 +82,14 @@ RESTORE_SQL = {
        "WHERE match = :match AND match_date = :match_date AND result = 'stale' AND resolved_at < match_date"
     for t in ("program_picks", "program_parlays", "shadow_bets", "model_proposals")
 }
+RESTORE_SQL["model_vs_sharp"] = (
+    "UPDATE model_vs_sharp SET skipped_at = NULL, skip_reason = NULL "
+    "WHERE match = :match AND match_date = :match_date AND skip_reason = 'reprogramado' AND skipped_at < match_date")
+# lo que check_dates busca: anulado antes de su partido por esta regla
+VOIDED_BEFORE_SQL = {t: f"SELECT DISTINCT match, match_date FROM {t} WHERE result = 'stale' AND resolved_at < match_date"
+                     for t in RESTORE_SQL if t != "model_vs_sharp"}
+VOIDED_BEFORE_SQL["model_vs_sharp"] = ("SELECT DISTINCT match, match_date FROM model_vs_sharp "
+                                       "WHERE skip_reason = 'reprogramado' AND skipped_at < match_date")
 
 
 def _ts(v) -> pd.Timestamp:
@@ -237,6 +247,9 @@ def void_rescheduled(engine=None, days: int | None = 30) -> dict:
     new = set()                                     # los que tenían algo por anular en esta corrida
     if todo or back:
         with engine.begin() as conn:
+            if "model_vs_sharp" in present:         # skip_reason nace con esta regla (11-nov-26)
+                from src.models.side_bias import REASON_SQL
+                conn.execute(text(REASON_SQL))
             for table, m, d in back:                # primero lo que se anuló de más; luego se anula
                 restored[table] += conn.execute(text(RESTORE_SQL[table]),
                                                 {"match": m, "match_date": d.to_pydatetime()}).rowcount or 0
@@ -291,11 +304,15 @@ def check_dates(engine, days: int = 30) -> list:
     current = current_dates(rows, espn, feed=feed)
     voided = []
     for t in present:
-        if t not in RESTORE_SQL:
+        if t not in VOIDED_BEFORE_SQL:
             continue
-        df = pd.read_sql(text(f"SELECT DISTINCT match, match_date FROM {t} WHERE result = 'stale' "
-                              f"AND resolved_at < match_date AND match_date >= NOW() - INTERVAL '{int(days)} days'"),
-                         engine)
+        try:
+            df = pd.read_sql(text(f"{VOIDED_BEFORE_SQL[t]} AND match_date >= NOW() - INTERVAL '{int(days)} days'"),
+                             engine)
+        except Exception as e:
+            if "skip_reason" in str(e):             # la columna nace con la primera anulación
+                continue
+            raise
         voided += [{**r, "table": t} for r in df.to_dict("records")]
     settled = [] if "program_picks" not in present else pd.read_sql(      # nace con el primer closing
         text(f"SELECT match, match_date FROM program_picks WHERE result IN {PLAYED} "
