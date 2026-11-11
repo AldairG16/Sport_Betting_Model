@@ -407,10 +407,31 @@ DATA_HEALTH_SQL = {
 }
 
 
-def data_health(counts: dict, ages: dict) -> list:
+# Lo que solo escribe el pipeline cuando hay partidos que analizar (11-nov-26)
+ANALYSIS_TABLES = ("model_vs_sharp", "program_picks")
+IDLE_MAX_AGE_H = 36                 # la corrida "sin partidos" tiene que ser reciente para valer
+
+
+def analysis_idle(coverage: dict | None, now=None) -> bool:
+    """La última corrida del pipeline (morning o evening) corrió y no tenía
+    partidos en los próximos 3 días (prediction_pipeline guarda idle=True en
+    pipeline_coverage). En una fecha FIFA no hay picks que guardar y no es un
+    error; si el pipeline deja de correr, la marca envejece y se vuelve a avisar."""
+    import pandas as pd
+    if not coverage or not coverage.get("idle") or not coverage.get("at"):
+        return False
+    now = pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz="UTC")
+    at = pd.Timestamp(coverage["at"])
+    at = at.tz_localize("UTC") if at.tzinfo is None else at
+    return (now - at).total_seconds() / 3600 <= IDLE_MAX_AGE_H
+
+
+def data_health(counts: dict, ages: dict, idle: bool = False) -> list:
     """counts: {"mirror", "future", "duplicate", "renamed"}; ages: {tabla: días desde lo
     último, o None si está vacía o no se pudo leer}; una tabla que todavía no
-    existe (instalación nueva) no viene en ages. Avisos (vacío = en orden)."""
+    existe (instalación nueva) no viene en ages. idle: la última corrida no tenía
+    partidos que analizar (analysis_idle): model_vs_sharp y program_picks no se
+    escriben y no es un error. Avisos (vacío = en orden)."""
     out = []
     if int(counts.get("mirror") or 0) > MAX_MIRROR_PAIRS:
         out.append(f"Datos: {counts['mirror']} partidos repetidos con el día y el mes cruzados "
@@ -423,7 +444,7 @@ def data_health(counts: dict, ages: dict) -> list:
         out.append(f"Datos: {counts['renamed']} partidos repetidos con un equipo escrito distinto "
                    f"(la fusión no los unió: falta el alias en src/utils/team_alias_map.py)")
     for table, age in ages.items():
-        if table not in FEED_MAX_AGE_DAYS:
+        if table not in FEED_MAX_AGE_DAYS or (idle and table in ANALYSIS_TABLES):
             continue
         max_age = FEED_MAX_AGE_DAYS[table][1]
         if age is None:
@@ -840,6 +861,7 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
         problems.append(f"Aprendizaje: no se pudo revisar ({type(e).__name__})")
 
     # 6) los datos que alimentan al modelo
+    idle_note = False
     try:
         counts = {k: int(q(sql).iloc[0, 0]) for k, sql in DATA_HEALTH_SQL.items()}
         ages = {}
@@ -851,7 +873,14 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
             except Exception as e:
                 if "does not exist" not in str(e):     # la tabla nace con su primera corrida
                     ages[table] = None
-        found = data_health(counts, ages)
+        try:
+            cov = q("SELECT value FROM model_state WHERE key = 'pipeline_coverage'")
+            v = cov.iloc[0]["value"] if not cov.empty else None
+            idle = analysis_idle(json.loads(v) if isinstance(v, str) else v)
+        except Exception:
+            idle = False
+        found = data_health(counts, ages, idle)
+        idle_note = idle                           # va en la línea de ✅ (seen nace más abajo)
         quiet = [p for p in found if any(f"Datos: {t} sin actualizar" in p for t in ODDS_FEEDS)]
         if quiet and credits_out_today(state):         # 29-oct-26: la causa ya se avisó una vez hoy
             for p in quiet:
@@ -887,6 +916,8 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     # 8) el pick con la alineación (v2.5.0): ningún 🎯 a un equipo con 4+
     #    titulares fuera, y los picks ven la alineación cuando ESPN la publica
     seen = []                                     # lo revisado, para la línea de ✅
+    if idle_note:
+        seen.append("sin partidos que analizar en los próximos 3 días")
     try:
         pk = q("""SELECT match, match_date, market, reason, lineup FROM program_picks
                   WHERE match_date BETWEEN GREATEST(NOW() - make_interval(days => :d), CAST(:since AS timestamptz))

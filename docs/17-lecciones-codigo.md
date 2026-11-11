@@ -152,3 +152,13 @@ otro nombre. Todo `INSERT` en `matches` usa `normalize_team`.
 **`fetch_results.py` no tiene umbral de créditos**, pero desde el 29-oct-2026 solo pide las
 ligas a las que les falta un marcador (`leagues_needing_results`); ver "El presupuesto no
 cubría lo que más gastaba".
+
+---
+
+**Sin partidos que analizar no es un error (11-nov-26).** En la fecha FIFA no hubo ningún partido de las 19 ligas
+en los próximos 3 días. El pipeline salía sin escribir nada, y el chequeo de salidas avisaba "program_picks sin
+actualizar hace 2 días" y la auditoría "la última corrida guardada es de hace 52 h": una falsa alarma cada
+noche, la misma clase que el "PIPELINE SIN CORRER" del 29-oct. Ahora la corrida sin partidos guarda
+`pipeline_coverage` con `idle: True` y la hora, y `output_checks.analysis_idle` deja de exigir `model_vs_sharp` y
+`program_picks` mientras esa marca tenga menos de 36 h. Si el pipeline deja de correr, la marca envejece y se
+vuelve a avisar. **Regla:** un chequeo de "algo dejó de escribirse" tiene que saber si había algo que escribir.
