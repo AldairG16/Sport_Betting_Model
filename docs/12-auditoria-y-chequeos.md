@@ -44,6 +44,7 @@ Además, cada corrida avisa sus **errores tolerados** (los que no la tumbaron) y
 | 21 | Un cierre que de golpe lee el doble de la base |
 | 22 | El medidor de la base guardó algo en 24 h; modo esencial |
 | 23 | El respaldo semanal en la PC tiene menos de 10 días |
+| 5 (ampliado el 11-nov) | Lo aprendido por el weekly incluye la vigilancia de los supuestos del 🎯 (`favourite_watch`): si deja de correr 9 días, avisa |
 
 ### Las 11 secciones de la auditoría del sistema
 

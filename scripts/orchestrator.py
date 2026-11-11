@@ -991,6 +991,19 @@ def step_filter_learning():
         send_message(format_report(state, previous, html=True))
 
 
+def step_favourite_watch():
+    """Los supuestos del 🎯 con todos los muy favoritos analizados, con pick o
+    sin él: si siguen ganando más de lo que dice Pinnacle y cada cuánto paga
+    el pago anticipado (src/models/favourite_watch.py, 11-nov-26). No cambia
+    ningún pick. Telegram solo si el veredicto cambia."""
+    from src.models.favourite_watch import changed, format_report, load_favourite_watch, run_favourite_watch
+    previous = load_favourite_watch()
+    state = run_favourite_watch(verbose=True)
+    if changed(previous, state):
+        from scripts.notify_telegram import send_message
+        send_message(format_report(state, previous, html=True))
+
+
 def step_timing_learning():
     """¿A qué hora se sostiene la ventaja contra Pinnacle? Bloquea para dinero
     real el horario que pierde contra el cierre (src/models/timing_learner.py).
@@ -1258,6 +1271,7 @@ def run_weekly(logger: Logger):
     run_step(logger, "Sesgo por lado (Pinnacle)", step_side_bias)
     run_step(logger, "Evidencia de reglas",      step_rule_evidence)
     run_step(logger, "Filtros aprendidos",       step_filter_learning)
+    run_step(logger, "Supuestos del 🎯 (favoritos)", step_favourite_watch, skip_at="esencial")
     run_step(logger, "Referencia Pinnacle",      step_sharp_reference)
     run_step(logger, "Horario de apuesta",       step_timing_learning)
     run_step(logger, "Refresh CLV cache",        step_refresh_clv_cache)   # Mejora #14
