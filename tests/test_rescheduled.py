@@ -89,14 +89,18 @@ def test_void_marks_the_phantom_in_every_table_and_leaves_bets_alone(monkeypatch
     sqls = [s for s, _ in eng.log]
     assert not any("bets_history" in s for s in sqls)
     assert any("SET result = 'stale'" in s and "program_picks" in s for s in sqls)
-    assert any("SET skipped_at = NOW()" in s for s in sqls)
-    voids = [p for s, p in eng.log if "SET result = 'stale'" in s or "SET skipped_at" in s]
+    assert any("SET skipped_at = NOW(), skip_reason = 'reprogramado'" in s for s in sqls)
+    voids = [p for s, p in eng.log if "SET result = 'stale'" in s or "SET skipped_at = NOW()" in s]
     assert voids and all(p["match_date"] == pd.Timestamp("2026-10-25 19:45", tz="UTC") for p in voids)
-    # 9-nov-26: en la fecha que vale se recupera lo que una decisión anterior anuló
-    backs = [(s.split()[1], p["match_date"]) for s, p in eng.log if "SET result = NULL" in s]
-    assert sorted(backs) == [("program_picks", pd.Timestamp("2026-10-26 19:30", tz="UTC")),
+    # 9-nov-26: en la fecha que vale se recupera lo que una decisión anterior anuló;
+    # 11-nov-26: también el análisis, si lo anuló esta regla (skip_reason)
+    backs = [(s.split()[1], p["match_date"]) for s, p in eng.log if "SET result = NULL" in s or "SET skipped_at = NULL" in s]
+    assert sorted(backs) == [("model_vs_sharp", pd.Timestamp("2026-10-26 19:30", tz="UTC")),
+                             ("program_picks", pd.Timestamp("2026-10-26 19:30", tz="UTC")),
                              ("shadow_bets", pd.Timestamp("2026-10-26 19:30", tz="UTC"))]
-    assert out["restored"] == {"program_picks": 1, "shadow_bets": 1}
+    assert any("skip_reason = 'reprogramado' AND skipped_at < match_date" in s for s in sqls)
+    assert sqls.index(next(s for s in sqls if "ADD COLUMN IF NOT EXISTS skip_reason" in s)) <         sqls.index(next(s for s in sqls if "SET skipped_at = NULL" in s))
+    assert out["restored"] == {"program_picks": 1, "shadow_bets": 1, "model_vs_sharp": 1}
     assert out["new"] == [PSG]
     assert "Partidos reprogramados: 1 nuevos (paris saint germain vs lyon)" in capsys.readouterr().out
 
@@ -171,3 +175,41 @@ def test_rebuilt_past_picks_skip_the_analyses_that_no_longer_count(monkeypatch):
     monkeypatch.setattr(PK, "build_past_picks", lambda *a, **k: [])
     assert PK.backfill_picks(engine=object()) == 0
     assert any("FROM model_vs_sharp" in s and "skipped_at IS NULL" in s for s in seen)
+
+
+def test_only_what_this_rule_voided_comes_back(monkeypatch):
+    """Un análisis que la última corrida ya no evaluó (mark_skipped) no se
+    recupera; el que anuló void_rescheduled sí (11-nov-26)."""
+    from src.models import side_bias as SB
+    assert SB.REASON_SQL == "ALTER TABLE model_vs_sharp ADD COLUMN IF NOT EXISTS skip_reason TEXT"
+    eng_log = []
+
+    class _Eng:
+        @contextlib.contextmanager
+        def begin(self):
+            yield _Conn(eng_log)
+    monkeypatch.setattr("config.database.engine", _Eng())
+    SB.mark_skipped([{"match": PSG, "match_date": pd.Timestamp("2026-10-26 19:30", tz="UTC")}])
+    upd = [s for s, _ in eng_log if s.startswith("UPDATE model_vs_sharp")]
+    assert upd == ["UPDATE model_vs_sharp SET skipped_at = NOW(), skip_reason = NULL "
+                   "WHERE match = :match AND match_date = :match_date"]
+    assert "skip_reason = 'reprogramado'" in R.RESTORE_SQL["model_vs_sharp"]
+    assert "skip_reason = 'reprogramado'" in R.VOIDED_BEFORE_SQL["model_vs_sharp"]
+
+
+def test_the_daily_check_sees_an_analysis_voided_on_the_date_that_counts(monkeypatch):
+    rows = [_r(PSG, "2026-10-25 19:45", "2026-10-25 19:32", "model_vs_sharp"),
+            _r(PSG, "2026-10-26 19:30", "2026-10-26 19:02", "model_vs_sharp")]
+
+    def fake_read_sql(sql, engine, params=None):
+        s = str(sql)
+        if "FROM live_scores" in s:
+            return pd.DataFrame(columns=["home", "away", "kickoff"])
+        if "skip_reason = 'reprogramado'" in s:
+            return pd.DataFrame([{"match": PSG, "match_date": pd.Timestamp("2026-10-26 19:30", tz="UTC")}])
+        if "FROM model_vs_sharp " in s:
+            return pd.DataFrame(rows)[["match", "match_date", "written"]]
+        raise RuntimeError(f'relation "{s.split("FROM ")[1].split()[0]}" does not exist')
+    monkeypatch.setattr(R.pd, "read_sql", fake_read_sql)
+    out = R.check_dates(object())
+    assert out == ["Reprogramados: 1 con filas anuladas en la fecha que vale (paris saint germain vs lyon [model_vs_sharp])"]

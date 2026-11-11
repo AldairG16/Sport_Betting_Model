@@ -90,6 +90,11 @@ ALTER_SQL = "; ".join(f"ALTER TABLE model_vs_sharp ADD COLUMN IF NOT EXISTS {c} 
 # uno del modelo con el error del xG) que esa mañana el programa rechazó.
 # Un análisis nuevo lo limpia (persist).
 SKIP_SQL = "ALTER TABLE model_vs_sharp ADD COLUMN IF NOT EXISTS skipped_at TIMESTAMPTZ"
+# skip_reason (11-nov-26): 'reprogramado' cuando lo anuló rescheduled.void_rescheduled
+# por ser un horario que no se jugó; NULL cuando la última corrida ya no lo evaluó
+# (mark_skipped). Solo lo de void_rescheduled se puede recuperar si después resulta
+# que esa fecha sí era la buena (Nacional vs Académico de Viseu, 8-nov-26).
+REASON_SQL = "ALTER TABLE model_vs_sharp ADD COLUMN IF NOT EXISTS skip_reason TEXT"
 VALID = "skipped_at IS NULL"
 # low_history (24-oct-26): el partido se analizó con poca historia (menos de 5
 # partidos o Dixon-Coles por debajo de MIN_DC_WEIGHT). Su pick se ve, marcado,
@@ -374,6 +379,7 @@ def persist(records: list) -> int:
         conn.execute(text(TABLE_SQL))
         conn.execute(text(ALTER_SQL))
         conn.execute(text(SKIP_SQL))
+        conn.execute(text(REASON_SQL))
         conn.execute(text(LOW_SQL))
         for r in rows:
             r = {**{c: None for c in EXTRA_COLUMNS}, "low_history": None, **r}
@@ -392,7 +398,7 @@ def persist(records: list) -> int:
                     p_btts = EXCLUDED.p_btts, league_factor = EXCLUDED.league_factor,
                     mkt_over25 = EXCLUDED.mkt_over25, mkt_btts = EXCLUDED.mkt_btts,
                     low_history = EXCLUDED.low_history,
-                    skipped_at = NULL, created_at = NOW()
+                    skipped_at = NULL, skip_reason = NULL, created_at = NOW()
             """), r)
     return len(rows)
 
@@ -408,7 +414,8 @@ def mark_skipped(skips: list) -> int:
     with engine.begin() as conn:
         conn.execute(text(TABLE_SQL))
         conn.execute(text(SKIP_SQL))
-        conn.execute(text("UPDATE model_vs_sharp SET skipped_at = NOW() "
+        conn.execute(text(REASON_SQL))
+        conn.execute(text("UPDATE model_vs_sharp SET skipped_at = NOW(), skip_reason = NULL "
                           "WHERE match = :match AND match_date = :match_date"), rows)
     return len(rows)
 

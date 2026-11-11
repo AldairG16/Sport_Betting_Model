@@ -107,19 +107,23 @@ def test_what_an_earlier_decision_voided_comes_back_on_the_real_date(monkeypatch
     assert sorted(voids) == [("model_vs_sharp", T("2026-11-07 15:00")), ("shadow_bets", T("2026-11-07 15:00"))]
     # primero se recupera y luego se anula, en la misma transacción
     assert eng.log.index(backs[0]) < min(i for i, (s, _) in enumerate(eng.log) if "stale', profit" in s)
-    assert out["restored"] == {"shadow_bets": 1}
+    assert out["restored"] == {"shadow_bets": 1, "model_vs_sharp": 1}      # el análisis, desde el 11-nov
     assert "recuperadas en la fecha que vale" in capsys.readouterr().out
     espn_sql = next(s for s in seen if "FROM live_scores" in s)
     assert "status IS DISTINCT FROM 'postponed'" in espn_sql and "NOT ILIKE 'postponed" in espn_sql
 
 
 def test_only_the_rule_that_voids_before_kickoff_is_undone():
-    """Las otras anulaciones ('sin datos') son días después del partido, y
-    model_vs_sharp no se recupera (su skipped_at también lo pone
-    side_bias.mark_skipped)."""
-    assert set(R.RESTORE_SQL) == {"program_picks", "program_parlays", "shadow_bets", "model_proposals"}
-    for sql in R.RESTORE_SQL.values():
-        assert "result = 'stale' AND resolved_at < match_date" in sql
+    """Las otras anulaciones ('sin datos') son días después del partido. En
+    model_vs_sharp, skipped_at también lo pone side_bias.mark_skipped: solo se
+    recupera lo marcado por esta regla (skip_reason, 11-nov-26)."""
+    assert set(R.RESTORE_SQL) == {"program_picks", "program_parlays", "shadow_bets", "model_proposals",
+                                  "model_vs_sharp"}
+    for t, sql in R.RESTORE_SQL.items():
+        if t == "model_vs_sharp":
+            assert "skip_reason = 'reprogramado' AND skipped_at < match_date" in sql
+        else:
+            assert "result = 'stale' AND resolved_at < match_date" in sql
 
 
 # ─── chequeo de salidas §20 ──────────────────────────────────────────────────
