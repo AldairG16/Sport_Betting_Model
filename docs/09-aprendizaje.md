@@ -318,6 +318,41 @@ puede medir cada semana es si se siguen cumpliendo las dos cosas en que descansa
 - **Veredicto** (ligas con pago anticipado, mínimo 100 partidos, z 1.96): a favor, sin evidencia,
   en contra, insuficiente. Telegram solo cuando cambia. No toca ningún pick.
 - El chequeo diario avisa si deja de correr (`WEEKLY_KEYS`).
+- **Dos señales en observación** (desde el 11-nov; se miden, no deciden nada y no cambian el veredicto):
+  - **El precio.** Hoy el 🎯 no exige que el momio estimado de PlayDoit llegue al mínimo
+    (`program_picks.value`). En el historial, el favorito de 65 a 70 cuyo precio promedio no llegaba
+    al mínimo de hoy (probabilidad + 3.5 puntos) perdió 6.8 por cada 100 apostados (841 partidos;
+    −10.2, −3.6 y −8.3 en las tres épocas) y con el pago anticipado sigue perdiendo ~4; el que sí
+    llegaba dejó +0.5. En 70 a 80 no hay diferencia (+2.2 contra +1.7); en 80 o más, −2.2 contra
+    +1.2 (no concluyente). El weekly lo mide con el momio del pick guardado de cada favorito de 65 a
+    70 (`state["price"]`: partidos, ganados, lo que deja por cada 100 y en pesos apostando 50).
+    Regla simulada en 14 años (`audit/m6_rule.py`): hoy (65+) deja +0.4 por cada 100 (+2.0 con pago
+    anticipado), 632 🎯 al año; "70+ siempre y 65 a 70 solo si paga el mínimo" deja +1.1 (+2.6), 573
+    al año, positiva en las tres épocas (+1.9, +0.3, +0.8); solo 70+, +1.3 (+2.5), 428 al año.
+    **Cambiar la regla es decisión del dueño (pendiente).**
+  - **La suerte de gol.** Por equipo, la media en sus últimos 10 partidos de liga (mínimo 8) de
+    (diferencia de goles) − 0.31 × (diferencia de tiros a puerta); se compara favorito menos rival y
+    más de +0.33 cuenta como "con suerte". En el historial, el favorito de 70+ sin suerte ganó 4.8
+    más de cada 100 de lo que decía Pinnacle y dejó +2.9, +2.7 y +3.4 por cada 100 en las tres
+    épocas; con suerte, 2.6 más y +2.2, −2.2 y −0.2. La diferencia (3.0 ± 1.5) todavía puede ser
+    azar: prometedor, no probado. El weekly lo mide con `matches` (`state["luck"]`).
+
+**Probado el 11-nov con 137 mil partidos y tres épocas** (2012-18, 2018-23, 2023-26;
+`audit/m3_build.py`, `m4_test.py`, `m5_reg.py`, `m6_rule.py`), para no repetirlo:
+
+| Idea | Resultado |
+|---|---|
+| Favorito local o visitante | Nada: +2.1 y +2.9 puntos, sin diferencia |
+| Descanso de 4 días o menos (favorito o rival) | Nada |
+| Primeras 4 jornadas | Nada |
+| Rival o favorito recién ascendido | Nada |
+| Partido de muchos goles según el mercado | Nada consistente entre épocas |
+| Las demás casas contra Pinnacle, como información | Nada: lo que cambia es el precio, no quién gana |
+| Titulares habituales fuera, contra el precio de cierre (ESPN 2019-26) | Nada: con 4+ fuera el favorito ganó +1.7 puntos (z 0.6) |
+| Racha de los últimos 5 (puntos contra lo esperado) | Real pero chico: el mercado la exagera (z −4.1, igual en las tres épocas), ~0.7 puntos por desviación; no paga el margen y no se ve entre los favoritos de 65+ |
+| La curva "Pinnacle → real" aprendida con 2012-23 | Le gana al precio de Pinnacle en 2023-26 (z +3.6; con suerte y racha, +4.4). Pero la ventaja es un escalón en 70, no una curva: 60-65 +1.5, 65-70 +1.3, 70-75 +4.0, 75-80 +3.2, 80+ +2.9 |
+| Dar el 🎯 por "precio corregido" (curva × momio + pago anticipado ≥ 0, 1 o 2%) | **Descartado**: +1.9 y +3.7 en las dos primeras épocas, −0.7 ± 3.0 en 2023-26. Las bandas simples aguantaron |
+| Pago anticipado por banda (ESPN 2019-26, fuera de América) | Rescata 1.8 de cada 100 en 65-70 y 0.9 en 70+: vale ~2.5% en 65-70 y ~1.2% en 70+ |
 
 **Ya probado y descartado el 11-nov** (`audit/r1_rules.py`, 523 partidos sin 🎯 repetidos con lo que
 había antes del inicio): cambiar el pick de los partidos sin 🎯 a "lo más probable" acierta más (59
