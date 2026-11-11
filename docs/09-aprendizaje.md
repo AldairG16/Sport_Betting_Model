@@ -20,6 +20,7 @@ porque las corridas de GitHub no guardan nada.
 | Peso del modelo | `anchor_learner.py` | Cuánto creerle al modelo frente a Pinnacle (encogido a 0.35, entre 0 y 0.5, ±0.10 por semana). Hoy ~0.07 |
 | Sesgo por lado | `side_bias.py` | La corrección que le falta al modelo por lado (local, empate, visitante), por región y en goles |
 | Filtros aprendidos | `filter_learner.py` | Qué regiones pausan el 🎯 (América desde el 3-nov; se quita solo cuando deje de perder) |
+| Supuestos del 🎯 | `favourite_watch.py` | No decide nada: mide con todos los muy favoritos analizados (con pick o sin él) si siguen ganando más de lo que dice Pinnacle y cada cuánto paga el pago anticipado. Avisa si el veredicto cambia |
 | Evidencia de reglas | `rule_evidence.py` | Si las reglas a mano tienen evidencia contra resultados reales |
 | Referencia Pinnacle | `sharp_reference.py` | Si hay ventaja real contra el cierre de Pinnacle |
 | Horario de apuesta | `timing_learner.py` | Si conviene apostar antes o después |
@@ -289,3 +290,37 @@ Con el modelo bajo en goles, los picks se iban al "menos" y al "no anotan ambos"
   +1.3) y ambos anotan a −0.7 (antes −2.7); el resto, parejo.
 - **Lo vigila la auditoría del sistema** (chequeo "Sesgo del modelo", [12](12-auditoria-y-chequeos.md)): lo que queda después
   de corregir, global y por región, y que el weekly lo siga aprendiendo.
+
+### Los supuestos del 🎯, vigilados (`src/models/favourite_watch.py`, 11-nov-2026)
+
+El 🎯 de v2.9.0 no se puede juzgar por ganados y perdidos: el 11-nov había 17 cobrados con esa regla
+(el encabezado los mezcla con los ~195 de la regla anterior) y la ventaja es delgada. Lo que sí se
+puede medir cada semana es si se siguen cumpliendo las dos cosas en que descansa.
+
+- **Lo que dice el historial** (`historical_odds`, 10 ligas con pago anticipado, 2012-26, al precio
+  promedio de las casas; medido el 11-nov con `audit/r2_fav60.py`):
+
+  | Favorito según Pinnacle | Partidos | Gana de más | Deja antes del pago anticipado |
+  |---|---|---|---|
+  | 70 de cada 100 o más | 6,147 | +3.6 puntos | +1.3% ± 0.6 |
+  | 65 a 70 | 2,921 | +1.3 | −1.6% ± 1.2 |
+  | 60 a 65 | 3,472 | +1.2 | −1.7% ± 1.3 |
+  | 55 a 60 | 4,352 | +0.9 | −1.8% ± 1.3 |
+
+  La ventaja vive en el de 70 o más (en las tres épocas: +2.6, −0.1, +1.0). El de 65 a 70 queda en
+  tablas con el pago anticipado (~+1.3 de cada 100). Bajar el corte a 60 no agrega nada; subirlo a
+  70 es decisión del dueño (pendiente).
+- **Lo que mide el weekly:** todos los muy favoritos (65+) de `model_vs_sharp` de los últimos 120
+  días, con pick o sin él, cobrados con la misma función que las apuestas. Por banda (65-70, 70+):
+  ganados contra lo que esperaba Pinnacle y su z. Y el pago anticipado: de las apuestas al favorito
+  con la ventaja de ESPN guardada (`live_scores`, desde v2.9.0), cuántas no ganaron pero iban 2
+  arriba.
+- **Veredicto** (ligas con pago anticipado, mínimo 100 partidos, z 1.96): a favor, sin evidencia,
+  en contra, insuficiente. Telegram solo cuando cambia. No toca ningún pick.
+- El chequeo diario avisa si deja de correr (`WEEKLY_KEYS`).
+
+**Ya probado y descartado el 11-nov** (`audit/r1_rules.py`, 523 partidos sin 🎯 repetidos con lo que
+había antes del inicio): cambiar el pick de los partidos sin 🎯 a "lo más probable" acierta más (59
+contra 55 de cada 100) pero no deja más (−6.3% ± 3.5 contra −1.6% ± 4.1). El momio mínimo ya usa lo
+más prudente entre el modelo y Pinnacle (`min_odds._floor_decimal`). No volver a proponerlo.
+
