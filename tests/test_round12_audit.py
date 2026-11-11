@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import src.models.dc_mle_fitter as fitter
 
-DOC = Path(__file__).parent.parent / "docs" / "SALIDA_PAPEL.md"
+DOC = Path(__file__).parent.parent / "docs" / "historial" / "SALIDA_PAPEL.md"
 
 
 # ============================================================
