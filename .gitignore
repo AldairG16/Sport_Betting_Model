@@ -52,3 +52,6 @@ blueprints/
 installer/build/
 installer/dist/
 installer/*.wxs
+
+# ── Respaldos de la base (los hace el dashboard, 11-nov-26) ──
+respaldos/

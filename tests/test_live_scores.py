@@ -67,7 +67,7 @@ def test_the_dashboard_shows_the_provisional_result():
 def test_the_closing_reads_the_scores_before_the_picks(monkeypatch):
     import scripts.orchestrator as O
     ran = []
-    monkeypatch.setattr(O, "run_step", lambda logger, name, fn: ran.append(name))
+    monkeypatch.setattr(O, "run_step", lambda logger, name, fn, *a, **k: ran.append(name))
     O.run_closing(None)
     assert ran.index("Marcadores del día (ESPN)") == ran.index("Pre-kickoff closing odds") + 1
     assert ran.index("Marcadores del día (ESPN)") < ran.index("Picks del programa")

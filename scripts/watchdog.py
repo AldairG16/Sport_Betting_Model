@@ -99,6 +99,27 @@ def _credits_out_today(now_utc) -> bool:
         return False                     # ante la duda, avisar
 
 
+def db_down_message(err: str, short: str) -> str:
+    """El aviso de base caída, en palabras (11-nov-26). Desde ese día las
+    corridas sin base terminan sin hacer nada y sin error (orchestrator
+    _db_preflight): este es el único aviso, 4 veces al día como máximo."""
+    if "quota" in err.lower():
+        return ("🔴 <b>LA BASE DE DATOS ESTÁ BLOQUEADA</b>\n"
+                "Neon la bloqueó por pasarse del límite del plan gratis. El programa está detenido: "
+                "sin picks, sin cierres y sin resultados. Se libera sola el día 1 del mes.\n"
+                "El freno del presupuesto (modo ahorro) debió evitarlo: revisa en Neon → Billing qué "
+                "límite se pasó.\n"
+                f"<code>{short}</code>")
+    if "password authentication failed" in err:
+        return ("🔴 <b>LA BASE DE DATOS NO ACEPTA LA CONTRASEÑA</b>\n"
+                "El programa está detenido. Revisa el secreto DB_URL en GitHub (Settings → Secrets).\n"
+                f"<code>{short}</code>")
+    return ("🔴 <b>LA BASE DE DATOS NO CONTESTA</b>\n"
+            "El programa está detenido mientras no haya conexión. Revisa el estado de Neon "
+            "(neonstatus.com) y el secreto DB_URL.\n"
+            f"<code>{short}</code>")
+
+
 def run_watchdog() -> int:
     """0 = sano o alerta entregada; 1 = DB caída o alerta NO entregada (la
     corrida queda en rojo y GitHub avisa por correo: segundo canal)."""
@@ -117,11 +138,7 @@ def run_watchdog() -> int:
         print("  ✅ DB accesible")
     except Exception as e:
         short = str(e)[:300].replace("<", "&lt;").replace(">", "&gt;")
-        issues.append(
-            "🔴 <b>DB INACCESIBLE</b>\n"
-            f"<code>{short}</code>\n"
-            "→ Verifica el secret DB_URL en GitHub Actions Settings."
-        )
+        issues.append(db_down_message(str(e), short))
         # Sin DB no podemos hacer más checks — alertar y salir en rojo
         _send_alert(
             "🚨 <b>WATCHDOG — DB CAÍDA</b>\n\n"

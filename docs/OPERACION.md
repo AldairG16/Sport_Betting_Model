@@ -1086,6 +1086,75 @@ plan gratis, con una base de 236 MB. La base vuelve al empezar el mes o al subir
   dashboard. Por medir con el medidor: las fotos de momios de 72 h (`_SNAPS_SQL`) y el
   `SELECT * FROM model_vs_sharp` de Próximos.
 
+**El presupuesto del plan gratis (11-nov-2026, v2.12.0).** El dueño, después del bloqueo: "esto tiene
+que funcionar 100% con planes gratis… no debemos sufrir estos ataques y pausar todo por eso". Neon se
+pagó (Launch) del 11-nov al 1-dic para medir y corregir. Desde el 1-dic se vuelve al plan gratis, con
+la base fija en 0.25 CU (Neon → Computes; Launch la había subido a 0.25↔8).
+- **Medición** (`src/utils/db_meter.py`):
+  - Bytes de cada lectura, en el protocolo de texto de Postgres. Con el cursor de psycopg2 del lado
+    del cliente se leen las filas ya recibidas y se rebobina el cursor. Si no se puede rebobinar, la
+    consulta falla (`RewindError`), para que nunca falten filas. Un resultado vacío no se rebobina:
+    psycopg2 no lo deja, y el 11-nov eso tumbaba la consulta.
+  - Base despierta: unión de [consulta, consulta + 5 min] del proceso.
+  - Verificado contra la base real el 11-nov: 9 formas de consultar devuelven lo mismo con y sin el
+    medidor. 132 mil partidos × 5 columnas = 7.9 MB, ~12 bytes por celda.
+- **Quién lo guarda en `pipeline_runs`** (`bytes_read`, `awake_s`):
+  - el orquestador y el resolvedor, en su fila;
+  - los demás procesos de GitHub Actions, al salir, como `proc:<script>`;
+  - el dashboard, cada 30 min, como `dashboard`;
+  - el respaldo, como `respaldo`.
+- **Presupuesto** (`src/utils/db_budget.py`):
+  - Lo gastado en el mes de calendario (UTC, como cuenta Neon) más el ritmo de los últimos 3 días
+    da el pronóstico del día último, en transferencia (5 GB) y en horas (100 CU-h a 0.25 CU).
+  - `WIRE_FACTOR` 1.15 cubre TLS, TCP y lo que no se mide. Calíbralo contra la consola de Neon
+    (Billing → "Network transfer").
+  - Si la medición empezó a medio mes, los días de antes se estiman con el mismo ritmo.
+  - Lo semanal (`WEEKLY_MODES`: weekly, respaldo, sanidad y CLV del weekly) se reparte en 7 días.
+    Con 3 días de ritmo, recién medido, el weekly y la primera copia contaban como si pasaran a
+    diario.
+  - Sin 24 h de medición no opina.
+  - Con `model_state` → `db_budget_plan` = `{"paid_until": ...}`, mide pero no frena ni avisa. Así
+    quedó del 11-nov al 1-dic-26 (Launch). El log dice en qué modo estaría con el gratis.
+- **Avisos y freno:**
+  - Por Telegram al pasar del 50% y del 75%, una vez cada uno por mes, y cuando cambia el modo
+    (`model_state` → `db_budget`).
+  - **Modo ahorro (≥75%):**
+    - El closing corre solo en la primera media hora de cada hora, salvo que haya partidos en las
+      próximas 2 h (`closing_skip_reason`). El cierre saltado igual se registra, para que el
+      watchdog no lo cuente como parado.
+    - Se saltan los pasos con `skip_at="ahorro"`: Kalshi, Backtest, Historial ESPN, Holdout,
+      Momios históricos, Buscador de ventajas, Drift, Market regime y Walk-forward.
+    - El dashboard se actualiza cada 15 min (`budget_level` en `/api/board/header`).
+  - **Modo esencial (≥90%):**
+    - El closing corre solo con partidos en las próximas 2 h.
+    - Se saltan además los pasos con `skip_at="esencial"`: xG de respaldo, ClubElo, CLV update,
+      datos internacionales, eventos y K-League.
+  - Sin medición suficiente o sin base, el nivel es normal: el freno nunca apaga nada a ciegas.
+- **Base caída** (`_db_preflight`):
+  - Antes, cada corrida fallaba paso por paso, con errores a Telegram y correos de GitHub cada
+    30 min.
+  - Ahora la corrida termina al principio, sin error y con un `::warning::`.
+  - El único aviso es el del watchdog (4 al día), en palabras: bloqueada por el plan, contraseña o
+    sin conexión.
+- **Respaldo semanal en la PC del dueño** (`src/utils/db_backup.py`, hilo del dashboard):
+  - El hilo empieza 2 min después de abrir y revisa cada 6 h.
+  - Cada 7 días copia todas las tablas menos `historical_odds` (se vuelve a bajar) y las
+    `*_backup`. Cada 28 días incluye también `matches`, `match_events`, `matches_history` y
+    `espn_matches`.
+  - Formato: CSV comprimido por COPY, `schema.json` (tablas, restricciones, índices y
+    secuencias) y `manifest.json` (filas).
+  - Escribe en `<carpeta>.tmp` y renombra al terminar, así que una copia cortada nunca cuenta.
+    No se borra ninguna.
+  - Dónde: `installer/dist/respaldos/`. El log va en `respaldos/respaldo.log`.
+  - El 11-nov la copia completa fue de 61 MB de transferencia en 49 s, 11.6 MB comprimida en disco.
+    La semanal ronda los 41 MB. En total, ~4% del plan gratis al mes.
+- **Restaurar:** `scripts/restore_backup.py <carpeta> [--schema x] [--apply]`. Sin `--apply` es un
+  ensayo: crea todo en una transacción, compara filas y lo deshace. El 11-nov el ensayo en un esquema
+  aparte rehízo las 37 tablas y 365,941 filas en 87 s.
+- **Chequeos de salidas:**
+  - 22: sin medición en 24 h, o modo esencial, es problema.
+  - 23: la última copia tiene más de 10 días.
+
 **Fechas: siempre con formato explícito (`src/utils/dates.py`, 23-oct-2026).**
 `pd.to_datetime(x, dayfirst=True)` sin formato cae a dateutil elemento por elemento, y dateutil
 con dayfirst lee "2025-02-06" como 2-jun. El cargador de FBref dejó así toda la historia

@@ -94,7 +94,8 @@ def test_each_run_is_recorded_and_nothing_is_deleted():
     eng = FakeEngine()
     record_run(eng, "closing", 0, 63.04)
     (_, params), = eng.statements("INSERT INTO pipeline_runs")
-    assert params == {"mode": "closing", "failed": 0, "seconds": 63.0, "rows_read": None, "cells_read": None}
+    assert params == {"mode": "closing", "failed": 0, "seconds": 63.0, "rows_read": None, "cells_read": None,
+                      "bytes_read": None, "awake_s": None}
     assert not eng.statements("DELETE")
     # 10-nov-26: con lo que leyó de la base
     eng = FakeEngine()
@@ -111,7 +112,7 @@ def test_orchestrator_records_runs_without_ever_breaking_them(monkeypatch):
     monkeypatch.setattr(pr, "record_run", lambda eng, *a: calls.append(a))
     orch._record_run("weekly", 2, 12.5)
     assert [c[:3] for c in calls] == [("weekly", 2, 12.5)]
-    assert len(calls[0]) == 5                       # + filas y celdas leídas (db_meter)
+    assert len(calls[0]) == 7                       # + filas, celdas, bytes y base despierta (db_meter)
 
     def boom(*a):
         raise RuntimeError("DB caída")

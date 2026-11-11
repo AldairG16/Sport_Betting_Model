@@ -105,7 +105,7 @@ function getJSON(url, ok, fail){
 // pestaña abierta (las otras, al abrirlas) y dice a qué hora y si algo cambió.
 // Solo, cada 5 min, hace lo mismo menos Equipos y Gráficas (no cierra lo que
 // se está viendo).
-var _refreshing = false, _firstDone = false;
+var _refreshing = false, _firstDone = false, _saving = false;
 function refreshAll(manual){
   if (_refreshing) return;
   _refreshing = true; _changed = 0;
@@ -132,7 +132,8 @@ function refreshDone(){
   b.disabled = false; b.innerHTML = '🔄 Actualizar';
   // la primera carga no tiene con qué comparar: solo la hora
   u.textContent = 'Actualizado ' + p2(n.getUTCHours()) + ':' + p2(n.getUTCMinutes()) +
-                  (!_firstDone ? '' : _changed ? ' · hay cambios' : ' · sin cambios');
+                  (!_firstDone ? '' : _changed ? ' · hay cambios' : ' · sin cambios') +
+                  (_saving ? ' · modo ahorro de la base: se actualiza cada 15 min' : '');
   u.className = 'small ' + (_firstDone && _changed ? 'chg' : 'muted');
   _firstDone = true;
 }
@@ -948,6 +949,9 @@ function loadHeader(){
   // v2.11.0: los 🎯 desde el 22 oct, como la noche de Telegram (decía "Bankroll 63.4u",
   // de una tabla que dejó de moverse el 25-sep-26)
   getJSON('/api/board/header', function(d){
+    // 11-nov-26: en modo ahorro o esencial del plan gratis de Neon, cada 15 min
+    _saving = d.budget_level === 'ahorro' || d.budget_level === 'esencial';
+    AUTO_MS = (_saving ? 15 : 5) * 60000;
     var c = el('chiptarget');
     c.innerHTML = d.n ? '🎯 Desde el 22 oct: <b>' + d.won + '</b> de ' + d.n + ' ganados · <b class="' +
       (d.units >= 0 ? 'pos' : 'neg') + '">' + money(d.units) + '</b>' : '🎯 Desde el 22 oct: todavía ninguno terminado';

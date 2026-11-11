@@ -201,7 +201,7 @@ def test_second_division_rows_use_our_names():
 def test_the_weekly_loads_the_second_divisions_after_the_extra_leagues(monkeypatch):
     import scripts.orchestrator as O
     ran = []
-    monkeypatch.setattr(O, "run_step", lambda logger, name, fn: ran.append(name))
+    monkeypatch.setattr(O, "run_step", lambda logger, name, fn, *a, **k: ran.append(name))
     O.run_weekly(None)
     assert ran.index("Segundas divisiones (ESPN)") == ran.index("Load extra leagues") + 1
     assert ran.index("Segundas divisiones (ESPN)") < ran.index("Fit DC-MLE parameters")

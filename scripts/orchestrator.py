@@ -251,8 +251,18 @@ class Logger:
         self._fh.close()
 
 
-def run_step(logger: Logger, name: str, func, *args, **kwargs) -> bool:
-    """Ejecuta un paso y captura errores sin detener el pipeline."""
+# Nivel del presupuesto de la base de esta corrida (src/utils/db_budget.py, 11-nov-26)
+_BUDGET: dict = {"level": "normal"}
+_SKIP_LEVELS = {"ahorro": ("ahorro", "esencial"), "esencial": ("esencial",)}
+
+
+def run_step(logger: Logger, name: str, func, *args, skip_at: str | None = None, **kwargs) -> bool:
+    """Ejecuta un paso y captura errores sin detener el pipeline.
+    skip_at (11-nov-26): "ahorro" = paso opcional, se salta en modo ahorro y en
+    esencial; "esencial" = se salta solo en modo esencial (db_budget)."""
+    if skip_at and _BUDGET.get("level") in _SKIP_LEVELS[skip_at]:
+        logger.log(f"💡 {name} — se salta (modo {_BUDGET['level']} de la base: plan gratis de Neon)")
+        return True
     logger.log(f"\n{'='*50}")
     logger.log(f"PASO: {name}")
     logger.log(f"{'='*50}")
@@ -634,10 +644,10 @@ def run_morning(logger: Logger, force_fetch: bool = False):
         capture_snapshot(verbose=True)
     except Exception as e:
         log.error(f"⚠️  odds_history falló: {e}")
-    run_step(logger, "Precios Kalshi (referencia)", step_kalshi)
+    run_step(logger, "Precios Kalshi (referencia)", step_kalshi, skip_at="ahorro")
 
-    run_step(logger, "xG real (si el weekly no pudo)", step_understat_retry)
-    run_step(logger, "ClubElo (fuerza de liga)", step_clubelo)
+    run_step(logger, "xG real (si el weekly no pudo)", step_understat_retry, skip_at="esencial")
+    run_step(logger, "ClubElo (fuerza de liga)", step_clubelo, skip_at="esencial")
     predict_ok = run_step(logger, "Predictions", step_predict)
     run_step(logger, "Picks del programa", step_program_picks)
     # run_step(logger, "MLB Predictions",   step_mlb_predict)  # desactivado — sin creditos MLB
@@ -727,8 +737,8 @@ def run_evening(logger: Logger):
     # usuario no ve "esperando data" en la noche para partidos ya jugados.
     run_step(logger, "Resolve pending (Claude)", step_resolve_pending)
     run_step(logger, "Goalscorer resolve", step_goalscorer_resolve)
-    run_step(logger, "CLV update",        step_clv)
-    run_step(logger, "Backtest",          step_backtest)
+    run_step(logger, "CLV update",        step_clv, skip_at="esencial")
+    run_step(logger, "Backtest",          step_backtest, skip_at="ahorro")
     run_step(logger, "Chequeo de salidas", step_output_checks)
     run_step(logger, "Telegram evening",  step_notify_evening)
 
@@ -737,8 +747,8 @@ def run_evening(logger: Logger):
     # y envía el resumen por Telegram. Así el usuario puede preparar sus
     # apuestas antes de dormir aunque la laptop esté apagada por la mañana.
     run_step(logger, "Fetch odds (mañana)",       step_fetch_odds)
-    run_step(logger, "Precios Kalshi (referencia)", step_kalshi)
-    run_step(logger, "Historial ESPN (copas, Europa, amistosos)", step_espn_history)
+    run_step(logger, "Precios Kalshi (referencia)", step_kalshi, skip_at="ahorro")
+    run_step(logger, "Historial ESPN (copas, Europa, amistosos)", step_espn_history, skip_at="ahorro")
     predict_ok = run_step(logger, "Predictions (mañana)", step_predict)
     run_step(logger, "Picks del programa", step_program_picks)
     # run_step(logger, "MLB Predictions (mañana)",  step_mlb_predict)  # desactivado — sin creditos MLB
@@ -1135,6 +1145,10 @@ def run_closing(logger: Logger):
     (el dueño: "ponemos los picks mucho antes de que la lista de alineaciones
     esté lista"). v2.11.0 (8-nov-26): Telegram recibe solo los picks finales,
     en la última revisión antes de cada partido, con el parlay y quién falta."""
+    skip = _closing_skip_reason()
+    if skip:
+        logger.log(f"💡 Cierre saltado: {skip}")
+        return
     run_step(logger, "Pre-kickoff closing odds", step_pre_kickoff_closing)
     run_step(logger, "Marcadores del día (ESPN)", step_live_scores)
     run_step(logger, "Alineaciones publicadas", step_capture_lineups)
@@ -1142,6 +1156,42 @@ def run_closing(logger: Logger):
     run_step(logger, "Alertas de alineación", step_lineup_alerts)
     run_step(logger, "Partidos de hoy (Telegram)", step_today_board)
     run_step(logger, "Picks finales (Telegram)", step_final_alerts)
+
+
+def _kickoffs_soon(hours: float) -> int:
+    """Partidos que empiezan en las próximas `hours` horas (o empezaron hace 15 min)."""
+    from sqlalchemy import text
+    from config.database import engine
+    with engine.connect() as conn:
+        return int(conn.execute(text(
+            "SELECT COUNT(*) FROM upcoming_matches WHERE match_date BETWEEN NOW() - INTERVAL '15 minutes' "
+            "AND NOW() + make_interval(mins => :m)"), {"m": int(hours * 60)}).scalar() or 0)
+
+
+def closing_skip_reason(level: str, minute: int, soon: int) -> str | None:
+    """Función pura (11-nov-26). Modo ahorro: un cierre por hora (el de la
+    primera media hora) salvo partidos en las próximas 2 h; esencial: solo con
+    partidos en las próximas 2 h."""
+    from src.utils.db_budget import KICKOFF_SOON_H
+    if level == "normal" or soon > 0:
+        return None
+    if level == "ahorro" and minute < 30:
+        return None
+    return (f"modo {level} de la base (plan gratis de Neon) y ningún partido en las próximas "
+            f"{KICKOFF_SOON_H} horas")
+
+
+def _closing_skip_reason() -> str | None:
+    level = _BUDGET.get("level", "normal")
+    if level == "normal":
+        return None
+    try:
+        from src.utils.db_budget import KICKOFF_SOON_H
+        soon = _kickoffs_soon(KICKOFF_SOON_H)
+    except Exception as e:                       # sin saberlo, se corre: el freno no apaga nada a ciegas
+        log.warning(f"⚠️  Modo {level}: no se pudo ver si hay partidos pronto ({type(e).__name__}); el cierre corre")
+        return None
+    return closing_skip_reason(level, datetime.now().astimezone().minute, soon)
 
 
 def step_espn_finals():
@@ -1211,17 +1261,17 @@ def run_weekly(logger: Logger):
     run_step(logger, "Referencia Pinnacle",      step_sharp_reference)
     run_step(logger, "Horario de apuesta",       step_timing_learning)
     run_step(logger, "Refresh CLV cache",        step_refresh_clv_cache)   # Mejora #14
-    run_step(logger, "Holdout evaluation",       step_evaluate_holdout)
+    run_step(logger, "Holdout evaluation",       step_evaluate_holdout, skip_at="ahorro")
     # 2) Cargas de datos (lentas) y el ajuste que depende de ellas
     run_step(logger, "Load historical data",     step_load_historical)
-    run_step(logger, "Load international data",  step_load_international)
-    run_step(logger, "Collect match events",     step_collect_events)
+    run_step(logger, "Load international data",  step_load_international, skip_at="esencial")
+    run_step(logger, "Collect match events",     step_collect_events, skip_at="esencial")
     run_step(logger, "Load extra leagues",       step_load_extra_leagues)
     run_step(logger, "Segundas divisiones (ESPN)", step_second_divisions)
-    run_step(logger, "Historial K-League (TheSportsDB)", step_tsdb_history)
-    run_step(logger, "Momios históricos",        step_historical_odds)
+    run_step(logger, "Historial K-League (TheSportsDB)", step_tsdb_history, skip_at="esencial")
+    run_step(logger, "Momios históricos",        step_historical_odds, skip_at="ahorro")
     run_step(logger, "Alineaciones (ESPN)",      step_lineup_history)
-    run_step(logger, "Buscador de ventajas",     step_edge_finder)
+    run_step(logger, "Buscador de ventajas",     step_edge_finder, skip_at="ahorro")
     run_step(logger, "Nombres de equipo y repetidos", step_team_names_check)
     run_step(logger, "Apuestas sin fuente con dato nuevo", step_resolve_stale)
     # run_step(logger, "Load MLB data",            step_load_mlb)  # desactivado — sin creditos MLB
@@ -1229,12 +1279,12 @@ def run_weekly(logger: Logger):
     run_step(logger, "Fit DC-MLE parameters",    step_fit_dc_mle)
     run_step(logger, "Auditoría del sistema",    step_system_audit)
     # 3) Monitores y reportes
-    run_step(logger, "Drift detection",          step_drift_detection)     # Mejora #15
-    run_step(logger, "Market regime monitor",    step_market_regime)
+    run_step(logger, "Drift detection",          step_drift_detection, skip_at="ahorro")     # Mejora #15
+    run_step(logger, "Market regime monitor",    step_market_regime, skip_at="ahorro")
     # La auditoría de sanidad NO corre aquí: la ejecuta su propio paso
     # en weekly.yml (if: always(), corre aunque el weekly falle).
     # Correrla en los dos sitios mandaba el mismo mensaje dos veces.
-    run_step(logger, "Walk-forward backtest",    step_walkforward)
+    run_step(logger, "Walk-forward backtest",    step_walkforward, skip_at="ahorro")
     run_step(logger, "Weekly Telegram report",   step_weekly_report)
 
 
@@ -1272,6 +1322,15 @@ def main():
     args = parser.parse_args()
 
     _rotate_logs()              # limpiar logs antiguos antes de cada ejecución
+    down = _db_preflight()
+    if down:
+        # 11-nov-26: sin base, cada paso fallaba y llegaban errores a Telegram y
+        # correos de GitHub cada 30 min. Ahora la corrida termina aquí, sin
+        # error; el aviso claro lo manda el watchdog (4 veces al día como máximo).
+        print(f"::warning::Base de datos sin conexión: {down}. La corrida no hace nada; avisa el watchdog.")
+        log.warning(f"⚠️  Base de datos sin conexión: {down}. Modo {args.mode}: no se corre nada.")
+        sys.exit(0)
+    _budget_check()
     _check_world_cup_activation()  # activar Mundial 2026 si llegó la fecha
     _ensure_db_indexes()        # crear índices si no existen
 
@@ -1394,6 +1453,80 @@ def _telegram_send_failures() -> list:
     return list(getattr(mod, "SEND_FAILURES", []) or [])
 
 
+def db_down_reason(err: str) -> str:
+    """En palabras: por qué no contesta la base."""
+    if "quota" in err.lower():
+        return "Neon la bloqueó por pasarse del límite del plan gratis"
+    if "password authentication failed" in err:
+        return "la contraseña de la base no sirve (secreto DB_URL)"
+    return "no contesta (conexión)"
+
+
+def _db_preflight(tries: int = 2, wait_s: float = 20.0) -> str | None:
+    """None si la base contesta; si no, el motivo en palabras."""
+    import time
+    from sqlalchemy import text
+    err = ""
+    for i in range(tries):
+        try:
+            from config.database import engine
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return None
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"
+            if "quota" in err.lower() or i == tries - 1:
+                break
+            time.sleep(wait_s)
+    return db_down_reason(err)
+
+
+def _budget_check() -> None:
+    """El nivel del presupuesto de la base para esta corrida, y los avisos del
+    dueño cuando cambia o cuando el pronóstico del mes pasa del 50% o del 75%
+    (src/utils/db_budget.py). Nunca detiene la corrida."""
+    try:
+        from src.utils import db_budget as B
+        from src.utils.model_state import load_state, save_state
+        st = B.status()
+        _BUDGET.update(st)
+        log.info("📊 " + B.describe(st) + f" · modo {st['level']}")
+        if not st.get("measured"):
+            return
+        prev = load_state("db_budget") or {}
+        msgs, changed = budget_messages(st, prev)
+        if changed:
+            save_state("db_budget", changed, history=False)
+        if msgs:
+            from scripts.notify_telegram import send_message
+            for m in msgs:
+                send_message(m)
+    except Exception as e:
+        log.warning(f"⚠️  Presupuesto de la base: no se pudo revisar ({type(e).__name__}: {str(e)[:120]})")
+
+
+def budget_messages(st: dict, prev: dict) -> tuple:
+    """Función pura: (mensajes para el dueño, estado nuevo o None). Un mensaje
+    al cambiar de modo; el aviso del 50%/75% una vez por mes (si el cambio de
+    modo ya lo dice, no se repite)."""
+    from src.utils import db_budget as B
+    if st.get("paid_until"):                      # con el plan de pago no hay freno ni avisos
+        return [], None
+    old = prev.get("level", "normal")
+    alerted = dict(prev.get("alerted") or {})
+    msgs = []
+    if old != st["level"]:
+        msgs.append(B.level_message(old, st["level"], st))
+    pct = B.threshold_crossed(st, alerted)
+    if pct:
+        if not msgs:
+            msgs.append(B.threshold_message(pct, st))
+        alerted[st["month"]] = pct
+    if old == st["level"] and not pct:
+        return msgs, None
+    return msgs, {"level": st["level"], "alerted": alerted}
+
+
 def _record_run(mode: str, failed: int, seconds: float) -> None:
     """Registro de la corrida (24-sep-26): el watchdog avisa si el closing o
     el weekly dejan de correr (src/utils/pipeline_runs.py). Warning y no
@@ -1405,12 +1538,13 @@ def _record_run(mode: str, failed: int, seconds: float) -> None:
         for line in db_meter.summary_lines():
             print(line)
         t = db_meter.totals()
+        db_meter.mark_recorded()
     except Exception:
-        t = {"rows": None, "cells": None}
+        t = {"rows": None, "cells": None, "bytes": None, "awake_s": None}
     try:
         from config.database import engine as _engine
         from src.utils.pipeline_runs import record_run
-        record_run(_engine, mode, failed, seconds, t["rows"], t["cells"])
+        record_run(_engine, mode, failed, seconds, t["rows"], t["cells"], t["bytes"], t["awake_s"])
     except Exception as e:
         log.warning(f"⚠️  No se pudo registrar la corrida: {type(e).__name__}: {e}")
 

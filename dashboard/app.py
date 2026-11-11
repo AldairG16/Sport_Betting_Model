@@ -36,6 +36,10 @@ from config.database import DATABASE_URL  # noqa: E402
 # pool_pre_ping prueba la conexión antes de usarla y reconecta sola;
 # pool_recycle la renueva antes de que el servidor la corte.
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=240)  # noqa: E402
+# Lo que el dashboard gasta de la base también cuenta para el plan gratis de
+# Neon (11-nov-26): se mide y se guarda cada 30 min en pipeline_runs ("dashboard")
+from src.utils import db_meter as _meter  # noqa: E402
+_meter.install(engine)
 from dashboard.display import league_name, market_name, match_name, result_label  # noqa: E402
 from src.utils.bet_status import CANCELLED_SQL  # noqa: E402
 from src.utils.min_odds import (HOW_TO_READ, fmt_american, min_american,  # noqa: E402
@@ -192,6 +196,45 @@ def _partial_is_an_error(resp):
         if isinstance(data, dict) and data.get("ok"):
             resp.set_data(jsonify({"ok": False, "msg": DB_DOWN if g.get("db_down") else PARTIAL}).get_data())
     return resp
+
+
+_METER_FLUSH = {"last": None}
+METER_FLUSH_S = 1800
+
+
+@app.after_request
+def _flush_db_meter(resp):
+    """Cada 30 min, lo que leyó el dashboard va a pipeline_runs (mode
+    "dashboard") para el presupuesto del plan gratis (db_budget). Solo después
+    de una consulta real: la base ya está despierta, no se despierta para esto."""
+    import time
+    now = time.time()
+    if _METER_FLUSH["last"] is None:
+        _METER_FLUSH["last"] = now
+    t = _meter.totals()
+    if now - _METER_FLUSH["last"] < METER_FLUSH_S or not t["queries"] or g.get("db_down"):
+        return resp
+    try:
+        from src.utils.pipeline_runs import record_run
+        record_run(engine, "dashboard", 0, now - _METER_FLUSH["last"], t["rows"], t["cells"], t["bytes"], t["awake_s"])
+        _meter.reset()
+        _METER_FLUSH["last"] = now
+    except Exception as e:
+        app.logger.warning(f"consumo de la base: no se pudo guardar ({type(e).__name__})")
+    return resp
+
+
+_BUDGET_CACHE = {"at": 0.0, "st": None}
+BUDGET_TTL_S = 1800
+
+
+def _budget_status() -> dict:
+    """El presupuesto del plan gratis (db_budget), una vez cada 30 min."""
+    import time
+    from src.utils import db_budget
+    if _BUDGET_CACHE["st"] is None or time.time() - _BUDGET_CACHE["at"] > BUDGET_TTL_S:
+        _BUDGET_CACHE.update(at=time.time(), st=db_budget.status(engine))
+    return _BUDGET_CACHE["st"]
 
 
 def _no_data(msg: str = "sin datos"):
@@ -951,7 +994,9 @@ def api_board_header():
     rows = _q(TR.SINCE_SQL, {"s": TR.FIXED_SINCE.to_pydatetime(), "n": pd.Timestamp.now(tz="UTC").to_pydatetime()})
     if g.get("db_down"):
         return _no_data()
-    return jsonify({"ok": True, "since": TR.FIXED_SINCE.strftime("%Y-%m-%d"), **TR.record(rows.to_dict("records"))})
+    budget = _budget_status()          # 11-nov-26: en modo ahorro la página se actualiza cada 15 min
+    return jsonify({"ok": True, "since": TR.FIXED_SINCE.strftime("%Y-%m-%d"), **TR.record(rows.to_dict("records")),
+                    "budget_level": budget.get("level", "normal")})
 
 
 @app.route("/api/board/charts")

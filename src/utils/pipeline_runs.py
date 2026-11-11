@@ -35,6 +35,9 @@ RUNS_DDL = (
     # cuánto leyó de la base (10-nov-26, src/utils/db_meter.py)
     "ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS rows_read BIGINT",
     "ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS cells_read BIGINT",
+    # bytes que viajaron y segundos de base despierta (11-nov-26, db_budget)
+    "ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS bytes_read BIGINT",
+    "ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS awake_s REAL",
 )
 # Sin poda: ~50 filas/día (casi todas del closing) son ~1 MB al año.
 
@@ -66,18 +69,20 @@ DAILY_LABELS = {      # título, workflow, sin él…, quién lo dispara, veces 
 
 
 def record_run(engine, mode: str, failed: int, seconds: float | None,
-               rows_read: int | None = None, cells_read: int | None = None) -> None:
-    """Una fila por corrida, con lo que leyó de la base (db_meter)."""
+               rows_read: int | None = None, cells_read: int | None = None,
+               bytes_read: int | None = None, awake_s: float | None = None) -> None:
+    """Una fila por corrida, con lo que gastó de la base (db_meter)."""
+    opt = lambda v: None if v is None else int(v)
     with engine.begin() as conn:
         for stmt in RUNS_DDL:
             conn.execute(text(stmt))
         conn.execute(text("""
-            INSERT INTO pipeline_runs (mode, failed, seconds, rows_read, cells_read)
-            VALUES (:mode, :failed, :seconds, :rows_read, :cells_read)
+            INSERT INTO pipeline_runs (mode, failed, seconds, rows_read, cells_read, bytes_read, awake_s)
+            VALUES (:mode, :failed, :seconds, :rows_read, :cells_read, :bytes_read, :awake_s)
         """), {"mode": mode, "failed": int(failed),
                "seconds": None if seconds is None else round(float(seconds), 1),
-               "rows_read": None if rows_read is None else int(rows_read),
-               "cells_read": None if cells_read is None else int(cells_read)})
+               "rows_read": opt(rows_read), "cells_read": opt(cells_read), "bytes_read": opt(bytes_read),
+               "awake_s": None if awake_s is None else round(float(awake_s), 1)})
 
 
 def _hours(now, t) -> float:

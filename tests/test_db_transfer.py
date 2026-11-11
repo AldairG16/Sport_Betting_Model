@@ -30,11 +30,12 @@ def test_the_meter_counts_rows_and_cells_of_each_read():
     db_meter._after_execute(None, _Cur(3, 1), "SELECT 1", None, None, False)
     db_meter._after_execute(None, _Cur(1, 0), "UPDATE x SET y = 1", None, None, False)   # no es lectura
     db_meter._after_execute(None, _Cur(-1, 3), "SELECT * FROM t", None, None, False)      # SQLite: no sabe
-    assert db_meter.totals() == {"queries": 3, "rows": 203, "cells": 803}
-    (k, times, rows, cells), _ = db_meter.top(2)
-    assert k == "SELECT a, b, c, d FROM lineups" and (times, rows, cells) == (2, 200, 800)
+    t = db_meter.totals()
+    assert (t["queries"], t["rows"], t["cells"]) == (3, 203, 803)
+    (k, times, rows, cells, nbytes), _ = db_meter.top(2)
+    assert k == "SELECT a, b, c, d FROM lineups" and (times, rows, cells) == (2, 200, 800) and nbytes > 0
     lines = db_meter.summary_lines()
-    assert lines[0].startswith("🗄️  Lecturas de la base: 203 filas · 803 celdas en 3 consultas")
+    assert lines[0].startswith("🗄️  Lecturas de la base:") and "203 filas · 803 celdas en 3 consultas" in lines[0]
     db_meter.reset()
     assert db_meter.summary_lines() == []
 
