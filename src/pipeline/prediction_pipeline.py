@@ -3011,6 +3011,17 @@ def run_prediction_pipeline(dry_run: bool = False):
         LAST_RUN_SUMMARY.clear()
         LAST_RUN_SUMMARY.update({"dry_run": dry_run, "matches": 0, "failed_matches": 0,
                                  "bets": 0, "paper_bets": 0, "shadow": 0, "markets": {}})
+        if not dry_run:
+            # 11-nov-26 (fecha FIFA, ningún partido en los próximos 3 días): sin
+            # esto la corrida no dejaba rastro y los chequeos avisaban cada noche
+            # "program_picks sin actualizar" y "la última corrida es de hace 52 h".
+            # Queda dicho que corrió y no había qué analizar (output_checks.analysis_idle)
+            try:
+                from src.utils.model_state import save_state
+                save_state("pipeline_coverage", {"evaluated": 0, "idle": True, "problems": [],
+                                                 "at": pd.Timestamp.now(tz="UTC").isoformat()}, history=False)
+            except Exception as e:
+                log.warning(f"⚠️  Cobertura de la corrida no guardada: {type(e).__name__}")
         return
 
     all_bets = []

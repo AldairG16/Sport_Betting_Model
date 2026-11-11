@@ -556,3 +556,33 @@ def test_stale_odds_while_credits_are_out_are_said_once_not_as_new_errors(monkey
     assert mod.run_output_checks(engine=object(), normalize=lambda t: t) == []
     assert sum("sin créditos de The Odds API" in w for w in RUN_ISSUES.warnings()) == 2
     RUN_ISSUES.reset()
+
+
+def test_no_matches_to_analyze_is_not_stale_picks():
+    """11-nov-26, fecha FIFA: ningún partido en los próximos 3 días. El pipeline
+    no escribía nada y el chequeo avisaba cada noche "program_picks sin
+    actualizar" y la auditoría "la última corrida es de hace 52 h"."""
+    import pandas as pd
+    from src.utils.output_checks import analysis_idle, data_health
+    now = pd.Timestamp("2026-11-12 03:00", tz="UTC")
+    fresh = {"evaluated": 0, "idle": True, "at": "2026-11-11T12:01:00+00:00"}
+    assert analysis_idle(fresh, now)
+    assert not analysis_idle({**fresh, "at": "2026-11-10T12:00:00+00:00"}, now)     # dejó de correr: se avisa
+    assert not analysis_idle({"evaluated": 40, "at": "2026-11-11T12:01:00+00:00"}, now)
+    assert not analysis_idle(None, now)
+    ages = {"program_picks": 2, "model_vs_sharp": 3, "upcoming_matches": 0}
+    assert data_health({}, ages, idle=True) == []
+    assert data_health({}, ages) == ["Datos: program_picks sin actualizar hace 2 días (máximo 1)",
+                                     "Datos: model_vs_sharp sin actualizar hace 3 días (máximo 2)"]
+    # las cuotas sí se revisan aunque no haya qué analizar
+    assert data_health({}, {**ages, "upcoming_matches": 2}, idle=True) == \
+        ["Datos: upcoming_matches sin actualizar hace 2 días (máximo 1)"]
+
+
+def test_a_run_without_matches_leaves_its_mark(monkeypatch):
+    import src.utils.model_state as MS
+    from tests.pipeline_harness import default_matches, run_pipeline
+    saved = {}
+    monkeypatch.setattr(MS, "save_state", lambda k, v, **kw: saved.update({k: v}) or True)
+    run_pipeline(monkeypatch, matches=default_matches().iloc[0:0])
+    assert saved["pipeline_coverage"]["idle"] is True and saved["pipeline_coverage"]["evaluated"] == 0
