@@ -527,6 +527,25 @@ def api_predictions():
                                                             set(espn_leagues()))})
 
 
+# Titulares habituales de cada equipo (10-nov-26): salen de sus partidos ya
+# terminados y no cambian entre una recarga y otra (5 min), pero se volvían a
+# bajar de la base cada vez. Una copia por 30 min para los equipos de hoy.
+_PROFILES_CACHE: dict = {}
+PROFILES_TTL_S = 1800
+
+
+def _cached_profiles(load, teams: list) -> dict:
+    import time
+    key = tuple(teams)
+    hit = _PROFILES_CACHE.get(key)
+    if hit is not None and time.time() - hit[0] < PROFILES_TTL_S:
+        return hit[1]
+    profiles = load(engine, teams)
+    _PROFILES_CACHE.clear()                  # una sola copia: la de los equipos de hoy
+    _PROFILES_CACHE[key] = (time.time(), profiles)
+    return profiles
+
+
 @app.route("/api/lineups")
 def api_lineups():
     """Veredicto por partido cuando salen las alineaciones (v1.7.1)."""
@@ -555,7 +574,7 @@ def api_lineups():
         lineups.setdefault(r.team, []).append({"kickoff": r.kickoff, "formation": r.formation,
                                                "starters": load(r.starters), "names": load(r.names)})
     try:
-        profiles = load_profiles(engine, teams)
+        profiles = _cached_profiles(load_profiles, teams)
     except Exception as e:
         app.logger.warning(f"perfiles de alineación: {e}")
         profiles = {}

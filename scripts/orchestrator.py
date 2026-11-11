@@ -1397,11 +1397,20 @@ def _telegram_send_failures() -> list:
 def _record_run(mode: str, failed: int, seconds: float) -> None:
     """Registro de la corrida (24-sep-26): el watchdog avisa si el closing o
     el weekly dejan de correr (src/utils/pipeline_runs.py). Warning y no
-    error: que falle el registro no es un fallo del pipeline."""
+    error: que falle el registro no es un fallo del pipeline.
+    10-nov-26: también lo que leyó de la base (src/utils/db_meter.py), antes
+    de contar el propio registro."""
+    try:
+        from src.utils import db_meter
+        for line in db_meter.summary_lines():
+            print(line)
+        t = db_meter.totals()
+    except Exception:
+        t = {"rows": None, "cells": None}
     try:
         from config.database import engine as _engine
         from src.utils.pipeline_runs import record_run
-        record_run(_engine, mode, failed, seconds)
+        record_run(_engine, mode, failed, seconds, t["rows"], t["cells"])
     except Exception as e:
         log.warning(f"⚠️  No se pudo registrar la corrida: {type(e).__name__}: {e}")
 

@@ -666,6 +666,46 @@ def repicked_after_start(picks: list, kicks: list, normalize=None) -> list:
     return out
 
 
+# 21) lecturas de la base (10-nov-26): el 9-nov Neon cortó la base por pasarse
+#     de la transferencia del plan gratis (5.58 de 5 GB en 9 días, con 236 MB de
+#     base). Cada closing guarda lo que leyó (pipeline_runs.cells_read, db_meter);
+#     un cambio que multiplica las lecturas (la fusión de repetidos de la PR #124
+#     leía todo el historial en cada corrida) se ve al día siguiente.
+READS_JUMP = 2.0              # el closing de hoy lee el doble o más que el de la semana
+READS_MIN_CELLS = 50_000      # por debajo de esto, aunque suba, no gasta nada que importe
+READS_MIN_RUNS = 6            # corridas de cada lado para comparar
+
+
+def reads_jump(runs: list, now: datetime | None = None) -> list:
+    """runs: [{"ran_at", "cells_read"}] del closing. Problema si la mediana de las
+    últimas 24 h es READS_JUMP veces la de los 7 días anteriores."""
+    import statistics
+
+    import pandas as pd
+    now = pd.Timestamp(now if now is not None else datetime.now(timezone.utc))
+    now = now.tz_localize("UTC") if now.tzinfo is None else now
+    today, before = [], []
+    for r in runs:
+        c, t = r.get("cells_read"), r.get("ran_at")
+        if c is None or t is None or (isinstance(c, float) and pd.isna(c)):
+            continue
+        t = pd.Timestamp(t)
+        t = t.tz_localize("UTC") if t.tzinfo is None else t
+        age = (now - t).total_seconds() / 86400
+        if 0 <= age < 1:
+            today.append(float(c))
+        elif 1 <= age < 8:
+            before.append(float(c))
+    if len(today) < READS_MIN_RUNS or len(before) < READS_MIN_RUNS:
+        return []
+    m_today, m_before = statistics.median(today), statistics.median(before)
+    if m_today < READS_MIN_CELLS or m_today < READS_JUMP * max(m_before, 1.0):
+        return []
+    return [f"Lecturas de la base: cada closing de hoy lee {m_today / max(m_before, 1.0):.1f} veces más que "
+            f"la semana pasada ({m_today:,.0f} celdas contra {m_before:,.0f}). Eso gasta la transferencia "
+            f"del plan de Neon; el log del closing dice qué consultas leen más"]
+
+
 def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     """Corre todo y avisa cada problema como ERROR. Devuelve los avisos."""
     import pandas as pd
@@ -1054,6 +1094,20 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
             seen.append("reprogramados en su fecha")
     except Exception as e:
         problems.append(f"Reprogramados en su fecha: no se pudo revisar ({type(e).__name__})")
+
+    # 21) lecturas de la base (10-nov-26): ver reads_jump
+    try:
+        runs = pd.read_sql(text("""
+            SELECT ran_at, cells_read FROM pipeline_runs
+            WHERE mode = 'closing' AND ran_at >= NOW() - INTERVAL '8 days' AND cells_read IS NOT NULL
+        """), engine)
+        bad = reads_jump(runs.to_dict("records"))
+        problems += bad
+        if not bad:
+            seen.append("lecturas de la base")
+    except Exception as e:
+        if "cells_read" not in str(e) and "does not exist" not in str(e):   # la columna nace con el primer closing
+            problems.append(f"Lecturas de la base: no se pudo revisar ({type(e).__name__})")
 
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")

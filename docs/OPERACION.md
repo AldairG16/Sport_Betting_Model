@@ -1061,6 +1061,31 @@ Un ensayo del pipeline desde esa PC (miles de consultas) tarda ~1 h; en GitHub, 
 - El 22-oct se agregó `pool_pre_ping` creyendo que los ensayos se colgaban en conexiones
   muertas. Eran lentos, no estaban colgados; se quitó el mismo día.
 
+**La transferencia del plan de Neon (10-nov-2026, v2.11.2).** El 9-nov a las 13:55 UTC Neon bloqueó
+la base ("exceeded the quota"). No fueron las horas de cómputo (37.8 de 100): fue la
+**transferencia**, lo que el programa descarga de la base, 5.58 GB en 9 días contra 5 GB al mes del
+plan gratis, con una base de 236 MB. La base vuelve al empezar el mes o al subir de plan.
+- **Lo que se releía:**
+  - Titulares habituales (`lineup_alerts.load_profiles`): bajaba el historial entero de cada equipo,
+    con los nombres de toda la plantilla, tres veces por closing (picks, parlays y alertas) y en cada
+    recarga de `/api/lineups`. Ahora `PROFILES_SQL` trae solo los últimos `HISTORY_MATCHES` (15) de
+    cada equipo, que es lo que usa `team_profile`, y el dashboard guarda los perfiles 30 min
+    (`_cached_profiles`).
+  - Córners y tarjetas (`props_fair.load_history`): 900 días de todas las ligas en cada closing.
+    Ahora el closing pide solo el año de las ligas de sus partidos y todos los partidos de sus
+    equipos (`program_picks.props_scope`). El resultado es el mismo (`tests/test_db_transfer.py`).
+  - Ya corregidos en v2.11.1: el dashboard recargaba cada 5 min aunque no se viera, y la fusión de
+    repetidos leía todo el historial en cada corrida de resultados.
+- **Medición** (`src/utils/db_meter.py`): cuenta las filas y celdas (filas × columnas) que devuelve
+  cada consulta del engine del pipeline. Al final de cada corrida el log dice "🗄️ Lecturas de la
+  base" con las 5 consultas que más leen, y `pipeline_runs` guarda `rows_read` y `cells_read`.
+  No son bytes (psycopg2 no los da), pero ordenan bien qué pesa.
+- **Chequeo de salidas 21** (`reads_jump`): si el closing de las últimas 24 h lee el doble o más que
+  la mediana de los 7 días anteriores (y más de 50 mil celdas), avisa.
+- **Antes de agregar una lectura**, multiplícala por 48 closings al día y por las recargas del
+  dashboard. Por medir con el medidor: las fotos de momios de 72 h (`_SNAPS_SQL`) y el
+  `SELECT * FROM model_vs_sharp` de Próximos.
+
 **Fechas: siempre con formato explícito (`src/utils/dates.py`, 23-oct-2026).**
 `pd.to_datetime(x, dayfirst=True)` sin formato cae a dateutil elemento por elemento, y dateutil
 con dayfirst lee "2025-02-06" como 2-jun. El cargador de FBref dejó así toda la historia
