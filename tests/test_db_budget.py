@@ -1,0 +1,285 @@
+"""
+tests/test_db_budget.py
+=======================
+El presupuesto del plan gratis de Neon (11-nov-26). El 9-nov la base se
+bloqueó por pasarse de la transferencia del plan gratis y todo el programa
+quedó detenido. El dueño: "esto tiene que funcionar 100% con planes gratis…
+no debemos sufrir estos ataques y pausar todo por eso".
+"""
+
+import sys
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from src.utils import db_budget as B
+from src.utils import db_meter as M
+
+
+# ── El medidor: bytes y base despierta ───────────────────────────────────────
+
+class _PgCursor:
+    """Como el cursor de psycopg2 del lado del cliente: ya trae todas las filas."""
+
+    def __init__(self, rows, broken_scroll=False):
+        self._rows, self.rownumber, self.name = rows, 0, None
+        self.rowcount = len(rows)
+        self.description = [("a",), ("b",)]
+        self._broken = broken_scroll
+
+    def fetchall(self):
+        out = self._rows[self.rownumber:]
+        self.rownumber = len(self._rows)
+        return out
+
+    def scroll(self, value, mode="relative"):
+        new = value if mode == "absolute" else self.rownumber + value
+        if self._broken or new < 0 or new >= len(self._rows):      # como psycopg2: fuera de rango
+            raise ValueError("scroll destination out of bounds")
+        self.rownumber = new
+
+
+_PgCursor.__module__ = "psycopg2.extensions"
+
+
+def test_the_meter_counts_the_bytes_and_leaves_the_rows_for_the_caller():
+    M.reset()
+    cur = _PgCursor([("hola", 12), ("adiós", None)])
+    M._after_execute(None, cur, "SELECT a, b FROM t", None, None, False)
+    assert cur.fetchall() == [("hola", 12), ("adiós", None)]          # quien consultó lee todo
+    t = M.totals()
+    assert (t["rows"], t["cells"]) == (2, 4)
+    assert t["bytes"] == 2 * M.ROW_OVERHEAD + 4 * M.FIELD_OVERHEAD + len("hola") + 2 + len("adiós")
+    M.reset()
+
+
+def test_an_empty_result_is_measured_without_rewinding():
+    """11-nov-26, contra la base real: psycopg2 no deja rebobinar un resultado
+    vacío ("scroll destination out of bounds") y la consulta reventaba."""
+    M.reset()
+    cur = _PgCursor([])
+    M._after_execute(None, cur, "SELECT a, b FROM t WHERE false", None, None, False)
+    assert M.totals()["bytes"] == 0 and cur.fetchall() == []
+    M.reset()
+
+
+def test_a_cursor_that_cannot_rewind_is_an_error_not_missing_rows():
+    with pytest.raises(RuntimeError, match="rebobinar"):
+        M._after_execute(None, _PgCursor([("x", 1)], broken_scroll=True), "SELECT a, b FROM t", None, None, False)
+    M.reset()
+
+
+def test_other_cursors_are_estimated_without_reading_them():
+    class Other:
+        rowcount, description, name = 10, [("a",), ("b",), ("c",)], None
+    M.reset()
+    M._after_execute(None, Other(), "SELECT a, b, c FROM t", None, None, False)
+    assert M.totals()["bytes"] == 10 * M.ROW_OVERHEAD + 30 * (M.FIELD_OVERHEAD + M.AVG_CELL_BYTES)
+    M.reset()
+
+
+def test_the_database_counts_as_awake_five_minutes_after_each_query():
+    M.reset()
+    M._AWAKE["until"] = 0.0
+    for t in (1000.0, 1100.0, 3000.0):                 # dos seguidas y otra media hora después
+        M._awake(t)
+    assert M.totals()["awake_s"] == 300 + 100 + 300
+    M.reset()
+
+
+def test_other_processes_save_what_they_spent_when_they_finish(monkeypatch):
+    import src.utils.pipeline_runs as PR
+    calls = []
+    monkeypatch.setattr(PR, "record_run", lambda eng, *a: calls.append(a))
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(M, "_STATE", {"recorded": False, "started": 0.0})
+    M.reset()
+    M.record("SELECT 1", 1, 1, 50)
+    M._record_at_exit()                                # con pytest cargado no guarda nada
+    assert calls == []
+    monkeypatch.delitem(sys.modules, "pytest")
+    monkeypatch.setattr(sys, "argv", ["scripts/watchdog.py"])
+    M._record_at_exit()
+    assert calls and calls[0][0] == "proc:watchdog" and calls[0][5] == 50
+    M.mark_recorded()                                  # el orquestador ya lo guardó: no se repite
+    M._record_at_exit()
+    assert len(calls) == 1
+    M.reset()
+
+
+# ── El pronóstico del mes ────────────────────────────────────────────────────
+
+NOW = datetime(2026, 12, 11, 12, tzinfo=timezone.utc)
+
+
+def _usage(gb_day, awake_h_day, since=datetime(2026, 12, 1, tzinfo=timezone.utc)):
+    days = (NOW - since).total_seconds() / 86400
+    per_day = gb_day * 1e9 / B.WIRE_FACTOR
+    return {"measured_since": since, "bytes": per_day * days, "awake_s": awake_h_day * 3600 * days,
+            "rate_since": NOW - timedelta(days=3), "rate_bytes": per_day * 3, "rate_awake_s": awake_h_day * 3600 * 3}
+
+
+def test_a_month_well_under_the_free_plan_runs_normal():
+    st = B.project(_usage(gb_day=0.08, awake_h_day=6), NOW)       # 2.5 GB y 45 h al mes
+    assert st["level"] == "normal" and st["proj_gb"] == pytest.approx(2.48, abs=0.01)
+    assert st["pct_compute"] == pytest.approx(46.5, abs=0.5)
+
+
+@pytest.mark.parametrize("gb_day,level", [(0.13, "ahorro"), (0.16, "esencial")])
+def test_the_brake_turns_on_before_the_limit(gb_day, level):
+    st = B.project(_usage(gb_day=gb_day, awake_h_day=4), NOW)
+    assert st["level"] == level and st["worst"] == "transfer"
+
+
+def test_compute_hours_also_brake():
+    st = B.project(_usage(gb_day=0.02, awake_h_day=11), NOW)      # 0.25 × 11 h × 31 días = 85 h
+    assert st["level"] == "ahorro" and st["worst"] == "compute"
+
+
+def test_a_measurement_that_starts_mid_month_estimates_the_days_before():
+    since = datetime(2026, 12, 8, tzinfo=timezone.utc)
+    st = B.project(_usage(gb_day=0.1, awake_h_day=4, since=since), NOW)
+    assert st["estimated_days"] == 7.0
+    assert st["used_gb"] == pytest.approx(0.1 * 10.5, abs=0.01)   # 3.5 medidos + 7 estimados
+
+
+def test_too_little_measurement_has_no_opinion():
+    u = _usage(gb_day=1.0, awake_h_day=20)
+    u["rate_since"] = NOW - timedelta(hours=2)
+    assert B.project(u, NOW) == {"level": "normal", "measured": False, "month": "2026-12"}
+    assert B.status(engine=object(), now=NOW)["level"] == "normal"        # sin base: nunca frena a ciegas
+
+
+def test_each_warning_goes_once_a_month():
+    st = B.project(_usage(gb_day=0.12, awake_h_day=4), NOW)       # ~74%
+    assert B.threshold_crossed(st, {}) == 50
+    assert B.threshold_crossed(st, {"2026-12": 50}) is None
+    assert B.threshold_crossed(st, {"2026-11": 75}) == 50          # otro mes
+    st = B.project(_usage(gb_day=0.13, awake_h_day=4), NOW)
+    assert B.threshold_crossed(st, {"2026-12": 50}) == 75
+
+
+def test_the_owner_hears_when_the_mode_changes_and_when_it_crosses_a_warning():
+    from scripts.orchestrator import budget_messages
+    st = B.project(_usage(gb_day=0.13, awake_h_day=4), NOW)
+    msgs, state = budget_messages(st, {})
+    assert len(msgs) == 1 and "Modo ahorro" in msgs[0] and "cada hora" in msgs[0]
+    assert state == {"level": "ahorro", "alerted": {"2026-12": 75}}
+    assert budget_messages(st, state) == ([], None)                   # nada nuevo: silencio
+    calm = B.project(_usage(gb_day=0.09, awake_h_day=4), NOW)
+    msgs, state = budget_messages(calm, state)
+    assert "volvió a su ritmo normal" in msgs[0] and state["level"] == "normal"
+    msgs, state = budget_messages(calm, {"level": "normal"})
+    assert "50% del plan gratis" in msgs[0] and state["alerted"] == {"2026-12": 50}
+
+
+# ── Lo que hace el freno ─────────────────────────────────────────────────────
+
+def test_saving_mode_keeps_one_closing_an_hour_and_every_closing_before_a_match():
+    from scripts.orchestrator import closing_skip_reason as skip
+    assert skip("normal", 40, 0) is None
+    assert skip("ahorro", 5, 0) is None                    # el de la primera media hora corre
+    assert "modo ahorro" in skip("ahorro", 35, 0)
+    assert skip("ahorro", 35, 2) is None                   # hay partidos en las próximas 2 h
+    assert "modo esencial" in skip("esencial", 5, 0)
+    assert skip("esencial", 35, 1) is None
+
+
+def test_optional_steps_are_skipped_only_in_their_mode(monkeypatch):
+    import scripts.orchestrator as O
+    ran = []
+
+    class L:
+        steps_total = steps_ok = 0
+        failed_steps = []
+
+        def log(self, m):
+            ran.append(m)
+    for level, expect in (("normal", 2), ("ahorro", 1), ("esencial", 0)):
+        monkeypatch.setitem(O._BUDGET, "level", level)
+        calls = []
+        O.run_step(L(), "Backtest", lambda: calls.append(1), skip_at="ahorro")
+        O.run_step(L(), "ClubElo", lambda: calls.append(1), skip_at="esencial")
+        assert len(calls) == {"normal": 2, "ahorro": 1, "esencial": 0}[level] == expect
+    assert any("se salta (modo esencial de la base" in m for m in ran)
+
+
+def test_without_a_database_a_run_ends_quietly_and_says_why(monkeypatch):
+    import scripts.orchestrator as O
+    assert O.db_down_reason("OperationalError: ERROR: Your account or project has exceeded the quota") == \
+        "Neon la bloqueó por pasarse del límite del plan gratis"
+    assert "contraseña" in O.db_down_reason("password authentication failed for user x")
+    assert O.db_down_reason("could not connect to server") == "no contesta (conexión)"
+
+
+def test_the_watchdog_explains_a_blocked_database():
+    from scripts.watchdog import db_down_message
+    msg = db_down_message("ERROR: Your account or project has exceeded the quota", "…")
+    assert "BLOQUEADA" in msg and "plan gratis" in msg and "día 1" in msg
+    assert "NO CONTESTA" in db_down_message("timeout expired", "…")
+
+
+def test_the_daily_check_sees_a_silent_meter_and_essential_mode():
+    from src.utils.output_checks import budget_problems
+    assert budget_problems({"level": "normal", "measured": True, "pct": 30}, 40) == []
+    assert "ninguna corrida guardó" in budget_problems({"level": "normal"}, 0)[0]
+    st = B.project(_usage(gb_day=0.16, awake_h_day=4), NOW)
+    assert "modo esencial" in budget_problems(st, 40)[0]
+
+
+# ── El dashboard ─────────────────────────────────────────────────────────────
+
+def test_the_dashboard_saves_what_it_spent_every_half_hour(monkeypatch):
+    from dashboard import app as A
+    import src.utils.pipeline_runs as PR
+    calls = []
+    monkeypatch.setattr(PR, "record_run", lambda eng, *a: calls.append(a))
+    clock = [10_000.0]
+    monkeypatch.setattr("time.time", lambda: clock[0])
+    monkeypatch.setitem(A._METER_FLUSH, "last", None)
+    M.reset()
+    with A.app.test_request_context("/api/x"):
+        A._flush_db_meter(A.app.response_class("{}"))      # empieza a contar
+        M.record("SELECT x", 10, 20, 5000)
+        clock[0] += 600
+        A._flush_db_meter(A.app.response_class("{}"))
+        assert calls == []                                   # aún no son 30 min
+        clock[0] += A.METER_FLUSH_S
+        A._flush_db_meter(A.app.response_class("{}"))
+    assert calls and calls[0][0] == "dashboard" and calls[0][5] == 5000
+    assert M.totals()["queries"] == 0
+    M.reset()
+
+
+def test_in_saving_mode_the_page_refreshes_every_15_minutes(monkeypatch):
+    from pathlib import Path
+    js = (Path(__file__).parent.parent / "dashboard" / "ui_es5.js").read_text(encoding="utf-8")
+    assert "_saving = d.budget_level === 'ahorro' || d.budget_level === 'esencial';" in js
+    assert "AUTO_MS = (_saving ? 15 : 5) * 60000;" in js
+    from dashboard import app as A
+    monkeypatch.setattr(A, "_q", lambda *a, **k: __import__("pandas").DataFrame())
+    monkeypatch.setattr(A, "_budget_status", lambda: {"level": "ahorro"})
+    with A.app.test_client() as c:
+        d = c.get("/api/board/header").get_json()
+    assert d["budget_level"] == "ahorro"
+
+
+def test_weekly_jobs_are_spread_over_the_week():
+    """11-nov-26: recién medido, el weekly y la primera copia contaban como si
+    pasaran cada día y el pronóstico salía del 400%."""
+    u = _usage(gb_day=0.05, awake_h_day=3)
+    u["week_bytes"] = 0.35e9 / B.WIRE_FACTOR                  # 350 MB de weekly + respaldo en la semana
+    st = B.project(u, NOW)
+    assert st["gb_day"] == pytest.approx(0.05 + 0.05, abs=0.001)
+
+
+def test_with_the_paid_plan_it_measures_but_does_not_brake():
+    from scripts.orchestrator import budget_messages
+    st = B.project(_usage(gb_day=0.16, awake_h_day=4), NOW)
+    assert st["level"] == "esencial"
+    paid = B.paid_plan(st, '{"paid_until": "2026-12-20"}', NOW)
+    assert paid["level"] == "normal" and paid["free_level"] == "esencial"
+    assert "plan de pago hasta el 2026-12-20" in B.describe(paid) and "sería modo esencial" in B.describe(paid)
+    assert budget_messages(paid, {}) == ([], None)
+    assert B.paid_plan(st, {"paid_until": "2026-12-01"}, NOW)["level"] == "esencial"     # ya venció
+    assert B.paid_plan(st, None, NOW)["level"] == "esencial"

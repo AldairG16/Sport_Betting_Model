@@ -263,7 +263,8 @@ def test_the_header_shows_the_targets_since_oct_22_not_the_frozen_bankroll(monke
                              for r, p in (("win", 0.45), ("win", 0.3), ("loss", -1.0), ("push", 0.0))])
     monkeypatch.setattr(A, "_q", fake_q)
     d = A.app.test_client().get("/api/board/header").get_json()
-    assert d == {"ok": True, "since": "2026-10-22", "n": 4, "won": 2, "lost": 1, "void": 1, "units": -0.25, "priced": 4}
+    assert d == {"ok": True, "since": "2026-10-22", "n": 4, "won": 2, "lost": 1, "void": 1, "units": -0.25, "priced": 4,
+                 "budget_level": "normal"}                # 11-nov-26: el modo del plan gratis de Neon
     assert seen == [TR.SINCE_SQL]
     html = A.app.test_client().get("/").get_data(as_text=True)
     import re

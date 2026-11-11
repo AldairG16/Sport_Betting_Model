@@ -388,8 +388,11 @@ def _record(seconds: float, failed: int) -> None:
     """Huella de la corrida en pipeline_runs: el watchdog avisa si el
     resolvedor deja de correr (del 11-may al 1-oct-26 no corrió y nadie lo vio)."""
     try:
+        from src.utils import db_meter
         from src.utils.pipeline_runs import record_run
-        record_run(engine, "resolve_pending", failed, seconds)
+        t = db_meter.totals()
+        db_meter.mark_recorded()
+        record_run(engine, "resolve_pending", failed, seconds, t["rows"], t["cells"], t["bytes"], t["awake_s"])
     except Exception as e:
         log.error(f"❌ resolve_pending: no se pudo registrar la corrida: {e}")
 

@@ -47,8 +47,11 @@ def _serve():
     # Sin una línea por petición en la consola: si la consola se pausa, cada
     # escritura bloquea la respuesta y la página se queda esperando.
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
-    from dashboard.app import app
+    from dashboard.app import app, engine
     from dashboard.supervisor import PORT
+    # 11-nov-26: el respaldo semanal de la base en esta PC (src/utils/db_backup.py)
+    from src.utils.db_backup import start_thread
+    start_thread(engine)
     app.run(host="127.0.0.1", port=PORT, debug=False, threaded=True)
 
 

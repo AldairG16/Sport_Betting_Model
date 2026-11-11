@@ -706,6 +706,25 @@ def reads_jump(runs: list, now: datetime | None = None) -> list:
             f"del plan de Neon; el log del closing dice qué consultas leen más"]
 
 
+def budget_problems(st: dict, measured_24h: int) -> list:
+    """Chequeo 22: el medidor guarda algo y el mes no va al límite."""
+    out = []
+    if measured_24h == 0:
+        out.append("Presupuesto de la base: ninguna corrida guardó lo que leyó en las últimas 24 h "
+                   "(db_meter): el freno del plan gratis de Neon no ve el gasto")
+    if st.get("level") == "esencial":
+        from src.utils.db_budget import describe
+        out.append(f"Presupuesto de la base: modo esencial, el mes va al {st['pct']:.0f}% del plan gratis de "
+                   f"Neon y solo corre lo esencial. {describe(st)}")
+    return out
+
+
+def _recent_measured_runs(engine) -> int:
+    with engine.connect() as conn:
+        return int(conn.execute(text("SELECT COUNT(*) FROM pipeline_runs WHERE ran_at >= NOW() - INTERVAL '24 hours' "
+                                     "AND bytes_read IS NOT NULL")).scalar() or 0)
+
+
 def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     """Corre todo y avisa cada problema como ERROR. Devuelve los avisos."""
     import pandas as pd
@@ -1108,6 +1127,37 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     except Exception as e:
         if "cells_read" not in str(e) and "does not exist" not in str(e):   # la columna nace con el primer closing
             problems.append(f"Lecturas de la base: no se pudo revisar ({type(e).__name__})")
+
+    # 22) el presupuesto del plan gratis de Neon (11-nov-26, src/utils/db_budget.py):
+    #     sin medición de las últimas 24 h el freno no ve nada; en modo esencial
+    #     el programa ya está recortado
+    try:
+        from src.utils import db_budget
+        st = db_budget.status(engine)
+        # sin la columna todavía (nace con el primer closing de v2.12.0) no hay qué revisar
+        bad = [] if st.get("error") else budget_problems(st, _recent_measured_runs(engine))
+        problems += bad
+        if not bad and st.get("measured"):
+            seen.append(f"plan gratis de Neon {st['pct']:.0f}% (modo {st['level']})")
+    except Exception as e:
+        problems.append(f"Presupuesto de la base: no se pudo revisar ({type(e).__name__})")
+
+    # 23) el respaldo semanal en la PC del dueño (11-nov-26, src/utils/db_backup.py):
+    #     sin copia, un bloqueo de la base vuelve a dejar todo atrapado
+    try:
+        from src.utils.db_backup import backup_late
+        if not hasattr(engine, "connect"):                  # pruebas con engine falso
+            raise LookupError("pipeline_runs does not exist")
+        with engine.connect() as conn:
+            last = conn.execute(text("SELECT MAX(ran_at) FROM pipeline_runs WHERE mode = 'respaldo'")).scalar()
+        late = backup_late(last)
+        if late:
+            problems.append(late)
+        else:
+            seen.append("respaldo semanal")
+    except Exception as e:
+        if "does not exist" not in str(e):
+            problems.append(f"Respaldo de la base: no se pudo revisar ({type(e).__name__})")
 
     for p in problems:
         log.error(f"❌ Chequeo de salidas — {p}")

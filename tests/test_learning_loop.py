@@ -393,7 +393,7 @@ def test_orchestrator_exits_nonzero_when_a_step_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(nt, "send_message", lambda msg, *a, **k: sent.append(msg))
     monkeypatch.setattr(orch, "LOG_DIR", tmp_path)
     monkeypatch.setattr(orch, "LOCK_FILE", tmp_path / "lock")
-    for fn in ("_rotate_logs", "_check_world_cup_activation", "_ensure_db_indexes"):
+    for fn in ("_rotate_logs", "_check_world_cup_activation", "_ensure_db_indexes", "_db_preflight", "_budget_check"):
         monkeypatch.setattr(orch, fn, lambda: None)
 
     def boom():
