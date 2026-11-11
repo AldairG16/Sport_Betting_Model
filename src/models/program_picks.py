@@ -651,12 +651,13 @@ _SNAPS_SQL = """
 """
 
 
-def _props_for(engine):
+def _props_for(engine, leagues=None, teams=None):
     """fn(home, away, league, kickoff) → {"corners"|"cards": fn(línea)} con el
-    modelo calibrado de córners y tarjetas (props_fair), lo de antes del partido."""
+    modelo calibrado de córners y tarjetas (props_fair), lo de antes del partido.
+    leagues/teams: solo la historia que necesitan esos partidos (10-nov-26)."""
     from src.models import props_fair as PF
     try:
-        hist = PF.load_history(engine)
+        hist = PF.load_history(engine, leagues=leagues, teams=teams)
     except Exception as e:
         log.warning(f"⚠️  Córners y tarjetas sin historia: {type(e).__name__}")
         return None
@@ -815,6 +816,20 @@ def started_early(engine, normalize=None, now=None) -> set:
     return frozen_by_espn(kicks.to_dict("records"), now, normalize)
 
 
+def props_scope(mvs: pd.DataFrame, normalize=None) -> tuple:
+    """(ligas, equipos) de los partidos de model_vs_sharp, con los mismos nombres
+    que build_picks le pasa a props_for: la historia de córners y tarjetas que
+    hace falta para ellos (props_fair.load_history)."""
+    leagues, teams = set(), set()
+    for r in (mvs.to_dict("records") if not mvs.empty else []):
+        h, _, a = str(r["match"]).partition(" vs ")
+        kh, _, ka = match_key(h, a, normalize).partition(" vs ")
+        teams |= {kh, ka}
+        if r.get("league") is not None and not (isinstance(r.get("league"), float) and pd.isna(r.get("league"))):
+            leagues.add(str(r["league"]))
+    return sorted(leagues), sorted(teams)
+
+
 def _row_key(r: dict, normalize=None) -> str:
     h, _, a = str(r["match"]).partition(" vs ")
     return match_key(h, a, normalize)
@@ -839,7 +854,9 @@ def snapshot_picks(hours: int = SNAPSHOT_HOURS, engine=None) -> int:
         snaps = pd.read_sql(text(_SNAPS_SQL), engine, params={"a": now.to_pydatetime(),
                                                                "b": (now + pd.Timedelta(hours=hours)).to_pydatetime()})
         from src.models.filter_learner import paused_regions
-        rows = build_picks(mvs, up, snaps, _ratio(engine), normalize_team, _props_for(engine), load_bias(engine),
+        leagues, teams = props_scope(mvs, normalize_team)
+        rows = build_picks(mvs, up, snaps, _ratio(engine), normalize_team, _props_for(engine, leagues, teams),
+                           load_bias(engine),
                            _lineups_for(engine, normalize_team), paused_regions(engine))
         early = started_early(engine, normalize_team, now)
         frozen = [r for r in rows if _row_key(r, normalize_team) in early]

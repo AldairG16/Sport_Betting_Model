@@ -10,3 +10,8 @@ DATABASE_URL = DB_URL
 _KEEPALIVE = {"keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10, "keepalives_count": 5}
 engine = create_engine(DATABASE_URL, pool_recycle=240,
                        connect_args=_KEEPALIVE if str(DATABASE_URL).startswith("postgres") else {})
+
+# Cuánto lee cada corrida (10-nov-26, src/utils/db_meter.py): el 9-nov la base se
+# bloqueó por pasarse de la transferencia del plan gratis y nada lo medía
+from src.utils.db_meter import install as _meter
+_meter(engine)

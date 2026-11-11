@@ -273,15 +273,28 @@ def value_at_close(min_american: int | None, pin_close_prob: float | None) -> fl
 # DB
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Solo los últimos HISTORY_MATCHES de cada equipo, que es lo que usa team_profile
+# (10-nov-26). Antes bajaba el historial entero de cada equipo, con los nombres de
+# toda la plantilla, tres veces por closing (picks, parlays y alertas) y en cada
+# recarga del dashboard: parte de los 5.58 GB que agotaron la transferencia de Neon.
+PROFILES_SQL = """
+    SELECT team, starters, goals, names FROM (
+        SELECT team, kickoff, starters, goals, names,
+               ROW_NUMBER() OVER (PARTITION BY team ORDER BY kickoff DESC) AS rn
+        FROM lineups
+        WHERE completed AND team = ANY(:t)
+    ) x
+    WHERE rn <= :n
+    ORDER BY team, kickoff DESC
+"""
+
+
 def load_profiles(engine, teams: list) -> dict:
     """team_profile de cada equipo con sus partidos terminados en `lineups`."""
     if not teams:
         return {}
     with engine.connect() as conn:
-        rows = conn.execute(text("""
-            SELECT team, starters, goals, names FROM lineups
-            WHERE completed AND team = ANY(:t) ORDER BY kickoff DESC
-        """), {"t": list(teams)}).fetchall()
+        rows = conn.execute(text(PROFILES_SQL), {"t": list(teams), "n": HISTORY_MATCHES}).fetchall()
     hist = {}
     for team, st, gl, nm in rows:
         load = lambda v: v if isinstance(v, (list, dict)) else json.loads(v or "null")

@@ -32,6 +32,9 @@ RUNS_DDL = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_pipeline_runs_mode_ran ON pipeline_runs (mode, ran_at DESC)",
+    # cuánto leyó de la base (10-nov-26, src/utils/db_meter.py)
+    "ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS rows_read BIGINT",
+    "ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS cells_read BIGINT",
 )
 # Sin poda: ~50 filas/día (casi todas del closing) son ~1 MB al año.
 
@@ -62,16 +65,19 @@ DAILY_LABELS = {      # título, workflow, sin él…, quién lo dispara, veces 
 }
 
 
-def record_run(engine, mode: str, failed: int, seconds: float | None) -> None:
-    """Una fila por corrida."""
+def record_run(engine, mode: str, failed: int, seconds: float | None,
+               rows_read: int | None = None, cells_read: int | None = None) -> None:
+    """Una fila por corrida, con lo que leyó de la base (db_meter)."""
     with engine.begin() as conn:
         for stmt in RUNS_DDL:
             conn.execute(text(stmt))
         conn.execute(text("""
-            INSERT INTO pipeline_runs (mode, failed, seconds)
-            VALUES (:mode, :failed, :seconds)
+            INSERT INTO pipeline_runs (mode, failed, seconds, rows_read, cells_read)
+            VALUES (:mode, :failed, :seconds, :rows_read, :cells_read)
         """), {"mode": mode, "failed": int(failed),
-               "seconds": None if seconds is None else round(float(seconds), 1)})
+               "seconds": None if seconds is None else round(float(seconds), 1),
+               "rows_read": None if rows_read is None else int(rows_read),
+               "cells_read": None if cells_read is None else int(cells_read)})
 
 
 def _hours(now, t) -> float:

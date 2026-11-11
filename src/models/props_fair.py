@@ -127,23 +127,41 @@ def best_pick(mu: float, league_mu: float, prop: str, min_gap: float = MIN_GAP) 
 HISTORY_DAYS = 900          # alcanza para el año de liga y los 20 partidos de cada equipo
 
 
-def load_history(engine=None, days: int = HISTORY_DAYS) -> pd.DataFrame:
+def load_history(engine=None, days: int = HISTORY_DAYS, leagues=None, teams=None) -> pd.DataFrame:
     """Una sola consulta: los partidos recientes con córners o tarjetas. Todo
     lo demás se calcula en memoria (el 20-oct, una consulta por equipo y liga
     tardaba 7 min para 122 partidos). El nombre es `home_team` (canónico, en
-    minúsculas): `team_home_norm` quedó vacío en los partidos recientes."""
+    minúsculas): `team_home_norm` quedó vacío en los partidos recientes.
+
+    leagues/teams (10-nov-26): solo lo que necesitan los partidos por venir, para
+    el closing, que la leía entera 48 veces al día. match_props usa el año de la
+    liga antes del partido (league_averages) y los últimos partidos de cada
+    equipo en cualquier liga (team_history): con el año de esas ligas y todos los
+    partidos de esos equipos el resultado es el mismo. Vale para partidos de hoy
+    en adelante (el año se cuenta desde hoy). Sin ellos, todo, como antes."""
     from sqlalchemy import text
     if engine is None:
         from config.database import engine
     cols = sorted({c for cfg in PROPS.values() for c in cfg["cols"]})
     expr = lambda c: COLUMN_SQL.get(c, c)
-    df = pd.read_sql(text(f"""
+    scope, params = "", {}
+    if leagues is not None or teams is not None:
+        parts = []
+        if leagues:
+            parts.append(f"(league = ANY(:leagues) AND date >= CURRENT_DATE - {LEAGUE_DAYS + 1})")
+            params["leagues"] = sorted({str(x) for x in leagues})
+        if teams:
+            parts.append("(LOWER(home_team) = ANY(:teams) OR LOWER(away_team) = ANY(:teams))")
+            params["teams"] = sorted({str(x).lower() for x in teams})
+        scope = f" AND ({' OR '.join(parts)})" if parts else " AND FALSE"
+    sql = text(f"""
         SELECT date, league, LOWER(home_team) AS home, LOWER(away_team) AS away,
                {", ".join(f"{expr(c)} AS {c}" for c in cols)}
         FROM matches
         WHERE date >= CURRENT_DATE - {int(days)}
-          AND ({" OR ".join(f"({expr(c)}) IS NOT NULL" for c in cols)})
-    """), engine)
+          AND ({" OR ".join(f"({expr(c)}) IS NOT NULL" for c in cols)}){scope}
+    """)
+    df = pd.read_sql(sql, engine, params=params) if params else pd.read_sql(sql, engine)
     df["date"] = pd.to_datetime(df["date"])
     return df.sort_values("date", ascending=False).reset_index(drop=True)
 
