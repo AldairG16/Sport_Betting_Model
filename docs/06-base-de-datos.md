@@ -149,8 +149,20 @@ la base fija en 0.25 CU (Neon → Computes; Launch la había subido a 0.25↔8).
     Con 3 días de ritmo, recién medido, el weekly y la primera copia contaban como si pasaran a
     diario.
   - Sin 24 h de medición no opina.
-  - Con `model_state` → `db_budget_plan` = `{"paid_until": ...}`, mide pero no frena ni avisa. Así
-    quedó del 11-nov al 1-dic-26 (Launch). El log dice en qué modo estaría con el gratis.
+  - Con `model_state` → `db_budget_plan` = `{"paid_until": ..., "since": ..., "cap_usd": 15}`, mide
+    pero no frena. Así quedó del 11-nov al 1-dic-26 (Launch). El log dice en qué modo estaría con el
+    gratis.
+  - **La cuenta del plan de pago** (`paid_bill`, 11-nov-26). La alerta de $15 que el dueño puso en
+    Neon (Billing → Spending notifications) es un correo de Neon: existe y está activa (revisada el
+    11-nov: "$0.10 of $15"), pero no se puede probar. El programa lleva su propia cuenta:
+    - Horas encendida desde `since` × 0.25 CU × $0.106, más el almacenamiento ($0.55 por GB al mes).
+      Lo que corrió antes de que el medidor empezara se estima con el ritmo.
+    - Avisa por Telegram una vez cuando, a ese ritmo, el mes llega al 80% del tope (`cap_usd`), y
+      otra si lo pasa. El medidor no ve las consultas hechas a mano: por eso el margen.
+    - El chequeo diario la muestra en lo revisado ("cuenta de Neon estimada $X de $15").
+  - **La vuelta al gratis** (`downgrade_message`). El programa no puede saber si el dueño ya bajó el
+    plan, y un mes olvidado se cobra entero. 12 h después de `paid_until` (con el mes de Neon ya
+    cerrado en UTC) manda una vez "Hoy toca bajar Neon al plan gratis", con los pasos.
 - **Avisos y freno:**
   - Por Telegram al pasar del 50% y del 75%, una vez cada uno por mes, y cuando cambia el modo
     (`model_state` → `db_budget`).

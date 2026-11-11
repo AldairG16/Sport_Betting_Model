@@ -162,3 +162,9 @@ noche, la misma clase que el "PIPELINE SIN CORRER" del 29-oct. Ahora la corrida 
 `pipeline_coverage` con `idle: True` y la hora, y `output_checks.analysis_idle` deja de exigir `model_vs_sharp` y
 `program_picks` mientras esa marca tenga menos de 36 h. Si el pipeline deja de correr, la marca envejece y se
 vuelve a avisar. **Regla:** un chequeo de "algo dejó de escribirse" tiene que saber si había algo que escribir.
+
+**Una alarma que no se puede probar no cuenta como alarma (11-nov-26).** El tope de gasto del plan de
+pago de Neon era solo el correo de Neon a los $15: nadie podía saber si llegaba sin gastar $15. Y al
+vencer el mes pagado nada recordaba bajar al gratis. Regla: lo que cuida dinero del dueño lo calcula
+y lo avisa el programa, con pruebas (`db_budget.paid_bill`, `bill_message`, `downgrade_message`); la
+alerta del proveedor queda de respaldo.
