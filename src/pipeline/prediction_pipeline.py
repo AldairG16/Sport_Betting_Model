@@ -209,7 +209,7 @@ MIN_EDGE                = 0.05
 MAX_MODEL_DEVIATION     = 0.30
 # C1/R11 (ronda 8): piso del barrido shadow — el rango observable empieza
 # aquí. Banda [0-2pt) fuera por diseño (ruido de cuota); declarado en
-# docs/AUDITORIA_RONDA8.md §2.3.
+# docs/historial/AUDITORIA_RONDA8.md §2.3.
 SHADOW_MIN_DEV          = 0.02
 # Filtro Pinnacle (25-sep-26): una bet real exige p_pinnacle − 1/cuota ≥ esto
 # (el mismo umbral de la cuota mínima para PlayDoit, src/utils/min_odds.py).
@@ -3017,7 +3017,7 @@ def run_prediction_pipeline(dry_run: bool = False):
     # B2 (ronda 7): candidatas rechazadas con precio real — se registran en
     # shadow_bets para medir CLV por banda de desvío SIN apostar. Responde
     # si la ventana apostable [MIN_EDGE→desvío, MAX_MODEL_DEVIATION] está en
-    # el lado correcto (ver docs/AUDITORIA_RONDA7.md §3).
+    # el lado correcto (ver docs/historial/AUDITORIA_RONDA7.md §3).
     shadow_records: list = []
     # 1X2 crudo del modelo vs Pinnacle en CADA partido con precio de Pinnacle
     # (no solo candidatas): de aquí aprende src/models/side_bias.py.
