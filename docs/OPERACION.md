@@ -1085,6 +1085,15 @@ plan gratis, con una base de 236 MB. La base vuelve al empezar el mes o al subir
 - **Antes de agregar una lectura**, multiplícala por 48 closings al día y por las recargas del
   dashboard. Por medir con el medidor: las fotos de momios de 72 h (`_SNAPS_SQL`) y el
   `SELECT * FROM model_vs_sharp` de Próximos.
+- **Cierres de la sombra (11-nov-26, medido por db_meter):**
+  - Cada closing releía todas las apuestas sombra de 10 días con un cierre "mejorable"
+    (descargado antes del kickoff), y buscaba su partido una por una: 2,705 filas, 263
+    consultas y 0.41 MB cada 30 min.
+  - Un cierre solo mejora con cuotas de antes del kickoff (`should_update_closing`, más
+    `CLOSING_MAX_LAG_MIN`), y esas ya no llegan horas después del partido.
+  - Ahora (`save_bets.SHADOW_CLOSING_SQL`, `IMPROVE_HOURS` = 6) solo se mejoran los de las
+    últimas 6 h: 154 filas. Lo que no tiene cierre se sigue recuperando los 10 días. Lo mismo
+    en `bets_history`.
 
 **El presupuesto del plan gratis (11-nov-2026, v2.12.0).** El dueño, después del bloqueo: "esto tiene
 que funcionar 100% con planes gratis… no debemos sufrir estos ataques y pausar todo por eso". Neon se

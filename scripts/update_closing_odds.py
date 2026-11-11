@@ -135,7 +135,7 @@ def update_closing_odds(only_near_kickoff: bool = True):
     """
     print("\n📡 ACTUALIZANDO CLOSING ODDS (desde DB, sin llamada API)...\n")
 
-    from src.models.save_bets import BETS_CLOSING_ALTER_SQL
+    from src.models.save_bets import BETS_CLOSING_ALTER_SQL, IMPROVE_HOURS
     with engine.begin() as conn:
         conn.execute(text(BETS_CLOSING_ALTER_SQL))
 
@@ -158,11 +158,12 @@ def update_closing_odds(only_near_kickoff: bool = True):
                    pin_close_at
             FROM bets_history
             WHERE (closing_odds IS NULL OR closing_fetched_at IS NULL
-                   OR closing_fetched_at < match_date)
+                   OR (closing_fetched_at < match_date
+                       AND match_date >= NOW() AT TIME ZONE 'UTC' - make_interval(hours => :improve)))
               AND result IN ('pending','win','loss','half_win','half_loss','push')
               AND match_date <= NOW() AT TIME ZONE 'UTC' + INTERVAL '90 minutes'
               AND match_date >= NOW() AT TIME ZONE 'UTC' - INTERVAL '7 days'
-        """), engine)
+        """), engine, params={"improve": IMPROVE_HOURS})   # 11-nov-26: ver save_bets.SHADOW_CLOSING_SQL
     else:
         # Modo backfill (one_shot_data_quality_cleanup): TODO lo rellenable
         bets = pd.read_sql("""

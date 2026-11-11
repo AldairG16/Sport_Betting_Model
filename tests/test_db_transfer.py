@@ -184,3 +184,20 @@ def test_a_closing_that_suddenly_reads_much_more_is_flagged():
     assert reads_jump(_runs(900_000, 300_000, n=3), NOW) == []         # pocas corridas para comparar
     assert reads_jump([{"ran_at": NOW, "cells_read": None}], NOW) == []
 
+
+
+def test_old_shadow_closings_are_not_reread_every_half_hour():
+    """11-nov-26 (db_meter): cada closing releía ~2,000 apuestas sombra de 10
+    días para "mejorar" un cierre que ya no puede mejorar (solo cuentan cuotas
+    de antes del kickoff). Lo que no tiene cierre se sigue recuperando 10 días."""
+    from src.models import save_bets as SB
+    sql = " ".join(SB.SHADOW_CLOSING_SQL.split())
+    assert "closing_odds IS NULL OR closing_fetched_at IS NULL" in sql
+    assert (f"(closing_fetched_at < match_date AND match_date >= NOW() - INTERVAL '{SB.IMPROVE_HOURS} hours')"
+            in sql)
+    assert "NOW() - INTERVAL '10 days'" in sql
+    from src.utils.closing_quality import CLOSING_MAX_LAG_MIN
+    assert SB.IMPROVE_HOURS * 60 > 10 * CLOSING_MAX_LAG_MIN            # margen de sobra sobre el retraso aceptado
+    from pathlib import Path
+    src = (Path(__file__).parent.parent / "scripts" / "update_closing_odds.py").read_text(encoding="utf-8")
+    assert "make_interval(hours => :improve)" in src and 'params={"improve": IMPROVE_HOURS}' in src
