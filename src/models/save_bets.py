@@ -1223,6 +1223,24 @@ def apply_closing_updates(conn, table: str, row_id: int, sets: dict) -> None:
 
 
 
+# 11-nov-26: el "cierre que puede mejorarse" (descargado antes del kickoff) solo
+# hasta IMPROVE_HOURS después del partido. should_update_closing solo acepta
+# cuotas descargadas antes del kickoff (+ CLOSING_MAX_LAG_MIN), y después de eso
+# no llega ninguna nueva: cada closing releía ~2,000 apuestas sombra de 10 días y
+# buscaba su partido una por una (0.41 MB y 263 consultas cada 30 min, medido por
+# db_meter). Las que no tienen cierre se siguen recuperando los 10 días.
+IMPROVE_HOURS = 6
+SHADOW_CLOSING_SQL = f"""
+    SELECT id, match, market, match_date, closing_odds, closing_fetched_at,
+           pin_close_at
+    FROM shadow_bets
+    WHERE match_date BETWEEN NOW() - INTERVAL '10 days'
+                         AND NOW() + INTERVAL '90 minutes'
+      AND (closing_odds IS NULL OR closing_fetched_at IS NULL
+           OR (closing_fetched_at < match_date AND match_date >= NOW() - INTERVAL '{IMPROVE_HOURS} hours'))
+"""
+
+
 def _update_shadow_closing():
     """Rellena closing_odds de shadow_bets con el MISMO lookup y mapeo que
     bets_history (B2, ronda 7) — el CLV por bandas depende de esto.
@@ -1236,15 +1254,7 @@ def _update_shadow_closing():
     el cierre de Pinnacle (closing_updates)."""
     with engine.begin() as conn:
         conn.execute(text(SHADOW_ALTER_SQL))
-    sdf = pd.read_sql(text("""
-        SELECT id, match, market, match_date, closing_odds, closing_fetched_at,
-               pin_close_at
-        FROM shadow_bets
-        WHERE match_date BETWEEN NOW() - INTERVAL '10 days'
-                             AND NOW() + INTERVAL '90 minutes'
-          AND (closing_odds IS NULL OR closing_fetched_at IS NULL
-               OR closing_fetched_at < match_date)
-    """), engine)
+    sdf = pd.read_sql(text(SHADOW_CLOSING_SQL), engine)
     if sdf.empty:
         return
 
