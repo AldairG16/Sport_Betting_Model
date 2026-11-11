@@ -1170,6 +1170,8 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
         problems += bad
         if not bad and st.get("measured"):
             seen.append(f"plan gratis de Neon {st['pct']:.0f}% (modo {st['level']})")
+            if st.get("bill_usd") is not None:
+                seen.append(f"cuenta de Neon estimada ${st['bill_proj_usd']:.2f} de ${st['bill_cap_usd']:.0f}")
     except Exception as e:
         problems.append(f"Presupuesto de la base: no se pudo revisar ({type(e).__name__})")
 

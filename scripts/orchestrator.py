@@ -1508,23 +1508,36 @@ def _budget_check() -> None:
 def budget_messages(st: dict, prev: dict) -> tuple:
     """Función pura: (mensajes para el dueño, estado nuevo o None). Un mensaje
     al cambiar de modo; el aviso del 50%/75% una vez por mes (si el cambio de
-    modo ya lo dice, no se repite)."""
+    modo ya lo dice, no se repite). Con el plan de pago no hay freno: solo el
+    aviso de la cuenta cuando se acerca al tope del dueño y cuando lo pasa
+    (una vez cada uno por mes). Vencido el plan de pago, el recordatorio de
+    bajar al gratis, una vez."""
     from src.utils import db_budget as B
-    if st.get("paid_until"):                      # con el plan de pago no hay freno ni avisos
-        return [], None
+    if st.get("paid_until"):
+        stage = B.bill_stage(st)
+        told = dict(prev.get("bill_alerted") or {})
+        if stage <= told.get(st["month"], 0):
+            return [], None
+        told[st["month"]] = stage
+        return [B.bill_message(st)], {**prev, "bill_alerted": told}
     old = prev.get("level", "normal")
     alerted = dict(prev.get("alerted") or {})
-    msgs = []
+    msgs, state = [], dict(prev)
+    due = st.get("downgrade_due")
+    if due and prev.get("downgrade_reminded") != due:
+        msgs.append(B.downgrade_message(st))
+        state["downgrade_reminded"] = due
+    said = len(msgs)
     if old != st["level"]:
         msgs.append(B.level_message(old, st["level"], st))
     pct = B.threshold_crossed(st, alerted)
     if pct:
-        if not msgs:
+        if len(msgs) == said:
             msgs.append(B.threshold_message(pct, st))
         alerted[st["month"]] = pct
-    if old == st["level"] and not pct:
+    if old == st["level"] and not pct and not said:
         return msgs, None
-    return msgs, {"level": st["level"], "alerted": alerted}
+    return msgs, {**state, "level": st["level"], "alerted": alerted}
 
 
 def _record_run(mode: str, failed: int, seconds: float) -> None:

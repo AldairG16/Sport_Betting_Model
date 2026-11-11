@@ -23,6 +23,12 @@ Así se frena solo antes del 100%.
 Neon cuenta el mes de calendario en UTC (la consola: "Usage since Nov 1").
 Lo que el medidor no ve (TLS, TCP, consultas a mano) va en WIRE_FACTOR, y la
 base se cuenta siempre del tamaño fijo CU_SIZE (Neon → Computes: 0.25).
+
+Con el plan de pago (model_state 'db_budget_plan', Launch del 11-nov al
+1-dic-26) no hay freno, pero se estima la cuenta del mes (paid_bill) y se
+avisa por Telegram si va a llegar al tope del dueño; al terminar el periodo
+pagado se le recuerda bajar al plan gratis (downgrade_message). La alerta de
+$15 de Neon es un correo que no se puede probar: este aviso sí tiene pruebas.
 """
 
 from datetime import datetime, timezone
@@ -42,6 +48,15 @@ AHORRO_PCT = 75
 ESENCIAL_PCT = 90
 LEVELS = ("normal", "ahorro", "esencial")
 KICKOFF_SOON_H = 2
+# El plan de pago (Launch; consola de Neon → Billing, 11-nov-26). El tope es el
+# de la alerta que el dueño puso en Neon ("agregué la alerta de 15 dólares como
+# tope"); otro tope: db_budget_plan → "cap_usd".
+PAID_CU_HOUR_USD = 0.106
+PAID_GB_MONTH_USD = 0.55      # 0.35 de almacenamiento + 0.20 de historia (instant restore)
+PAID_CAP_USD = 15.0
+PAID_WARN_SHARE = 0.8         # avisa antes del tope: el medidor no ve las consultas hechas a mano
+DOWNGRADE_GRACE_H = 12        # el recordatorio sale con el mes de Neon (UTC) ya cerrado
+DOWNGRADE_REMIND_DAYS = 14
 
 USAGE_SQL = """
     SELECT MIN(ran_at)                     FILTER (WHERE ran_at >= :start)                        AS measured_since,
@@ -51,7 +66,9 @@ USAGE_SQL = """
            COALESCE(SUM(bytes_read) FILTER (WHERE ran_at >= :rate_from AND mode <> ALL(:weekly)), 0) AS rate_bytes,
            COALESCE(SUM(awake_s)    FILTER (WHERE ran_at >= :rate_from AND mode <> ALL(:weekly)), 0) AS rate_awake_s,
            COALESCE(SUM(bytes_read) FILTER (WHERE ran_at >= :week_from AND mode = ANY(:weekly)), 0)  AS week_bytes,
-           COALESCE(SUM(awake_s)    FILTER (WHERE ran_at >= :week_from AND mode = ANY(:weekly)), 0)  AS week_awake_s
+           COALESCE(SUM(awake_s)    FILTER (WHERE ran_at >= :week_from AND mode = ANY(:weekly)), 0)  AS week_awake_s,
+           MIN(ran_at)                     FILTER (WHERE ran_at >= :paid_from)                    AS paid_measured_since,
+           COALESCE(SUM(awake_s)           FILTER (WHERE ran_at >= :paid_from), 0)                AS paid_awake_s
     FROM pipeline_runs
     WHERE ran_at >= LEAST(CAST(:start AS timestamptz), CAST(:week_from AS timestamptz)) AND bytes_read IS NOT NULL
 """
@@ -116,27 +133,108 @@ def status(engine=None, now: datetime | None = None) -> dict:
         if engine is None:
             from config.database import engine
         with engine.connect() as conn:
+            plan = _plan(conn.execute(text("SELECT value FROM model_state WHERE key = 'db_budget_plan'")).scalar())
             row = conn.execute(text(USAGE_SQL), {"start": start, "rate_from": now - timedelta(days=RATE_DAYS),
-                                                 "week_from": now - timedelta(days=7), "weekly": list(WEEKLY_MODES)}
-                               ).mappings().first()
-            plan = conn.execute(text("SELECT value FROM model_state WHERE key = 'db_budget_plan'")).scalar()
-        st = project(dict(row) if row else {}, now)
-        return paid_plan(st, plan, now)
+                                                 "week_from": now - timedelta(days=7), "weekly": list(WEEKLY_MODES),
+                                                 "paid_from": paid_from(plan, now)}).mappings().first()
+            usage = dict(row) if row else {}
+            until = _ts(plan.get("paid_until"))
+            if until is not None and now < until:          # solo con el plan de pago hace falta el tamaño
+                usage["storage_bytes"] = conn.execute(text("SELECT pg_database_size(current_database())")).scalar()
+        return paid_plan(project(usage, now), plan, now, usage)
     except Exception as e:
         return {"level": "normal", "measured": False, "error": f"{type(e).__name__}: {str(e)[:120]}"}
 
 
-def paid_plan(st: dict, plan, now: datetime) -> dict:
-    """model_state 'db_budget_plan' = {"paid_until": "2026-12-01"}: con el plan
-    de pago (Launch del 11-nov al 1-dic-26) se mide igual, pero el freno no
-    actúa (el pronóstico sigue diciendo si cabría en el gratis)."""
+def _plan(plan) -> dict:
     import json
     if isinstance(plan, str):
         plan = json.loads(plan)
-    until = _ts((plan or {}).get("paid_until"))
-    if until is not None and now < until:
-        st = {**st, "free_level": st.get("level"), "level": "normal", "paid_until": until.date().isoformat()}
+    return plan if isinstance(plan, dict) else {}
+
+
+def paid_from(plan, now: datetime) -> datetime:
+    """Desde cuándo se cobra este mes: el inicio del plan de pago ("since") o el
+    día 1 (Neon factura por mes de calendario)."""
+    start, _ = month_bounds(now)
+    since = _ts(_plan(plan).get("since"))
+    return max(since, start) if since is not None else start
+
+
+def paid_bill(st: dict, plan, now: datetime, usage: dict | None) -> dict:
+    """Función pura: la cuenta estimada del plan de pago en este mes, hasta hoy
+    y al terminar el periodo (el día que vence o el último del mes). Horas
+    encendida × CU_SIZE × precio, más el almacenamiento. Lo que no se midió
+    desde que empezó el plan se estima con el ritmo (del lado alto)."""
+    plan, usage = _plan(plan), usage or {}
+    until = _ts(plan.get("paid_until"))
+    if until is None or not st.get("measured"):
+        return {}
+    start, end = month_bounds(now)
+    since, period_end = paid_from(plan, now), min(until, end)
+    month_days = (end - start).total_seconds() / 86400
+    measured = _ts(usage.get("paid_measured_since")) or now
+    gap_days = max(0.0, (min(measured, now) - since).total_seconds() / 86400)
+    cuh = float(usage.get("paid_awake_s") or 0) / 3600 * CU_SIZE + st["cuh_day"] * gap_days
+    left = max(0.0, (period_end - now).total_seconds() / 86400)
+    gb = float(usage.get("storage_bytes") or 0) / 1e9
+    storage = (lambda to: gb * PAID_GB_MONTH_USD * max(0.0, (to - since).total_seconds() / 86400) / month_days)
+    cap = float(plan.get("cap_usd") or PAID_CAP_USD)
+    return {"bill_usd": round(cuh * PAID_CU_HOUR_USD + storage(now), 2),
+            "bill_proj_usd": round((cuh + st["cuh_day"] * left) * PAID_CU_HOUR_USD + storage(period_end), 2),
+            "bill_cap_usd": cap, "bill_until": period_end.date().isoformat()}
+
+
+def paid_plan(st: dict, plan, now: datetime, usage: dict | None = None) -> dict:
+    """model_state 'db_budget_plan' = {"paid_until": "2026-12-01"}: con el plan
+    de pago (Launch del 11-nov al 1-dic-26) se mide igual, pero el freno no
+    actúa (el pronóstico sigue diciendo si cabría en el gratis) y se estima la
+    cuenta (paid_bill). Vencido el periodo, toca recordar la bajada al gratis
+    (downgrade_due) durante DOWNGRADE_REMIND_DAYS."""
+    from datetime import timedelta
+    plan = _plan(plan)
+    until = _ts(plan.get("paid_until"))
+    if until is None:
+        return st
+    if now < until:
+        return {**st, "free_level": st.get("level"), "level": "normal", "paid_until": until.date().isoformat(),
+                **paid_bill(st, plan, now, usage)}
+    if until + timedelta(hours=DOWNGRADE_GRACE_H) <= now < until + timedelta(days=DOWNGRADE_REMIND_DAYS):
+        st = {**st, "downgrade_due": until.date().isoformat(), "paid_plan_name": str(plan.get("plan") or "de pago")}
     return st
+
+
+def bill_stage(st: dict) -> int:
+    """0 = la cuenta va bien; 1 = a este ritmo llega cerca del tope; 2 = ya lo pasó."""
+    if st.get("bill_usd") is None:
+        return 0
+    if st["bill_usd"] >= st["bill_cap_usd"]:
+        return 2
+    return 1 if st["bill_proj_usd"] >= PAID_WARN_SHARE * st["bill_cap_usd"] else 0
+
+
+def bill_message(st: dict) -> str:
+    """Telegram para el dueño cuando la cuenta del plan de pago se acerca al tope o lo pasa."""
+    cap, usd, proj = st["bill_cap_usd"], st["bill_usd"], st["bill_proj_usd"]
+    hours = st.get("cuh_day", 0) / CU_SIZE
+    if bill_stage(st) == 2:
+        head = (f"💳 <b>Neon: la cuenta del mes ya pasó de ${cap:.0f}</b>\nVan unos ${usd:.2f} (estimado con lo "
+                f"que mide el programa) y el tope de tu alerta de Neon es ${cap:.0f}.")
+    else:
+        head = (f"💳 <b>Neon: la cuenta del mes va para ${proj:.0f}</b>\nHasta hoy van unos ${usd:.2f}; a este "
+                f"ritmo, el {st['bill_until']} serían ${proj:.2f}. El tope de tu alerta de Neon es ${cap:.0f}.")
+    return (head + f"\nLo que se cobra son las horas que la base pasa encendida: ahora, unas {hours:.0f} al día. "
+            "La cifra exacta está en Neon → Billing.")
+
+
+def downgrade_message(st: dict) -> str:
+    """Telegram el día que vence el periodo pagado: el programa no puede saber
+    si el dueño ya bajó el plan, y un mes olvidado se cobra entero."""
+    return (f"📌 <b>Hoy toca bajar Neon al plan gratis</b>\nEl periodo que pagaste del plan "
+            f"{st.get('paid_plan_name', 'de pago')} terminó el {st['downgrade_due']}. Para que no se cobre otro "
+            "mes: Neon → Billing → Change plan → Free. Antes revisa que la base siga fija en 0.25 CU "
+            "(Neon → Computes).\nSi ya lo bajaste, no hagas caso de este mensaje. Desde hoy el programa cuida solo "
+            "el plan gratis: avisa al 50% y al 75% del mes y se frena antes de llegar al límite.")
 
 
 _CACHE: dict = {}
@@ -157,6 +255,9 @@ def describe(st: dict) -> str:
     if st.get("paid_until"):
         est += (f" [plan de pago hasta el {st['paid_until']}: el freno no actúa; en el gratis sería modo "
                 f"{st.get('free_level')}]")
+        if st.get("bill_usd") is not None:
+            est += (f" [cuenta estimada: ${st['bill_usd']:.2f} hasta hoy, ${st['bill_proj_usd']:.2f} al "
+                    f"{st['bill_until']}; tope ${st['bill_cap_usd']:.0f}]")
     return (f"Plan gratis de Neon este mes{est}: transferencia {st['used_gb']:.2f} de {FREE_TRANSFER_GB:.0f} GB, "
             f"a este ritmo {st['proj_gb']:.2f} GB ({st['pct_transfer']:.0f}%); base encendida "
             f"{st['used_cuh']:.0f} de {FREE_CU_HOURS:.0f} h, a este ritmo {st['proj_cuh']:.0f} h "

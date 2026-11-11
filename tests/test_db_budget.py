@@ -9,6 +9,7 @@ no debemos sufrir estos ataques y pausar todo por eso".
 
 import sys
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -283,3 +284,126 @@ def test_with_the_paid_plan_it_measures_but_does_not_brake():
     assert budget_messages(paid, {}) == ([], None)
     assert B.paid_plan(st, {"paid_until": "2026-12-01"}, NOW)["level"] == "esencial"     # ya venció
     assert B.paid_plan(st, None, NOW)["level"] == "esencial"
+
+
+# ── La cuenta del plan de pago y la vuelta al gratis (11-nov-26) ─────────────
+# La alerta de $15 que el dueño puso en Neon es un correo que no se puede
+# probar; el programa lleva su propia cuenta y avisa por Telegram.
+
+DEC1 = datetime(2026, 12, 1, tzinfo=timezone.utc)
+
+
+def _paid(awake_h_day, until="2027-01-01", paid_days=None, gb=0.2, **plan):
+    """El estado con el plan de pago: awake_h_day horas encendida al día desde el día 1."""
+    st = B.project(_usage(gb_day=0.02, awake_h_day=awake_h_day), NOW)
+    days = (NOW - DEC1).total_seconds() / 86400 if paid_days is None else paid_days
+    usage = {"paid_measured_since": DEC1, "paid_awake_s": awake_h_day * 3600 * days, "storage_bytes": gb * 1e9}
+    return B.paid_plan(st, {"paid_until": until, "plan": "Launch", **plan}, NOW, usage)
+
+
+def test_the_paid_plan_bill_comes_from_the_hours_the_database_is_awake():
+    st = _paid(awake_h_day=6, until="2026-12-21")
+    cuh = 6 * 10.5 * B.CU_SIZE                                  # 10.5 días a 6 h, base de 0.25
+    assert st["bill_usd"] == pytest.approx(cuh * B.PAID_CU_HOUR_USD + 0.2 * B.PAID_GB_MONTH_USD * 10.5 / 31, abs=0.01)
+    more = 6 * 9.5 * B.CU_SIZE                                  # lo que falta hasta el 21
+    assert st["bill_proj_usd"] == pytest.approx((cuh + more) * B.PAID_CU_HOUR_USD
+                                                + 0.2 * B.PAID_GB_MONTH_USD * 20 / 31, abs=0.01)
+    assert st["bill_until"] == "2026-12-21" and st["bill_cap_usd"] == B.PAID_CAP_USD
+    assert "cuenta estimada: $1.71 hasta hoy, $3.25 al 2026-12-21; tope $15" in B.describe(st)
+    assert _paid(6, until="2027-02-01")["bill_until"] == "2027-01-01"        # Neon cobra por mes de calendario
+    assert _paid(6, cap_usd=8)["bill_cap_usd"] == 8
+
+
+def test_what_ran_before_the_meter_started_is_estimated_on_the_high_side():
+    """El 11-nov el plan empezó a las 04:00 UTC y el medidor a las 05:14."""
+    st = B.project(_usage(gb_day=0.02, awake_h_day=6), NOW)
+    plan = {"paid_until": "2027-01-01", "since": "2026-12-08T00:00:00+00:00"}
+    assert B.paid_from(plan, NOW) == datetime(2026, 12, 8, tzinfo=timezone.utc)
+    assert B.paid_from({"paid_until": "2027-01-01", "since": "2026-11-11"}, NOW) == DEC1     # mes nuevo: desde el 1
+    usage = {"paid_measured_since": datetime(2026, 12, 9, tzinfo=timezone.utc), "paid_awake_s": 6 * 3600 * 2.5}
+    bill = B.paid_bill(st, plan, NOW, usage)
+    assert bill["bill_usd"] == pytest.approx(6 * 3.5 * B.CU_SIZE * B.PAID_CU_HOUR_USD, abs=0.01)   # 2.5 medidos + 1 estimado
+    assert B.paid_bill({"measured": False}, plan, NOW, usage) == {}          # sin medición no opina
+
+
+def test_the_owner_hears_before_the_bill_reaches_the_cap_and_when_it_passes_it():
+    from scripts.orchestrator import budget_messages
+    cheap = _paid(awake_h_day=6)                                             # ~$5 al mes
+    assert B.bill_stage(cheap) == 0 and budget_messages(cheap, {}) == ([], None)
+    st = _paid(awake_h_day=24)                                               # encendida todo el día: ~$20
+    assert st["bill_usd"] < 15 <= st["bill_proj_usd"] and B.bill_stage(st) == 1
+    msgs, state = budget_messages(st, {"level": "normal", "alerted": {"2026-11": 75}})
+    assert len(msgs) == 1 and "va para $20" in msgs[0] and "tope de tu alerta de Neon es $15" in msgs[0]
+    assert "unas 24 al día" in msgs[0]
+    assert state == {"level": "normal", "alerted": {"2026-11": 75}, "bill_alerted": {"2026-12": 1}}
+    assert budget_messages(st, state) == ([], None)                          # una vez por mes
+    over = _paid(awake_h_day=24, paid_days=25)                               # ya gastado más que el tope
+    assert B.bill_stage(over) == 2
+    msgs, state = budget_messages(over, state)
+    assert "ya pasó de $15" in msgs[0] and state["bill_alerted"] == {"2026-12": 2}
+    assert budget_messages(over, state) == ([], None)
+    assert budget_messages(st, {"bill_alerted": {"2026-11": 2}})[0]          # otro mes: se avisa de nuevo
+
+
+def test_a_bill_near_the_cap_warns_with_margin():
+    """El medidor no ve las consultas hechas a mano: avisa desde el 80% del tope."""
+    st = _paid(awake_h_day=6, cap_usd=6)                                     # ~$5 de 6
+    assert st["bill_proj_usd"] < 6 and B.bill_stage(st) == 1
+
+
+def test_when_the_paid_period_ends_the_owner_is_reminded_to_go_back_to_free_once():
+    from scripts.orchestrator import budget_messages
+    st = B.project(_usage(gb_day=0.02, awake_h_day=2), NOW)                  # NOW = 11-dic 12:00 UTC
+    plan = {"paid_until": "2026-12-11T00:00:00+00:00", "plan": "Launch"}
+    early = B.paid_plan(st, plan, NOW - timedelta(hours=1))                  # el mes de Neon cierra en UTC
+    assert "downgrade_due" not in early and "paid_until" not in early
+    due = B.paid_plan(st, plan, NOW)
+    assert due["downgrade_due"] == "2026-12-11" and due["level"] == "normal"
+    msgs, state = budget_messages(due, {"bill_alerted": {"2026-11": 1}})
+    assert len(msgs) == 1 and "bajar Neon al plan gratis" in msgs[0] and "plan Launch terminó el 2026-12-11" in msgs[0]
+    assert "Change plan" in msgs[0] and "0.25 CU" in msgs[0]
+    assert state == {"bill_alerted": {"2026-11": 1}, "downgrade_reminded": "2026-12-11", "level": "normal",
+                     "alerted": {}}
+    assert budget_messages(due, state) == ([], None)                         # una sola vez
+    assert "downgrade_due" not in B.paid_plan(st, plan, NOW + timedelta(days=15))
+    hot = B.paid_plan(B.project(_usage(gb_day=0.13, awake_h_day=4), NOW), plan, NOW)
+    msgs, state = budget_messages(hot, {})                                   # el freno del gratis ya actúa
+    assert len(msgs) == 2 and "bajar Neon" in msgs[0] and "Modo ahorro" in msgs[1]
+    assert state["level"] == "ahorro" and state["downgrade_reminded"] == "2026-12-11"
+
+
+class _Conn:
+    def __init__(self, plan, log):
+        self.plan, self.log = plan, log
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, params=None):
+        sql = str(sql)
+        self.log.append((sql, params))
+        out = SimpleNamespace()
+        if "db_budget_plan" in sql:
+            out.scalar = lambda: self.plan
+        elif "pg_database_size" in sql:
+            out.scalar = lambda: 250_000_000
+        else:
+            row = {**_usage(gb_day=0.02, awake_h_day=6), "paid_measured_since": DEC1, "paid_awake_s": 6 * 3600 * 10.5}
+            out.mappings = lambda: SimpleNamespace(first=lambda: row)
+        return out
+
+
+def test_the_status_reads_the_plan_first_and_the_size_only_while_it_is_paid():
+    log = []
+    engine = SimpleNamespace(connect=lambda: _Conn('{"paid_until": "2026-12-21", "since": "2026-12-05"}', log))
+    st = B.status(engine, NOW)
+    assert st["paid_until"] == "2026-12-21" and st["bill_usd"] > 0 and st["level"] == "normal"
+    assert [("db_budget_plan" in s, "pg_database_size" in s) for s, _ in log] == [(True, False), (False, False),
+                                                                                (False, True)]
+    assert log[1][1]["paid_from"] == datetime(2026, 12, 5, tzinfo=timezone.utc)
+    log.clear()
+    st = B.status(SimpleNamespace(connect=lambda: _Conn(None, log)), NOW)       # plan gratis: sin cuenta
+    assert "bill_usd" not in st and len(log) == 2 and log[1][1]["paid_from"] == DEC1
