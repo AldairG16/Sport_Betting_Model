@@ -256,13 +256,66 @@ _BUDGET: dict = {"level": "normal"}
 _SKIP_LEVELS = {"ahorro": ("ahorro", "esencial"), "esencial": ("esencial",)}
 
 
-def run_step(logger: Logger, name: str, func, *args, skip_at: str | None = None, **kwargs) -> bool:
+# 12-nov-26, el dueño (3c): "archivar las partes del programa que ya no deciden nada". Cuatro pasos solo
+# analizan las apuestas propias ya cobradas (bets_history): Backtest cada noche, y Holdout, Drift y
+# Walk-forward cada lunes. Desde el modo recolección (25-sep-26) casi no se registran apuestas y la
+# última cobrada es del 22-sep, así que repetían el mismo reporte de las mismas 1,160 y dejaban en el log
+# líneas con ❌ ("ROI negativo") que parecen errores. Quedan archivados mientras la última apuesta
+# cobrada tenga más de OWN_BETS_IDLE_DAYS; si vuelve a cobrarse una, corren solos otra vez. El código y
+# sus pruebas siguen ahí. CLV update NO se archiva: una apuesta nueva (hubo 2 en octubre) lo necesita.
+OWN_BETS_IDLE_DAYS = 45
+OWN_BETS_SETTLED = ("win", "loss", "push", "half_win", "half_loss")
+_OWN_BETS: dict = {}
+
+
+def own_bets_idle(now=None) -> str | None:
+    """La fecha de la última apuesta propia cobrada ("22-sep-2026") si
+    bets_history lleva más de OWN_BETS_IDLE_DAYS sin cobrar una nueva, o
+    "nunca" si no hay ninguna. None si hay cobradas recientes o no se pudo
+    leer: ante la duda, los pasos corren como siempre. Una lectura por corrida."""
+    if "last" not in _OWN_BETS:
+        try:
+            from sqlalchemy import bindparam, text
+            from config.database import engine
+            with engine.connect() as conn:
+                _OWN_BETS["last"] = conn.execute(
+                    text("SELECT MAX(match_date) FROM bets_history WHERE result IN :r").bindparams(
+                        bindparam("r", expanding=True)), {"r": list(OWN_BETS_SETTLED)}).scalar()
+        except Exception as e:
+            log.warning(f"⚠️  No se pudo leer la última apuesta propia cobrada ({type(e).__name__}): sus reportes corren")
+            _OWN_BETS["last"] = False
+    last = _OWN_BETS["last"]
+    if last is False:
+        return None
+    if last is None:
+        return "nunca"
+    import pandas as pd
+    when = pd.Timestamp(last)
+    when = when.tz_convert("UTC") if when.tzinfo else when.tz_localize("UTC")
+    now = pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz="UTC")
+    now = now.tz_convert("UTC") if now.tzinfo else now.tz_localize("UTC")
+    if now - when <= pd.Timedelta(days=OWN_BETS_IDLE_DAYS):
+        return None
+    meses = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+    return f"{when.day}-{meses[when.month - 1]}-{when.year}"
+
+
+def run_step(logger: Logger, name: str, func, *args, skip_at: str | None = None, own_bets: bool = False,
+             **kwargs) -> bool:
     """Ejecuta un paso y captura errores sin detener el pipeline.
     skip_at (11-nov-26): "ahorro" = paso opcional, se salta en modo ahorro y en
-    esencial; "esencial" = se salta solo en modo esencial (db_budget)."""
+    esencial; "esencial" = se salta solo en modo esencial (db_budget).
+    own_bets (12-nov-26): el paso solo analiza las apuestas propias ya
+    cobradas; queda archivado mientras no se cobre una nueva (own_bets_idle)."""
     if skip_at and _BUDGET.get("level") in _SKIP_LEVELS[skip_at]:
         logger.log(f"💡 {name} — se salta (modo {_BUDGET['level']} de la base: plan gratis de Neon)")
         return True
+    if own_bets:
+        last = own_bets_idle()
+        if last:
+            logger.log(f"🗄️ {name} — archivado: solo analiza las apuestas propias ya cobradas y la última es de "
+                       f"{last} (modo recolección). Vuelve solo si se cobra una nueva")
+            return True
     logger.log(f"\n{'='*50}")
     logger.log(f"PASO: {name}")
     logger.log(f"{'='*50}")
@@ -738,7 +791,7 @@ def run_evening(logger: Logger):
     run_step(logger, "Resolve pending (Claude)", step_resolve_pending)
     run_step(logger, "Goalscorer resolve", step_goalscorer_resolve)
     run_step(logger, "CLV update",        step_clv, skip_at="esencial")
-    run_step(logger, "Backtest",          step_backtest, skip_at="ahorro")
+    run_step(logger, "Backtest",          step_backtest, skip_at="ahorro", own_bets=True)
     run_step(logger, "Chequeo de salidas", step_output_checks)
     run_step(logger, "Telegram evening",  step_notify_evening)
 
@@ -1275,7 +1328,7 @@ def run_weekly(logger: Logger):
     run_step(logger, "Referencia Pinnacle",      step_sharp_reference)
     run_step(logger, "Horario de apuesta",       step_timing_learning)
     run_step(logger, "Refresh CLV cache",        step_refresh_clv_cache)   # Mejora #14
-    run_step(logger, "Holdout evaluation",       step_evaluate_holdout, skip_at="ahorro")
+    run_step(logger, "Holdout evaluation",       step_evaluate_holdout, skip_at="ahorro", own_bets=True)
     # 2) Cargas de datos (lentas) y el ajuste que depende de ellas
     run_step(logger, "Load historical data",     step_load_historical)
     run_step(logger, "Load international data",  step_load_international, skip_at="esencial")
@@ -1293,12 +1346,12 @@ def run_weekly(logger: Logger):
     run_step(logger, "Fit DC-MLE parameters",    step_fit_dc_mle)
     run_step(logger, "Auditoría del sistema",    step_system_audit)
     # 3) Monitores y reportes
-    run_step(logger, "Drift detection",          step_drift_detection, skip_at="ahorro")     # Mejora #15
+    run_step(logger, "Drift detection",          step_drift_detection, skip_at="ahorro", own_bets=True)   # Mejora #15
     run_step(logger, "Market regime monitor",    step_market_regime, skip_at="ahorro")
     # La auditoría de sanidad NO corre aquí: la ejecuta su propio paso
     # en weekly.yml (if: always(), corre aunque el weekly falle).
     # Correrla en los dos sitios mandaba el mismo mensaje dos veces.
-    run_step(logger, "Walk-forward backtest",    step_walkforward, skip_at="ahorro")
+    run_step(logger, "Walk-forward backtest",    step_walkforward, skip_at="ahorro", own_bets=True)
     run_step(logger, "Weekly Telegram report",   step_weekly_report)
 
 
@@ -1314,7 +1367,7 @@ def run_results_only(logger: Logger):
     run_step(logger, "Results",                        step_results)
     run_step(logger, "Shadow results",                 step_shadow_results)
     run_step(logger, "CLV update",                     step_clv)
-    run_step(logger, "Backtest",                       step_backtest)
+    run_step(logger, "Backtest",                       step_backtest, own_bets=True)
 
 
 # ============================================================

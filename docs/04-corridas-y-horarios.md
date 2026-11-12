@@ -41,6 +41,17 @@ Al final guarda la corrida en `pipeline_runs` (con lo que leyó de la base) y sa
 | `morning` | Fetch odds (y una foto en `odds_history`) · Precios Kalshi · xG real (si el weekly no pudo) · ClubElo · Predictions · Picks del programa · Goalscorer picks · Telegram (la mañana) |
 | `evening` | Closing odds · Fetch results · resultados de respaldo (football-data y TheSportsDB) · Córners y tarjetas (ESPN) · Tiros y córners (ESPN) · Partidos repetidos · Results · Shadow results (anula reprogramados y cobra picks, parlays, sombra y propuestas) · Resolve pending (Claude) · Goalscorer resolve · CLV update · Backtest · Chequeo de salidas · Telegram (la noche) · y el avance de mañana: Fetch odds, Kalshi, Historial ESPN, Predictions, Picks del programa |
 | `results` | Fetch results · respaldos de football-data y TheSportsDB · Partidos repetidos · Results · Shadow results · CLV update · Backtest |
+
+**Archivados mientras no se cobre una apuesta propia (12-nov-2026).** Backtest (evening y results), Holdout,
+Drift y Walk-forward (weekly) solo analizan las apuestas propias ya cobradas de `bets_history`. Desde el modo
+recolección (25-sep-26) casi no se registran apuestas y la última cobrada es del 22-sep: repetían cada noche
+y cada lunes el mismo reporte de las mismas 1,160 y dejaban en el log líneas con ❌ ("ROI negativo") que
+parecen errores. El dueño pidió archivarlos (3c). `run_step(..., own_bets=True)` los salta con "🗄️ …
+archivado" cuando la última apuesta cobrada (`win`, `loss`, `push`, medias) tiene más de 45 días
+(`own_bets_idle`, una lectura por corrida); si vuelve a cobrarse una, corren solos otra vez. El código y sus
+pruebas siguen en su lugar. Siguen corriendo, aunque toquen `bets_history`: CLV update (una apuesta nueva lo
+necesita: hubo 2 en octubre, que quedaron sin cobrar), Calibration monitor (su estado lo vigila el chequeo
+diario), CLV gate (también lee la sombra), CLV cache y "Apuestas sin fuente".
 | `weekly` | Primero lo que aprende (segundos, solo base): Calibration monitor · CLV gate · Reactivación por sombra · Peso del modelo · Sesgo por lado · Evidencia de reglas · Filtros aprendidos · Referencia Pinnacle · Horario de apuesta · CLV cache · Holdout. Luego las cargas: historia, internacionales, eventos, ligas extra, segundas divisiones (ESPN), K-League, momios históricos, alineaciones (ESPN), buscador de ventajas, nombres de equipo y repetidos, apuestas sin fuente, xG real, ajuste Dixon-Coles · Auditoría del sistema · Drift · Market regime · Walk-forward · Reporte semanal de Telegram |
 
 Los pasos marcados como opcionales se saltan en modo ahorro o esencial ([06](06-base-de-datos.md)).

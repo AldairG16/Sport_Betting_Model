@@ -205,6 +205,67 @@ def test_optional_steps_are_skipped_only_in_their_mode(monkeypatch):
     assert any("se salta (modo esencial de la base" in m for m in ran)
 
 
+def test_reports_about_the_owners_own_bets_are_archived_while_there_are_no_new_bets(monkeypatch):
+    """12-nov-26, el dueño (3c): Backtest, Holdout, Drift y Walk-forward solo analizan las apuestas
+    propias ya cobradas (bets_history; la última, del 22-sep). No corren mientras no se cobre una nueva.
+    CLV update no se archiva: una apuesta nueva lo necesita (hubo 2 en octubre)."""
+    import pandas as pd
+    import scripts.orchestrator as O
+    now = pd.Timestamp("2026-11-12 03:00", tz="UTC")
+    monkeypatch.setitem(O._BUDGET, "level", "normal")
+    for last, expect in ((pd.Timestamp("2026-09-24 19:00"), "24-sep-2026"),          # congelada: archivado
+                         (pd.Timestamp("2026-11-01 19:00", tz="UTC"), None),         # apuestas recientes: corre
+                         (None, "nunca"),                                           # tabla vacía: archivado
+                         (False, None)):                                            # no se pudo leer: corre
+        monkeypatch.setattr(O, "_OWN_BETS", {"last": last})
+        assert O.own_bets_idle(now) == expect
+    ran, logged = [], []
+
+    class L:
+        steps_total = steps_ok = 0
+        failed_steps = []
+
+        def log(self, m):
+            logged.append(m)
+    monkeypatch.setattr(O, "_OWN_BETS", {"last": pd.Timestamp("2026-09-24 19:00")})
+    assert O.run_step(L(), "Backtest", lambda: ran.append("backtest"), own_bets=True) is True
+    assert O.run_step(L(), "Results", lambda: ran.append("results")) is True       # los demás pasos, como siempre
+    assert ran == ["results"]
+    assert any("Backtest — archivado: solo analiza las apuestas propias ya cobradas y la última es de 24-sep-2026"
+               in m for m in logged)
+    monkeypatch.setattr(O, "_OWN_BETS", {"last": pd.Timestamp.now(tz="UTC")})       # el dueño vuelve a apostar
+    O.run_step(L(), "Backtest", lambda: ran.append("backtest"), own_bets=True)
+    assert ran == ["results", "backtest"]
+    # los cinco que se archivan, y solo esos
+    steps = []
+    monkeypatch.setattr(O, "run_step", lambda logger, name, fn, *a, **k: steps.append((name, k.get("own_bets", False))) or True)
+    monkeypatch.setattr(O, "closing_skip_reason", lambda *a, **k: None, raising=False)
+    O.run_weekly(None)
+    O.run_results_only(None)
+    archived = {n for n, own in steps if own}
+    assert archived == {"Holdout evaluation", "Drift detection", "Walk-forward backtest", "Backtest"}
+    assert ("CLV update", False) in steps                                           # sirve a una apuesta nueva
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=None):
+            seen.append((str(sql), params))
+            return type("R", (), {"scalar": lambda self: pd.Timestamp("2026-09-22 00:15")})()
+    seen = []
+    import config.database as DB
+    monkeypatch.setattr(DB, "engine", type("E", (), {"connect": lambda self: Conn()})())
+    monkeypatch.setattr(O, "_OWN_BETS", {})
+    assert O.own_bets_idle(now) == "22-sep-2026" and O.own_bets_idle(now) == "22-sep-2026"
+    assert len(seen) == 1                                                           # una lectura por corrida
+    assert "MAX(match_date) FROM bets_history WHERE result IN" in seen[0][0]         # solo las cobradas
+    assert seen[0][1] == {"r": list(O.OWN_BETS_SETTLED)} and "stale" not in O.OWN_BETS_SETTLED
+
+
 def test_without_a_database_a_run_ends_quietly_and_says_why(monkeypatch):
     import scripts.orchestrator as O
     assert O.db_down_reason("OperationalError: ERROR: Your account or project has exceeded the quota") == \
