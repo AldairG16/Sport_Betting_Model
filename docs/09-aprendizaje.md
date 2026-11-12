@@ -329,6 +329,13 @@ puede medir cada semana es si se siguen cumpliendo las dos cosas en que descansa
     Regla simulada en 14 años (`audit/m6_rule.py`): hoy (65+) deja +0.4 por cada 100 (+2.0 con pago
     anticipado), 632 🎯 al año; "70+ siempre y 65 a 70 solo si paga el mínimo" deja +1.1 (+2.6), 573
     al año, positiva en las tres épocas (+1.9, +0.3, +0.8); solo 70+, +1.3 (+2.5), 428 al año.
+    **Ojo, con los precios de hoy quita más:** el promedio de las casas contra Pinnacle se ha ido
+    cerrando para el favorito (65 a 70: −2.8% en 2012-18, −3.9% en 2018-23, −4.2% en 2023-26) y con
+    los momios en vivo (`odds_history`, 12-oct a 11-nov-26, última foto antes del partido, 55
+    favoritos de 65+ en ligas con pago anticipado; `audit/m9_live_price.py`) va en −5.0%. Al mínimo
+    llegaban 74 de cada 100 favoritos de 65 a 70 en el historial reciente; en vivo, 6 de 14. Con
+    precios de hoy la regla quitaría más de la mitad de los 🎯 de 65 a 70, no 3 de cada 10 (muestra
+    chica: volver a medir con `state["price"]` cuando junte más).
     **Cambiar la regla es decisión del dueño (pendiente).**
   - **La suerte de gol.** Por equipo, la media en sus últimos 10 partidos de liga (mínimo 8) de
     (diferencia de goles) − 0.31 × (diferencia de tiros a puerta); se compara favorito menos rival y
