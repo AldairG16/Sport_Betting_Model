@@ -38,7 +38,7 @@ def _cands(mvs=None, **up):
 
 def test_the_note_names_what_the_favourite_is_missing():
     teams = ("Napoli", "Lecce")
-    # el favorito fuerte en Serie A, a -278: cumple todo (es 🎯) → sin nota
+    # el favorito fuerte en Serie A, a -256 (llega a su mínimo de -260): cumple todo (es 🎯) → sin nota
     assert PP.no_star_note(_cands(), "soccer_italy_serie_a", None, teams) is None
     # partido parejo: Pinnacle 2.3 / 3.3 / 3.4 → el local 42 de cada 100
     even = PP.no_star_note(_cands(pin_home_odds=2.3, pin_draw_odds=3.3, pin_away_odds=3.4),
@@ -50,6 +50,9 @@ def test_the_note_names_what_the_favourite_is_missing():
     # más corto que -500: paga muy poco, con su momio
     short = PP.no_star_note(_cands(consensus_home_odds=1.15), "soccer_italy_serie_a", None, teams)
     assert re.match(r"Napoli paga muy poco \(-\d+\):", short)
+    # de 65 a 70 con un precio que no llega al mínimo (12-nov-26): lo dice con los dos momios
+    low = PP.no_star_note(_cands(consensus_home_odds=1.36), "soccer_italy_serie_a", None, teams)
+    assert low.startswith("Napoli paga poco para lo que gana (-278):") and low.endswith("lo paga a -260 o mejor")
     # con 4+ titulares fuera: el motivo de la alineación
     weak = {"home_win": PP.WEAKENED.format(team="Napoli", n=5, names="a, b, c, d, e")}
     assert PP.no_star_note(_cands(), "soccer_italy_serie_a", weak, teams) == weak["home_win"]
@@ -69,7 +72,8 @@ def test_without_winner_odds_the_note_says_so():
 
 
 def test_every_short_part_fits_the_card_and_has_no_percent_jargon():
-    for note in (PP.STAR_NO_ODDS, PP.STAR_NO_FAV, PP.STAR_NO_PA, PP.STAR_NO_PRICE, PP.STAR_SHORT, PP.NOT_STRONG):
+    for note in (PP.STAR_NO_ODDS, PP.STAR_NO_FAV, PP.STAR_NO_PA, PP.STAR_NO_PRICE, PP.STAR_SHORT, PP.STAR_LOW_PRICE,
+                 PP.NOT_STRONG):
         short = note.split(":")[0].format(team="Borussia Dortmund", pct=74, us="-650")
         assert len(short) <= 75, short
         assert "%" not in note and "65%+" not in note
@@ -86,6 +90,8 @@ def test_build_picks_stores_the_note_only_without_target():
     assert star["reason"] is None and star["star_note"] is None                 # 🎯: nada que explicar
     mls = _build(_mvs(league="soccer_usa_mls"))
     assert mls["reason"] and mls["star_note"].startswith("Napoli es muy favorito, pero esta liga no tiene pago")
+    low = _build(_mvs(), consensus_home_odds=1.36)                              # el precio no llega: pick sin 🎯
+    assert low["market"] and low["reason"] and low["star_note"].startswith("Napoli paga poco para lo que gana (-278):")
     assert "star_note" in PP._COLS
     assert any("ADD COLUMN IF NOT EXISTS star_note" in a for a in PP.PICKS_ALTERS)
     # sin pick (la última corrida ya no lo evaluó): sin nota

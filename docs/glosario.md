@@ -4,7 +4,7 @@ Las palabras del proyecto, en el sentido en que se usan aquí.
 
 | Palabra | Qué quiere decir |
 |---|---|
-| **🎯 (recomendado)** | El pick que sí se sugiere jugar. Hoy: favorito fuerte según Pinnacle, -500 o mejor en PlayDoit, liga con pago anticipado ([08](08-picks-y-parlays.md)) |
+| **🎯 (recomendado)** | El pick que sí se sugiere jugar. Hoy: favorito fuerte según Pinnacle, -500 o mejor en PlayDoit, liga con pago anticipado y, si gana menos de 70 de cada 100, con un momio que llegue al mínimo ([08](08-picks-y-parlays.md)) |
 | **Pick** | Lo que más le gusta al programa de un partido. Todo partido analizado tiene uno |
 | **Momio americano** | +128 = ganas 128 por cada 100; -140 = apuestas 140 para ganar 100. Es como lo muestra PlayDoit y como se muestra todo al dueño |
 | **Momio mínimo** | El momio a partir del cual vale la pena el pick ("apuesta si paga X o mejor") |

@@ -23,8 +23,33 @@ def test_the_target_is_the_strong_favourite_in_a_league_with_early_payout():
     pick, why = PP.decide(_mvs(), SimpleNamespace(**_up()))
     assert why is None and pick["market"] == "home_win" and pick["strong"]
     row = PP._row(_mvs(), _mvs()["match_date"], "Napoli vs Lecce", pick, why)
-    # el mínimo sale del mercado: 1 / (68.7% + 3.5 pts) ≈ -261; el promedio paga -278
-    assert row["min_us"] == pytest.approx(-261, abs=3) and row["playdoit_odds"] == pytest.approx(1.36)
+    # el mínimo sale del mercado: 1 / (68.7% + 3.5 pts) ≈ -260; el promedio paga -256: llega
+    assert row["min_us"] == pytest.approx(-260, abs=1) and row["playdoit_odds"] == pytest.approx(1.39)
+    assert row["value"] is True
+
+
+def test_between_65_and_70_the_target_needs_a_price_that_reaches_the_minimum():
+    """12-nov-26, el dueño (1a). En el historial, el favorito de 65 a 70 cuyo precio no llegaba al
+    mínimo perdió 6.8 por cada 100 apostados en las tres épocas; de 70 para arriba no hay diferencia."""
+    short = SimpleNamespace(**_up(consensus_home_odds=1.36))           # -278 no llega a -260
+    pick, why = PP.decide(_mvs(), short)
+    assert pick is not None and why is not None and not pick.get("strong")     # el partido sigue con su pick, sin 🎯
+    assert PP.strong_favourite(PP._candidates_of(_mvs(), short), "soccer_italy_serie_a") is None
+    note = PP.no_star_note(PP._candidates_of(_mvs(), short), "soccer_italy_serie_a", None, ("Napoli", "Lecce"))
+    assert note == ("Napoli paga poco para lo que gana (-278): es muy favorito (69 de cada 100 según Pinnacle), pero a "
+                    "ese precio, a la larga, se pierde. Vale la pena solo si PlayDoit lo paga a -260 o mejor")
+    edge = SimpleNamespace(**_up(consensus_home_odds=1.385))           # justo en el mínimo (-260): llega
+    assert PP.decide(_mvs(), edge)[1] is None
+    # de 70 para arriba el precio no se exige: 73 de cada 100, mínimo -329, paga -357 y sigue siendo 🎯
+    top = SimpleNamespace(**_up(pin_home_odds=1.30, pin_draw_odds=5.5, pin_away_odds=10.0, consensus_home_odds=1.28))
+    pick, why = PP.decide(_mvs(), top)
+    assert why is None and pick["strong"] and pick["market_prob"] >= PP.PRICE_BAND
+    row = PP._row(_mvs(), _mvs()["match_date"], "Napoli vs Lecce", pick, why)
+    assert row["value"] is False and row["min_us"] == pytest.approx(-329, abs=1)
+    # la cuenta es la misma que el `value` guardado: un 🎯 de menos de 70 siempre lo trae en True
+    assert PP.reaches_minimum({"playdoit_odds": 1.39, "market_prob": 0.687})
+    assert not PP.reaches_minimum({"playdoit_odds": 1.36, "market_prob": 0.687})
+    assert not PP.reaches_minimum({"playdoit_odds": None, "market_prob": 0.687})
 
 
 def test_other_picks_are_still_shown_without_the_target():

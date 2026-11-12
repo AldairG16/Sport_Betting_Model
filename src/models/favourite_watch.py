@@ -21,11 +21,15 @@ cambia; el chequeo diario avisa si esto deja de correr (output_checks 5,
 WEEKLY_KEYS).
 
 Desde el 11-nov-26 mide además dos señales que salieron de repetir el
-historial (137 mil partidos, tres épocas) y que todavía NO deciden nada:
+historial (137 mil partidos, tres épocas):
 
 3. El precio: el favorito de 65 a 70 cuyo momio estimado de PlayDoit no llega
    al mínimo (probabilidad + FAV_EDGE) perdió 6.8 por cada 100 apostados en
-   las tres épocas; el que sí llega quedó en +0.5.
+   las tres épocas; el que sí llega quedó en +0.5. Desde el 12-nov-26 esto SÍ
+   decide (el dueño, 1a: ese favorito no lleva 🎯, program_picks.PRICE_BAND).
+   Aquí se siguen midiendo los dos grupos, con 🎯 o sin él, con la última
+   foto de momios antes del partido (odds_history): si los que no llegan
+   dejan de perder, la regla se revisa.
 4. La "suerte de gol": goles de más contra lo que justifican los tiros a
    puerta en los últimos 10 partidos de liga, favorito menos rival. El
    favorito de 70+ que venía sin suerte ganó 4.8 más de cada 100 de lo que
@@ -245,33 +249,64 @@ def format_report(state: dict, previous: dict | None = None, html: bool = False)
     return "\n".join(lines)
 
 
-PICKS_SQL = """
-    SELECT match, match_date, market, market_prob, playdoit_odds
-    FROM program_picks
-    WHERE match_date >= NOW() - make_interval(days => :d) AND market IN ('home_win', 'away_win')
-      AND playdoit_odds IS NOT NULL AND market_prob IS NOT NULL
-"""
+PRICE_HOURS = 6                              # la foto de momios es de ese partido si su hora cuadra
 
 
-def _price_of(picks: dict, match, kickoff, market, edge: float) -> tuple:
-    """(momio estimado de PlayDoit del favorito, ¿llegaba al mínimo?) según el
-    pick guardado de ese partido; (None, None) si el pick fue a otro lado."""
+def price_index(snaps: list, normalize=None) -> dict:
+    """{"local vs visitante": [(hora, promedio local, promedio visitante,
+    Pinnacle local, empate, visitante)]} con la última foto de momios de cada
+    partido antes de empezar (odds_history, nombres como los manda la API)."""
+    norm = (lambda t: normalize(str(t)).lower()) if normalize else (lambda t: str(t).lower())
+    idx: dict = {}
+    for r in snaps:
+        home, sep, away = str(r["match"]).partition(" vs ")
+        if not sep:
+            continue
+        idx.setdefault(f"{norm(home)} vs {norm(away)}", []).append(
+            (pd.Timestamp(r["kickoff"]), r["consensus_home_odds"], r["consensus_away_odds"],
+             r.get("pin_home_odds"), r.get("pin_draw_odds"), r.get("pin_away_odds")))
+    return idx
+
+
+def _price_of(prices: dict, match, kickoff, market, p: float, ratio=None, normalize=None) -> tuple:
+    """(momio estimado de PlayDoit del favorito, ¿llegaba al mínimo?) con la
+    última foto antes del partido y la misma cuenta que la regla del 🎯
+    (program_picks.reaches_minimum). La probabilidad es la de Pinnacle en esa
+    foto; sin ella, la del análisis (p). (None, None) sin foto."""
+    from types import SimpleNamespace
+    from src.models.program_picks import fair_1x2, playdoit_estimate, reaches_minimum
+    home, _, away = str(match).partition(" vs ")
+    norm = (lambda t: normalize(str(t)).lower()) if normalize else (lambda t: str(t).lower())
     k = pd.Timestamp(kickoff)
     k = k.tz_convert("UTC") if k.tzinfo else k.tz_localize("UTC")
-    for t, mkt, prob, odds in picks.get(str(match).lower(), []):
+    for t, ch, ca, ph, pd_, pa in prices.get(f"{norm(home)} vs {norm(away)}", []):
         t = t.tz_convert("UTC") if t.tzinfo else t.tz_localize("UTC")
-        if mkt == market and abs((t - k).total_seconds()) <= 36 * 3600:
-            return float(odds), bool(float(odds) * (float(prob) + edge) >= 1)
+        if abs((t - k).total_seconds()) > PRICE_HOURS * 3600:
+            continue
+        odds = playdoit_estimate(ch if market == "home_win" else ca, ratio)
+        if odds is None:
+            continue
+        fair = fair_1x2(SimpleNamespace(pin_home_odds=ph, pin_draw_odds=pd_, pin_away_odds=pa))
+        prob = (fair[0] if market == "home_win" else fair[2]) if fair else p
+        return float(odds), reaches_minimum({"playdoit_odds": odds, "market_prob": float(prob)})
     return None, None
 
 
-def _read_picks(engine) -> dict:
-    picks = pd.read_sql(text(PICKS_SQL), engine, params={"d": WINDOW_DAYS + 2})
-    out: dict = {}
-    for r in picks.to_dict("records"):
-        out.setdefault(str(r["match"]).lower(), []).append(
-            (pd.Timestamp(r["match_date"]), r["market"], r["market_prob"], r["playdoit_odds"]))
-    return out
+def _read_prices(engine, leagues) -> list:
+    """La última foto de momios antes de empezar de cada partido de esas ligas."""
+    leagues = sorted({str(x) for x in leagues if x})
+    if not leagues:
+        return []
+    marks = ", ".join(f":l{i}" for i in range(len(leagues)))
+    snaps = pd.read_sql(text(f"""
+        SELECT DISTINCT ON (match_key) match, kickoff, consensus_home_odds, consensus_away_odds,
+               pin_home_odds, pin_draw_odds, pin_away_odds
+        FROM odds_history
+        WHERE league IN ({marks}) AND kickoff >= NOW() - make_interval(days => :d) AND kickoff < NOW()
+          AND captured_at <= kickoff AND consensus_home_odds > 1 AND consensus_away_odds > 1
+        ORDER BY match_key, captured_at DESC"""), engine,
+        params={"d": WINDOW_DAYS + 2, **{f"l{i}": x for i, x in enumerate(leagues)}})
+    return snaps.to_dict("records")
 
 
 def _read_history(engine, since, leagues) -> list:
@@ -308,10 +343,10 @@ def read_rows(engine=None) -> list:
     plan = {p["id"]: p["result"] for p in plan_shadow_resolutions(favs, _preload_matches(favs["match_date"]))}
     first = pd.to_datetime(favs["match_date"], utc=True).min()
     leads = EP.load_leads(engine, first - pd.Timedelta(days=1), normalize_team)
-    from src.models.program_picks import FAV_EDGE
-    picks = _read_picks(engine)
-    luck = luck_index(_read_history(engine, first - pd.Timedelta(days=LUCK_DAYS),
-                                    [x for x in favs["league"].unique() if x in EP.PA_LEAGUES]), normalize_team)
+    from src.models.program_picks import _ratio
+    pa_leagues = [x for x in favs["league"].unique() if x in EP.PA_LEAGUES]
+    prices, ratio = price_index(_read_prices(engine, pa_leagues), normalize_team), _ratio(engine)
+    luck = luck_index(_read_history(engine, first - pd.Timedelta(days=LUCK_DAYS), pa_leagues), normalize_team)
     rows = []
     for r in favs.to_dict("records"):
         if plan.get(r["id"]) not in ("win", "loss"):
@@ -320,7 +355,7 @@ def read_rows(engine=None) -> list:
         fav, rival = (home, away) if r["market"] == "home_win" else (away, home)
         mine = luck_of(luck, r["league"], fav, r["match_date"], normalize_team)
         theirs = luck_of(luck, r["league"], rival, r["match_date"], normalize_team)
-        odds, pays = _price_of(picks, r["match"], r["match_date"], r["market"], FAV_EDGE)
+        odds, pays = _price_of(prices, r["match"], r["match_date"], r["market"], float(r["p"]), ratio, normalize_team)
         rows.append({"p": float(r["p"]), "won": plan[r["id"]] == "win", "league": r["league"],
                      "lead": EP.lead_of(leads, r["match"], r["match_date"], r["market"], normalize_team),
                      "odds": odds, "pays": pays, "away": r["market"] == "away_win",

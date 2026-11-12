@@ -930,7 +930,8 @@ def api_board_parlay():
     board = _px.parlay_board(legs, live, normalize=normalize_team, official=official,
                              covered=set(espn_leagues()))
     return jsonify({"ok": True, **board,
-                    "rules": {"strong": _pl.STRONG_FAV, "min_odds_us": _odds_us(_pl.MIN_LEG_ODDS),
+                    "rules": {"strong": _pl.STRONG_FAV, "price_band": _pl.PRICE_BAND,
+                              "min_odds_us": _odds_us(_pl.MIN_LEG_ODDS),
                               "day_min": _pl.DAY_MIN_LEGS, "slot_min": _pl.SLOT_MIN_LEGS, "max_legs": _pl.MAX_LEGS,
                               "bonus": {str(k): v for k, v in _pl.BONUS.items()},
                               "block_minutes": _pl.BLOCK_MINUTES,
@@ -1270,7 +1271,7 @@ PAGE = """<!DOCTYPE html>
     <select id="ufam"><option value="">Todas las apuestas</option><option>Ganador</option><option>Goles</option><option>Ambos anotan</option><option>Córners</option><option>Tarjetas</option></select>
     <span class="small muted" style="margin-left:auto">De cada 100: <span style="color:var(--home)">■</span> gana el local <span style="color:var(--draw)">■</span> empate <span style="color:var(--away)">■</span> gana el visitante · barra gruesa: el programa · delgada: Pinnacle</span>
   </div>
-  <div class="small muted" style="margin:0 0 10px">🎯 = <b>apuesta recomendada</b>: un equipo muy favorito (según Pinnacle, la casa más precisa, gana 65 de cada 100 partidos así o más) que paga -500 o mejor en PlayDoit, en una liga con pago anticipado. Los partidos sin 🎯 muestran lo que más le gusta al programa, solo para seguirlo, y dicen por qué no son 🎯.</div>
+  <div class="small muted" style="margin:0 0 10px">🎯 = <b>apuesta recomendada</b>: un equipo muy favorito (según Pinnacle, la casa más precisa, gana 65 de cada 100 partidos así o más) que paga -500 o mejor en PlayDoit, en una liga con pago anticipado. Si gana menos de 70 de cada 100, solo cuando su momio llega al mínimo que se muestra: más barato, a la larga, se pierde. Los partidos sin 🎯 muestran lo que más le gusta al programa, solo para seguirlo, y dicen por qué no son 🎯.</div>
   <div id="uplist" class="muted">Cargando…</div>
 </div>
 

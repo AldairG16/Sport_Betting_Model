@@ -11,7 +11,7 @@ Cada día:
    (Dixon-Coles + ensemble de Poisson, Elo, xG, entre-ellos y forma).
 2. Da **un pick por cada partido analizado** (nunca esconde uno) y marca con 🎯 los recomendados: hoy, un
    favorito muy claro según Pinnacle (la casa más precisa) que PlayDoit paga a -500 o mejor, en una liga con
-   pago anticipado.
+   pago anticipado; si gana menos de 70 de cada 100, solo cuando su momio llega al mínimo.
 3. Arma parlays, revisa las alineaciones antes de cada partido y fija el pick final.
 4. Avisa por Telegram (al dueño y a su canal «Dulopatia») y lo muestra en un dashboard en la PC del dueño.
 5. Cobra los resultados, mide contra el mercado y **aprende** de lo que junta (apuestas "sombra" y picks

@@ -135,20 +135,22 @@ def test_goal_luck_is_the_goals_above_the_shots_in_the_last_ten_league_games():
 
 def test_the_rows_come_from_every_analysed_favourite_with_its_result(monkeypatch):
     """read_rows: el favorito es el lado con más probabilidad de Pinnacle; se cobra con la
-    misma función que las apuestas y lo que no tiene resultado no cuenta. El precio sale del
-    pick guardado de ese lado y la suerte de gol de los partidos de liga anteriores."""
+    misma función que las apuestas y lo que no tiene resultado no cuenta. El precio sale de la
+    última foto de momios antes del partido (con 🎯 o sin él: desde el 12-nov el favorito que no
+    llega al mínimo ya no es el pick) y la suerte de gol de los partidos de liga anteriores."""
     import src.models.early_payout as EP
     import src.models.save_bets as SB
     favs = pd.DataFrame([
         {"match": "a vs b", "match_date": NOW, "league": "liga_pa", "pin_home": 0.72, "pin_away": 0.10},
         {"match": "c vs d", "match_date": NOW, "league": "liga_pa", "pin_home": 0.12, "pin_away": 0.68},
         {"match": "e vs f", "match_date": NOW, "league": "liga_pa", "pin_home": 0.80, "pin_away": 0.07}])
-    picks = pd.DataFrame([
-        {"match": "a vs b", "match_date": NOW, "market": "home_win", "market_prob": 0.72, "playdoit_odds": 1.36},
-        {"match": "c vs d", "match_date": NOW, "market": "home_win", "market_prob": 0.12, "playdoit_odds": 7.0},
-        {"match": "c vs d", "match_date": NOW, "market": "away_win", "market_prob": 0.68, "playdoit_odds": 1.38},
-        {"match": "a vs b", "match_date": NOW - pd.Timedelta(days=30), "market": "home_win", "market_prob": 0.5,
-         "playdoit_odds": 9.0}])                                   # otro partido de los mismos equipos: no es este
+    snaps = pd.DataFrame([                                         # nombres como los manda la API, no normalizados
+        {"match": "A vs B", "kickoff": NOW - pd.Timedelta(days=30), "consensus_home_odds": 9.0,
+         "consensus_away_odds": 1.2, "pin_home_odds": 9.5, "pin_draw_odds": 6.0, "pin_away_odds": 1.25},   # otro partido
+        {"match": "A vs B", "kickoff": NOW, "consensus_home_odds": 1.36, "consensus_away_odds": 8.0,
+         "pin_home_odds": 1.33, "pin_draw_odds": 5.5, "pin_away_odds": 9.5},        # Pinnacle 72 de cada 100: llega
+        {"match": "C vs D", "kickoff": NOW, "consensus_home_odds": 7.0, "consensus_away_odds": 1.38,
+         "pin_home_odds": 8.0, "pin_draw_odds": 5.0, "pin_away_odds": 1.40}])       # 68.7: −263 no llega a −260
     days = pd.date_range("2026-08-01", periods=10, freq="7D")
     history = pd.DataFrame([_game(d, "a", "x", 2, 0, 4, 4) for d in days] + [_game(d, "y", "b", 1, 1, 5, 5) for d in days]
                            + [_game(d, "c", "z", 1, 0, 3, 3) for d in days[:5]])   # c: 5 partidos, sin dato
@@ -156,9 +158,11 @@ def test_the_rows_come_from_every_analysed_favourite_with_its_result(monkeypatch
 
     def fake_read_sql(sql, con=None, params=None, **kw):
         q = str(sql)
-        if "FROM program_picks" in q:
-            seen["picks"] = params
-            return picks
+        if "FROM odds_history" in q:
+            seen["prices"] = params
+            return snaps
+        if "FROM playdoit_prices" in q:
+            return pd.DataFrame()                                  # sin capturas: el promedio tal cual
         if "FROM matches" in q:
             seen["history"] = params
             return history
@@ -178,10 +182,11 @@ def test_the_rows_come_from_every_analysed_favourite_with_its_result(monkeypatch
     assert seen["params"] == {"d": F.WINDOW_DAYS, "p": F.STRONG}
     assert seen["markets"] == ["home_win", "away_win", "home_win"]
     assert seen["history"] == {"s": "2026-04-30", "l0": "liga_pa"}             # 200 días antes del primer partido
+    assert seen["prices"] == {"d": F.WINDOW_DAYS + 2, "l0": "liga_pa"}
     assert rows == [{"p": 0.72, "won": True, "league": "liga_pa", "lead": None, "odds": 1.36, "pays": True,
                      "away": False, "luck": 2.0},                              # a: +2 por partido; b: 0
                     {"p": 0.68, "won": False, "league": "liga_pa", "lead": 2, "odds": 1.38, "pays": False,
-                     "away": True, "luck": None}]                              # 1.38 × (0.68 + 0.035) no llega a 1
+                     "away": True, "luck": None}]
 
 
 def test_the_weekly_runs_it_and_the_owner_hears_only_when_the_verdict_changes(monkeypatch):
