@@ -86,9 +86,9 @@ Los mismos CSV de football-data que descarga el weekly traen el cierre de Pinnac
 
 **Buscador de ventajas** (`src/models/edge_finder.py`, paso "Buscador de ventajas", clave
 `edge_finder`):
-- **Qué prueba:** más de 30 ideas en palabras del dueño (racha, goles, descanso, recién
-  ascendidos, suerte, resultado anterior, pelea por el descenso y sesgos del momio) contra
-  esos momios.
+- **Qué prueba:** 40 ideas en palabras del dueño (racha, goles, descanso, recién
+  ascendidos, suerte, resultado anterior, pelea por el descenso, sesgos del momio y, desde el
+  12-nov, el muy favorito con y sin suerte de gol) contra esos momios.
 - **Precio:** el promedio entre casas, porque PlayDoit paga casi igual. Medido el 19-oct en la
   Bundesliga: PlayDoit −2.2 pt contra el precio justo de Pinnacle, promedio −2.4.
 - **Sin mirar el futuro:** cada rasgo usa solo partidos anteriores de la misma liga y
@@ -101,6 +101,20 @@ Los mismos CSV de football-data que descarga el weekly traen el cierre de Pinnac
 - **Por qué tanto rigor:** "el recién ascendido de local pierde" ganaba +10% y +15% en
   2019-25 y perdió −11% en 2012-19.
 - **Solo mide.** Una idea que pase va primero al laboratorio y después al dinero real.
+- **Una idea que nació de mirar este mismo historial no puede "pasar" con él** (12-nov-2026,
+  `FROM_THIS_HISTORY`): la prueba ya vio la respuesta. Llega a prometedora, el reporte dice "pasaría
+  la prueba, pero la idea salió de mirar este mismo historial: falta verla en partidos nuevos", y la
+  confirman o no los partidos nuevos (`favourite_watch`, `state["luck"]`).
+  - El caso: al meter la suerte de gol del muy favorito (media de sus últimos 10 partidos de liga
+    de goles de más contra tiros a puerta, `luck10`, la misma definición que `favourite_watch`),
+    "visitante muy favorito (70%+, liga con pago anticipado) que no viene con suerte" dio +11.0%
+    con z 4.1 (303 partidos; +13.3%, +12.7% y +4.8% en los tres periodos; positivo en 12 de 14
+    temporadas y 8 de 9 ligas). Pasaba la regla.
+  - Por qué no se le cree todavía: la idea y su corte (+0.33) salieron de explorar estos mismos
+    datos el 11-nov, y los vecinos no la repiten: el local de 70%+ sin suerte deja +1.4%
+    (descartada: −0.8% en 2019-22), el visitante de 60 a 70 +3.3% contra +1.6%, y en las ligas sin
+    pago anticipado va al revés (−4.7% contra +3.8%). Un efecto real de ese tamaño no viviría en
+    un solo rincón.
 - **Telegram:** solo cuando cambia lo que pasa o lo prometedor.
 - **Primera corrida (20-oct-2026):** 132,218 partidos de 26 ligas, 2012-2026. Ninguna de las
   32 ideas pasó y casi todas pierden lo que cobra la casa (−4% a −8%).

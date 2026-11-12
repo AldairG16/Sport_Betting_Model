@@ -343,6 +343,11 @@ puede medir cada semana es si se siguen cumpliendo las dos cosas en que descansa
     más de cada 100 de lo que decía Pinnacle y dejó +2.9, +2.7 y +3.4 por cada 100 en las tres
     épocas; con suerte, 2.6 más y +2.2, −2.2 y −0.2. La diferencia (3.0 ± 1.5) todavía puede ser
     azar: prometedor, no probado. El weekly lo mide con `matches` (`state["luck"]`).
+    Desde el 12-nov el buscador de ventajas la prueba además cada semana contra todo el historial
+    ([07](07-modelo.md)): donde más se nota es en el visitante muy favorito (+11%, 303 partidos),
+    pero esa idea salió de estos mismos datos y queda como prometedora. Por eso `state["luck"]`
+    guarda al visitante aparte (`away_low`, `away_high`): son los partidos nuevos los que la
+    confirman o la tiran. A ~22 partidos al año, tarda.
 
 **Probado el 11-nov con 137 mil partidos y tres épocas** (2012-18, 2018-23, 2023-26;
 `audit/m3_build.py`, `m4_test.py`, `m5_reg.py`, `m6_rule.py`), para no repetirlo:
