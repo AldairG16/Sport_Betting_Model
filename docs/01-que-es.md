@@ -41,7 +41,8 @@ Los horarios exactos y quién dispara cada corrida están en [04](04-corridas-y-
    dónde tiende el aprendizaje.
 4. **El 🎯 (recomendado)** es la apuesta que sí se sugiere jugar. Hoy: un equipo muy favorito (según Pinnacle
    gana 65 de cada 100 partidos así o más) que PlayDoit paga a -500 o mejor, en una liga con **pago
-   anticipado** (PlayDoit da la apuesta por ganada si el equipo va 2 goles arriba). Los partidos sin 🎯 dicen
+   anticipado** (PlayDoit da la apuesta por ganada si el equipo va 2 goles arriba). Si gana menos de 70 de
+   cada 100, solo cuando su momio llega al mínimo (12-nov). Los partidos sin 🎯 dicen
    por qué no lo son ("no hay favorito claro", "paga muy poco (-667)", "esta liga no tiene pago anticipado").
 5. **El parlay** junta los 🎯 de un día o de un horario para cobrar el bono de PlayDoit por parlay (5% con 3
    piernas, 7.5% con 4, 10% con 5…, sobre la ganancia) ([08](08-picks-y-parlays.md)).
@@ -57,7 +58,7 @@ Todo se mide "apostando 50 a cada uno".
 
 ## En qué estado está (noviembre de 2026)
 
-- **En producción**, versión del dashboard 2.12.0. `master` es producción.
+- **En producción**, versión del dashboard 2.12.1. `master` es producción.
 - **Modo recolección desde el 25-sep-26**: el programa ya no registra apuestas propias en `bets_history`
   (congelada); junta picks (`program_picks`) y sombra para aprender.
 - **Lo que dicen los datos (auditoría del 5-nov):** el modelo no le gana a Pinnacle en predecir; la única
@@ -72,7 +73,7 @@ Todo se mide "apostando 50 a cada uno".
 | Tema | Decisión |
 |---|---|
 | Picks | Un pick por partido analizado, siempre; los filtros solo marcan 🎯, nunca quitan (22-oct) |
-| 🎯 | Favorito fuerte (≥65 de cada 100 según Pinnacle), -500 o mejor, liga con pago anticipado; el 🎯 de goles se quitó (5-nov) |
+| 🎯 | Favorito fuerte (≥65 de cada 100 según Pinnacle), -500 o mejor, liga con pago anticipado; el 🎯 de goles se quitó (5-nov). De 65 a 70, solo si el momio estimado llega al mínimo (12-nov) |
 | Parlays | Bono de PlayDoit: parlay del día de 4 a 6 piernas y parlays de un mismo horario de 3+, esperando alineaciones (5-nov) |
 | Dinero | Todo "apostando 50 a cada uno" (8-nov) |
 | Momios | Siempre americanos; los decimales solo internos |

@@ -13,16 +13,19 @@
   cuenta y el que se cobra.
 - Se cobra **al momio mínimo de PlayDoit**, apostando 50.
 
-**El 🎯 (recomendado)**, la regla vigente desde v2.9.0 (6-nov-26):
+**El 🎯 (recomendado)**, la regla vigente desde v2.9.0 (6-nov-26), con el precio desde v2.12.1 (12-nov-26):
 
 1. Un equipo **muy favorito**: según Pinnacle gana 65 de cada 100 partidos así o más.
 2. PlayDoit lo paga a **-500 o mejor** (cada pierna de parlay con bono también debe ser -500 o mejor).
 3. En una liga con **pago anticipado** de PlayDoit (si va 2 goles arriba, se paga como ganada).
 4. Sin **4 o más titulares habituales fuera**.
 5. Fuera de una **región en pausa** por el filtro aprendido (hoy, América).
+6. **Si gana menos de 70 de cada 100, su momio estimado de PlayDoit tiene que llegar al mínimo**
+   (`PRICE_BAND`, `reaches_minimum`). De 70 para arriba no se exige.
 
 El partido sin 🎯 dice por qué en palabras (`star_note`): "no hay favorito claro", "paga muy poco (-667)",
-"esta liga no tiene pago anticipado", "le faltan 5 titulares".
+"esta liga no tiene pago anticipado", "le faltan 5 titulares", "paga poco para lo que gana (-278)… vale la
+pena solo si PlayDoit lo paga a -260 o mejor".
 
 **Los parlays** (`src/models/program_parlays.py`, tabla `program_parlays`):
 
@@ -404,6 +407,23 @@ Lo que eligió el dueño (1b, 2c, 3a, 4a):
   favorito. Los demás siguen mostrando su pick, sin 🎯 (`NOT_STRONG`, o el motivo que ya tenían); el 🎯
   de goles y el del modelo se acaban. El mínimo de PlayDoit del favorito sale del mercado:
   1 / (Pinnacle + 3.5 pts) (`FAV_EDGE`: el sesgo más el pago anticipado; ≈ el promedio de las casas).
+- **El precio, 12-nov-2026 (v2.12.1).** El dueño eligió (1a) que el favorito de 65 a 70 lleve 🎯 solo
+  si su momio estimado llega al mínimo. `strong_favourite` devuelve None cuando no llega, así que el
+  partido muestra el pick de siempre sin 🎯 (`choose`), su nota dice los dos momios (`STAR_LOW_PRICE`) y
+  tampoco es pierna de parlay (`strong_leg` usa la misma función: la pierna sigue siendo el 🎯 de su
+  partido, chequeo 18). La cuenta es la del `value` guardado (momio americano redondeado), así que un 🎯
+  de menos de 70 siempre trae `value` en verdadero.
+  - **Por qué:** en el historial (ligas con pago anticipado, 2012-26, precio promedio) el de 65 a 70 que
+    no llegaba al mínimo perdió 6.8 por cada 100 apostados (841 partidos; −10.2, −3.6 y −8.3 en las tres
+    épocas), ~−4 con el pago anticipado; el que sí llegaba dejó +0.5 (~+3). De 70 a 80 no hay diferencia
+    (+2.2 contra +1.7), por eso ahí no se exige. Detalle y simulación en [09](09-aprendizaje.md).
+  - **Cuántos quita:** en el historial reciente llegaban 74 de cada 100; con los momios en vivo (12-oct
+    a 11-nov) llegaban 9 de 25. Con precios de hoy, cerca de dos de cada tres favoritos de 65 a 70 se
+    quedan sin 🎯. El 🎯 va y viene con el precio en cada cierre (cada 30 min) hasta que el partido empieza.
+  - **Lo que se sigue midiendo:** `favourite_watch` (`state["price"]`) cobra cada semana los dos grupos,
+    con 🎯 o sin él, con la última foto de momios antes del partido (`odds_history`). El 12-nov la muestra
+    en vivo iba al revés del historial (los que no llegaban: 14 ganados de 16), pero son 16 partidos
+    contra 841. Si con una muestra seria siguen sin perder, la regla se revisa.
 - **El parlay** (`src/models/program_parlays.py`, reemplaza al de "la apuesta más segura"):
   - piernas = esos favoritos (`strong_leg`), una por partido, marcadas `pa`;
   - **del día** (`kind` 'dia'): los más fuertes del día de México, de 4 a 6 (`DAY_MIN_LEGS`, `MAX_LEGS`);

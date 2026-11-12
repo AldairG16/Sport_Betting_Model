@@ -84,6 +84,6 @@ El detalle de cada módulo está en [03](03-componentes.md).
 
 ## Versiones
 
-- `VERSION` es la versión del dashboard (hoy 2.12.0). Un tag `v*` hace que `release.yml` compile, pruebe y
+- `VERSION` es la versión del dashboard (hoy 2.12.1). Un tag `v*` hace que `release.yml` compile, pruebe y
   publique el `.exe`.
 - El pipeline no tiene versión propia: lo que está en `master` es lo que corre en la siguiente corrida.

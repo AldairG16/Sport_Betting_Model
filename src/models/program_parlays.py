@@ -57,6 +57,7 @@ log = get_logger(__name__)
 
 RULE = "bono"                 # v2.9.0; lo de antes queda como 'seguro'
 STRONG_FAV = PP.STRONG_FAV
+PRICE_BAND = PP.PRICE_BAND     # por debajo, la pierna exige que su momio llegue al mínimo (12-nov-26)
 MIN_LEG_ODDS = PP.MIN_FAV_ODDS
 # El bono del boleto de PlayDoit sobre la ganancia, por número de selecciones (5-nov-26)
 BONUS = {3: 0.05, 4: 0.075, 5: 0.10, 6: 0.15, 7: 0.20, 8: 0.25, 9: 0.35}

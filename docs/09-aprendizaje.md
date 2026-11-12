@@ -336,7 +336,10 @@ puede medir cada semana es si se siguen cumpliendo las dos cosas en que descansa
     llegaban 74 de cada 100 favoritos de 65 a 70 en el historial reciente; en vivo, 6 de 14. Con
     precios de hoy la regla quitaría más de la mitad de los 🎯 de 65 a 70, no 3 de cada 10 (muestra
     chica: volver a medir con `state["price"]` cuando junte más).
-    **Cambiar la regla es decisión del dueño (pendiente).**
+    **Decidido el 12-nov-2026: el dueño eligió (1a)**, el 🎯 de 65 a 70 solo si el momio estimado llega
+    al mínimo (v2.12.1, [08](08-picks-y-parlays.md)). Desde entonces el weekly lee el precio de la última
+    foto de momios antes del partido (`odds_history`), no del pick guardado, para seguir cobrando también
+    a los que se quedaron sin 🎯.
   - **La suerte de gol.** Por equipo, la media en sus últimos 10 partidos de liga (mínimo 8) de
     (diferencia de goles) − 0.31 × (diferencia de tiros a puerta); se compara favorito menos rival y
     más de +0.33 cuenta como "con suerte". En el historial, el favorito de 70+ sin suerte ganó 4.8

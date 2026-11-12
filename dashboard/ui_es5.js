@@ -790,7 +790,9 @@ function renderParlay(){
   if (!_px) return;
   var i, h = '', today = mxday(), r = _px.rules;
   el('xrule').innerHTML = '<b>Cómo se arma:</b> solo equipos muy favoritos (según Pinnacle ganan ' + Math.round(r.strong * 100) +
-    ' de cada 100 partidos así o más) que paguen ' + esc(r.min_odds_us) + ' o mejor, en ligas con pago anticipado ⚡ ' +
+    ' de cada 100 partidos así o más) que paguen ' + esc(r.min_odds_us) + ' o mejor' +
+    (r.price_band ? ' (los de menos de ' + Math.round(r.price_band * 100) + ' de cada 100, solo si su momio llega al mínimo)' : '') +
+    ', en ligas con pago anticipado ⚡ ' +
     '(si el equipo va 2 goles arriba, PlayDoit la paga como ganada aunque luego le empaten). ' +
     'PlayDoit suma un bono a la ganancia: 3 partidos +5%, 4 +7.5%, 5 +10%, 6 +15%. ' +
     '<b>Parlay del día:</b> de ' + r.day_min + ' a ' + r.max_legs + ' partidos. <b>Parlay de un horario:</b> ' + r.slot_min +

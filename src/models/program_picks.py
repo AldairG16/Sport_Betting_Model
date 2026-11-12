@@ -167,6 +167,12 @@ MIN_FAV_ODDS = 1.20           # −500: más corto no entra al bono del parlay d
 # (+2.5-4 pts) y el pago anticipado (+1.26). Con 3.5 pts el momio mínimo queda
 # ≈ el promedio de las casas, donde el historial da ≈ 0% sin pago anticipado.
 FAV_EDGE = 0.035
+# 12-nov-26, el dueño (1a): al favorito de 65 a 70 de cada 100, el 🎯 solo si su momio estimado
+# de PlayDoit llega al mínimo. En el historial (ligas con pago anticipado, 2012-26) el de 65 a 70
+# que no llegaba perdió 6.8 por cada 100 apostados en las tres épocas (−10.2, −3.6, −8.3) y con el
+# pago anticipado sigue perdiendo ~4; el que sí llegaba dejó +0.5 (~+3 con pago anticipado). De 70
+# para arriba no hay diferencia (+2.2 contra +1.7) y no se exige.
+PRICE_BAND = 0.70
 NOT_STRONG = "No es el muy favorito: el 🎯 es solo para un equipo muy favorito en una liga con pago anticipado"
 # Por qué un partido no tiene 🎯, dicho por el favorito (6-nov-26, el dueño:
 # "no entiendo nada eso de al favorito de 65%"). El motivo guardado (reason)
@@ -183,6 +189,8 @@ STAR_NO_PRICE = ("No hay momio de PlayDoit para {team}: es muy favorito ({pct} d
                  "pero sin su momio no se sabe si paga lo suficiente")
 STAR_SHORT = ("{team} paga muy poco ({us}): es muy favorito ({pct} de cada 100 según Pinnacle), pero más "
               "corto que -500 casi no deja ganancia y no entra al bono del parlay")
+STAR_LOW_PRICE = ("{team} paga poco para lo que gana ({us}): es muy favorito ({pct} de cada 100 según Pinnacle), "
+                  "pero a ese precio, a la larga, se pierde. Vale la pena solo si PlayDoit lo paga a {min_us} o mejor")
 
 
 def _num(v):
@@ -390,7 +398,7 @@ def _row(r: dict, kick, display, pick_: dict | None, reason: str | None, source=
         return {**base, **{c: None for c in ("market", "label", "family", "model_prob", "market_prob", "lean",
                                              "min_us", "best_odds", "playdoit_odds", "value")}, "reason": reason}
     if pick_.get("strong"):           # v2.9.0: el mínimo sale del mercado, no del programa
-        min_us = to_american(1 / (pick_["market_prob"] + FAV_EDGE))
+        min_us = favourite_min_us(pick_["market_prob"])
     else:
         min_us = min_american(pick_["model"], pin_prob=pick_["market_prob"])
     est_us = to_american(pick_["playdoit_odds"]) if pick_["playdoit_odds"] else None
@@ -425,16 +433,31 @@ def model_1x2(r: dict, bias: dict | None = None) -> list:
     return [p["home_win"], p["draw"], p["away_win"]]
 
 
+def favourite_min_us(market_prob: float) -> int:
+    """El momio mínimo (americano) del favorito fuerte: su probabilidad de Pinnacle + FAV_EDGE."""
+    return to_american(1 / (market_prob + FAV_EDGE))
+
+
+def reaches_minimum(c: dict) -> bool:
+    """¿El momio estimado de PlayDoit del favorito llega a su mínimo? La misma
+    cuenta, en momio americano, que el `value` que guarda el pick."""
+    return bool(c.get("playdoit_odds")) and to_american(c["playdoit_odds"]) >= favourite_min_us(c["market_prob"])
+
+
 def strong_favourite(cs: list, league) -> dict | None:
     """El favorito fuerte de un partido (v2.9.0): el ganador con STRONG_FAV o
     más en Pinnacle sin margen, en una liga con pago anticipado, con momio de
-    PlayDoit de MIN_FAV_ODDS o más. None si no hay."""
+    PlayDoit de MIN_FAV_ODDS o más. Por debajo de PRICE_BAND (12-nov-26),
+    además, su momio estimado tiene que llegar al mínimo. None si no hay."""
     from src.models.early_payout import PA_LEAGUES
     if str(league or "") not in PA_LEAGUES:
         return None
     fav = [c for c in cs or [] if c["market"] in ("home_win", "away_win") and c["market_prob"] is not None
            and c["market_prob"] >= STRONG_FAV and c["playdoit_odds"] and c["playdoit_odds"] >= MIN_FAV_ODDS]
-    return max(fav, key=lambda c: c["market_prob"]) if fav else None
+    best = max(fav, key=lambda c: c["market_prob"]) if fav else None
+    if best is not None and best["market_prob"] < PRICE_BAND and not reaches_minimum(best):
+        return None
+    return best
 
 
 def no_star_note(cs: list, league, weak: dict | None = None, teams=("el local", "el visitante")) -> str | None:
@@ -442,7 +465,8 @@ def no_star_note(cs: list, league, weak: dict | None = None, teams=("el local", 
     dueño (6-nov-26). Revisa lo mismo que strong_favourite, en orden: que haya
     momios del ganador, que el favorito llegue a STRONG_FAV, la liga con pago
     anticipado, su momio de PlayDoit y su alineación. teams: (local, visitante)
-    como se ven. None si el favorito cumple todo (entonces es 🎯)."""
+    como se ven. Entre el momio corto y la alineación, el precio del favorito
+    de menos de PRICE_BAND (12-nov-26). None si cumple todo (entonces es 🎯)."""
     from src.models.early_payout import PA_LEAGUES
     wins = [c for c in cs or [] if c["market"] in ("home_win", "away_win") and c["market_prob"] is not None]
     if not wins:
@@ -459,6 +483,10 @@ def no_star_note(cs: list, league, weak: dict | None = None, teams=("el local", 
     if fav["playdoit_odds"] < MIN_FAV_ODDS:
         from src.utils.min_odds import fmt_american
         return STAR_SHORT.format(team=team, pct=pct, us=fmt_american(to_american(fav["playdoit_odds"])))
+    if fav["market_prob"] < PRICE_BAND and not reaches_minimum(fav):
+        from src.utils.min_odds import fmt_american
+        return STAR_LOW_PRICE.format(team=team, pct=pct, us=fmt_american(to_american(fav["playdoit_odds"])),
+                                     min_us=fmt_american(favourite_min_us(fav["market_prob"])))
     return (weak or {}).get(fav["market"])
 
 

@@ -35,11 +35,12 @@ def _mvs(match="napoli vs lecce", kick="2030-01-05 19:45", league="soccer_italy_
 
 
 def _up(home="napoli", away="lecce", **kw):
-    # Pinnacle 1.40 / 5.0 / 8.0 → el local 68.7% sin margen; promedio de las casas 1.36 (-278)
+    # Pinnacle 1.40 / 5.0 / 8.0 → el local 68.7% sin margen, mínimo -260; el promedio de las casas paga
+    # 1.39 (-256): llega. Hasta el 12-nov-26 era 1.36 (-278), que con la regla del precio ya no es 🎯
     return {"home_team_norm": home, "away_team_norm": away, "home_team": home.title(), "away_team": away.title(),
             "pin_home_odds": 1.40, "pin_draw_odds": 5.0, "pin_away_odds": 8.0,
             "home_odds": 1.42, "draw_odds": 5.2, "away_odds": 8.5,
-            "consensus_home_odds": 1.36, "consensus_draw_odds": 4.8, "consensus_away_odds": 7.6,
+            "consensus_home_odds": 1.39, "consensus_draw_odds": 4.8, "consensus_away_odds": 7.6,
             "over25_odds": 1.70, "under25_odds": 2.20, "consensus_over25_odds": 1.66, "consensus_under25_odds": 2.15,
             "btts_yes_odds": None, "btts_no_odds": None, **kw}
 
@@ -49,7 +50,13 @@ def _up(home="napoli", away="lecce", **kw):
 def test_a_leg_is_the_65pct_favourite_with_early_payout_at_minus_500_or_longer():
     leg = PL.strong_leg(_mvs(), SimpleNamespace(**_up()))
     assert leg["market"] == "home_win" and leg["market_prob"] == pytest.approx(0.687, abs=1e-3)
-    assert leg["playdoit_odds"] == pytest.approx(1.36)
+    assert leg["playdoit_odds"] == pytest.approx(1.39)
+    # 12-nov-26 (el dueño, 1a): de 65 a 70, solo si el momio estimado llega al mínimo (-278 no llega a -260)
+    assert PL.strong_leg(_mvs(), SimpleNamespace(**_up(consensus_home_odds=1.36))) is None
+    # de 70 para arriba no se exige: Pinnacle 1.30 / 5.5 / 10 → 73 de cada 100, mínimo -329, y paga -357
+    top = PL.strong_leg(_mvs(), SimpleNamespace(**_up(pin_home_odds=1.30, pin_draw_odds=5.5, pin_away_odds=10.0,
+                                                      consensus_home_odds=1.28)))
+    assert top["market"] == "home_win" and top["market_prob"] == pytest.approx(0.732, abs=1e-3)
     # Pinnacle 1.65 / 4.0 / 5.5: el local 58%, no es favorito fuerte
     assert PL.strong_leg(_mvs(), SimpleNamespace(**_up(pin_home_odds=1.65, pin_draw_odds=4.0, pin_away_odds=5.5))) is None
     # MLS: sin pago anticipado en la lista; Escocia tampoco (sin la etiqueta "PA")
@@ -359,6 +366,7 @@ def test_parlay_endpoint_and_tab(monkeypatch):
     d = c.get("/api/board/parlay").get_json()
     assert d["ok"] and d["parlays"][0]["parlay"]["odds_bonus_us"] == "+437"
     assert d["rules"]["min_odds_us"] == "-500" and d["rules"]["strong"] == 0.65 and d["rules"]["bonus"]["6"] == 0.15
+    assert d["rules"]["price_band"] == 0.70                           # la página dice que de 65 a 70 pide precio
     assert "Champions League" in " ".join(d["rules"]["leagues"]) or d["rules"]["leagues"]
     html = c.get("/").get_data(as_text=True)
     for el_id in ('data-tab="parlay"', 'id="tab-parlay"', 'id="xrule"', 'id="xnext"', 'id="xkpis"', 'id="xhist"'):
