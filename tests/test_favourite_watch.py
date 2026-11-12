@@ -104,6 +104,9 @@ def test_goal_luck_is_watched_among_the_strong_favourites():
     assert st["luck"]["low"]["n"] == 60 and st["luck"]["low"]["won"] == 50
     assert st["luck"]["high"]["n"] == 40 and st["luck"]["cut"] == F.LUCK_CUT
     assert F.evaluate(calm + edge + hot, PA, NOW)["luck"]["low"]["n"] == 61
+    visit = [{**r, "away": True} for r in calm[:20]] + [{**r, "away": True} for r in hot[:10]]   # el visitante, aparte
+    by_side = F.evaluate(visit + calm[20:] + hot[10:], PA, NOW)["luck"]
+    assert by_side["away_low"]["n"] == 20 and by_side["away_high"]["n"] == 10 and by_side["low"]["n"] == 60
     text = F.format_report(st)
     assert "los que venían sin suerte ganaron 83 de cada 100 y Pinnacle decía 75, en 60 partidos" in text
     assert "los que venían con suerte ganaron 75 de cada 100 y Pinnacle decía 75, en 40 partidos" in text
@@ -176,9 +179,9 @@ def test_the_rows_come_from_every_analysed_favourite_with_its_result(monkeypatch
     assert seen["markets"] == ["home_win", "away_win", "home_win"]
     assert seen["history"] == {"s": "2026-04-30", "l0": "liga_pa"}             # 200 días antes del primer partido
     assert rows == [{"p": 0.72, "won": True, "league": "liga_pa", "lead": None, "odds": 1.36, "pays": True,
-                     "luck": 2.0},                                             # a: +2 por partido; b: 0
+                     "away": False, "luck": 2.0},                              # a: +2 por partido; b: 0
                     {"p": 0.68, "won": False, "league": "liga_pa", "lead": 2, "odds": 1.38, "pays": False,
-                     "luck": None}]                                            # 1.38 × (0.68 + 0.035) no llega a 1
+                     "away": True, "luck": None}]                              # 1.38 × (0.68 + 0.035) no llega a 1
 
 
 def test_the_weekly_runs_it_and_the_owner_hears_only_when_the_verdict_changes(monkeypatch):

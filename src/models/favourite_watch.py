@@ -153,7 +153,10 @@ def evaluate(rows: list, pa_leagues=None, now=None) -> dict:
             "price": {"pays": _money([r for r in priced if r["pays"]]),
                       "short": _money([r for r in priced if not r["pays"]])},
             "luck": {"cut": LUCK_CUT, "low": _stats([r for r in lucky if r["luck"] <= LUCK_CUT]),
-                     "high": _stats([r for r in lucky if r["luck"] > LUCK_CUT])},
+                     "high": _stats([r for r in lucky if r["luck"] > LUCK_CUT]),
+                     # el visitante aparte (12-nov-26): en el historial es donde más se nota; aquí se confirma o no
+                     "away_low": _stats([r for r in lucky if r.get("away") and r["luck"] <= LUCK_CUT]),
+                     "away_high": _stats([r for r in lucky if r.get("away") and r["luck"] > LUCK_CUT])},
             "early_payout": {"n": len(known), "rescued": rescued,
                              "per_100": round(100 * rescued / len(known), 1) if known else None},
             "policy": {"min_n": MIN_N, "z": Z, "history": HISTORY, "pa_history": PA_HISTORY,
@@ -320,7 +323,7 @@ def read_rows(engine=None) -> list:
         odds, pays = _price_of(picks, r["match"], r["match_date"], r["market"], FAV_EDGE)
         rows.append({"p": float(r["p"]), "won": plan[r["id"]] == "win", "league": r["league"],
                      "lead": EP.lead_of(leads, r["match"], r["match_date"], r["market"], normalize_team),
-                     "odds": odds, "pays": pays,
+                     "odds": odds, "pays": pays, "away": r["market"] == "away_win",
                      "luck": round(mine - theirs, 3) if mine is not None and theirs is not None else None})
     return rows
 

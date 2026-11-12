@@ -115,6 +115,39 @@ def test_promoted_luck_and_relegation_zone():
     assert g.h_luck6 == pytest.approx(6 * (1 - 0.3 * (1 - 6)))
 
 
+def test_goal_luck_of_ten_games_crosses_seasons_and_feeds_the_favourite_ideas():
+    """12-nov-26: la misma suerte de gol que mide favourite_watch en vivo (media de los últimos 10
+    partidos de liga con tiros a puerta, mínimo 8), a prueba cada semana entre los muy favoritos."""
+    from src.models import favourite_watch as FW
+    assert (EF.LUCK_K, EF.LUCK_GAMES, EF.LUCK_MIN, EF.LUCK_CUT) == (FW.LUCK_K, FW.LUCK_GAMES, FW.LUCK_MIN, FW.LUCK_CUT)
+    fav = (1.30, 5.5, 11.0)                                             # el local, 72 de cada 100 según Pinnacle
+    old = [_match(f"2020-0{2 + i}-10", "alpha", f"r{i}", 3, 0, season=2019, hst=4, ast=4) for i in range(4)]
+    new = [_match(f"2020-{8 + i // 4:02d}-{1 + 7 * (i % 4):02d}", "alpha", f"s{i}", 1, 0, season=2020, hst=4, ast=4)
+           for i in range(8)]
+    rows = old + new + [_match("2020-12-20", "alpha", "beta", 0, 1, season=2020, odds=fav)]
+    f = EF.build_features(pd.DataFrame(rows))
+    last = f.iloc[-1:]
+    assert last.h_luck10.iloc[0] == pytest.approx((2 * 3 + 8 * 1) / 10)   # 2 de la temporada anterior + 8 de esta
+    assert np.isnan(last.a_luck10.iloc[0])                              # beta sin historia: sin dato
+    assert np.isnan(f.iloc[7].h_luck10) and f.iloc[8].h_luck10 == pytest.approx((4 * 3 + 4 * 1) / 8)   # 7 no, 8 sí
+    blind = EF.build_features(pd.DataFrame(old + [_match("2020-08-01", "alpha", "s0", 1, 0, hst=np.nan)] + new[1:]))
+    assert blind.iloc[-1].h_luck10 == pytest.approx((4 * 3 + 6 * 1) / 10)   # el partido sin tiros no entra a la suerte
+    rules = {k: (side, r) for k, _, side, r in EF.HYPOTHESES}
+    fires = lambda k, frame: bool(rules[k][1](frame).fillna(False).iloc[0])
+    assert not fires("favorito_sin_suerte_local", last) and not fires("favorito_con_suerte_local", last)   # sin dato del rival
+    beta = [_match(f"2020-{8 + i // 4:02d}-{2 + 7 * (i % 4):02d}", "beta", f"t{i}", 1, 1, season=2020) for i in range(8)]
+    both = EF.build_features(pd.DataFrame(old + new + beta + [_match("2020-12-20", "alpha", "beta", 0, 1, season=2020,
+                                                                    odds=fav)])).iloc[-1:]
+    assert both.h_luck10.iloc[0] - both.a_luck10.iloc[0] == pytest.approx(1.4)     # 1.4 goles de más por partido
+    assert fires("favorito_con_suerte_local", both) and not fires("favorito_sin_suerte_local", both)
+    assert rules["favorito_sin_suerte_local"][0] == "H" and rules["favorito_sin_suerte_visita"][0] == "A"
+    other = both.assign(sport_key="soccer_usa_mls")                     # liga sin pago anticipado: no entra
+    assert not fires("favorito_con_suerte_local", other)
+    even = EF.build_features(pd.DataFrame(old + new + beta + [_match("2020-12-20", "alpha", "beta", 0, 1,
+                                                                    season=2020)])).iloc[-1:]
+    assert not fires("favorito_con_suerte_local", even)                 # 48 de cada 100: no es muy favorito
+
+
 # ============================================================
 # edge_finder — veredicto
 # ============================================================
@@ -152,6 +185,24 @@ def test_an_idea_passes_only_if_it_wins_in_every_period_beyond_luck():
     # menos de 50 apuestas en un periodo: pocos datos
     f = _frame([(2015, 400, 300), (2020, 30, 25), (2024, 400, 300)])
     assert EF.evaluate(f, ALL_HOMES)["hypotheses"]["todos"]["verdict"] == EF.THIN
+
+
+def test_an_idea_born_from_this_same_history_cannot_pass_with_it():
+    """12-nov-26: "visitante muy favorito sin suerte de gol" daba +11% con z 4.1, pero la idea salió de
+    explorar este mismo historial. La prueba ya vio la respuesta: llega a prometedora y lo dice."""
+    f = _frame([(s, 300, 200) for s in range(2012, 2025)])
+    free = EF.evaluate(f, ALL_HOMES, born_here=())
+    assert free["hypotheses"]["todos"]["verdict"] == EF.PASSES and not free["hypotheses"]["todos"]["born_here"]
+    ev = EF.evaluate(f, ALL_HOMES, born_here={"todos"})
+    h = ev["hypotheses"]["todos"]
+    assert h["verdict"] == EF.PROMISING and h["born_here"] and h["z"] >= ev["z_needed"]
+    rep = {"n_matches": len(f), "n_leagues": 1, "seasons": [2012, 2024], "periods": [p[0] for p in EF.PERIODS],
+           "k": ev["k"], "z_needed": ev["z_needed"], "hypotheses": ev["hypotheses"], "passed": [], "promising": ["todos"]}
+    text = EF.format_report(rep, html=False)
+    assert "Pasaron las 3 pruebas: ninguna todavía." in text
+    assert "pasaría la prueba, pero la idea salió de mirar este mismo historial: falta verla en partidos nuevos" in text
+    assert {"favorito_sin_suerte_local", "favorito_con_suerte_local", "favorito_sin_suerte_visita"} <= EF.FROM_THIS_HISTORY
+    assert EF.FROM_THIS_HISTORY <= {k for k, *_ in EF.HYPOTHESES}        # ninguna clave huérfana
 
 
 def test_more_ideas_need_more_evidence():

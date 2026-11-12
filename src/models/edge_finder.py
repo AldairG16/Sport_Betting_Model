@@ -22,11 +22,19 @@ perdió −11% en 2012-19; con miles de datos siempre "aparece" algo):
     ganancia junta no puede ser suerte aun habiendo probado todas las ideas
     (Bonferroni: z ≥ z(1 − 0.05/k));
   - PROMETEDORA si gana en los tres pero todavía puede ser suerte.
+  - una idea que NACIÓ de mirar este mismo historial (FROM_THIS_HISTORY) nunca
+    "pasa" con él: la prueba ya vio la respuesta. Llega a prometedora y la
+    confirman, o no, los partidos nuevos (favourite_watch). 12-nov-26:
+    "visitante muy favorito sin suerte de gol" daba +11% con z 4.1 (303
+    partidos), pero salió de explorar estos datos y ni el local (+1.4%), ni el
+    visitante de 60 a 70 (+3.3%), ni las otras ligas (−4.7%) lo repiten.
 Solo mide: pasar una idea al laboratorio y a dinero real es el paso siguiente.
 
 Cada rasgo usa solo partidos ANTERIORES de la misma liga y temporada (la
 racha, el descanso y la tabla de ese momento), nunca el resultado del propio
-partido.
+partido. La suerte de gol de 10 partidos (luck10, 12-nov-26) es la única que
+cruza de una temporada a la siguiente, igual que la que mide en vivo
+favourite_watch: mismas constantes, una sola definición.
 """
 
 from datetime import datetime, timezone
@@ -36,6 +44,9 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
+from src.models.early_payout import PA_LEAGUES
+from src.models.favourite_watch import LUCK_CUT, LUCK_GAMES, LUCK_K, LUCK_MIN
+
 STATE_KEY = "edge_finder"
 PERIODS = (("2012-18", 2012, 2018), ("2019-22", 2019, 2022), ("2023+", 2023, 9999))
 MIN_N_PERIOD = 50
@@ -43,6 +54,8 @@ ALPHA = 0.05
 LUCK_SHOT_GOALS = 0.3        # goles esperados por tiro a puerta (aprox.)
 
 PASSES, PROMISING, DISCARDED, THIN = "pasa", "prometedora", "descartada", "pocos datos"
+# ideas que salieron de explorar este mismo historial: con él no pueden pasar
+FROM_THIS_HISTORY = frozenset({"favorito_sin_suerte_local", "favorito_con_suerte_local", "favorito_sin_suerte_visita"})
 
 # lado → (columna de precio sin prefijo, probabilidad justa de Pinnacle, ¿ganó?)
 SIDES = {
@@ -118,6 +131,17 @@ HYPOTHESES = (
     # al revés: si el mercado exagera esos goles, el menos de 2.5 tendría el valor
     ("alguno_goleable_menos", "Alguno de los dos recibe 2+ goles por partido (últimos 5) → menos de 2.5", "U",
      lambda f: (f.h_ga5 >= 10) | (f.a_ga5 >= 10)),
+    # 12-nov-26: de repetir el historial buscando qué no trae el precio del muy favorito (el 🎯).
+    # En las ligas con pago anticipado, el de 70%+ que NO viene metiendo más goles de los que
+    # justifican sus tiros a puerta dejó +2.9, +2.7 y +3.4 por cada 100 en tres épocas; el que sí,
+    # +2.2, −2.2 y −0.2. Aquí queda a prueba cada semana, con la regla de siempre.
+    ("favorito_sin_suerte_local", "Local muy favorito (70%+, liga con pago anticipado) que no viene con suerte de gol",
+     "H", lambda f: f.sport_key.isin(PA_LEAGUES) & (f.fh >= 0.70) & (f.h_luck10 - f.a_luck10 <= LUCK_CUT)),
+    ("favorito_con_suerte_local", "Local muy favorito (70%+, liga con pago anticipado) que viene con suerte de gol",
+     "H", lambda f: f.sport_key.isin(PA_LEAGUES) & (f.fh >= 0.70) & (f.h_luck10 - f.a_luck10 > LUCK_CUT)),
+    ("favorito_sin_suerte_visita", "Visitante muy favorito (70%+, liga con pago anticipado) que no viene con "
+     "suerte de gol", "A",
+     lambda f: f.sport_key.isin(PA_LEAGUES) & (f.fa >= 0.70) & (f.a_luck10 - f.h_luck10 <= LUCK_CUT)),
 )
 
 
@@ -154,6 +178,7 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
         games[k] = int(pd.concat([g.home, g.away]).value_counts().max())
 
     hist, table = {}, {}
+    shots = {}                                      # (liga, equipo) → goles de más contra sus tiros a puerta
     rows = []
     for r in d.itertuples(index=False):
         k = (r.sport_key, r.season)
@@ -176,6 +201,8 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
             feat[f"{side}_luck6"] = (sum((x[1] - x[2]) - LUCK_SHOT_GOALS * (x[3] - x[4]) for x in last6)
                                      if len(last6) == 6 and all(np.isfinite(x[3]) and np.isfinite(x[4])
                                                                 for x in last6) else np.nan)
+            last10 = shots.get((r.sport_key, team), [])[-LUCK_GAMES:]
+            feat[f"{side}_luck10"] = sum(last10) / len(last10) if len(last10) >= LUCK_MIN else np.nan
             feat[f"{side}_promoted"] = bool(prev) and team not in prev
             feat[f"{side}_late"] = len(h) >= games.get(k, 0) - 6 and len(h) >= 10
             pos = ranked.index(team) if team in tbl else None
@@ -187,6 +214,10 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
         hst, ast = r.home_shots_target, r.away_shots_target
         hist.setdefault((k, r.home), []).append((hp, hg, ag, hst, ast, r.match_date))
         hist.setdefault((k, r.away), []).append((ap, ag, hg, ast, hst, r.match_date))
+        if np.isfinite(hst) and np.isfinite(ast):
+            over = (hg - ag) - LUCK_K * (hst - ast)
+            shots.setdefault((r.sport_key, r.home), []).append(over)
+            shots.setdefault((r.sport_key, r.away), []).append(-over)
         for team, pts, gd in ((r.home, hp, hg - ag), (r.away, ap, ag - hg)):
             p, g = tbl.get(team, (0, 0))
             tbl[team] = (p + pts, g + gd)
@@ -219,8 +250,9 @@ def _stats(sel: pd.DataFrame, side: str) -> dict:
             "roi_pin": roi_pin}
 
 
-def evaluate(f: pd.DataFrame, hypotheses=HYPOTHESES) -> dict:
-    """Cada idea por periodo y junta, con su veredicto (función pura)."""
+def evaluate(f: pd.DataFrame, hypotheses=HYPOTHESES, born_here=FROM_THIS_HISTORY) -> dict:
+    """Cada idea por periodo y junta, con su veredicto (función pura).
+    born_here: las ideas nacidas de este historial; a lo más, prometedoras."""
     k = len(hypotheses)
     z_needed = NormalDist().inv_cdf(1 - ALPHA / max(k, 1))
     out = {}
@@ -235,13 +267,13 @@ def evaluate(f: pd.DataFrame, hypotheses=HYPOTHESES) -> dict:
         if not all_n:
             v = THIN
         elif all_up and z is not None and z >= z_needed:
-            v = PASSES
+            v = PROMISING if key in born_here else PASSES
         elif all_up:
             v = PROMISING
         else:
             v = DISCARDED
         out[key] = {"name": name, "side": side, "periods": per, "pooled": pooled,
-                    "z": None if z is None else float(z), "verdict": v}
+                    "z": None if z is None else float(z), "verdict": v, "born_here": key in born_here}
     return {"hypotheses": out, "z_needed": float(z_needed), "k": k}
 
 
@@ -316,7 +348,11 @@ def format_report(rep: dict, html: bool = True) -> str:
     def line(key):
         h = hyps[key]
         per = " · ".join(f"{lbl} {_pct(p.get('roi'))}" for lbl, p in h["periods"].items())
-        return f"  • {h['name']}: {_pct(h['pooled'].get('roi'))} (n={h['pooled'].get('n', 0):,}; {per})"
+        note = ""
+        if h.get("born_here") and h["verdict"] == PROMISING and (h.get("z") or 0) >= (rep.get("z_needed") or 9e9):
+            note = (" — pasaría la prueba, pero la idea salió de mirar este mismo historial: falta verla en "
+                    "partidos nuevos")
+        return f"  • {h['name']}: {_pct(h['pooled'].get('roi'))} (n={h['pooled'].get('n', 0):,}; {per}){note}"
 
     passed, promising = rep.get("passed") or [], rep.get("promising") or []
     lines.append("✅ Pasaron las 3 pruebas: " + ("" if passed else "ninguna todavía."))
