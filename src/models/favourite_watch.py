@@ -28,8 +28,11 @@ historial (137 mil partidos, tres épocas):
    las tres épocas; el que sí llega quedó en +0.5. Desde el 12-nov-26 esto SÍ
    decide (el dueño, 1a: ese favorito no lleva 🎯, program_picks.PRICE_BAND).
    Aquí se siguen midiendo los dos grupos, con 🎯 o sin él, con la última
-   foto de momios antes del partido (odds_history): si los que no llegan
-   dejan de perder, la regla se revisa.
+   foto de momios antes del partido (odds_history). Los que no llegan tienen
+   su propio veredicto (13-nov-26, price_verdict): si con 100 partidos o más
+   están dejando dinero, la regla les está quitando el 🎯 a apuestas buenas y
+   el weekly lo avisa por Telegram, una vez. Antes era una promesa ("si siguen
+   sin perder, te aviso") sin nada que la cumpliera.
 4. La "suerte de gol": goles de más contra lo que justifican los tiros a
    puerta en los últimos 10 partidos de liga, favorito menos rival. El
    favorito de 70+ que venía sin suerte ganó 4.8 más de cada 100 de lo que
@@ -56,6 +59,11 @@ PA_HISTORY = 1.3                            # de cada 100 apuestas al favorito, 
 MIN_N = 100
 Z = 1.96
 PRICE_HISTORY = {"pays": 0.5, "short": -6.8}    # 65-70: lo que deja por cada 100 apostados (m5, 11-nov-26)
+PRICE_VERDICTS = {"en contra": "los que no llegan al mínimo están dejando dinero: la regla del precio les quita el "
+                               "🎯 a apuestas buenas",
+                  "a favor": "los que no llegan al mínimo pierden, como en el historial",
+                  "sin evidencia": "con los que no llegan al mínimo todavía no se distingue del azar",
+                  "insuficiente": "los que no llegan al mínimo todavía son pocos para opinar"}
 LUCK_K = 0.31                               # goles por tiro a puerta (media de historical_odds)
 LUCK_GAMES, LUCK_MIN = 10, 8                # últimos partidos de liga; con menos de 8 no hay dato
 LUCK_DAYS = 200                             # cuánto hacia atrás se leen los partidos para esos 10
@@ -92,9 +100,21 @@ def _money(rows: list) -> dict:
     n = len(rows)
     if not n:
         return {"n": 0}
-    net = sum((r["odds"] if r["won"] else 0.0) - 1.0 for r in rows)
+    rets = [(r["odds"] if r["won"] else 0.0) - 1.0 for r in rows]
+    net = sum(rets)
+    mean = net / n
+    var = sum((x - mean) ** 2 for x in rets) / (n - 1) if n > 1 else 0.0
     return {"n": n, "won": sum(1 for r in rows if r["won"]), "per_100": round(100 * net / n, 1),
-            "profit_50": round(50 * net)}
+            "profit_50": round(50 * net), "z": round(mean / math.sqrt(var / n), 2) if var > 0 else 0.0}
+
+
+def price_verdict(short: dict) -> str:
+    """El veredicto de la regla del precio, con los favoritos de 65 a 70 que NO
+    llegaban al mínimo (los que la regla deja sin 🎯): "en contra" si dejan
+    dinero más allá del azar, "a favor" si pierden, como en el historial."""
+    if short.get("n", 0) < MIN_N:
+        return "insuficiente"
+    return "en contra" if short["z"] >= Z else "a favor" if short["z"] <= -Z else "sin evidencia"
 
 
 def luck_index(history: list, normalize=None) -> dict:
@@ -154,8 +174,8 @@ def evaluate(rows: list, pa_leagues=None, now=None) -> dict:
     return {"window_days": WINDOW_DAYS, "strong": STRONG, "verdict": _verdict(scope), "scope": scope,
             "bands": {name: _stats([r for r in pa if lo <= r["p"] < hi]) for name, lo, hi in BANDS},
             "other_leagues": _stats(rest),
-            "price": {"pays": _money([r for r in priced if r["pays"]]),
-                      "short": _money([r for r in priced if not r["pays"]])},
+            "price": (lambda pays, short: {"pays": pays, "short": short, "verdict": price_verdict(short)})(
+                _money([r for r in priced if r["pays"]]), _money([r for r in priced if not r["pays"]])),
             "luck": {"cut": LUCK_CUT, "low": _stats([r for r in lucky if r["luck"] <= LUCK_CUT]),
                      "high": _stats([r for r in lucky if r["luck"] > LUCK_CUT]),
                      # el visitante aparte (12-nov-26): en el historial es donde más se nota; aquí se confirma o no
@@ -169,11 +189,15 @@ def evaluate(rows: list, pa_leagues=None, now=None) -> dict:
 
 
 def changed(previous: dict | None, state: dict) -> bool:
-    """El veredicto cambió (la primera vez no cuenta salvo que ya salga en contra)."""
+    """El veredicto cambió (la primera vez no cuenta salvo que ya salga en
+    contra), o cambió el de la regla del precio hacia o desde "en contra" o
+    "a favor" (pasar de pocos datos a sin evidencia no es noticia)."""
     before = (previous or {}).get("verdict")
-    if before is None:
-        return state.get("verdict") == "en contra"
-    return before != state.get("verdict")
+    main = state.get("verdict") == "en contra" if before is None else before != state.get("verdict")
+    was = ((previous or {}).get("price") or {}).get("verdict")
+    now = (state.get("price") or {}).get("verdict")
+    price = now != was and bool({was, now} & {"en contra", "a favor"}) and not (was is None and now != "en contra")
+    return main or price
 
 
 def _line(name: str, s: dict, hist: float | None) -> str:
@@ -189,7 +213,7 @@ def _pesos(v) -> str:
 
 
 def _extra_lines(state: dict) -> list:
-    """Las dos señales en observación (precio y suerte de gol), en palabras del dueño."""
+    """El precio (que decide desde el 12-nov) y la suerte de gol (en observación), en palabras del dueño."""
     lines = []
     price = state.get("price") or {}
     pays, short = price.get("pays") or {}, price.get("short") or {}
@@ -200,9 +224,14 @@ def _extra_lines(state: dict) -> list:
                          f"{_pesos(pays['profit_50'])} apostando 50 a cada uno")
         if short.get("n"):
             parts.append(f"cuando no llegaba, {short['n']} partidos: {_pesos(short['profit_50'])}")
-        lines.append("• En observación, el precio (favoritos de 65 a 70): " + "; ".join(parts)
+        lines.append("• El precio (favoritos de 65 a 70; desde el 12-nov el que no llega al mínimo va sin 🎯): "
+                     + "; ".join(parts)
                      + f" (en el historial, los que no llegan pierden {abs(PRICE_HISTORY['short']):g} por cada 100 "
                        f"apostados)")
+        verdict = price.get("verdict")
+        if verdict in ("en contra", "a favor"):
+            lines.append(f"• La regla del precio: {PRICE_VERDICTS[verdict]}."
+                         + (" Conviene revisarla." if verdict == "en contra" else ""))
     luck = state.get("luck") or {}
     low, high = luck.get("low") or {}, luck.get("high") or {}
     if low.get("n") or high.get("n"):

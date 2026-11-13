@@ -339,7 +339,8 @@ puede medir cada semana es si se siguen cumpliendo las dos cosas en que descansa
     **Decidido el 12-nov-2026: el dueño eligió (1a)**, el 🎯 de 65 a 70 solo si el momio estimado llega
     al mínimo (v2.12.1, [08](08-picks-y-parlays.md)). Desde entonces el weekly lee el precio de la última
     foto de momios antes del partido (`odds_history`), no del pick guardado, para seguir cobrando también
-    a los que se quedaron sin 🎯.
+    a los que se quedaron sin 🎯. Esos tienen su propio veredicto (`price_verdict`, 13-nov): con 100 o más,
+    si dejan dinero más allá del azar el weekly avisa por Telegram que la regla conviene revisarla.
   - **La suerte de gol.** Por equipo, la media en sus últimos 10 partidos de liga (mínimo 8) de
     (diferencia de goles) − 0.31 × (diferencia de tiros a puerta); se compara favorito menos rival y
     más de +0.33 cuenta como "con suerte". En el historial, el favorito de 70+ sin suerte ganó 4.8
