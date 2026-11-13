@@ -460,6 +460,18 @@ def strong_favourite(cs: list, league) -> dict | None:
     return best
 
 
+def shown_pct(p: float, *cuts) -> str:
+    """Los "de cada 100" de una nota. Entero, salvo cuando el redondeo lo dejaría
+    parado justo en un corte que el equipo NO alcanza: con 69.7 la nota diría
+    "70 de cada 100" y a la vez que le falta precio por ganar menos de 70 (visto
+    el 13-nov-26 al repetir partidos reales: Besiktas, 69.7). Ahí va con un
+    decimal, hacia abajo, para que la nota no se contradiga. La regla no cambia."""
+    whole = round(p * 100)
+    if any(whole == round(c * 100) and p < c for c in cuts):
+        return f"{math.floor(p * 1000) / 10:.1f}"
+    return str(whole)
+
+
 def no_star_note(cs: list, league, weak: dict | None = None, teams=("el local", "el visitante")) -> str | None:
     """Por qué el partido no tiene 🎯, dicho por su favorito y en palabras del
     dueño (6-nov-26). Revisa lo mismo que strong_favourite, en orden: que haya
@@ -473,7 +485,7 @@ def no_star_note(cs: list, league, weak: dict | None = None, teams=("el local", 
         return STAR_NO_ODDS
     fav = max(wins, key=lambda c: c["market_prob"])
     team = teams[0] if fav["market"] == "home_win" else teams[1]
-    pct = round(fav["market_prob"] * 100)
+    pct = shown_pct(fav["market_prob"], STRONG_FAV, PRICE_BAND)
     if fav["market_prob"] < STRONG_FAV:
         return STAR_NO_FAV.format(team=team, pct=pct)
     if str(league or "") not in PA_LEAGUES:

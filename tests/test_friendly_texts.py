@@ -62,6 +62,23 @@ def test_the_note_names_what_the_favourite_is_missing():
     assert "Lecce es muy favorito" in away
 
 
+def test_the_note_never_shows_a_number_that_contradicts_its_own_rule():
+    """13-nov-26: Besiktas, 69.7 de cada 100, salía como "70 de cada 100" en la nota que le quita el 🎯
+    por ganar menos de 70. En el corte que no alcanza, el número va con un decimal."""
+    teams = ("Napoli", "Lecce")
+    assert PP.shown_pct(0.687, PP.STRONG_FAV, PP.PRICE_BAND) == "69"
+    assert PP.shown_pct(0.697, PP.STRONG_FAV, PP.PRICE_BAND) == "69.7"        # se leería 70 y es menos de 70
+    assert PP.shown_pct(0.6996, PP.STRONG_FAV, PP.PRICE_BAND) == "69.9"       # nunca "70.0"
+    assert PP.shown_pct(0.70, PP.STRONG_FAV, PP.PRICE_BAND) == "70"           # sí llega: entero
+    assert PP.shown_pct(0.646, PP.STRONG_FAV, PP.PRICE_BAND) == "64.6" and PP.shown_pct(0.65, PP.STRONG_FAV) == "65"
+    # Pinnacle 1.337 / 5.0 / 8.0 → 69.7; el promedio paga -333 y el mínimo es -273: sin 🎯 por precio
+    low = PP.no_star_note(_cands(pin_home_odds=1.337, consensus_home_odds=1.30), "soccer_italy_serie_a", None, teams)
+    assert low.startswith("Napoli paga poco para lo que gana (-333):") and "(69.7 de cada 100 según Pinnacle)" in low
+    # Pinnacle 1.686 / 5.0 / 8.0 → 64.6: "65 o más" y a la vez "con 65" se contradecían
+    near = PP.no_star_note(_cands(pin_home_odds=1.686, consensus_home_odds=1.62), "soccer_italy_serie_a", None, teams)
+    assert near.startswith("No hay favorito claro:") and near.endswith("Napoli, con 64.6 de cada 100")
+
+
 def test_without_winner_odds_the_note_says_so():
     assert PP.no_star_note([], "soccer_italy_serie_a") == PP.STAR_NO_ODDS
     # sin momios del 1X2 el favorito sale del Pinnacle de cuando se analizó: sin momio de PlayDoit

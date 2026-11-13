@@ -420,6 +420,10 @@ Lo que eligió el dueño (1b, 2c, 3a, 4a):
   - **Cuántos quita:** en el historial reciente llegaban 74 de cada 100; con los momios en vivo (12-oct
     a 11-nov) llegaban 9 de 25. Con precios de hoy, cerca de dos de cada tres favoritos de 65 a 70 se
     quedan sin 🎯. El 🎯 va y viene con el precio en cada cierre (cada 30 min) hasta que el partido empieza.
+  - **La nota no se contradice** (13-nov-2026, `shown_pct`): un favorito de 69.7 se leía "70 de cada 100" en la
+    nota que le quita el 🎯 por ganar menos de 70 (visto al repetir 564 partidos reales con el código de
+    producción: Besiktas). Cuando el redondeo deja el número parado en un corte que el equipo no alcanza (65 o
+    70), la nota lo muestra con un decimal. La regla no cambia.
   - **Lo que se sigue midiendo:** `favourite_watch` (`state["price"]`) cobra cada semana los dos grupos,
     con 🎯 o sin él, con la última foto de momios antes del partido (`odds_history`). El 12-nov la muestra
     en vivo iba al revés del historial (los que no llegaban: 14 ganados de 16), pero son 16 partidos
