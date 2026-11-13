@@ -351,6 +351,14 @@ def step_predict():
     run_prediction_pipeline()
 
 
+def step_big_names():
+    """Grandes de nombre y cómo vienen (src/models/big_names.py, 13-nov-26): el
+    ranking de cada liga una vez por semana y sus puntos de los últimos 10 cada
+    vez. De ahí sale el aviso "viene mal" de cada pick. Solo informa."""
+    from src.models.big_names import run_big_names
+    run_big_names(verbose=True)
+
+
 def step_goalscorer_picks():
     """Anytime goalscorer (papel, 0 créditos): picks con fair odds para
     los partidos de las próximas 48h usando match_events."""
@@ -703,6 +711,9 @@ def run_morning(logger: Logger, force_fetch: bool = False):
     run_step(logger, "ClubElo (fuerza de liga)", step_clubelo, skip_at="esencial")
     predict_ok = run_step(logger, "Predictions", step_predict)
     run_step(logger, "Picks del programa", step_program_picks)
+    # después de los picks (otras pruebas fijan qué va pegado al análisis): el closing de la media hora
+    # siguiente ya rehace cada pick con este estado
+    run_step(logger, "Grandes que vienen mal", step_big_names, skip_at="esencial")
     # run_step(logger, "MLB Predictions",   step_mlb_predict)  # desactivado — sin creditos MLB
 
     # Si predict falló, NO mandamos "Sin value bets" — mandamos alerta.
@@ -804,6 +815,7 @@ def run_evening(logger: Logger):
     run_step(logger, "Historial ESPN (copas, Europa, amistosos)", step_espn_history, skip_at="ahorro")
     predict_ok = run_step(logger, "Predictions (mañana)", step_predict)
     run_step(logger, "Picks del programa", step_program_picks)
+    run_step(logger, "Grandes que vienen mal", step_big_names, skip_at="esencial")   # ya con los resultados del día
     # run_step(logger, "MLB Predictions (mañana)",  step_mlb_predict)  # desactivado — sin creditos MLB
 
     # El preview separado de mañana se ELIMINÓ (12-sep): duplicaba las

@@ -46,7 +46,8 @@ MAX_MISSING_RESULTS = 0.15
 MAX_XG_PER_MATCH = 4.0
 # favourite_watch (11-nov-26): los supuestos del 🎯, src/models/favourite_watch.py
 WEEKLY_KEYS = ("anchor_weights", "side_bias", "calibration_factors", "dc_params",
-               "sharp_reference", "strategy_lab", "rule_evidence", "favourite_watch")
+               "sharp_reference", "strategy_lab", "rule_evidence", "favourite_watch",
+               "big_names")            # diario (morning y evening): con 9 días sin refrescarse, algo se rompió
 WEEKLY_MAX_AGE_DAYS = 9
 RESOLVED = ("win", "loss", "push", "half_win", "half_loss")
 

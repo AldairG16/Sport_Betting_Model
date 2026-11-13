@@ -211,15 +211,17 @@ def test_the_rows_come_from_every_analysed_favourite_with_its_result(monkeypatch
     monkeypatch.setattr(SB, "plan_shadow_resolutions", fake_plan)
     monkeypatch.setattr(EP, "load_leads", lambda engine, since, normalize=None: {"c vs d": [(NOW, 0, 2)]})
     monkeypatch.setattr(EP, "PA_LEAGUES", ("liga_pa",))
+    from src.models import big_names as BN                        # a es un grande de su liga; d, no
+    monkeypatch.setattr(BN, "load_big_names", lambda: {"big": {"liga_pa": {"season": 2026, "teams": ["a"]}}})
     rows = F.read_rows(engine=object())
     assert seen["params"] == {"d": F.WINDOW_DAYS, "p": F.STRONG}
     assert seen["markets"] == ["home_win", "away_win", "home_win"]
     assert seen["history"] == {"s": "2026-04-30", "l0": "liga_pa"}             # 200 días antes del primer partido
     assert seen["prices"] == {"d": F.WINDOW_DAYS + 2, "l0": "liga_pa"}
     assert rows == [{"p": 0.72, "won": True, "league": "liga_pa", "lead": None, "odds": 1.36, "pays": True,
-                     "away": False, "luck": 2.0},                              # a: +2 por partido; b: 0
+                     "away": False, "name": "good", "luck": 2.0},              # a: +2 por partido; b: 0. 30 puntos de 30
                     {"p": 0.68, "won": False, "league": "liga_pa", "lead": 2, "odds": 1.38, "pays": False,
-                     "away": True, "luck": None}]
+                     "away": True, "name": "rest", "luck": None}]
 
 
 def test_the_weekly_runs_it_and_the_owner_hears_only_when_the_verdict_changes(monkeypatch):

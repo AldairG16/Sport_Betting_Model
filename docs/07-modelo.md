@@ -86,9 +86,16 @@ Los mismos CSV de football-data que descarga el weekly traen el cierre de Pinnac
 
 **Buscador de ventajas** (`src/models/edge_finder.py`, paso "Buscador de ventajas", clave
 `edge_finder`):
-- **Qué prueba:** 40 ideas en palabras del dueño (racha, goles, descanso, recién
-  ascendidos, suerte, resultado anterior, pelea por el descenso, sesgos del momio y, desde el
-  12-nov, el muy favorito con y sin suerte de gol) contra esos momios.
+- **Qué prueba:** 46 ideas en palabras del dueño (racha, goles, descanso, recién
+  ascendidos, suerte, resultado anterior, pelea por el descenso, sesgos del momio y, desde
+  noviembre, el muy favorito con y sin suerte de gol y el grande de nombre según cómo viene)
+  contra esos momios.
+- **El precio de Pinnacle del historial llega hasta el 14-ene-2026** (visto el 13-nov-2026):
+  football-data dejó de publicarlo y desde febrero vienen solo el promedio y el máximo de las
+  casas. El historial sigue creciendo, pero las ideas que dependen de la probabilidad de Pinnacle
+  ya no suman partidos, y el "2023 en adelante" es en realidad 2023 a enero de 2026. El reporte
+  lo dice cuando el hueco pasa de 60 días (`pinnacle_until`). Lo de 2026 en adelante se mide con
+  los partidos que analiza el programa (`favourite_watch`, con el Pinnacle de The Odds API).
 - **Precio:** el promedio entre casas, porque PlayDoit paga casi igual. Medido el 19-oct en la
   Bundesliga: PlayDoit −2.2 pt contra el precio justo de Pinnacle, promedio −2.4.
 - **Sin mirar el futuro:** cada rasgo usa solo partidos anteriores de la misma liga y

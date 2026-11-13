@@ -58,7 +58,7 @@ Todo se mide "apostando 50 a cada uno".
 
 ## En qué estado está (noviembre de 2026)
 
-- **En producción**, versión del dashboard 2.12.1. `master` es producción.
+- **En producción**, versión del dashboard 2.12.2. `master` es producción.
 - **Modo recolección desde el 25-sep-26**: el programa ya no registra apuestas propias en `bets_history`
   (congelada); junta picks (`program_picks`) y sombra para aprender.
 - **Lo que dicen los datos (auditoría del 5-nov):** el modelo no le gana a Pinnacle en predecir; la única

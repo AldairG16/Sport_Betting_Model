@@ -23,6 +23,10 @@
 6. **Si gana menos de 70 de cada 100, su momio estimado de PlayDoit tiene que llegar al mínimo**
    (`PRICE_BAND`, `reaches_minimum`). De 70 para arriba no se exige.
 
+**El aviso "viene mal"** (`form_note`, v2.12.2, 13-nov-26): si en el partido juega un equipo grande de nombre que
+viene con 15 puntos o menos de sus últimos 30 en liga, el pick lo dice ("Juventus viene mal: 15 puntos de sus
+últimos 30 en liga"), con 🎯 o sin él. **Solo informa: el pick y el 🎯 no cambian** ([09](09-aprendizaje.md)).
+
 El partido sin 🎯 dice por qué en palabras (`star_note`): "no hay favorito claro", "paga muy poco (-667)",
 "esta liga no tiene pago anticipado", "le faltan 5 titulares", "paga poco para lo que gana (-278)… vale la
 pena solo si PlayDoit lo paga a -260 o mejor".

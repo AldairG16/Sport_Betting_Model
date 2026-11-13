@@ -283,11 +283,12 @@ function upRow(m, i){
             '  ·  Pinnacle: ' + p100(pin[0]) + ' / ' + p100(pin[1]) + ' / ' + p100(pin[2]);
   // v2.2: todos los partidos analizados tienen pick; 🎯 = pasa la regla
   var pick = pk.label ? (pk.rule ? '🎯 ' : '') + famIcon(pk.family) + ' <b>' + esc(pk.label) + '</b>' +
-             (pk.playdoit_us ? ' <span class="muted">' + esc(pk.playdoit_us) + '</span>' : '') + whyTag(pk) + lineupTag(pk, m.lineups_covered) :
+             (pk.playdoit_us ? ' <span class="muted">' + esc(pk.playdoit_us) + '</span>' : '') + whyTag(pk) + formTag(pk) + lineupTag(pk, m.lineups_covered) :
              noPick(pk.reason);
   var tipPick = pk.label ? 'Qué tan probable lo ve: el programa ' + p100(pk.model) + ', las casas ' + p100(pk.market_prob) +
                 ' · el momio es el aproximado de PlayDoit' +
-                (pk.rule ? ' · 🎯 apuesta recomendada' : (pk.star_note || pk.reason ? ' · sin 🎯: ' + (pk.star_note || pk.reason) : '')) : (pk.reason || '');
+                (pk.rule ? ' · 🎯 apuesta recomendada' : (pk.star_note || pk.reason ? ' · sin 🎯: ' + (pk.star_note || pk.reason) : '')) +
+                (pk.form_note ? ' · ⚠️ ' + pk.form_note : '') : (pk.reason || '');
   var al = _alerts[m.match] ? ' <span title="' + esc(_alerts[m.match]) + '">⚠️</span>' : '';
   return '<div class="m" id="u' + i + '"><div class="mr" onclick="openUp(' + i + ')">' +
          '<div class="time">' + mxtime(m.match_date) + '<span class="small muted">' + esc(m.league) + '</span></div>' +
@@ -400,6 +401,13 @@ function lineupTag(pk, covered){
   if (covered === false) return '<div class="muted small" title="ESPN no publica alineaciones de esta liga: el pick no las ve. Revisa la alineación antes de apostar.">ESPN no publica alineación</div>';
   return '<div class="muted small" title="La alineación sale ~1 h antes del partido y ahí se revisa el pick (puede cambiar). Para apostar, espera a que salga.">⏳ falta la alineación</div>';
 }
+// Aviso de que un grande de nombre viene mal (13-nov-26, big_names). Sale con 🎯 o sin él: solo informa
+function formTag(pk){
+  if (!pk || !pk.form_note) return '';
+  var parts = String(pk.form_note).split(' · '), i, shorts = [];
+  for (i = 0; i < parts.length; i++) shorts.push(parts[i].split('. ')[0]);
+  return '<div class="small" title="' + esc(pk.form_note) + '">⚠️ ' + esc(shorts.join(' · ')) + '</div>';
+}
 function whyTag(pk){
   if (!pk || pk.rule || !(pk.reason || pk.star_note)) return '';
   var txt = pk.star_note ? noteShort(pk.star_note) : shortWhy(pk.reason);
@@ -426,6 +434,7 @@ function pastRow(r, i){
               (pk.winner ? ' · tuvo razón ' + (pk.winner === 'mercado' ? 'el mercado (las casas)' : 'el programa') : '') +
               (pk.old_model ? ' · versión del programa con error (antes del 22 oct)' : '') +
               (pk.rule ? ' · 🎯 apuesta recomendada' : (pk.star_note || pk.reason ? ' · sin 🎯: ' + (pk.star_note || pk.reason) : '')) +
+              (pk.form_note ? ' · ⚠️ ' + pk.form_note : '') +
               (pk.rebuilt ? ' · rehecho con la predicción guardada antes del partido' : '') +
               (pk.provisional ? ' · provisional: ya terminó, cuenta en los totales cuando se cobre' : '')) + '">' + (pk.rebuilt ? '↺ ' : '') +
               (played ? ok(pk.result === 'win' || pk.result === 'half_win') : '⏳') + ' ' + (pk.rule ? '🎯 ' : '') + famIcon(pk.family) + ' ' + esc(pk.label) +

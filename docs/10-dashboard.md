@@ -4,7 +4,7 @@
 
 Un `.exe` que corre en la PC del dueño y se abre en el navegador: **http://127.0.0.1:5050**. Es
 `dashboard/app.py` (Flask) con `dashboard/ui_es5.js`; lee la base (no escribe, salvo su consumo y el
-respaldo). Versión en `VERSION` (2.12.1 en noviembre de 2026).
+respaldo). Versión en `VERSION` (2.12.2 en noviembre de 2026).
 
 **Pestañas:**
 

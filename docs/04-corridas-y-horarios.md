@@ -38,8 +38,8 @@ Al final guarda la corrida en `pipeline_runs` (con lo que leyó de la base) y sa
 | Modo | Pasos (en orden) |
 |---|---|
 | `closing` (cada 30 min) | Pre-kickoff closing odds (recarga dirigida de cuotas y cierres) · Marcadores del día (ESPN) · Alineaciones publicadas · Picks del programa (anula horarios viejos de reprogramados, rehace picks y parlays) · Alertas de alineación · Partidos de hoy (Telegram) · Picks finales (Telegram). En modo ahorro corre uno por hora salvo partidos en las próximas 2 h. |
-| `morning` | Fetch odds (y una foto en `odds_history`) · Precios Kalshi · xG real (si el weekly no pudo) · ClubElo · Predictions · Picks del programa · Goalscorer picks · Telegram (la mañana) |
-| `evening` | Closing odds · Fetch results · resultados de respaldo (football-data y TheSportsDB) · Córners y tarjetas (ESPN) · Tiros y córners (ESPN) · Partidos repetidos · Results · Shadow results (anula reprogramados y cobra picks, parlays, sombra y propuestas) · Resolve pending (Claude) · Goalscorer resolve · CLV update · Backtest · Chequeo de salidas · Telegram (la noche) · y el avance de mañana: Fetch odds, Kalshi, Historial ESPN, Predictions, Picks del programa |
+| `morning` | Fetch odds (y una foto en `odds_history`) · Precios Kalshi · xG real (si el weekly no pudo) · ClubElo · Predictions · Picks del programa · Grandes que vienen mal · Goalscorer picks · Telegram (la mañana) |
+| `evening` | Closing odds · Fetch results · resultados de respaldo (football-data y TheSportsDB) · Córners y tarjetas (ESPN) · Tiros y córners (ESPN) · Partidos repetidos · Results · Shadow results (anula reprogramados y cobra picks, parlays, sombra y propuestas) · Resolve pending (Claude) · Goalscorer resolve · CLV update · Backtest · Chequeo de salidas · Telegram (la noche) · y el avance de mañana: Fetch odds, Kalshi, Historial ESPN, Predictions, Picks del programa, Grandes que vienen mal |
 | `results` | Fetch results · respaldos de football-data y TheSportsDB · Partidos repetidos · Results · Shadow results · CLV update · Backtest |
 
 **Archivados mientras no se cobre una apuesta propia (12-nov-2026).** Backtest (evening y results), Holdout,

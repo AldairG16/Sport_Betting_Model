@@ -131,9 +131,12 @@ PICKS_ALTERS = ("ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS source TEXT"
                 # v2.9.0: se cobró por el Pago Anticipado de PlayDoit (early_payout.py)
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS pa_paid BOOLEAN",
                 # por qué no tiene 🎯, dicho por el favorito (star_note, 6-nov-26)
-                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS star_note TEXT")
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS star_note TEXT",
+                # aviso de que un grande de nombre viene mal (big_names, 13-nov-26). Solo informa
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS form_note TEXT")
 _COLS = ("match", "match_date", "league", "display", "market", "label", "family", "reason", "model_prob",
-         "market_prob", "lean", "min_us", "best_odds", "playdoit_odds", "value", "lineup", "star_note")
+         "market_prob", "lean", "min_us", "best_odds", "playdoit_odds", "value", "lineup", "star_note",
+         "form_note")
 
 NO_EDGE = "Sin ventaja: el programa ve lo mismo que el mercado"
 TOO_FAR = "El programa se separa demasiado del mercado: probablemente se equivoca"
@@ -390,10 +393,11 @@ def lineup_check(home: str, away: str, absent: dict | None) -> tuple:
 
 
 def _row(r: dict, kick, display, pick_: dict | None, reason: str | None, source=None, lineup=None,
-         star_note=None) -> dict:
+         star_note=None, form_note=None) -> dict:
     base = {"match": str(r["match"]).lower(), "match_date": pd.Timestamp(kick).to_pydatetime(),
             "league": r.get("league"), "display": display, "source": source, "lineup": lineup,
-            "star_note": star_note if pick_ and reason else None}
+            "star_note": star_note if pick_ and reason else None,
+            "form_note": form_note if pick_ else None}     # con 🎯 o sin él: es un aviso, no un motivo
     if not pick_:
         return {**base, **{c: None for c in ("market", "label", "family", "model_prob", "market_prob", "lean",
                                              "min_us", "best_odds", "playdoit_odds", "value")}, "reason": reason}
@@ -641,14 +645,16 @@ def _snap_before(idx: dict, key: str, kick, before) -> dict | None:
 
 
 def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame | None = None, ratio=None,
-                normalize=None, props_for=None, bias=None, lineups_for=None, paused=()) -> list:
+                normalize=None, props_for=None, bias=None, lineups_for=None, paused=(), form_for=None) -> list:
     """Función pura: el pick (o "sin pick" con su motivo) de cada partido de
     model_vs_sharp (la fila más reciente) con la última fila de
     upcoming_matches. snaps: odds_history, para los momios de cuando se
     analizó. props_for(home, away, league, kickoff) → {prop: fn(línea)}.
     bias: sesgo aprendido (side_bias: por lado, región y goles).
     lineups_for(home, away, kickoff) → (weak, nota) de lineup_check.
-    paused: regiones con el 🎯 en pausa (filter_learner.paused_regions)."""
+    paused: regiones con el 🎯 en pausa (filter_learner.paused_regions).
+    form_for(local, visitante, liga, nombres) → aviso de que un grande de nombre
+    viene mal (big_names.notes_for). No entra a decide: el pick no cambia."""
     from src.models.side_bias import drop_phantoms
     up = {match_key(r.home_team_norm, r.away_team_norm, normalize): r for r in upcoming.itertuples(index=False)}
     idx = _snap_index(snaps if snaps is not None else pd.DataFrame(), normalize)
@@ -665,13 +671,16 @@ def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame |
         props = props_for(h, a, r.get("league"), r["match_date"]) if props_for else None
         weak, lineup = lineups_for(h, a, r["match_date"]) if lineups_for else ({}, None)
         pk, why = decide(r, u, then, props, ratio, bias, weak, paused)
-        note = None
-        if pk and why:                         # sin 🎯: qué le falta al favorito (6-nov-26)
+        note = form = None
+        if pk and (why or form_for):
             from dashboard.display import team_name
             teams = (u.home_team, u.away_team) if u is not None else (team_name(h), team_name(a))
-            note = no_star_note(_candidates_of(r, u, props, ratio, bias), r.get("league"), weak, teams)
+            if why:                            # sin 🎯: qué le falta al favorito (6-nov-26)
+                note = no_star_note(_candidates_of(r, u, props, ratio, bias), r.get("league"), weak, teams)
+            if form_for:                       # un grande de nombre que viene mal (13-nov-26): solo avisa
+                form = form_for(h, a, r.get("league"), teams)
         rows.append(_row(r, r["match_date"], f"{u.home_team} vs {u.away_team}" if u is not None else None, pk, why,
-                         lineup=lineup, star_note=note))
+                         lineup=lineup, star_note=note, form_note=form))
     return rows
 
 
@@ -893,11 +902,13 @@ def snapshot_picks(hours: int = SNAPSHOT_HOURS, engine=None) -> int:
         now = pd.Timestamp.now(tz="UTC")
         snaps = pd.read_sql(text(_SNAPS_SQL), engine, params={"a": now.to_pydatetime(),
                                                                "b": (now + pd.Timedelta(hours=hours)).to_pydatetime()})
+        from src.models.big_names import notes_for
         from src.models.filter_learner import paused_regions
         leagues, teams = props_scope(mvs, normalize_team)
         rows = build_picks(mvs, up, snaps, _ratio(engine), normalize_team, _props_for(engine, leagues, teams),
                            load_bias(engine),
-                           _lineups_for(engine, normalize_team), paused_regions(engine))
+                           _lineups_for(engine, normalize_team), paused_regions(engine),
+                           form_for=notes_for(engine, normalize_team))
         early = started_early(engine, normalize_team, now)
         frozen = [r for r in rows if _row_key(r, normalize_team) in early]
         rows = [r for r in rows if _row_key(r, normalize_team) not in early]
