@@ -427,7 +427,10 @@ Lo que eligió el dueño (1b, 2c, 3a, 4a):
   - **Lo que se sigue midiendo:** `favourite_watch` (`state["price"]`) cobra cada semana los dos grupos,
     con 🎯 o sin él, con la última foto de momios antes del partido (`odds_history`). El 12-nov la muestra
     en vivo iba al revés del historial (los que no llegaban: 14 ganados de 16), pero son 16 partidos
-    contra 841. Si con una muestra seria siguen sin perder, la regla se revisa.
+    contra 841. **El aviso es automático** (13-nov, `price_verdict`): con 100 partidos o más, si los que
+    no llegan al mínimo dejan dinero más allá del azar (z ≥ 1.96) el veredicto es "en contra" y el weekly
+    manda el Telegram una vez ("la regla del precio les quita el 🎯 a apuestas buenas. Conviene
+    revisarla"); si pierden, "a favor". A ~16 partidos al mes, opina en unos seis meses.
 - **El parlay** (`src/models/program_parlays.py`, reemplaza al de "la apuesta más segura"):
   - piernas = esos favoritos (`strong_leg`), una por partido, marcadas `pa`;
   - **del día** (`kind` 'dia'): los más fuertes del día de México, de 4 a 6 (`DAY_MIN_LEGS`, `MAX_LEGS`);

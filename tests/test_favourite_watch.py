@@ -85,14 +85,47 @@ def test_the_price_of_the_65_to_70_favourite_is_watched_without_deciding_anythin
     short = [{**r, "odds": 1.36, "pays": False} for r in _favs(50, 0.67, 33)]      # no llegaba
     strong = [{**r, "odds": 1.25, "pays": False} for r in _favs(100, 0.75, 76)]    # 70+: no entra a esta cuenta
     st = F.evaluate(paid + short + strong + _favs(10, 0.67, 7), PA, NOW)           # sin pick guardado: tampoco
-    assert st["price"]["pays"] == {"n": 100, "won": 70, "per_100": 1.5, "profit_50": 75}
-    assert st["price"]["short"] == {"n": 50, "won": 33, "per_100": -10.2, "profit_50": -256}
+    money = lambda s: {k: s[k] for k in ("n", "won", "per_100", "profit_50")}
+    assert money(st["price"]["pays"]) == {"n": 100, "won": 70, "per_100": 1.5, "profit_50": 75}
+    assert money(st["price"]["short"]) == {"n": 50, "won": 33, "per_100": -10.2, "profit_50": -256}
+    assert st["price"]["verdict"] == "insuficiente"                               # 50 partidos: todavía no opina
     assert st["verdict"] == F.evaluate(plain, PA, NOW)["verdict"]                  # medir no cambia el veredicto
     text = F.format_report(st)
-    assert ("En observación, el precio (favoritos de 65 a 70): cuando el momio estimado de PlayDoit llegaba al "
-            "mínimo, 100 partidos: +75 pesos apostando 50 a cada uno; cuando no llegaba, 50 partidos: −256 pesos "
-            "(en el historial, los que no llegan pierden 6.8 por cada 100 apostados)") in text
-    assert "ROI" not in text
+    assert ("El precio (favoritos de 65 a 70; desde el 12-nov el que no llega al mínimo va sin 🎯): cuando el momio "
+            "estimado de PlayDoit llegaba al mínimo, 100 partidos: +75 pesos apostando 50 a cada uno; cuando no "
+            "llegaba, 50 partidos: −256 pesos (en el historial, los que no llegan pierden 6.8 por cada 100 "
+            "apostados)") in text
+    assert "ROI" not in text and "La regla del precio" not in text                # sin veredicto no hay renglón
+
+
+def test_the_price_rule_has_its_own_verdict_and_the_owner_hears_if_it_stops_holding():
+    """13-nov-26: la regla del 12-nov descansa en que el favorito de 65 a 70 que no llega al mínimo
+    pierde. El 12-nov la muestra en vivo iba al revés (16 partidos, 14 ganados). "Si siguen sin perder,
+    te aviso" era una promesa sin mecanismo: ahora el weekly lo decide y lo dice."""
+    base = _favs(600, 0.75, 510)                                   # el veredicto general, igual en todos: a favor
+
+    def short(n, wins, odds=1.36):
+        return base + [{**r, "odds": odds, "pays": False} for r in _favs(n, 0.67, wins)]
+    few = F.evaluate(short(16, 14), PA, NOW)                       # lo de hoy: pocos, no opina
+    assert few["price"]["verdict"] == "insuficiente" and not F.changed(None, few)
+    assert {F.evaluate(short(n, w), PA, NOW)["verdict"] for n, w in ((16, 14), (150, 126), (150, 96), (150, 110))} == {"a favor"}
+    good = F.evaluate(short(150, 126), PA, NOW)                    # 84 de cada 100 a -278: dejan dinero
+    assert good["price"]["short"]["z"] >= F.Z and good["price"]["verdict"] == "en contra"
+    assert F.changed(None, good) and F.changed(few, good)          # la primera vez también: es justo lo que hay que oír
+    assert not F.changed(good, good)                               # ya se dijo
+    text = F.format_report(good, few, html=True)
+    assert ("La regla del precio: los que no llegan al mínimo están dejando dinero: la regla del precio les quita "
+            "el 🎯 a apuestas buenas. Conviene revisarla.") in text
+    bad = F.evaluate(short(150, 96), PA, NOW)                      # 64 de cada 100: pierden, como en el historial
+    assert bad["price"]["verdict"] == "a favor" and "pierden, como en el historial" in F.format_report(bad)
+    assert not F.changed(None, bad) and F.changed(few, bad) and F.changed(good, bad)
+    flat = F.evaluate(short(150, 110), PA, NOW)                    # 73 de cada 100: ni gana ni pierde claro
+    assert flat["price"]["verdict"] == "sin evidencia"
+    assert not F.changed(few, flat)                                # de pocos datos a sin evidencia no es noticia
+    assert F.changed(good, flat)                                   # dejar de estar en contra, sí
+    assert F.price_verdict({"n": 0}) == "insuficiente"
+    old = {k: v for k, v in good.items() if k != "price"}          # un estado de antes (sin veredicto de precio)
+    assert F.changed(old, good) and not F.changed(old, flat)
 
 
 def test_goal_luck_is_watched_among_the_strong_favourites():
