@@ -44,6 +44,8 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
+from src.models.big_names import (FORM_GAMES, GOOD_POINTS, MIN_LEAGUE_TEAMS, POOR_POINTS, REP_MIN_GAMES,
+                                  REP_SEASONS, TOP_N)
 from src.models.early_payout import PA_LEAGUES
 from src.models.favourite_watch import LUCK_CUT, LUCK_GAMES, LUCK_K, LUCK_MIN
 
@@ -52,10 +54,13 @@ PERIODS = (("2012-18", 2012, 2018), ("2019-22", 2019, 2022), ("2023+", 2023, 999
 MIN_N_PERIOD = 50
 ALPHA = 0.05
 LUCK_SHOT_GOALS = 0.3        # goles esperados por tiro a puerta (aprox.)
+PINNACLE_GAP_DAYS = 60       # con más días sin precio de Pinnacle al final del historial, el reporte lo dice
 
 PASSES, PROMISING, DISCARDED, THIN = "pasa", "prometedora", "descartada", "pocos datos"
 # ideas que salieron de explorar este mismo historial: con él no pueden pasar
-FROM_THIS_HISTORY = frozenset({"favorito_sin_suerte_local", "favorito_con_suerte_local", "favorito_sin_suerte_visita"})
+FROM_THIS_HISTORY = frozenset({"favorito_sin_suerte_local", "favorito_con_suerte_local", "favorito_sin_suerte_visita",
+                               "grande_mal_local", "grande_bien_local", "sin_nombre_local", "grande_mal_visita",
+                               "grande_bien_visita", "contra_grande_mal_local"})
 
 # lado → (columna de precio sin prefijo, probabilidad justa de Pinnacle, ¿ganó?)
 SIDES = {
@@ -142,6 +147,28 @@ HYPOTHESES = (
     ("favorito_sin_suerte_visita", "Visitante muy favorito (70%+, liga con pago anticipado) que no viene con "
      "suerte de gol", "A",
      lambda f: f.sport_key.isin(PA_LEAGUES) & (f.fa >= 0.70) & (f.a_luck10 - f.h_luck10 <= LUCK_CUT)),
+    # 13-nov-26, el dueño: "lista negra" de equipos grandes de nombre que vienen en decadencia (Chelsea,
+    # Juventus, ManU). Grande = de los 4 que más ganaban según las casas en su liga en las dos temporadas
+    # anteriores; cómo viene = puntos de sus últimos 10 de liga (big_names, mismas constantes). Medido a
+    # mano: el que viene bien +1.4 por cada 100 en las tres épocas, el que viene mal −2.2 (pero +3.4 en
+    # 2023-26) y el favorito sin gran nombre −3.0. Aquí queda a prueba cada semana.
+    ("grande_mal_local", "Local muy favorito (65%+, liga con pago anticipado), grande de nombre que viene mal "
+     "(15 puntos o menos de 30)", "H",
+     lambda f: f.sport_key.isin(PA_LEAGUES) & (f.fh >= 0.65) & (f.h_big == 1) & (f.h_pts10 <= POOR_POINTS)),
+    ("grande_bien_local", "Local muy favorito (65%+, liga con pago anticipado), grande de nombre que viene bien "
+     "(20 puntos o más de 30)", "H",
+     lambda f: f.sport_key.isin(PA_LEAGUES) & (f.fh >= 0.65) & (f.h_big == 1) & (f.h_pts10 >= GOOD_POINTS)),
+    ("sin_nombre_local", "Local muy favorito (65%+, liga con pago anticipado) sin gran nombre", "H",
+     lambda f: f.sport_key.isin(PA_LEAGUES) & (f.fh >= 0.65) & (f.h_big == 0)),
+    ("grande_mal_visita", "Visitante muy favorito (65%+, liga con pago anticipado), grande de nombre que viene mal "
+     "(15 puntos o menos de 30)", "A",
+     lambda f: f.sport_key.isin(PA_LEAGUES) & (f.fa >= 0.65) & (f.a_big == 1) & (f.a_pts10 <= POOR_POINTS)),
+    ("grande_bien_visita", "Visitante muy favorito (65%+, liga con pago anticipado), grande de nombre que viene bien "
+     "(20 puntos o más de 30)", "A",
+     lambda f: f.sport_key.isin(PA_LEAGUES) & (f.fa >= 0.65) & (f.a_big == 1) & (f.a_pts10 >= GOOD_POINTS)),
+    ("contra_grande_mal_local", "Contra el local grande de nombre que viene mal (muy favorito, 65%+): apostar al "
+     "visitante", "A",
+     lambda f: f.sport_key.isin(PA_LEAGUES) & (f.fh >= 0.65) & (f.h_big == 1) & (f.h_pts10 <= POOR_POINTS)),
 )
 
 
@@ -177,8 +204,33 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     for k, g in d.groupby(["sport_key", "season"]):
         games[k] = int(pd.concat([g.home, g.away]).value_counts().max())
 
+    # el "nombre" (13-nov-26): probabilidad media de ganar de cada equipo por temporada, con Pinnacle y, si
+    # falta, con el promedio de las casas (el historial dejó de traer Pinnacle a principios de 2026)
+    pinv = d[["pin_home", "pin_draw", "pin_away"]].astype(float).to_numpy()
+    avgv = d[["avg_home", "avg_draw", "avg_away"]].astype(float).to_numpy()
+    odds = np.where((pinv > 1).all(axis=1)[:, None], pinv, np.where((avgv > 1).all(axis=1)[:, None], avgv, np.nan))
+    inv = 1.0 / odds
+    tot = inv.sum(axis=1)
+    acc = {}
+    for lg, se, home, away, ph, pa in zip(d.sport_key, d.season, d.home, d.away, inv[:, 0] / tot, inv[:, 2] / tot):
+        if np.isfinite(ph):
+            for team, prob in ((home, ph), (away, pa)):
+                x = acc.setdefault((lg, se, team), [0.0, 0])
+                x[0] += prob
+                x[1] += 1
+    big = {}                                        # (liga, temporada) → sus grandes de nombre
+    for (lg, se), here in teams.items():
+        ranked = []
+        for team in here:                           # solo los que siguen en la liga esa temporada
+            prev = [acc.get((lg, se - k, team)) for k in range(1, REP_SEASONS + 1)]
+            if all(x and x[1] >= REP_MIN_GAMES for x in prev):
+                ranked.append((sum(x[0] / x[1] for x in prev) / REP_SEASONS, team))
+        if len(ranked) >= MIN_LEAGUE_TEAMS:
+            big[(lg, se)] = {t for _, t in sorted(ranked, reverse=True)[:TOP_N]}
+
     hist, table = {}, {}
     shots = {}                                      # (liga, equipo) → goles de más contra sus tiros a puerta
+    points = {}                                     # (liga, equipo) → puntos de cada partido (cruza temporadas)
     rows = []
     for r in d.itertuples(index=False):
         k = (r.sport_key, r.season)
@@ -203,6 +255,10 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
                                                                 for x in last6) else np.nan)
             last10 = shots.get((r.sport_key, team), [])[-LUCK_GAMES:]
             feat[f"{side}_luck10"] = sum(last10) / len(last10) if len(last10) >= LUCK_MIN else np.nan
+            bigs = big.get(k)
+            feat[f"{side}_big"] = (1.0 if team in bigs else 0.0) if bigs is not None else np.nan
+            form = points.get((r.sport_key, team), [])[-FORM_GAMES:]
+            feat[f"{side}_pts10"] = float(sum(form)) if len(form) == FORM_GAMES else np.nan
             feat[f"{side}_promoted"] = bool(prev) and team not in prev
             feat[f"{side}_late"] = len(h) >= games.get(k, 0) - 6 and len(h) >= 10
             pos = ranked.index(team) if team in tbl else None
@@ -214,6 +270,8 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
         hst, ast = r.home_shots_target, r.away_shots_target
         hist.setdefault((k, r.home), []).append((hp, hg, ag, hst, ast, r.match_date))
         hist.setdefault((k, r.away), []).append((ap, ag, hg, ast, hst, r.match_date))
+        points.setdefault((r.sport_key, r.home), []).append(hp)
+        points.setdefault((r.sport_key, r.away), []).append(ap)
         if np.isfinite(hst) and np.isfinite(ast):
             over = (hg - ag) - LUCK_K * (hst - ast)
             shots.setdefault((r.sport_key, r.home), []).append(over)
@@ -284,7 +342,12 @@ def build_report(df: pd.DataFrame) -> dict:
                 "updated_at": datetime.now(timezone.utc).isoformat()}
     ev = evaluate(f)
     hyps = ev["hypotheses"]
+    last_pin, last_any = f.loc[f["fh"].notna(), "match_date"].max(), f["match_date"].max()
     return {
+        # hasta cuándo trae el historial el precio de Pinnacle (13-nov-26: la fuente dejó de publicarlo a
+        # principios de 2026 y nadie lo había notado; las ideas que dependen de él ya no suman partidos)
+        "pinnacle_until": None if pd.isna(last_pin) else str(pd.Timestamp(last_pin).date()),
+        "history_until": None if pd.isna(last_any) else str(pd.Timestamp(last_any).date()),
         "n_matches": int(len(f)),
         "n_leagues": int(f["sport_key"].nunique()),
         "seasons": [int(f["season"].min()), int(f["season"].max())],
@@ -344,6 +407,11 @@ def format_report(rep: dict, html: bool = True) -> str:
     lines = [b("🔎 BUSCADOR DE VENTAJAS"),
              f"{rep['k']} ideas probadas en {rep['n_matches']:,} partidos de {rep['n_leagues']} ligas "
              f"({rep['seasons'][0]}-{rep['seasons'][1]}), al precio de una casa común."]
+
+    until, end = rep.get("pinnacle_until"), rep.get("history_until")
+    if until and end and (pd.Timestamp(end) - pd.Timestamp(until)).days > PINNACLE_GAP_DAYS:
+        lines.append(f"⚠️ El historial trae el precio de Pinnacle solo hasta {until}: lo jugado después (hasta {end}) "
+                     f"no entra a las ideas que dependen de ese precio.")
 
     def line(key):
         h = hyps[key]

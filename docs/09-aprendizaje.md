@@ -21,6 +21,7 @@ porque las corridas de GitHub no guardan nada.
 | Sesgo por lado | `side_bias.py` | La corrección que le falta al modelo por lado (local, empate, visitante), por región y en goles |
 | Filtros aprendidos | `filter_learner.py` | Qué regiones pausan el 🎯 (América desde el 3-nov; se quita solo cuando deje de perder) |
 | Supuestos del 🎯 | `favourite_watch.py` | No decide nada: mide con todos los muy favoritos analizados (con pick o sin él) si siguen ganando más de lo que dice Pinnacle y cada cuánto paga el pago anticipado. Avisa si el veredicto cambia |
+| Grandes de nombre | `big_names.py` | No decide nada: qué equipos son los grandes de su liga y cómo vienen. De ahí sale el aviso "viene mal" de cada pick; la vigilancia y el buscador lo miden |
 | Evidencia de reglas | `rule_evidence.py` | Si las reglas a mano tienen evidencia contra resultados reales |
 | Referencia Pinnacle | `sharp_reference.py` | Si hay ventaja real contra el cierre de Pinnacle |
 | Horario de apuesta | `timing_learner.py` | Si conviene apostar antes o después |
@@ -369,6 +370,49 @@ puede medir cada semana es si se siguen cumpliendo las dos cosas en que descansa
 | La curva "Pinnacle → real" aprendida con 2012-23 | Le gana al precio de Pinnacle en 2023-26 (z +3.6; con suerte y racha, +4.4). Pero la ventaja es un escalón en 70, no una curva: 60-65 +1.5, 65-70 +1.3, 70-75 +4.0, 75-80 +3.2, 80+ +2.9 |
 | Dar el 🎯 por "precio corregido" (curva × momio + pago anticipado ≥ 0, 1 o 2%) | **Descartado**: +1.9 y +3.7 en las dos primeras épocas, −0.7 ± 3.0 en 2023-26. Las bandas simples aguantaron |
 | Pago anticipado por banda (ESPN 2019-26, fuera de América) | Rescata 1.8 de cada 100 en 65-70 y 0.9 en 70+: vale ~2.5% en 65-70 y ~1.2% en 70+ |
+
+### Los grandes de nombre que vienen mal (`src/models/big_names.py`, 13-nov-2026)
+
+El dueño: "quiero implementar la lista negra, en donde hay partidos en donde un equipo es muy superior por
+nombre pero en realidad viene en decadencia, como es el caso del Chelsea, Juventus, ManU". Se midió antes de
+armarla (`audit/m19_blacklist.py`, `m20_blacklist2.py`; 137 mil partidos; muy favoritos de 65+ en ligas con
+pago anticipado, al precio promedio):
+
+| Favorito | Partidos | Pinnacle decía | Ganó | Deja por cada 100 | Por época |
+|---|---|---|---|---|---|
+| Grande que viene bien (20+ puntos de 30) | 4,500 | 76 | 80 | +1.4 | +1.5, +1.3, +1.3 |
+| Grande normal (16 a 19) | 1,255 | 74 | 77 | −0.1 | +2.7, +0.2, −5.0 |
+| Grande que viene mal (15 o menos) | 577 | 72 | 73 | −2.2 | −5.3, −2.4, +3.4 |
+| Sin gran nombre | 1,467 | 71 | 71 | −3.0 | −4.7, −2.9, +0.1 |
+
+- **Lo sólido:** la ventaja del 🎯 vive en el grande que viene bien, igual en las tres épocas.
+- **Lo que apoya la idea:** el grande que viene mal no la tiene. **Lo que la debilita:** salió de 2012-23; en
+  2023-26 ganó 78 contra 72 (110 partidos) y la diferencia con el que viene bien puede ser azar (z −1.6).
+- **Una lista por nombre habría señalado mal:** como muy favoritos en mala racha, Chelsea ganó 20 de 26 y
+  Juventus 12 de 15; fallaron Dortmund (11 de 23) y Liverpool (7 de 16).
+- **Apostar en contra pierde:** el empate −14 a −22 por cada 100; el rival, ruido.
+- **El mercado ya lo descuenta:** en nov-26 las casas tenían a Chelsea, Juventus y United entre 53 y 64 de cada
+  100 como favoritos; ninguno llegó al corte del 🎯. Donde fallaron fue en los picks sin 🎯 ("gana X": 1 de 4).
+
+**El dueño eligió (2): medir primero y avisar sin decidir.** Lo que hace el programa:
+
+- **Grande de nombre** es una regla, no una lista a mano (`big_by_league`): los 4 equipos con más probabilidad
+  media de ganar en su liga en las dos temporadas anteriores, entre los que siguen en la liga. La probabilidad
+  sale de Pinnacle y, si falta, del promedio de las casas. Se rehace cada semana. Con esa regla el Manchester
+  United de 2026 **no** es un grande: las casas dejaron de tratarlo como tal hace dos temporadas.
+- **Viene mal:** 15 puntos o menos en sus últimos 10 partidos de liga (`matches`). Se rehace en cada morning y
+  evening (paso "Grandes que vienen mal"), y el closing siguiente ya rehace cada pick con ese estado.
+- **El aviso** viaja con el pick (`program_picks.form_note`), con 🎯 o sin él, y se ve en la tarjeta del
+  dashboard (⚠️) y en el pick final de Telegram. No entra a `decide`: el pick es idéntico con aviso o sin él.
+- **La medición:** `favourite_watch` (`state["names"]`: los cuatro grupos con los partidos nuevos) y el buscador
+  de ventajas, con seis ideas (`grande_mal_local`, `grande_bien_local`, `sin_nombre_local`, …) marcadas como
+  nacidas de este historial: no pueden "pasar" con él.
+- El chequeo diario avisa si el estado deja de refrescarse (`WEEKLY_KEYS`, 9 días).
+- Primera corrida (13-nov): 104 equipos en 26 ligas; venían mal, entre otros, Napoli (12), Juventus (15),
+  Stuttgart (13) y Villarreal (13). En vivo, de los muy favoritos de los últimos 120 días: 5 grandes que venían
+  mal (2 ganados), 52 que venían bien (83 de cada 100 contra 77) y 16 sin gran nombre.
+
+**Cambiar una regla con esto es decisión del dueño** y espera a que la medición diga algo.
 
 **Ya probado y descartado el 11-nov** (`audit/r1_rules.py`, 523 partidos sin 🎯 repetidos con lo que
 había antes del inicio): cambiar el pick de los partidos sin 🎯 a "lo más probable" acierta más (59

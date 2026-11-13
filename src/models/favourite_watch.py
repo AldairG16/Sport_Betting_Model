@@ -38,6 +38,13 @@ historial (137 mil partidos, tres épocas):
    favorito de 70+ que venía sin suerte ganó 4.8 más de cada 100 de lo que
    decía Pinnacle; el que venía con suerte, 2.6 (prometedor, no probado).
 
+5. Los grandes de nombre (13-nov-26, big_names): el dueño pidió una "lista
+   negra" de equipos grandes que vienen en decadencia. En el historial el
+   grande que viene bien gana 3.9 más de cada 100 de lo que dice Pinnacle, el
+   que viene mal 0.8 y el favorito sin gran nombre 0.1; pero lo del que viene
+   mal salió de 2012-23 y en 2023-26 fue al revés. En observación: se mide
+   cada grupo con los partidos nuevos y nadie decide con esto.
+
 No cambia ningún pick: mide y avisa.
 """
 
@@ -69,6 +76,8 @@ LUCK_GAMES, LUCK_MIN = 10, 8                # últimos partidos de liga; con men
 LUCK_DAYS = 200                             # cuánto hacia atrás se leen los partidos para esos 10
 LUCK_CUT = 0.33                             # favorito menos rival, en goles por partido: más = "con suerte"
 LUCK_HISTORY = {"low": 4.8, "high": 2.6}    # 70+: puntos de más sin suerte y con suerte (m5, 11-nov-26)
+# puntos de más del muy favorito según su nombre y cómo viene (m20, 13-nov-26; big_names.group_of)
+NAMES_HISTORY = {"poor": 0.8, "normal": 2.8, "good": 3.9, "rest": 0.1}
 VERDICTS = {"en contra": "ganan MENOS de lo que dice Pinnacle: la base del 🎯 dejó de cumplirse",
             "a favor": "ganan más de lo que dice Pinnacle, como en el historial",
             "sin evidencia": "van como dice Pinnacle; todavía no se distingue del azar",
@@ -126,12 +135,12 @@ def luck_index(history: list, normalize=None) -> dict:
     idx: dict = {}
     for r in history:
         try:
-            over = (float(r["home_goals"]) - float(r["away_goals"])
-                    - LUCK_K * (float(r["home_shots_target"]) - float(r["away_shots_target"])))
+            hst, ast = float(r["home_shots_target"]), float(r["away_shots_target"])
+            over = float(r["home_goals"]) - float(r["away_goals"]) - LUCK_K * (hst - ast)
             day = pd.Timestamp(r["date"]).tz_localize(None).normalize()
         except (TypeError, ValueError):
             continue
-        if over != over:                               # NaN: sin goles o sin tiros
+        if over != over or hst + ast <= 0:             # NaN: sin goles o sin tiros; 0 y 0: tiros sin capturar
             continue
         idx.setdefault((r["league"], norm(r["home"])), []).append((day, over))
         idx.setdefault((r["league"], norm(r["away"])), []).append((day, -over))
@@ -181,10 +190,12 @@ def evaluate(rows: list, pa_leagues=None, now=None) -> dict:
                      # el visitante aparte (12-nov-26): en el historial es donde más se nota; aquí se confirma o no
                      "away_low": _stats([r for r in lucky if r.get("away") and r["luck"] <= LUCK_CUT]),
                      "away_high": _stats([r for r in lucky if r.get("away") and r["luck"] > LUCK_CUT])},
+            # los grandes de nombre según cómo vienen (13-nov-26): en observación, nadie decide con esto
+            "names": {g: _stats([r for r in pa if r.get("name") == g]) for g in ("poor", "normal", "good", "rest")},
             "early_payout": {"n": len(known), "rescued": rescued,
                              "per_100": round(100 * rescued / len(known), 1) if known else None},
             "policy": {"min_n": MIN_N, "z": Z, "history": HISTORY, "pa_history": PA_HISTORY,
-                       "price_history": PRICE_HISTORY, "luck_history": LUCK_HISTORY},
+                       "price_history": PRICE_HISTORY, "luck_history": LUCK_HISTORY, "names_history": NAMES_HISTORY},
             "updated_at": now.isoformat()}
 
 
@@ -246,6 +257,18 @@ def _extra_lines(state: dict) -> list:
         lines.append("• En observación, la suerte de gol (favoritos de 70 o más; goles de más contra sus tiros a "
                      "puerta): " + "; ".join(parts)
                      + f" (en el historial ganan {LUCK_HISTORY['low']:g} y {LUCK_HISTORY['high']:g} más de cada 100)")
+    names = state.get("names") or {}
+    if any((names.get(g) or {}).get("n") for g in ("poor", "good", "rest")):
+        def said(s):
+            return (f"ganaron {round(100 * s['won'] / s['n'])} de cada 100 y Pinnacle decía "
+                    f"{round(100 * s['expected'] / s['n'])}, en {s['n']} partidos")
+        parts = [f"{label} {said(names[g])}" for g, label in (("poor", "los grandes de nombre que venían mal"),
+                                                              ("good", "los que venían bien"),
+                                                              ("rest", "los favoritos sin gran nombre"))
+                 if (names.get(g) or {}).get("n")]
+        lines.append("• En observación, el nombre y cómo viene (muy favoritos): " + "; ".join(parts)
+                     + f" (en el historial ganan {NAMES_HISTORY['poor']:g}, {NAMES_HISTORY['good']:g} y "
+                       f"{NAMES_HISTORY['rest']:g} más de cada 100)")
     return lines
 
 
@@ -339,7 +362,9 @@ def _read_prices(engine, leagues) -> list:
 
 
 def _read_history(engine, since, leagues) -> list:
-    """Los partidos de liga con goles y tiros a puerta desde `since` (para la suerte de gol)."""
+    """Los partidos de liga ya jugados desde `since`, con sus tiros a puerta si
+    los hay: la suerte de gol usa los que los traen (luck_index) y cómo viene
+    cada grande, todos (big_names.points_index)."""
     leagues = sorted({str(x) for x in leagues if x})
     if not leagues:
         return []
@@ -348,9 +373,7 @@ def _read_history(engine, since, leagues) -> list:
         SELECT league, date, LOWER(home_team) AS home, LOWER(away_team) AS away, home_goals, away_goals,
                home_shots_target, away_shots_target
         FROM matches
-        WHERE date >= :s AND league IN ({marks}) AND home_goals IS NOT NULL AND away_goals IS NOT NULL
-          AND home_shots_target IS NOT NULL AND away_shots_target IS NOT NULL
-          AND home_shots_target + away_shots_target > 0"""), engine,
+        WHERE date >= :s AND league IN ({marks}) AND home_goals IS NOT NULL AND away_goals IS NOT NULL"""), engine,
         params={"s": pd.Timestamp(since).strftime("%Y-%m-%d"), **{f"l{i}": x for i, x in enumerate(leagues)}})
     return hist.to_dict("records")
 
@@ -375,7 +398,14 @@ def read_rows(engine=None) -> list:
     from src.models.program_picks import _ratio
     pa_leagues = [x for x in favs["league"].unique() if x in EP.PA_LEAGUES]
     prices, ratio = price_index(_read_prices(engine, pa_leagues), normalize_team), _ratio(engine)
-    luck = luck_index(_read_history(engine, first - pd.Timedelta(days=LUCK_DAYS), pa_leagues), normalize_team)
+    from src.models import big_names as BN
+    history = _read_history(engine, first - pd.Timedelta(days=LUCK_DAYS), pa_leagues)
+    luck, points = luck_index(history, normalize_team), BN.points_index(history, normalize_team)
+    try:
+        names = BN.load_big_names()
+    except Exception as e:
+        log.warning(f"⚠️  Vigilancia sin los grandes de nombre ({type(e).__name__}): ese renglón no se mide")
+        names = {}
     rows = []
     for r in favs.to_dict("records"):
         if plan.get(r["id"]) not in ("win", "loss"):
@@ -385,9 +415,11 @@ def read_rows(engine=None) -> list:
         mine = luck_of(luck, r["league"], fav, r["match_date"], normalize_team)
         theirs = luck_of(luck, r["league"], rival, r["match_date"], normalize_team)
         odds, pays = _price_of(prices, r["match"], r["match_date"], r["market"], float(r["p"]), ratio, normalize_team)
+        big = BN.is_big(names, r["league"], fav, normalize_team)
+        pts = BN.points_last(points, r["league"], fav, r["match_date"], normalize_team) if big else None
         rows.append({"p": float(r["p"]), "won": plan[r["id"]] == "win", "league": r["league"],
                      "lead": EP.lead_of(leads, r["match"], r["match_date"], r["market"], normalize_team),
-                     "odds": odds, "pays": pays, "away": r["market"] == "away_win",
+                     "odds": odds, "pays": pays, "away": r["market"] == "away_win", "name": BN.group_of(big, pts),
                      "luck": round(mine - theirs, 3) if mine is not None and theirs is not None else None})
     return rows
 

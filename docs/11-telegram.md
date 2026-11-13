@@ -10,7 +10,7 @@ palabras normales y momios americanos.
 |---|---|---|---|
 | **La mañana** | ~6:00 | Dueño y canal | `notify_telegram.py`, `telegram_reports.py` |
 | **Partidos de hoy** | Se edita sin sonar en cada cierre | Dueño | `today_board.py` |
-| **Pick final** | Una vez por partido, en la última revisión antes de empezar: el 🎯 o por qué dejó de serlo, quién falta y el parlay que se fija ahí. Desde v2.11.0 ya no hay "Cambió el pick" ni "Parlay listo" aparte | Dueño y canal | `final_alerts.py` |
+| **Pick final** | Una vez por partido, en la última revisión antes de empezar: el 🎯 o por qué dejó de serlo, quién falta, el aviso de que un grande de nombre viene mal (⚠️, desde v2.12.2: solo informa) y el parlay que se fija ahí. Desde v2.11.0 ya no hay "Cambió el pick" ni "Parlay listo" aparte | Dueño y canal | `final_alerts.py` |
 | **La noche** | ~21:05: cómo le fue al día, con un avance de mañana | Dueño y canal | `notify_telegram.py`, `telegram_reports.py` |
 | **La semana** | Lunes, con el weekly | Dueño | `telegram_reports.py`, `weekly_narrator.py` |
 | **Avisos de la base** | Al pasar del 50% y del 75% del plan gratis y al cambiar de modo | Dueño | `db_budget.py` |

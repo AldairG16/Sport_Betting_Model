@@ -57,7 +57,8 @@ CHUNK_CHARS = 3800                       # Telegram corta en 4096
 MAX_NAMES = 5                            # jugadores que se nombran en la línea de quién falta
 
 _PICKS_SQL = """
-    SELECT match, display, match_date, league, label, family, market, reason, star_note, min_us, lineup, result
+    SELECT match, display, match_date, league, label, family, market, reason, star_note, form_note, min_us, lineup,
+           result
     FROM program_picks
     WHERE match_date > :now AND match_date <= :end AND result IS DISTINCT FROM 'stale'
 """
@@ -164,6 +165,17 @@ def lineup_note(r: dict, covered=None) -> str:
     return ""
 
 
+def form_line(r: dict) -> str:
+    """El aviso de que un grande de nombre viene mal (big_names, 13-nov-26), en
+    corto: '⚠️ Juventus viene mal: 15 puntos de sus últimos 30 en liga (es un
+    aviso: el pick no cambia)'. '' si no hay."""
+    note = r.get("form_note")
+    if not isinstance(note, str) or not note.strip():
+        return ""
+    short = " · ".join(part.split(". ")[0].strip() for part in note.split(" · "))
+    return f"⚠️ {html.escape(short)} <i>(es un aviso: el pick no cambia)</i>"
+
+
 def missing_lines(rows: list) -> dict:
     """{partido: ["📋 A Elversberg le faltan 5 titulares: …"]} de lineup_alerts
     (dos filas por equipo, una por mercado del rival: una línea)."""
@@ -219,6 +231,9 @@ def final_texts(items: list, missing: dict, tz, covered=None) -> list:
             note = lineup_note(r, covered)
             if note:
                 lines.append(f"   {note}")
+            form = form_line(r)
+            if form:
+                lines.append(f"   {form}")
         else:
             lines = [("🔄 " if i["late"] else "") + f"❌ <b>{ko:%H:%M}</b> {name}",
                      f"   Ya no es 🎯: {html.escape(why_not(r))}. No lo apuestes."]

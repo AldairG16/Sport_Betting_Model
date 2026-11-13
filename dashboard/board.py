@@ -162,7 +162,8 @@ def _pick_info(p: dict) -> dict:
     when = pd.Timestamp(p["match_date"])
     when = when.tz_convert("UTC") if when.tzinfo else when.tz_localize("UTC")
     base = {"rebuilt": _str(p.get("source")) == "reconstruido", "old_model": bool(when < MODEL_FIXED),
-            "reason": _str(p.get("reason")) or "", "star_note": _str(p.get("star_note")) or ""}
+            "reason": _str(p.get("reason")) or "", "star_note": _str(p.get("star_note")) or "",
+            "form_note": _str(p.get("form_note")) or ""}
     if not _str(p.get("market")):              # sin pick: el motivo (v2.1)
         return {**base, "none": True, "result": "none"}
     return {**base, "label": p.get("label"), "family": _str(p.get("family")) or "Ganador", "result": res_p,

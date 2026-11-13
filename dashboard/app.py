@@ -554,7 +554,8 @@ def api_predictions():
     # sin el horario viejo de un reprogramado ('stale', 6-nov-26) y, si hubiera
     # dos, el más reciente: la clave es el partido sin la fecha
     picks = _q("""
-        SELECT match, label, family, market, model_prob, market_prob, playdoit_odds, reason, lineup, star_note
+        SELECT match, label, family, market, model_prob, market_prob, playdoit_odds, reason, lineup, star_note,
+               form_note
         FROM program_picks WHERE match_date BETWEEN NOW() - INTERVAL '3 hours' AND NOW() + INTERVAL '3 days'
           AND result IS DISTINCT FROM 'stale'
         ORDER BY picked_at NULLS FIRST
@@ -844,7 +845,7 @@ def _load_past_rows() -> list:
     mvs = _q("""SELECT match, match_date, p_home, p_draw, p_away, pin_home, pin_draw, pin_away, low_history
                 FROM model_vs_sharp WHERE match_date >= CAST(:s AS date) - 2 AND skipped_at IS NULL""", p)
     picks = _q("""SELECT match, match_date, league, label, family, market, reason, model_prob, market_prob, result,
-                         profit, source, playdoit_odds, star_note
+                         profit, source, playdoit_odds, star_note, form_note
                   FROM program_picks WHERE match_date >= CAST(:s AS date) - 2""", p)
     bets = _q("""SELECT match, match_date, market, result, profit, stake FROM bets_history
                  WHERE match_date >= CAST(:s AS date) - 2""", p)
