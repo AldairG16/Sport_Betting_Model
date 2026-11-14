@@ -288,7 +288,7 @@ function upRow(m, i){
   var tipPick = pk.label ? 'Qué tan probable lo ve: el programa ' + p100(pk.model) + ', las casas ' + p100(pk.market_prob) +
                 ' · el momio es el aproximado de PlayDoit' +
                 (pk.rule ? ' · 🎯 apuesta recomendada' : (pk.star_note || pk.reason ? ' · sin 🎯: ' + (pk.star_note || pk.reason) : '')) +
-                (pk.form_note ? ' · ⚠️ ' + pk.form_note : '') : (pk.reason || '');
+                (pk.form_note ? ' · ' + (pk.form_note.charAt(0) === '⭐' ? '' : '⚠️ ') + pk.form_note : '') : (pk.reason || '');
   var al = _alerts[m.match] ? ' <span title="' + esc(_alerts[m.match]) + '">⚠️</span>' : '';
   return '<div class="m" id="u' + i + '"><div class="mr" onclick="openUp(' + i + ')">' +
          '<div class="time">' + mxtime(m.match_date) + '<span class="small muted">' + esc(m.league) + '</span></div>' +
@@ -404,9 +404,14 @@ function lineupTag(pk, covered){
 // Aviso de que un grande de nombre viene mal (13-nov-26, big_names). Sale con 🎯 o sin él: solo informa
 function formTag(pk){
   if (!pk || !pk.form_note) return '';
-  var parts = String(pk.form_note).split(' · '), i, shorts = [];
-  for (i = 0; i < parts.length; i++) shorts.push(parts[i].split('. ')[0]);
-  return '<div class="small" title="' + esc(pk.form_note) + '">⚠️ ' + esc(shorts.join(' · ')) + '</div>';
+  var parts = String(pk.form_note).split(' · '), i, h = '';
+  for (i = 0; i < parts.length; i++) {
+    if (parts[i].charAt(0) === '⭐')        // la marca del más firme (v2.14.0): no es un aviso
+      h += '<div class="small" title="' + esc(parts[i]) + '">' + esc(parts[i].split(': ')[0]) + '</div>';
+    else
+      h += '<div class="small" title="' + esc(parts[i]) + '">⚠️ ' + esc(parts[i].split('. ')[0]) + '</div>';
+  }
+  return h;
 }
 function whyTag(pk){
   if (!pk || pk.rule || !(pk.reason || pk.star_note)) return '';
@@ -434,7 +439,7 @@ function pastRow(r, i){
               (pk.winner ? ' · tuvo razón ' + (pk.winner === 'mercado' ? 'el mercado (las casas)' : 'el programa') : '') +
               (pk.old_model ? ' · versión del programa con error (antes del 22 oct)' : '') +
               (pk.rule ? ' · 🎯 apuesta recomendada' : (pk.star_note || pk.reason ? ' · sin 🎯: ' + (pk.star_note || pk.reason) : '')) +
-              (pk.form_note ? ' · ⚠️ ' + pk.form_note : '') +
+              (pk.form_note ? ' · ' + (pk.form_note.charAt(0) === '⭐' ? '' : '⚠️ ') + pk.form_note : '') +
               (pk.rebuilt ? ' · rehecho con la predicción guardada antes del partido' : '') +
               (pk.provisional ? ' · provisional: ya terminó, cuenta en los totales cuando se cobre' : '')) + '">' + (pk.rebuilt ? '↺ ' : '') +
               (played ? ok(pk.result === 'win' || pk.result === 'half_win') : '⏳') + ' ' + (pk.rule ? '🎯 ' : '') + famIcon(pk.family) + ' ' + esc(pk.label) +
@@ -798,7 +803,7 @@ function pxBlock(d){
 function renderParlay(){
   if (!_px) return;
   var i, h = '', today = mxday(), r = _px.rules;
-  el('xrule').innerHTML = '<b>Cómo se arma:</b> solo equipos grandes de su liga que vienen ganando y son muy favoritos (según Pinnacle ganan ' + Math.round(r.strong * 100) +
+  el('xrule').innerHTML = '<b>Cómo se arma:</b> solo equipos muy favoritos (según Pinnacle ganan ' + Math.round(r.strong * 100) +
     ' de cada 100 partidos así o más) que paguen ' + esc(r.min_odds_us) + ' o mejor' +
     (r.price_band ? ' (los de menos de ' + Math.round(r.price_band * 100) + ' de cada 100, solo si su momio llega al mínimo)' : '') +
     ', en ligas con pago anticipado ⚡ ' +

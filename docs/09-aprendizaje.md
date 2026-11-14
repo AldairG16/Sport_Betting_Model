@@ -412,10 +412,11 @@ pago anticipado, al precio promedio):
   Stuttgart (13) y Villarreal (13). En vivo, de los muy favoritos de los últimos 120 días: 5 grandes que venían
   mal (2 ganados), 52 que venían bien (83 de cada 100 contra 77) y 16 sin gran nombre.
 
-**Decidido el 14-nov-2026:** después de ver la calificación del programa, el dueño pidió ("arma las 4") que el
-🎯 se concentre en el grande que viene bien (v2.13.0, [08](08-picks-y-parlays.md)): sobre la regla del precio
-deja +1.9 por cada 100 contra +0.9, parecido en las tres épocas. El aviso "viene mal" sigue siendo solo un
-aviso, y los grupos que la regla deja sin 🎯 tienen veredicto propio en la vigilancia semanal.
+**14-nov-2026, dos decisiones el mismo día.** Por la mañana ("arma las 4") el 🎯 se concentró en el grande que
+viene bien (v2.13.0): +1.9 por cada 100 contra +0.9, pero quedaban 6 de cada 10 🎯. Al verlo, el dueño no quiso
+menos picks ("quiero tener más y que se ganen también") y eligió que el nombre sea una **marca** (⭐ al 🎯 de un
+grande que viene ganando) y que el 🎯 se **amplíe** a más ligas (v2.14.0, [08](08-picks-y-parlays.md)). El aviso
+"viene mal" sigue siendo solo un aviso. La lección para quien proponga reglas: decir primero cuántos 🎯 quita.
 
 **Ya probado y descartado el 11-nov** (`audit/r1_rules.py`, 523 partidos sin 🎯 repetidos con lo que
 había antes del inicio): cambiar el pick de los partidos sin 🎯 a "lo más probable" acierta más (59

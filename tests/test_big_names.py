@@ -148,6 +148,11 @@ def test_the_final_pick_in_telegram_carries_the_warning_in_plain_words():
                                  "<i>(es un aviso: el pick no cambia)</i>")
     assert FA.form_line({**row, "form_note": None}) == "" and FA.form_line({}) == ""
     from zoneinfo import ZoneInfo
+    firm = dict(row, form_note=PP.FIRM_NOTE.format(team="Napoli", pts=24))
+    assert FA.form_line(firm) == "⭐ Napoli es de los más firmes"                        # la marca no es un aviso
+    mixed = dict(row, form_note=firm["form_note"] + " · " + BN.FORM_NOTE.format(team="Lecce", pts=9))
+    assert FA.form_line(mixed) == ("⭐ Napoli es de los más firmes · ⚠️ Lecce viene mal: 9 puntos de sus últimos 30 en "
+                                   "liga <i>(es un aviso: el pick no cambia)</i>")
     (msg,) = FA.final_texts([{"kind": "star", "row": row, "new": False, "late": False}], {}, ZoneInfo("America/Mexico_City"),
                             {"soccer_italy_serie_a"})
     assert "🎯 <b>13:00</b> Napoli vs Lecce" in msg and "   ⚠️ Napoli viene mal: 12 puntos de sus últimos 30 en liga" in msg
@@ -184,12 +189,13 @@ def test_the_pick_builder_reads_the_state_once_and_knows_each_side_s_group():
     assert len([q for q, _ in eng.executed if "FROM model_state" in q]) == 1               # una sola lectura
     assert groups_for("napoli", "lecce", lg)["home_win"] == ("good", 24)
     assert form_for("juve", "lecce", lg, ("Juventus", "Lecce")).startswith("Juventus viene mal: 15")
-    # de punta a punta: el mismo partido, 🎯 si Napoli viene bien y sin 🎯 (con su nota) si no es un grande
+    # de punta a punta: el mismo partido es 🎯 en los dos casos; si Napoli viene bien lleva además la marca ⭐
     mvs, up = pd.DataFrame([_mvs()]), pd.DataFrame([_up()])
     star, = PP.build_picks(mvs, up, groups_for=groups_for)
-    assert star["reason"] is None and star["star_note"] is None and star["label"] == "Gana el local"
-    off, = PP.build_picks(mvs, up, groups_for=lambda h, a, league: {"home_win": ("rest", None)})
-    assert off["market"] and off["reason"] and off["star_note"].startswith("Napoli no está entre los 4 grandes de su liga:")
+    assert star["reason"] is None and star["label"] == "Gana el local"
+    assert star["form_note"].startswith("⭐ Napoli es de los más firmes") and "(24 puntos de sus últimos 30)" in star["form_note"]
+    rest, = PP.build_picks(mvs, up, groups_for=lambda h, a, league: {"home_win": ("rest", None)})
+    assert rest["reason"] is None and rest["form_note"] is None and rest["label"] == star["label"]   # 🎯 igual, sin ⭐
 
 
 # ─── cuándo se calcula y quién vigila que siga calculándose ─────────────────
@@ -252,34 +258,36 @@ def test_the_weekly_watch_measures_each_group_without_deciding_anything():
     plain = FW.evaluate([{k: v for k, v in r.items() if k != "name"} for r in rows], ("liga_pa",), NOW)
     assert st["verdict"] == plain["verdict"] and not FW.changed(plain, st)             # medir no cambia el veredicto
     text = FW.format_report(st)
-    assert ("El nombre y cómo viene (muy favoritos; desde el 14-nov el 🎯 es solo para el grande que viene bien): los "
-            "grandes de nombre que venían mal ganaron 65 de cada 100 y Pinnacle decía 75, en 40 partidos; los que "
-            "venían bien ganaron 82 de cada 100 y Pinnacle decía 75, en 200 partidos; los favoritos sin gran nombre "
-            "ganaron 70 de cada 100 y Pinnacle decía 75, en 60 partidos (en el historial ganan 0.8, 3.9 y 0.1 más de "
-            "cada 100)") in text
-    assert "El nombre y cómo viene" not in FW.format_report(plain)                    # sin datos, sin renglón
-    assert st["names"]["verdict"] == "insuficiente" and "La regla del nombre" not in text   # sin momios no opina
+    assert ("En observación, el nombre y cómo viene (muy favoritos; el grande que viene bien lleva ⭐): los grandes "
+            "de nombre que venían mal ganaron 65 de cada 100 y Pinnacle decía 75, en 40 partidos; los que venían bien "
+            "ganaron 82 de cada 100 y Pinnacle decía 75, en 200 partidos; los favoritos sin gran nombre ganaron 70 de "
+            "cada 100 y Pinnacle decía 75, en 60 partidos (en el historial ganan 0.8, 3.9 y 0.1 más de cada 100)") in text
+    assert "el nombre y cómo viene" not in FW.format_report(plain)                    # sin datos, sin renglón
+    assert "verdict" not in st["names"] and "La regla del nombre" not in text         # el nombre ya no es una regla
 
 
-def test_the_name_rule_has_its_own_verdict_and_the_owner_hears_if_it_stops_holding():
-    """14-nov-26: la regla quita el 🎯 al favorito que no es un grande que viene bien. Si los que se quedan sin
-    🎯 empiezan a dejar dinero, el weekly lo dice (lo mismo que con la regla del precio)."""
-    def favs(n, wins, name, odds=1.36):
-        return [{"p": 0.72, "won": i < wins, "league": "liga_pa", "lead": None, "name": name, "odds": odds} for i in range(n)]
-    base = favs(600, 510, "good")                                    # el veredicto general, igual en todos: a favor
-    few = FW.evaluate(base + favs(20, 18, "rest"), ("liga_pa",), NOW)
-    assert few["names"]["verdict"] == "insuficiente" and few["names"]["off"]["n"] == 20
-    good = FW.evaluate(base + favs(90, 76, "rest") + favs(60, 50, "normal"), ("liga_pa",), NOW)   # 84 de cada 100 a -278
-    assert good["names"]["off"]["n"] == 150 and good["names"]["verdict"] == "en contra"
-    assert FW.changed(few, good) and FW.changed(None, good) and not FW.changed(good, good)
-    assert ("La regla del nombre: los muy favoritos que no son un grande que viene bien están dejando dinero: la "
-            "regla del nombre les quita el 🎯 a apuestas buenas. Conviene revisarla.") in FW.format_report(good)
-    bad = FW.evaluate(base + favs(150, 96, "poor"), ("liga_pa",), NOW)                 # 64 de cada 100: pierden
-    assert bad["names"]["verdict"] == "a favor" and FW.changed(few, bad) and not FW.changed(None, bad)
-    flat = FW.evaluate(base + favs(150, 110, "rest"), ("liga_pa",), NOW)
-    assert flat["names"]["verdict"] == "sin evidencia" and not FW.changed(few, flat) and FW.changed(good, flat)
-    assert good["names"]["good"]["n"] == 600                                           # el grande que viene bien no entra a esa cuenta
-    assert FW.NAMES_OFF == PP.NAME_OFF                                                # la misma lista que usa la regla
+def test_the_new_leagues_have_their_own_verdict_and_the_owner_hears_if_they_lose():
+    """14-nov-26 (v2.14.0): el 🎯 se amplió al favorito de 70+ en ligas sin pago anticipado, donde el historial
+    dice que gana igual de seguido pero casi no deja. Si con 100 partidos o más PIERDEN dinero, el weekly avisa."""
+    def favs(n, wins, league="otra", wide=True, p=0.75, odds=1.30):
+        return [{"p": p, "won": i < wins, "league": league, "lead": None, "wide": wide, "odds": odds} for i in range(n)]
+    base = [{"p": 0.75, "won": i < 510, "league": "liga_pa", "lead": None} for i in range(600)]
+    few = FW.evaluate(base + favs(20, 16), ("liga_pa",), NOW)
+    assert few["wide"]["n"] == 20 and few["wide"]["verdict"] == "insuficiente" and not FW.changed(None, few)
+    losing = FW.evaluate(base + favs(150, 100), ("liga_pa",), NOW)                    # 67 de cada 100 a -333: pierden
+    assert losing["wide"]["verdict"] == "en contra" and losing["wide"]["money"]["profit_50"] < 0
+    assert FW.changed(few, losing) and FW.changed(None, losing) and not FW.changed(losing, losing)
+    text = FW.format_report(losing)
+    assert ("Las ligas nuevas (favoritos de 70 o más sin pago anticipado, con 🎯 desde el 14-nov): ganaron 67 de cada "
+            "100 y Pinnacle decía 75, en 150 partidos") in text
+    assert ("La ampliación del 🎯: los favoritos de las ligas nuevas están PERDIENDO dinero: la ampliación del 🎯 a esas "
+            "ligas no está funcionando. Conviene revisarla.") in text
+    fine = FW.evaluate(base + favs(150, 116), ("liga_pa",), NOW)                      # 77 de cada 100: tablas
+    assert fine["wide"]["verdict"] == "sin evidencia" and not FW.changed(few, fine) and FW.changed(losing, fine)
+    # solo cuentan los de 70+ de las ligas nuevas: ni el de 65 a 70, ni otra liga sin pago anticipado (América)
+    mixed = FW.evaluate(base + favs(30, 20, p=0.67) + favs(30, 20, wide=False) + favs(10, 8), ("liga_pa",), NOW)
+    assert mixed["wide"]["n"] == 10 and mixed["other_leagues"]["n"] == 70
+    assert FW.WIDE_P == PP.WIDE_FAV and FW.gain_verdict({"n": 0}) == "insuficiente"
 
 
 def _hist(date, home, away, hg, ag, season, odds=(2.0, 3.4, 3.8), league="soccer_epl"):

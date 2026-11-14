@@ -53,34 +53,55 @@ def test_between_65_and_70_the_target_needs_a_price_that_reaches_the_minimum():
     assert not PP.reaches_minimum({"playdoit_odds": None, "market_prob": 0.687})
 
 
-def test_the_target_is_only_for_a_big_name_that_comes_winning():
-    """14-nov-26, el dueño ("arma las 4"). Sobre la regla del precio, el grande que viene bien dejó +1.9 por
-    cada 100 en el historial (+2.4, +1.4 y +2.0 en tres épocas); lo que esta regla quita, −0.6."""
-    u, lg, teams = SimpleNamespace(**_up()), "soccer_italy_serie_a", ("Napoli", "Lecce")
-    cs = PP._candidates_of(_mvs(), u)
-    good, pick_good = {"home_win": ("good", 24)}, PP.decide(_mvs(), u)[0]
-    assert PP.decide(_mvs(), u, groups=good) == (pick_good, None)                  # grande que viene bien: 🎯, igual que sin la regla
-    assert PP.no_star_note(cs, lg, None, teams, good) is None
-    from src.models import big_names as BN
-    assert f"los {BN.TOP_N} grandes" in PP.STAR_NOT_BIG and f"{BN.GOOD_POINTS} puntos" in PP.STAR_NOT_GOOD
-    for groups, start in (({"home_win": ("rest", None)}, "Napoli no está entre los 4 grandes de su liga:"),
-                          ({"home_win": ("normal", 17)}, "Napoli no viene ganando como grande: lleva 17 puntos"),
-                          ({"home_win": ("poor", 12)}, "Napoli no viene ganando como grande: lleva 12 puntos")):
-        pick, why = PP.decide(_mvs(), u, groups=groups)
-        assert pick is not None and why is not None and not pick.get("strong")      # el partido sigue con su pick, sin 🎯
-        note = PP.no_star_note(cs, lg, None, teams, groups)
-        assert note.startswith(start) and "69 de cada 100 según Pinnacle" in note
-        assert PL.strong_leg(_mvs(), u, groups=groups) is None                      # y tampoco es pierna del parlay
-    # donde no se sabe (liga sin ranking, como la Champions, o un grande sin sus 10 partidos) la regla no aplica
-    for unknown in (None, {}, {"away_win": ("rest", None)}):
-        assert PP.decide(_mvs(), u, groups=unknown)[1] is None
-        assert PL.strong_leg(_mvs(), u, groups=unknown)["market"] == "home_win"
-    # el nombre va antes que el precio: con buen precio tampoco sería 🎯, así que no promete "vale si paga X"
-    short = SimpleNamespace(**_up(consensus_home_odds=1.36))
-    note = PP.no_star_note(PP._candidates_of(_mvs(), short), lg, None, teams, {"home_win": ("rest", None)})
-    assert note.startswith("Napoli no está entre los 4 grandes de su liga:") and "Vale la pena solo si" not in note
-    assert PP.name_off({"home_win": ("good", 22)}, "home_win") is None and PP.name_off(None, "home_win") is None
-    assert PP.name_off({"home_win": ("poor", 9)}, "home_win") == ("poor", 9)
+def test_the_name_marks_the_firmest_target_and_never_takes_it_away():
+    """14-nov-26 (v2.14.0). v2.13.0 le quitaba el 🎯 al favorito que no fuera un grande que viene bien y dejaba
+    6 de cada 10; el dueño: "no quiero que esto vaya dando menos por estricto… quiero tener más y que se ganen
+    también". Ahora el nombre solo marca: el 🎯 de un grande que viene ganando lleva ⭐."""
+    mvs, up = pd.DataFrame([_mvs()]), pd.DataFrame([_up()])
+    plain, = PP.build_picks(mvs, up)
+    for group, starred in ((("good", 24), True), (("rest", None), False), (("normal", 17), False), (("poor", 12), False)):
+        row, = PP.build_picks(mvs, up, groups_for=lambda h, a, lg, g=group: {"home_win": g})
+        assert row["reason"] is None and row["label"] == plain["label"] and row["min_us"] == plain["min_us"]   # siempre 🎯
+        assert (row["form_note"] or "").startswith("⭐ Napoli es de los más firmes") is starred
+    firm, = PP.build_picks(mvs, up, groups_for=lambda h, a, lg: {"home_win": ("good", 24)})
+    assert firm["form_note"] == ("⭐ Napoli es de los más firmes: es de los 4 grandes de su liga y viene ganando (24 puntos "
+                                 "de sus últimos 30). Los favoritos así ganan 81 de cada 100")
+    # la marca es del equipo del 🎯: si el grande que viene bien es el rival, no hay ⭐
+    assert PP.build_picks(mvs, up, groups_for=lambda h, a, lg: {"away_win": ("good", 24)})[0]["form_note"] is None
+    # un pick sin 🎯 (el precio no llega) no lleva ⭐ aunque sea un grande que viene bien
+    low, = PP.build_picks(mvs, pd.DataFrame([_up(consensus_home_odds=1.36)]),
+                          groups_for=lambda h, a, lg: {"home_win": ("good", 24)})
+    assert low["reason"] and low["form_note"] is None
+    # y junto al aviso de que el rival, otro grande, viene mal: las dos cosas
+    both, = PP.build_picks(mvs, up, groups_for=lambda h, a, lg: {"home_win": ("good", 24)},
+                           form_for=lambda h, a, lg, names: "Lecce viene mal: 9 puntos de sus últimos 30 en liga. x")
+    assert both["form_note"].startswith("⭐ Napoli es de los más firmes") and " · Lecce viene mal: 9" in both["form_note"]
+    assert PP.firm_note(None, "home_win", "Napoli") is None and PL.strong_leg(_mvs(), SimpleNamespace(**_up()))["market"] == "home_win"
+
+
+def test_the_target_reaches_the_very_strong_favourite_in_more_leagues():
+    """14-nov-26 (v2.14.0): más 🎯 con el mismo acierto. En 12 ligas de Europa y Asia sin pago anticipado el
+    favorito de 70+ gana 79 y 83 de cada 100 (casi no deja: +0.1 y +0.6). América queda fuera."""
+    strong = dict(pin_home_odds=1.30, pin_draw_odds=5.5, pin_away_odds=10.0, consensus_home_odds=1.28)   # 73 de cada 100
+    for lg in ("soccer_spl", "soccer_sweden_allsvenskan", "soccer_china_superleague", "soccer_efl_champ"):
+        pick, why = PP.decide(_mvs(league=lg), SimpleNamespace(**_up(**strong)))
+        assert why is None and pick["strong"] and pick["market"] == "home_win", lg
+        assert PL.strong_leg(_mvs(league=lg), SimpleNamespace(**_up(**strong))) is None   # sin pago anticipado: no es pierna
+    # ahí el de 65 a 70 no lleva 🎯 (sin pago anticipado no hay con qué pagarlo), y la nota lo dice
+    u = SimpleNamespace(**_up())                                                          # 68.7 de cada 100
+    pick, why = PP.decide(_mvs(league="soccer_spl"), u)
+    assert pick is not None and why is not None and not pick.get("strong")
+    note = PP.no_star_note(PP._candidates_of(_mvs(league="soccer_spl"), u), "soccer_spl", None, ("Celtic", "Hibernian"))
+    assert note == ("Celtic no llega a muy favorito para esta liga: gana 69 de cada 100 según Pinnacle y, como aquí no "
+                    "hay pago anticipado, el 🎯 pide 70 o más")
+    # en las ligas nuevas no se pide el precio mínimo (esa regla es del favorito de 65 a 70, que ahí no entra)
+    assert PP.decide(_mvs(league="soccer_spl"), SimpleNamespace(**_up(**strong)))[0]["playdoit_odds"] == 1.28
+    # América y los torneos de selecciones siguen fuera
+    for lg in ("soccer_usa_mls", "soccer_mexico_ligamx", "soccer_brazil_campeonato", "soccer_uefa_nations_league"):
+        assert PP.decide(_mvs(league=lg), SimpleNamespace(**_up(**strong)))[1] is not None, lg
+    from src.models import early_payout as EP2
+    assert not set(PP.WIDE_LEAGUES) & set(EP2.PA_LEAGUES) and len(PP.WIDE_LEAGUES) == 12
+    assert PP.WIDE_FAV == PP.PRICE_BAND == 0.70
 
 
 def test_other_picks_are_still_shown_without_the_target():

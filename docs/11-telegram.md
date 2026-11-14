@@ -10,7 +10,7 @@ palabras normales y momios americanos.
 |---|---|---|---|
 | **La mañana** | ~6:00 | Dueño y canal | `notify_telegram.py`, `telegram_reports.py` |
 | **Partidos de hoy** | Se edita sin sonar en cada cierre | Dueño | `today_board.py` |
-| **Pick final** | Una vez por partido, en la última revisión antes de empezar: el 🎯 o por qué dejó de serlo (también si no es de los 4 grandes de su liga o no viene ganando, desde v2.13.0), quién falta, el aviso de que un grande de nombre viene mal (⚠️, desde v2.12.2: solo informa) y el parlay que se fija ahí. Desde v2.11.0 ya no hay "Cambió el pick" ni "Parlay listo" aparte | Dueño y canal | `final_alerts.py` |
+| **Pick final** | Una vez por partido, en la última revisión antes de empezar: el 🎯 (con ⭐ si es de los más firmes, desde v2.14.0) o por qué dejó de serlo, quién falta, el aviso de que un grande de nombre viene mal (⚠️, desde v2.12.2: solo informa) y el parlay que se fija ahí. Desde v2.11.0 ya no hay "Cambió el pick" ni "Parlay listo" aparte | Dueño y canal | `final_alerts.py` |
 | **La noche** | ~21:05: cómo le fue al día, con un avance de mañana | Dueño y canal | `notify_telegram.py`, `telegram_reports.py` |
 | **La semana** | Lunes, con el weekly | Dueño | `telegram_reports.py`, `weekly_narrator.py` |
 | **Avisos de la base** | Al pasar del 50% y del 75% del plan gratis y al cambiar de modo | Dueño | `db_budget.py` |
@@ -32,7 +32,9 @@ en rojo.
 **Desde el 14-nov-2026 (v2.13.0)** el tablero separa lo que es para apostar de lo que no: el 🎯 lleva su momio
 mínimo ("🎯 Gana Arsenal · mín. -260"); los demás picks dicen "solo para seguir" y ya no llevan mínimo, porque
 con un mínimo al lado parecían una recomendación y esos picks quedan tablas con las casas. El pie lo repite:
-"🎯 = para apostar, si PlayDoit paga el mínimo o más. Lo demás es solo para seguir el partido."
+"🎯 = para apostar, si PlayDoit paga el mínimo o más. ⭐ = de los más firmes (un grande de su liga que viene
+ganando). Lo demás es solo para seguir el partido." Desde v2.14.0 el 🎯 de un grande que viene ganando lleva ⭐
+en el tablero y en el pick final.
 
 El dueño quiere ver en el teléfono los partidos del día, con su hora, y notar si un pick
 cambia. `src/models/today_board.py`, paso "Partidos de hoy (Telegram)" del closing (después

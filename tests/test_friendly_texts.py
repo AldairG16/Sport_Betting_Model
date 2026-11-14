@@ -90,7 +90,7 @@ def test_without_winner_odds_the_note_says_so():
 
 def test_every_short_part_fits_the_card_and_has_no_percent_jargon():
     for note in (PP.STAR_NO_ODDS, PP.STAR_NO_FAV, PP.STAR_NO_PA, PP.STAR_NO_PRICE, PP.STAR_SHORT, PP.STAR_LOW_PRICE,
-                 PP.STAR_NOT_BIG, PP.STAR_NOT_GOOD, PP.NOT_STRONG):
+                 PP.STAR_WIDE_SHORT, PP.NOT_STRONG):
         short = note.split(":")[0].format(team="Borussia Dortmund", pct=74, us="-650")
         assert len(short) <= 75, short
         assert "%" not in note and "65%+" not in note

@@ -10,9 +10,10 @@ Cada día:
 1. Descarga las cuotas de los partidos de 19 ligas (The Odds API) y las compara con su propio modelo
    (Dixon-Coles + ensemble de Poisson, Elo, xG, entre-ellos y forma).
 2. Da **un pick por cada partido analizado** (nunca esconde uno) y marca con 🎯 los recomendados: hoy, un
-   equipo de los 4 grandes de su liga que viene ganando y es favorito muy claro según Pinnacle (la casa más
-   precisa), que PlayDoit paga a -500 o mejor, en una liga con pago anticipado; si gana menos de 70 de cada
-   100, solo cuando su momio llega al mínimo. Los demás picks son solo para seguir el partido.
+   favorito muy claro según Pinnacle (la casa más precisa) que PlayDoit paga a -500 o mejor, en una liga con
+   pago anticipado (si gana menos de 70 de cada 100, solo cuando su momio llega al mínimo), o que gana 70 o
+   más en otras 12 ligas de Europa y Asia. El ⭐ marca a los más firmes: un grande de su liga que viene
+   ganando. Los demás picks son solo para seguir el partido.
 3. Arma parlays, revisa las alineaciones antes de cada partido y fija el pick final.
 4. Avisa por Telegram (al dueño y a su canal «Dulopatia») y lo muestra en un dashboard en la PC del dueño.
 5. Cobra los resultados, mide contra el mercado y **aprende** de lo que junta (apuestas "sombra" y picks

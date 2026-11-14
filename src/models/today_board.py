@@ -41,7 +41,7 @@ MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "
 DIAS = ("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
 
 _SQL = """
-    SELECT p.match, p.display, p.match_date, p.label, p.family, p.market, p.reason, p.min_us, p.lineup,
+    SELECT p.match, p.display, p.match_date, p.label, p.family, p.market, p.reason, p.min_us, p.lineup, p.form_note,
            p.prev_label, p.prev_star, p.changed_at, u.odds_fetched_at, u.specialty_fetched_at
     FROM program_picks p
     LEFT JOIN LATERAL (
@@ -109,8 +109,9 @@ def match_lines(r: dict, now: datetime, tz) -> list:
     name = html.escape(str(r.get("display") or r.get("match")))
     changed = _ts(r.get("changed_at"))
     recent = changed is not None and now - changed <= timedelta(hours=CHANGED_RECENT_H)
+    firm = " ⭐" if _star(r) and str(r.get("form_note") or "").startswith("⭐") else ""    # de los más firmes (v2.14.0)
     lines = [f"<b>{_hm(ko, tz)}</b> {name}" + (" 🔄" if recent else ""),
-             f"   {html.escape(pick_text(r.get('label'), _star(r), r.get('min_us'), r.get('reason')))}"
+             f"   {html.escape(pick_text(r.get('label'), _star(r), r.get('min_us'), r.get('reason')))}{firm}"
              f" · cuotas {_when(odds_time(r), now, tz)}"
              + (" · alineación ✓" if str(r.get("lineup") or "").startswith("confirmada") else "")]
     if recent:
@@ -138,7 +139,8 @@ def board_texts(rows: list, now: datetime, tz) -> list:
     if any("🔄" in b for b in blocks):
         tail.append("<i>🔄 = el pick cambió en las últimas 24 h</i>")
     if blocks:
-        tail.append("<i>🎯 = para apostar, si PlayDoit paga el mínimo o más. Lo demás es solo para seguir el partido.</i>")
+        tail.append("<i>🎯 = para apostar, si PlayDoit paga el mínimo o más. ⭐ = de los más firmes (un grande de su "
+                    "liga que viene ganando). Lo demás es solo para seguir el partido.</i>")
     chunks, cur = [], head
     for b in blocks:
         if len(cur) + len(b) + 2 > CHUNK_CHARS:

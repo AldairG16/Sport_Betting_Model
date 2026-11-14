@@ -172,8 +172,12 @@ def form_line(r: dict) -> str:
     note = r.get("form_note")
     if not isinstance(note, str) or not note.strip():
         return ""
-    short = " · ".join(part.split(". ")[0].strip() for part in note.split(" · "))
-    return f"⚠️ {html.escape(short)} <i>(es un aviso: el pick no cambia)</i>"
+    parts = [part.split(". ")[0].split(": ")[0].strip() if part.startswith("⭐") else part.split(". ")[0].strip()
+             for part in note.split(" · ")]
+    firm = [html.escape(x) for x in parts if x.startswith("⭐")]          # la marca del más firme (v2.14.0)
+    warn = [html.escape(x) for x in parts if not x.startswith("⭐")]
+    out = firm + ([f"⚠️ {' · '.join(warn)} <i>(es un aviso: el pick no cambia)</i>"] if warn else [])
+    return " · ".join(out)
 
 
 def missing_lines(rows: list) -> dict:
