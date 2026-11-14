@@ -412,7 +412,10 @@ pago anticipado, al precio promedio):
   Stuttgart (13) y Villarreal (13). En vivo, de los muy favoritos de los últimos 120 días: 5 grandes que venían
   mal (2 ganados), 52 que venían bien (83 de cada 100 contra 77) y 16 sin gran nombre.
 
-**Cambiar una regla con esto es decisión del dueño** y espera a que la medición diga algo.
+**Decidido el 14-nov-2026:** después de ver la calificación del programa, el dueño pidió ("arma las 4") que el
+🎯 se concentre en el grande que viene bien (v2.13.0, [08](08-picks-y-parlays.md)): sobre la regla del precio
+deja +1.9 por cada 100 contra +0.9, parecido en las tres épocas. El aviso "viene mal" sigue siendo solo un
+aviso, y los grupos que la regla deja sin 🎯 tienen veredicto propio en la vigilancia semanal.
 
 **Ya probado y descartado el 11-nov** (`audit/r1_rules.py`, 523 partidos sin 🎯 repetidos con lo que
 había antes del inicio): cambiar el pick de los partidos sin 🎯 a "lo más probable" acierta más (59

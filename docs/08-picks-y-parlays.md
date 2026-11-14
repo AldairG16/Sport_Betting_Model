@@ -13,7 +13,8 @@
   cuenta y el que se cobra.
 - Se cobra **al momio mínimo de PlayDoit**, apostando 50.
 
-**El 🎯 (recomendado)**, la regla vigente desde v2.9.0 (6-nov-26), con el precio desde v2.12.1 (12-nov-26):
+**El 🎯 (recomendado)**, la regla vigente desde v2.9.0 (6-nov-26), con el precio desde v2.12.1 (12-nov-26) y el
+nombre desde v2.13.0 (14-nov-26):
 
 1. Un equipo **muy favorito**: según Pinnacle gana 65 de cada 100 partidos así o más.
 2. PlayDoit lo paga a **-500 o mejor** (cada pierna de parlay con bono también debe ser -500 o mejor).
@@ -22,6 +23,13 @@
 5. Fuera de una **región en pausa** por el filtro aprendido (hoy, América).
 6. **Si gana menos de 70 de cada 100, su momio estimado de PlayDoit tiene que llegar al mínimo**
    (`PRICE_BAND`, `reaches_minimum`). De 70 para arriba no se exige.
+7. **Es de los 4 grandes de su liga y viene ganando**: de los 4 que más ganaban según las casas en las dos
+   temporadas anteriores, con 20 puntos o más en sus últimos 10 partidos de liga (`name_off`,
+   `big_names.groups_of_match`). Donde no hay ranking (Champions) o no se sabe cómo viene, no se exige.
+
+**Los picks sin 🎯 son solo para seguir el partido, no para apostar** (quedan tablas con las casas: 55 de cada
+100). Lo dicen la leyenda y cada tarjeta del dashboard, y el tablero de Telegram, donde ya no llevan momio
+mínimo (14-nov-26).
 
 **El aviso "viene mal"** (`form_note`, v2.12.2, 13-nov-26): si en el partido juega un equipo grande de nombre que
 viene con 15 puntos o menos de sus últimos 30 en liga, el pick lo dice ("Juventus viene mal: 15 puntos de sus
@@ -29,7 +37,8 @@ viene con 15 puntos o menos de sus últimos 30 en liga, el pick lo dice ("Juvent
 
 El partido sin 🎯 dice por qué en palabras (`star_note`): "no hay favorito claro", "paga muy poco (-667)",
 "esta liga no tiene pago anticipado", "le faltan 5 titulares", "paga poco para lo que gana (-278)… vale la
-pena solo si PlayDoit lo paga a -260 o mejor".
+pena solo si PlayDoit lo paga a -260 o mejor", "no está entre los 4 grandes de su liga", "no viene ganando
+como grande: lleva 12 puntos de sus últimos 30".
 
 **Los parlays** (`src/models/program_parlays.py`, tabla `program_parlays`):
 
@@ -435,6 +444,35 @@ Lo que eligió el dueño (1b, 2c, 3a, 4a):
     no llegan al mínimo dejan dinero más allá del azar (z ≥ 1.96) el veredicto es "en contra" y el weekly
     manda el Telegram una vez ("la regla del precio les quita el 🎯 a apuestas buenas. Conviene
     revisarla"); si pierden, "a favor". A ~16 partidos al mes, opina en unos seis meses.
+- **El nombre, 14-nov-2026 (v2.13.0).** El dueño, después de ver la calificación del programa ("arma las 4"):
+  el 🎯 solo para un grande de su liga que viene ganando. `decide` y `strong_leg` reciben el grupo de cada lado
+  (`groups`, de `big_names`: "good", "normal", "poor", "rest") y `name_off` deja sin 🎯 a todo lo que no sea
+  "good". El partido muestra su pick de siempre sin 🎯 y la nota dice por qué (`STAR_NOT_BIG`,
+  `STAR_NOT_GOOD`); el nombre va antes que el precio, para no prometer "vale si paga X" a un equipo que
+  tampoco sería 🎯 con buen precio. El parlay usa el mismo filtro (la pierna sigue siendo el 🎯 de su partido).
+  - **Por qué** (`audit/m29_rule_names.py`, ligas con pago anticipado, 2012-26, sobre la regla del precio):
+
+    | | 🎯 al año | Gana de cada 100 | Deja por cada 100 | Con pago anticipado | Por época |
+    |---|---|---|---|---|---|
+    | Regla de antes | 523 | 78 | +0.9 | +2.4 | +1.6, +0.3, +0.8 |
+    | Solo el grande que viene bien | 307 | 81 | +1.9 | +3.3 | +2.4, +1.4, +2.0 |
+    | Lo que la regla quita | 216 | 75 | −0.6 | +1.1 | +0.3, −1.1, −1.1 |
+
+    Lo que quita: sin gran nombre −1.9, grande normal +1.3 (pero −3.9 en 2023-26) y grande que viene mal
+    −1.4. La diferencia entre lo que deja y lo que quita es +2.5 (±1.3), con el mismo signo y tamaño en las
+    tres épocas (+2.1, +2.4, +3.1): es la evidencia más pareja que ha salido, sin ser concluyente (z 1.9).
+  - **En los partidos reales** (564 del 21-oct al 9-nov, repetidos con el código de producción,
+    `audit/m34_replay_names.py`, 0 inconsistencias): de 31 🎯 quedan 16 (15 ganados, +178 pesos apostando 50
+    a cada uno); los 15 que quita ganaron 11 (−26 pesos). Los dos grandes que venían mal (Stuttgart y
+    Villarreal, 12 puntos de 30) perdieron.
+  - **Lo que cuesta:** quedan 6 de cada 10 🎯 (unos 6 por semana) y el parlay del día, que pide 4, casi no se
+    arma (0 días de 20 en la repetición; con 3 serían 2). Bajar el mínimo del parlay del día a 3 es decisión
+    del dueño (pendiente).
+  - **Lo que se sigue midiendo:** `favourite_watch` cobra los cuatro grupos, con 🎯 o sin él, y los que la
+    regla deja sin 🎯 tienen veredicto propio (`names.verdict`): con 100 o más, si dejan dinero más allá del
+    azar el weekly avisa por Telegram que la regla conviene revisarla.
+  - Con esta regla Leipzig, Roma o el Manchester United de 2026 no son "grandes": no están entre los 4 que
+    más ganaban en su liga. Ampliar a los 6 primeros es una opción que se mediría antes.
 - **El parlay** (`src/models/program_parlays.py`, reemplaza al de "la apuesta más segura"):
   - piernas = esos favoritos (`strong_leg`), una por partido, marcadas `pa`;
   - **del día** (`kind` 'dia'): los más fuertes del día de México, de 4 a 6 (`DAY_MIN_LEGS`, `MAX_LEGS`);

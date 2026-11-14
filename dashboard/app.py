@@ -1272,7 +1272,7 @@ PAGE = """<!DOCTYPE html>
     <select id="ufam"><option value="">Todas las apuestas</option><option>Ganador</option><option>Goles</option><option>Ambos anotan</option><option>Córners</option><option>Tarjetas</option></select>
     <span class="small muted" style="margin-left:auto">De cada 100: <span style="color:var(--home)">■</span> gana el local <span style="color:var(--draw)">■</span> empate <span style="color:var(--away)">■</span> gana el visitante · barra gruesa: el programa · delgada: Pinnacle</span>
   </div>
-  <div class="small muted" style="margin:0 0 10px">🎯 = <b>apuesta recomendada</b>: un equipo muy favorito (según Pinnacle, la casa más precisa, gana 65 de cada 100 partidos así o más) que paga -500 o mejor en PlayDoit, en una liga con pago anticipado. Si gana menos de 70 de cada 100, solo cuando su momio llega al mínimo que se muestra: más barato, a la larga, se pierde. Los partidos sin 🎯 muestran lo que más le gusta al programa, solo para seguirlo, y dicen por qué no son 🎯.</div>
+  <div class="small muted" style="margin:0 0 10px">🎯 = <b>apuesta recomendada</b>: un equipo grande de su liga que viene ganando (20 puntos o más de sus últimos 30) y es muy favorito (según Pinnacle, la casa más precisa, gana 65 de cada 100 partidos así o más), que paga -500 o mejor en PlayDoit, en una liga con pago anticipado. Si gana menos de 70 de cada 100, solo cuando su momio llega al mínimo que se muestra: más barato, a la larga, se pierde. Los partidos sin 🎯 muestran lo que más le gusta al programa <b>solo para seguir el partido, no para apostar</b>, y dicen por qué no son 🎯.</div>
   <div id="uplist" class="muted">Cargando…</div>
 </div>
 

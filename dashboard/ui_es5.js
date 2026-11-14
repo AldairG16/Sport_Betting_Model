@@ -412,7 +412,7 @@ function whyTag(pk){
   if (!pk || pk.rule || !(pk.reason || pk.star_note)) return '';
   var txt = pk.star_note ? noteShort(pk.star_note) : shortWhy(pk.reason);
   if (pk.star_note && /^Poca historia/i.test(pk.reason || '')) txt += ' · ⚠️ pocos partidos de estos equipos';
-  return '<div class="muted small" title="' + esc(pk.star_note || pk.reason) + '">sin 🎯: ' + esc(txt) + '</div>';
+  return '<div class="muted small" title="Solo para seguir el partido, no para apostar. ' + esc(pk.star_note || pk.reason) + '">solo para seguir · sin 🎯: ' + esc(txt) + '</div>';
 }
 
 // ── Anteriores (desde septiembre) ──
@@ -798,7 +798,7 @@ function pxBlock(d){
 function renderParlay(){
   if (!_px) return;
   var i, h = '', today = mxday(), r = _px.rules;
-  el('xrule').innerHTML = '<b>Cómo se arma:</b> solo equipos muy favoritos (según Pinnacle ganan ' + Math.round(r.strong * 100) +
+  el('xrule').innerHTML = '<b>Cómo se arma:</b> solo equipos grandes de su liga que vienen ganando y son muy favoritos (según Pinnacle ganan ' + Math.round(r.strong * 100) +
     ' de cada 100 partidos así o más) que paguen ' + esc(r.min_odds_us) + ' o mejor' +
     (r.price_band ? ' (los de menos de ' + Math.round(r.price_band * 100) + ' de cada 100, solo si su momio llega al mínimo)' : '') +
     ', en ligas con pago anticipado ⚡ ' +

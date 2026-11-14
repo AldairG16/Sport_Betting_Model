@@ -43,7 +43,10 @@ def test_each_match_has_its_kickoff_its_pick_and_when_its_odds_are_from():
     assert "📋 <b>Partidos de hoy</b> · Viernes 30 oct" in text and "Actualizado 13:30" in text
     assert "<b>15:00</b> Arsenal vs Chelsea" in text and "🎯 Gana el local · mín. +120 · cuotas 13:00" in text
     assert "Milan &amp; Bologna" in text                                    # HTML escapado
-    assert "Ambos anotan · cuotas 28 oct 03:31" in text                     # cuotas del evento, de otro día
+    # lo que no es 🎯 dice "solo para seguir" y no lleva mínimo (14-nov-26): con un mínimo parecía recomendación
+    assert "Ambos anotan · solo para seguir · cuotas 28 oct 03:31" in text  # cuotas del evento, de otro día
+    assert "Ambos anotan · mín." not in text
+    assert "🎯 = para apostar, si PlayDoit paga el mínimo o más. Lo demás es solo para seguir el partido." in text
     assert "🎯 Ambos anotan" not in text                                    # no pasa la regla: sin 🎯
     assert "Sin pick · El programa ya no lo evalúa" in text
     assert "Ya Empezó" not in text and "Ya empezaron: 1" in text

@@ -192,6 +192,19 @@ STAR_NO_PRICE = ("No hay momio de PlayDoit para {team}: es muy favorito ({pct} d
                  "pero sin su momio no se sabe si paga lo suficiente")
 STAR_SHORT = ("{team} paga muy poco ({us}): es muy favorito ({pct} de cada 100 según Pinnacle), pero más "
               "corto que -500 casi no deja ganancia y no entra al bono del parlay")
+# 14-nov-26, el dueño ("arma las 4"): el 🎯 solo para un grande de su liga que viene ganando. En el
+# historial (ligas con pago anticipado, 2012-26, sobre la regla del precio) el grande que viene bien
+# (20+ puntos de sus últimos 30) dejó +1.9 por cada 100 (+2.4, +1.4 y +2.0 en las tres épocas; +3.3 con
+# pago anticipado); lo que esta regla quita, −0.6: sin gran nombre −1.9, grande normal +1.3 (pero −3.9
+# en 2023-26) y grande que viene mal −1.4. La diferencia, +2.5 (±1.3), con el mismo signo en las tres.
+# Quedan 6 de cada 10 🎯. Donde no hay ranking (Champions) o no se sabe cómo viene, la regla no aplica.
+STAR_NOT_BIG = ("{team} no está entre los 4 grandes de su liga: es muy favorito ({pct} de cada 100 según Pinnacle), "
+                "pero a la larga solo deja dinero el favorito que además es de los 4 que más han ganado en su liga "
+                "en las dos últimas temporadas y viene ganando")
+STAR_NOT_GOOD = ("{team} no viene ganando como grande: lleva {pts} puntos de sus últimos 30 en liga. Es muy favorito "
+                 "({pct} de cada 100 según Pinnacle), pero el 🎯 es solo para el grande que viene bien (20 puntos "
+                 "o más)")
+NAME_OFF = ("rest", "poor", "normal")       # grupos de big_names.group_of que no llevan 🎯
 STAR_LOW_PRICE = ("{team} paga poco para lo que gana ({us}): es muy favorito ({pct} de cada 100 según Pinnacle), "
                   "pero a ese precio, a la larga, se pierde. Vale la pena solo si PlayDoit lo paga a {min_us} o mejor")
 
@@ -476,7 +489,16 @@ def shown_pct(p: float, *cuts) -> str:
     return str(whole)
 
 
-def no_star_note(cs: list, league, weak: dict | None = None, teams=("el local", "el visitante")) -> str | None:
+def name_off(groups: dict | None, market) -> tuple | None:
+    """(grupo, puntos) si el favorito de ese mercado NO puede llevar 🎯 por su
+    nombre o por cómo viene (big_names.groups_of_match); None si puede o si
+    de ese lado no se sabe (ahí la regla no aplica)."""
+    g = (groups or {}).get(market)
+    return g if g and g[0] in NAME_OFF else None
+
+
+def no_star_note(cs: list, league, weak: dict | None = None, teams=("el local", "el visitante"),
+                 groups: dict | None = None) -> str | None:
     """Por qué el partido no tiene 🎯, dicho por su favorito y en palabras del
     dueño (6-nov-26). Revisa lo mismo que strong_favourite, en orden: que haya
     momios del ganador, que el favorito llegue a STRONG_FAV, la liga con pago
@@ -494,6 +516,10 @@ def no_star_note(cs: list, league, weak: dict | None = None, teams=("el local", 
         return STAR_NO_FAV.format(team=team, pct=pct)
     if str(league or "") not in PA_LEAGUES:
         return STAR_NO_PA.format(team=team, pct=pct)
+    off = name_off(groups, fav["market"])              # antes que el precio: con buen precio tampoco sería 🎯
+    if off:
+        return (STAR_NOT_BIG.format(team=team, pct=pct) if off[0] == "rest"
+                else STAR_NOT_GOOD.format(team=team, pct=pct, pts=off[1]))
     if not fav["playdoit_odds"]:
         return STAR_NO_PRICE.format(team=team, pct=pct)
     if fav["playdoit_odds"] < MIN_FAV_ODDS:
@@ -506,11 +532,14 @@ def no_star_note(cs: list, league, weak: dict | None = None, teams=("el local", 
     return (weak or {}).get(fav["market"])
 
 
-def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=None, paused=()) -> tuple:
+def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=None, paused=(),
+           groups=None) -> tuple:
     """(pick, motivo) para una fila de model_vs_sharp con los momios de ahora
     (u) y los de cuando se analizó (then_snap). bias: sesgo por lado aprendido.
     weak: los ganadores con la alineación debilitada (lineup_check). paused:
     regiones (side_bias.region_of) con el 🎯 en pausa por el filtro aprendido.
+    groups: el grupo de cada lado por su nombre y cómo viene (big_names);
+    v2.13.0: el favorito que no es un grande que viene bien no lleva 🎯.
     v2.9.0: el 🎯 es solo el favorito fuerte (strong_favourite); los demás
     picks se ven sin 🎯."""
     from src.models.side_bias import is_skipped, region_of
@@ -521,7 +550,7 @@ def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=N
         return None, NO_EDGE
     weak = weak or {}
     fav = strong_favourite(cs, r.get("league"))
-    if fav is not None and fav["market"] not in weak:
+    if fav is not None and fav["market"] not in weak and not name_off(groups, fav["market"]):
         return {**fav, "strong": True}, None
     pick, why = choose(cs, _market_then(r, then_snap, ratio), r.get("league"), _num(r.get("league_factor")) is not None,
                        weak)
@@ -532,7 +561,7 @@ def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=N
     if pick and why is None and region in paused:         # pasa la regla: se ve igual, sin 🎯
         why = REGION_PAUSED.format(region=REGION_NAMES.get(region, region))
     if pick and why is None:                              # v2.9.0: el 🎯 es solo del favorito fuerte
-        why = weak.get(fav["market"]) if fav is not None else NOT_STRONG
+        why = (weak.get(fav["market"]) or NOT_STRONG) if fav is not None else NOT_STRONG
     return pick, why
 
 
@@ -645,7 +674,8 @@ def _snap_before(idx: dict, key: str, kick, before) -> dict | None:
 
 
 def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame | None = None, ratio=None,
-                normalize=None, props_for=None, bias=None, lineups_for=None, paused=(), form_for=None) -> list:
+                normalize=None, props_for=None, bias=None, lineups_for=None, paused=(), form_for=None,
+                groups_for=None) -> list:
     """Función pura: el pick (o "sin pick" con su motivo) de cada partido de
     model_vs_sharp (la fila más reciente) con la última fila de
     upcoming_matches. snaps: odds_history, para los momios de cuando se
@@ -654,7 +684,9 @@ def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame |
     lineups_for(home, away, kickoff) → (weak, nota) de lineup_check.
     paused: regiones con el 🎯 en pausa (filter_learner.paused_regions).
     form_for(local, visitante, liga, nombres) → aviso de que un grande de nombre
-    viene mal (big_names.notes_for). No entra a decide: el pick no cambia."""
+    viene mal (big_names). No entra a decide: el pick no cambia.
+    groups_for(local, visitante, liga) → el grupo de cada lado por su nombre y
+    cómo viene (big_names.groups_of_match): ese sí decide el 🎯 (name_off)."""
     from src.models.side_bias import drop_phantoms
     up = {match_key(r.home_team_norm, r.away_team_norm, normalize): r for r in upcoming.itertuples(index=False)}
     idx = _snap_index(snaps if snaps is not None else pd.DataFrame(), normalize)
@@ -670,13 +702,14 @@ def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame |
         h, _, a = key.partition(" vs ")
         props = props_for(h, a, r.get("league"), r["match_date"]) if props_for else None
         weak, lineup = lineups_for(h, a, r["match_date"]) if lineups_for else ({}, None)
-        pk, why = decide(r, u, then, props, ratio, bias, weak, paused)
+        groups = groups_for(h, a, r.get("league")) if groups_for else None
+        pk, why = decide(r, u, then, props, ratio, bias, weak, paused, groups)
         note = form = None
         if pk and (why or form_for):
             from dashboard.display import team_name
             teams = (u.home_team, u.away_team) if u is not None else (team_name(h), team_name(a))
             if why:                            # sin 🎯: qué le falta al favorito (6-nov-26)
-                note = no_star_note(_candidates_of(r, u, props, ratio, bias), r.get("league"), weak, teams)
+                note = no_star_note(_candidates_of(r, u, props, ratio, bias), r.get("league"), weak, teams, groups)
             if form_for:                       # un grande de nombre que viene mal (13-nov-26): solo avisa
                 form = form_for(h, a, r.get("league"), teams)
         rows.append(_row(r, r["match_date"], f"{u.home_team} vs {u.away_team}" if u is not None else None, pk, why,
@@ -902,13 +935,14 @@ def snapshot_picks(hours: int = SNAPSHOT_HOURS, engine=None) -> int:
         now = pd.Timestamp.now(tz="UTC")
         snaps = pd.read_sql(text(_SNAPS_SQL), engine, params={"a": now.to_pydatetime(),
                                                                "b": (now + pd.Timedelta(hours=hours)).to_pydatetime()})
-        from src.models.big_names import notes_for
+        from src.models.big_names import picks_fns
         from src.models.filter_learner import paused_regions
+        form_for, groups_for = picks_fns(engine, normalize_team)
         leagues, teams = props_scope(mvs, normalize_team)
         rows = build_picks(mvs, up, snaps, _ratio(engine), normalize_team, _props_for(engine, leagues, teams),
                            load_bias(engine),
                            _lineups_for(engine, normalize_team), paused_regions(engine),
-                           form_for=notes_for(engine, normalize_team))
+                           form_for=form_for, groups_for=groups_for)
         early = started_early(engine, normalize_team, now)
         frozen = [r for r in rows if _row_key(r, normalize_team) in early]
         rows = [r for r in rows if _row_key(r, normalize_team) not in early]

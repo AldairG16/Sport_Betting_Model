@@ -90,7 +90,7 @@ def test_without_winner_odds_the_note_says_so():
 
 def test_every_short_part_fits_the_card_and_has_no_percent_jargon():
     for note in (PP.STAR_NO_ODDS, PP.STAR_NO_FAV, PP.STAR_NO_PA, PP.STAR_NO_PRICE, PP.STAR_SHORT, PP.STAR_LOW_PRICE,
-                 PP.NOT_STRONG):
+                 PP.STAR_NOT_BIG, PP.STAR_NOT_GOOD, PP.NOT_STRONG):
         short = note.split(":")[0].format(team="Borussia Dortmund", pct=74, us="-650")
         assert len(short) <= 75, short
         assert "%" not in note and "65%+" not in note
@@ -162,14 +162,14 @@ def test_cards_say_why_there_is_no_target_in_plain_words():
         lineupTag({label: 'x'}).replace(/<[^>]+>/g, ''),
         pxOdds(0.14), pxOdds(0.35)
       ]));""")
-    assert got[0] == "sin 🎯: no hay favorito claro"
-    assert got[1] == "sin 🎯: Paris Saint Germain paga muy poco (-650)"
-    assert got[2] == "sin 🎯: Rosenborg es muy favorito, pero esta liga no tiene pago anticipado"
-    assert got[3] == "sin 🎯: no era el muy favorito"                       # picks de antes de v2.9.2
-    assert got[4] == "sin 🎯: el programa no coincide con las casas"
-    assert got[5] == "sin 🎯: a Napoli le faltan 5 titulares"
-    assert got[6] == "sin 🎯: en América el programa viene perdiendo"
-    assert got[7] == "sin 🎯: no hay favorito claro · ⚠️ pocos partidos de estos equipos"
+    assert got[0] == "solo para seguir · sin 🎯: no hay favorito claro"
+    assert got[1] == "solo para seguir · sin 🎯: Paris Saint Germain paga muy poco (-650)"
+    assert got[2] == "solo para seguir · sin 🎯: Rosenborg es muy favorito, pero esta liga no tiene pago anticipado"
+    assert got[3] == "solo para seguir · sin 🎯: no era el muy favorito"                       # picks de antes de v2.9.2
+    assert got[4] == "solo para seguir · sin 🎯: el programa no coincide con las casas"
+    assert got[5] == "solo para seguir · sin 🎯: a Napoli le faltan 5 titulares"
+    assert got[6] == "solo para seguir · sin 🎯: en América el programa viene perdiendo"
+    assert got[7] == "solo para seguir · sin 🎯: no hay favorito claro · ⚠️ pocos partidos de estos equipos"
     assert got[8] == ""                                                        # 🎯: nada que explicar
     assert got[9] == "⏳ falta la alineación"
     assert got[10] == "más o menos 1 de cada 7 veces" and got[11] == "más o menos 1 de cada 3 veces"

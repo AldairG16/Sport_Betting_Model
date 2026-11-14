@@ -129,4 +129,4 @@ def test_the_live_snapshot_applies_the_learned_pause(monkeypatch):
 def test_the_telegram_board_shows_the_paused_pick_without_the_target():
     from src.models.today_board import pick_text
     r = {"label": "Más de 2.5 goles", "reason": PK.REGION_PAUSED.format(region="América")}
-    assert pick_text(r["label"], bool(r["label"]) and not r["reason"]) == "Más de 2.5 goles"
+    assert pick_text(r["label"], bool(r["label"]) and not r["reason"]) == "Más de 2.5 goles · solo para seguir"

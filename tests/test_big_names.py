@@ -171,6 +171,27 @@ def test_the_dashboard_shows_the_warning_with_or_without_target():
     assert app.count("form_note") == 2                                                 # las dos lecturas de picks la traen
 
 
+def test_the_pick_builder_reads_the_state_once_and_knows_each_side_s_group():
+    st = _state({"juve": 15, "napoli": 24, "inter": 17})                      # milan: grande, pero sin sus 10 partidos
+    lg = "soccer_italy_serie_a"
+    assert BN.groups_of_match(st, lg, "napoli", "lecce") == {"home_win": ("good", 24), "away_win": ("rest", None)}
+    assert BN.groups_of_match(st, lg, "juve", "inter") == {"home_win": ("poor", 15), "away_win": ("normal", 17)}
+    assert BN.groups_of_match(st, lg, "milan", "lecce") == {"away_win": ("rest", None)}   # de milan no se sabe: no aparece
+    assert BN.groups_of_match(st, "soccer_uefa_champs_league", "napoli", "juve") == {}     # sin ranking: la regla no aplica
+    assert BN.groups_of_match(None, lg, "napoli", "lecce") == {}
+    eng = FakeEngine(lambda sql, p: FakeResult(rows=[(json.dumps(st),)]) if "FROM model_state" in sql else FakeResult())
+    form_for, groups_for = BN.picks_fns(eng)
+    assert len([q for q, _ in eng.executed if "FROM model_state" in q]) == 1               # una sola lectura
+    assert groups_for("napoli", "lecce", lg)["home_win"] == ("good", 24)
+    assert form_for("juve", "lecce", lg, ("Juventus", "Lecce")).startswith("Juventus viene mal: 15")
+    # de punta a punta: el mismo partido, 🎯 si Napoli viene bien y sin 🎯 (con su nota) si no es un grande
+    mvs, up = pd.DataFrame([_mvs()]), pd.DataFrame([_up()])
+    star, = PP.build_picks(mvs, up, groups_for=groups_for)
+    assert star["reason"] is None and star["star_note"] is None and star["label"] == "Gana el local"
+    off, = PP.build_picks(mvs, up, groups_for=lambda h, a, league: {"home_win": ("rest", None)})
+    assert off["market"] and off["reason"] and off["star_note"].startswith("Napoli no está entre los 4 grandes de su liga:")
+
+
 # ─── cuándo se calcula y quién vigila que siga calculándose ─────────────────
 
 def test_the_ranking_is_rebuilt_weekly_and_the_form_every_run(monkeypatch):
@@ -231,11 +252,34 @@ def test_the_weekly_watch_measures_each_group_without_deciding_anything():
     plain = FW.evaluate([{k: v for k, v in r.items() if k != "name"} for r in rows], ("liga_pa",), NOW)
     assert st["verdict"] == plain["verdict"] and not FW.changed(plain, st)             # medir no cambia el veredicto
     text = FW.format_report(st)
-    assert ("En observación, el nombre y cómo viene (muy favoritos): los grandes de nombre que venían mal ganaron 65 de "
-            "cada 100 y Pinnacle decía 75, en 40 partidos; los que venían bien ganaron 82 de cada 100 y Pinnacle decía "
-            "75, en 200 partidos; los favoritos sin gran nombre ganaron 70 de cada 100 y Pinnacle decía 75, en 60 "
-            "partidos (en el historial ganan 0.8, 3.9 y 0.1 más de cada 100)") in text
-    assert "el nombre y cómo viene" not in FW.format_report(plain)                    # sin datos, sin renglón
+    assert ("El nombre y cómo viene (muy favoritos; desde el 14-nov el 🎯 es solo para el grande que viene bien): los "
+            "grandes de nombre que venían mal ganaron 65 de cada 100 y Pinnacle decía 75, en 40 partidos; los que "
+            "venían bien ganaron 82 de cada 100 y Pinnacle decía 75, en 200 partidos; los favoritos sin gran nombre "
+            "ganaron 70 de cada 100 y Pinnacle decía 75, en 60 partidos (en el historial ganan 0.8, 3.9 y 0.1 más de "
+            "cada 100)") in text
+    assert "El nombre y cómo viene" not in FW.format_report(plain)                    # sin datos, sin renglón
+    assert st["names"]["verdict"] == "insuficiente" and "La regla del nombre" not in text   # sin momios no opina
+
+
+def test_the_name_rule_has_its_own_verdict_and_the_owner_hears_if_it_stops_holding():
+    """14-nov-26: la regla quita el 🎯 al favorito que no es un grande que viene bien. Si los que se quedan sin
+    🎯 empiezan a dejar dinero, el weekly lo dice (lo mismo que con la regla del precio)."""
+    def favs(n, wins, name, odds=1.36):
+        return [{"p": 0.72, "won": i < wins, "league": "liga_pa", "lead": None, "name": name, "odds": odds} for i in range(n)]
+    base = favs(600, 510, "good")                                    # el veredicto general, igual en todos: a favor
+    few = FW.evaluate(base + favs(20, 18, "rest"), ("liga_pa",), NOW)
+    assert few["names"]["verdict"] == "insuficiente" and few["names"]["off"]["n"] == 20
+    good = FW.evaluate(base + favs(90, 76, "rest") + favs(60, 50, "normal"), ("liga_pa",), NOW)   # 84 de cada 100 a -278
+    assert good["names"]["off"]["n"] == 150 and good["names"]["verdict"] == "en contra"
+    assert FW.changed(few, good) and FW.changed(None, good) and not FW.changed(good, good)
+    assert ("La regla del nombre: los muy favoritos que no son un grande que viene bien están dejando dinero: la "
+            "regla del nombre les quita el 🎯 a apuestas buenas. Conviene revisarla.") in FW.format_report(good)
+    bad = FW.evaluate(base + favs(150, 96, "poor"), ("liga_pa",), NOW)                 # 64 de cada 100: pierden
+    assert bad["names"]["verdict"] == "a favor" and FW.changed(few, bad) and not FW.changed(None, bad)
+    flat = FW.evaluate(base + favs(150, 110, "rest"), ("liga_pa",), NOW)
+    assert flat["names"]["verdict"] == "sin evidencia" and not FW.changed(few, flat) and FW.changed(good, flat)
+    assert good["names"]["good"]["n"] == 600                                           # el grande que viene bien no entra a esa cuenta
+    assert FW.NAMES_OFF == PP.NAME_OFF                                                # la misma lista que usa la regla
 
 
 def _hist(date, home, away, hg, ag, season, odds=(2.0, 3.4, 3.8), league="soccer_epl"):
