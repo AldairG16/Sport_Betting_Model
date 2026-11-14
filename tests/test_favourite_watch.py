@@ -219,9 +219,9 @@ def test_the_rows_come_from_every_analysed_favourite_with_its_result(monkeypatch
     assert seen["history"] == {"s": "2026-04-30", "l0": "liga_pa"}             # 200 días antes del primer partido
     assert seen["prices"] == {"d": F.WINDOW_DAYS + 2, "l0": "liga_pa"}
     assert rows == [{"p": 0.72, "won": True, "league": "liga_pa", "lead": None, "odds": 1.36, "pays": True,
-                     "away": False, "name": "good", "luck": 2.0},              # a: +2 por partido; b: 0. 30 puntos de 30
+                     "away": False, "name": "good", "wide": False, "luck": 2.0},   # a: +2 por partido; b: 0. 30 de 30
                     {"p": 0.68, "won": False, "league": "liga_pa", "lead": 2, "odds": 1.38, "pays": False,
-                     "away": True, "name": "rest", "luck": None}]
+                     "away": True, "name": "rest", "wide": False, "luck": None}]
 
 
 def test_the_weekly_runs_it_and_the_owner_hears_only_when_the_verdict_changes(monkeypatch):

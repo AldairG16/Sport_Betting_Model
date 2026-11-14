@@ -46,7 +46,12 @@ def test_each_match_has_its_kickoff_its_pick_and_when_its_odds_are_from():
     # lo que no es 🎯 dice "solo para seguir" y no lleva mínimo (14-nov-26): con un mínimo parecía recomendación
     assert "Ambos anotan · solo para seguir · cuotas 28 oct 03:31" in text  # cuotas del evento, de otro día
     assert "Ambos anotan · mín." not in text
-    assert "🎯 = para apostar, si PlayDoit paga el mínimo o más. Lo demás es solo para seguir el partido." in text
+    assert ("🎯 = para apostar, si PlayDoit paga el mínimo o más. ⭐ = de los más firmes (un grande de su liga que "
+            "viene ganando). Lo demás es solo para seguir el partido.") in text
+    firm = dict(rows[0], form_note="⭐ Arsenal es de los más firmes: es de los 4 grandes de su liga y viene ganando")
+    assert "🎯 Gana el local · mín. +120 ⭐ · cuotas" in "\n".join(TB.board_texts([firm], NOW, MX))
+    warned = dict(rows[0], form_note="Chelsea viene mal: 12 puntos de sus últimos 30 en liga. x")   # un aviso no es ⭐
+    assert "⭐ · cuotas" not in "\n".join(TB.board_texts([warned], NOW, MX))
     assert "🎯 Ambos anotan" not in text                                    # no pasa la regla: sin 🎯
     assert "Sin pick · El programa ya no lo evalúa" in text
     assert "Ya Empezó" not in text and "Ya empezaron: 1" in text

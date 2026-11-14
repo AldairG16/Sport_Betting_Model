@@ -192,19 +192,23 @@ STAR_NO_PRICE = ("No hay momio de PlayDoit para {team}: es muy favorito ({pct} d
                  "pero sin su momio no se sabe si paga lo suficiente")
 STAR_SHORT = ("{team} paga muy poco ({us}): es muy favorito ({pct} de cada 100 según Pinnacle), pero más "
               "corto que -500 casi no deja ganancia y no entra al bono del parlay")
-# 14-nov-26, el dueño ("arma las 4"): el 🎯 solo para un grande de su liga que viene ganando. En el
-# historial (ligas con pago anticipado, 2012-26, sobre la regla del precio) el grande que viene bien
-# (20+ puntos de sus últimos 30) dejó +1.9 por cada 100 (+2.4, +1.4 y +2.0 en las tres épocas; +3.3 con
-# pago anticipado); lo que esta regla quita, −0.6: sin gran nombre −1.9, grande normal +1.3 (pero −3.9
-# en 2023-26) y grande que viene mal −1.4. La diferencia, +2.5 (±1.3), con el mismo signo en las tres.
-# Quedan 6 de cada 10 🎯. Donde no hay ranking (Champions) o no se sabe cómo viene, la regla no aplica.
-STAR_NOT_BIG = ("{team} no está entre los 4 grandes de su liga: es muy favorito ({pct} de cada 100 según Pinnacle), "
-                "pero a la larga solo deja dinero el favorito que además es de los 4 que más han ganado en su liga "
-                "en las dos últimas temporadas y viene ganando")
-STAR_NOT_GOOD = ("{team} no viene ganando como grande: lleva {pts} puntos de sus últimos 30 en liga. Es muy favorito "
-                 "({pct} de cada 100 según Pinnacle), pero el 🎯 es solo para el grande que viene bien (20 puntos "
-                 "o más)")
-NAME_OFF = ("rest", "poor", "normal")       # grupos de big_names.group_of que no llevan 🎯
+# 14-nov-26 (v2.14.0), el dueño, después de ver que la regla del nombre dejaba 6 de cada 10 🎯: "no quiero que
+# esto vaya dando menos por estricto… quiero tener más y que se ganen también". Eligió (1):
+#  - el nombre ya no QUITA el 🎯: es una marca. El grande de su liga que viene ganando lleva ⭐ ("de los más
+#    firmes": gana 81 de cada 100 contra 75 del resto de los favoritos). El pick es el mismo con marca o sin ella.
+#  - el 🎯 se amplía al favorito de WIDE_FAV o más en las ligas de Europa y Asia sin pago anticipado que tienen
+#    historial (WIDE_LEAGUES). Ahí gana 79 de cada 100 (Europa) y 83 (Asia), pero casi no deja (+0.1 y +0.6 por
+#    cada 100): más picks con el mismo acierto, no más margen. América queda fuera (76 de cada 100 y −1.3).
+# En el historial: de 13 a 16-17 🎯 por semana, 79 de cada 100, +0.7 por cada 100 (positivo en las tres épocas).
+WIDE_LEAGUES = ("soccer_efl_champ", "soccer_england_league1", "soccer_england_league2", "soccer_france_ligue_two",
+                "soccer_germany_bundesliga2", "soccer_italy_serie_b", "soccer_spain_segunda_division", "soccer_spl",
+                "soccer_norway_eliteserien", "soccer_sweden_allsvenskan", "soccer_japan_j_league",
+                "soccer_china_superleague")
+WIDE_FAV = 0.70               # sin pago anticipado no hay con qué pagar al favorito de 65 a 70
+STAR_WIDE_SHORT = ("{team} no llega a muy favorito para esta liga: gana {pct} de cada 100 según Pinnacle y, como "
+                   "aquí no hay pago anticipado, el 🎯 pide 70 o más")
+FIRM_NOTE = ("⭐ {team} es de los más firmes: es de los 4 grandes de su liga y viene ganando ({pts} puntos de sus "
+             "últimos 30). Los favoritos así ganan 81 de cada 100")
 STAR_LOW_PRICE = ("{team} paga poco para lo que gana ({us}): es muy favorito ({pct} de cada 100 según Pinnacle), "
                   "pero a ese precio, a la larga, se pierde. Vale la pena solo si PlayDoit lo paga a {min_us} o mejor")
 
@@ -462,17 +466,23 @@ def reaches_minimum(c: dict) -> bool:
 
 
 def strong_favourite(cs: list, league) -> dict | None:
-    """El favorito fuerte de un partido (v2.9.0): el ganador con STRONG_FAV o
-    más en Pinnacle sin margen, en una liga con pago anticipado, con momio de
-    PlayDoit de MIN_FAV_ODDS o más. Por debajo de PRICE_BAND (12-nov-26),
-    además, su momio estimado tiene que llegar al mínimo. None si no hay."""
+    """El favorito fuerte de un partido: el ganador con momio de PlayDoit de
+    MIN_FAV_ODDS o más y
+    - en una liga con pago anticipado, STRONG_FAV o más en Pinnacle sin margen
+      (v2.9.0); por debajo de PRICE_BAND, además, su momio estimado tiene que
+      llegar al mínimo (12-nov-26);
+    - en una liga de WIDE_LEAGUES (sin pago anticipado, v2.14.0), WIDE_FAV o más.
+    None si no hay."""
     from src.models.early_payout import PA_LEAGUES
-    if str(league or "") not in PA_LEAGUES:
+    lg = str(league or "")
+    wide = lg in WIDE_LEAGUES and lg not in PA_LEAGUES
+    if lg not in PA_LEAGUES and not wide:
         return None
+    cut = WIDE_FAV if wide else STRONG_FAV
     fav = [c for c in cs or [] if c["market"] in ("home_win", "away_win") and c["market_prob"] is not None
-           and c["market_prob"] >= STRONG_FAV and c["playdoit_odds"] and c["playdoit_odds"] >= MIN_FAV_ODDS]
+           and c["market_prob"] >= cut and c["playdoit_odds"] and c["playdoit_odds"] >= MIN_FAV_ODDS]
     best = max(fav, key=lambda c: c["market_prob"]) if fav else None
-    if best is not None and best["market_prob"] < PRICE_BAND and not reaches_minimum(best):
+    if best is not None and not wide and best["market_prob"] < PRICE_BAND and not reaches_minimum(best):
         return None
     return best
 
@@ -489,16 +499,15 @@ def shown_pct(p: float, *cuts) -> str:
     return str(whole)
 
 
-def name_off(groups: dict | None, market) -> tuple | None:
-    """(grupo, puntos) si el favorito de ese mercado NO puede llevar 🎯 por su
-    nombre o por cómo viene (big_names.groups_of_match); None si puede o si
-    de ese lado no se sabe (ahí la regla no aplica)."""
+def firm_note(groups: dict | None, market, team) -> str | None:
+    """La marca ⭐ del 🎯 (v2.14.0): su equipo es de los 4 grandes de su liga y
+    viene ganando (big_names.groups_of_match: grupo "good"). None si no. Es una
+    marca: no decide nada."""
     g = (groups or {}).get(market)
-    return g if g and g[0] in NAME_OFF else None
+    return FIRM_NOTE.format(team=team, pts=g[1]) if g and g[0] == "good" else None
 
 
-def no_star_note(cs: list, league, weak: dict | None = None, teams=("el local", "el visitante"),
-                 groups: dict | None = None) -> str | None:
+def no_star_note(cs: list, league, weak: dict | None = None, teams=("el local", "el visitante")) -> str | None:
     """Por qué el partido no tiene 🎯, dicho por su favorito y en palabras del
     dueño (6-nov-26). Revisa lo mismo que strong_favourite, en orden: que haya
     momios del ganador, que el favorito llegue a STRONG_FAV, la liga con pago
@@ -514,32 +523,28 @@ def no_star_note(cs: list, league, weak: dict | None = None, teams=("el local", 
     pct = shown_pct(fav["market_prob"], STRONG_FAV, PRICE_BAND)
     if fav["market_prob"] < STRONG_FAV:
         return STAR_NO_FAV.format(team=team, pct=pct)
-    if str(league or "") not in PA_LEAGUES:
+    wide = str(league or "") in WIDE_LEAGUES and str(league or "") not in PA_LEAGUES
+    if wide and fav["market_prob"] < WIDE_FAV:           # liga sin pago anticipado: pide 70 o más (v2.14.0)
+        return STAR_WIDE_SHORT.format(team=team, pct=shown_pct(fav["market_prob"], WIDE_FAV))
+    if str(league or "") not in PA_LEAGUES and not wide:
         return STAR_NO_PA.format(team=team, pct=pct)
-    off = name_off(groups, fav["market"])              # antes que el precio: con buen precio tampoco sería 🎯
-    if off:
-        return (STAR_NOT_BIG.format(team=team, pct=pct) if off[0] == "rest"
-                else STAR_NOT_GOOD.format(team=team, pct=pct, pts=off[1]))
     if not fav["playdoit_odds"]:
         return STAR_NO_PRICE.format(team=team, pct=pct)
     if fav["playdoit_odds"] < MIN_FAV_ODDS:
         from src.utils.min_odds import fmt_american
         return STAR_SHORT.format(team=team, pct=pct, us=fmt_american(to_american(fav["playdoit_odds"])))
-    if fav["market_prob"] < PRICE_BAND and not reaches_minimum(fav):
+    if not wide and fav["market_prob"] < PRICE_BAND and not reaches_minimum(fav):
         from src.utils.min_odds import fmt_american
         return STAR_LOW_PRICE.format(team=team, pct=pct, us=fmt_american(to_american(fav["playdoit_odds"])),
                                      min_us=fmt_american(favourite_min_us(fav["market_prob"])))
     return (weak or {}).get(fav["market"])
 
 
-def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=None, paused=(),
-           groups=None) -> tuple:
+def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=None, paused=()) -> tuple:
     """(pick, motivo) para una fila de model_vs_sharp con los momios de ahora
     (u) y los de cuando se analizó (then_snap). bias: sesgo por lado aprendido.
     weak: los ganadores con la alineación debilitada (lineup_check). paused:
     regiones (side_bias.region_of) con el 🎯 en pausa por el filtro aprendido.
-    groups: el grupo de cada lado por su nombre y cómo viene (big_names);
-    v2.13.0: el favorito que no es un grande que viene bien no lleva 🎯.
     v2.9.0: el 🎯 es solo el favorito fuerte (strong_favourite); los demás
     picks se ven sin 🎯."""
     from src.models.side_bias import is_skipped, region_of
@@ -550,7 +555,7 @@ def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=N
         return None, NO_EDGE
     weak = weak or {}
     fav = strong_favourite(cs, r.get("league"))
-    if fav is not None and fav["market"] not in weak and not name_off(groups, fav["market"]):
+    if fav is not None and fav["market"] not in weak:
         return {**fav, "strong": True}, None
     pick, why = choose(cs, _market_then(r, then_snap, ratio), r.get("league"), _num(r.get("league_factor")) is not None,
                        weak)
@@ -686,7 +691,9 @@ def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame |
     form_for(local, visitante, liga, nombres) → aviso de que un grande de nombre
     viene mal (big_names). No entra a decide: el pick no cambia.
     groups_for(local, visitante, liga) → el grupo de cada lado por su nombre y
-    cómo viene (big_names.groups_of_match): ese sí decide el 🎯 (name_off)."""
+    cómo viene (big_names.groups_of_match): de ahí sale la marca ⭐ del 🎯
+    (firm_note). Tampoco decide: v2.13.0 quitaba el 🎯 con esto y el dueño no
+    quiso menos picks (v2.14.0)."""
     from src.models.side_bias import drop_phantoms
     up = {match_key(r.home_team_norm, r.away_team_norm, normalize): r for r in upcoming.itertuples(index=False)}
     idx = _snap_index(snaps if snaps is not None else pd.DataFrame(), normalize)
@@ -702,16 +709,19 @@ def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame |
         h, _, a = key.partition(" vs ")
         props = props_for(h, a, r.get("league"), r["match_date"]) if props_for else None
         weak, lineup = lineups_for(h, a, r["match_date"]) if lineups_for else ({}, None)
-        groups = groups_for(h, a, r.get("league")) if groups_for else None
-        pk, why = decide(r, u, then, props, ratio, bias, weak, paused, groups)
+        pk, why = decide(r, u, then, props, ratio, bias, weak, paused)
         note = form = None
-        if pk and (why or form_for):
+        if pk and (why or form_for or groups_for):
             from dashboard.display import team_name
             teams = (u.home_team, u.away_team) if u is not None else (team_name(h), team_name(a))
             if why:                            # sin 🎯: qué le falta al favorito (6-nov-26)
-                note = no_star_note(_candidates_of(r, u, props, ratio, bias), r.get("league"), weak, teams, groups)
+                note = no_star_note(_candidates_of(r, u, props, ratio, bias), r.get("league"), weak, teams)
             if form_for:                       # un grande de nombre que viene mal (13-nov-26): solo avisa
                 form = form_for(h, a, r.get("league"), teams)
+            if groups_for and not why:         # el 🎯 de un grande que viene ganando lleva ⭐ (v2.14.0): solo marca
+                firm = firm_note(groups_for(h, a, r.get("league")),
+                                 pk["market"], teams[0] if pk["market"] == "home_win" else teams[1])
+                form = " · ".join(x for x in (firm, form) if x) or None
         rows.append(_row(r, r["match_date"], f"{u.home_team} vs {u.away_team}" if u is not None else None, pk, why,
                          lineup=lineup, star_note=note, form_note=form))
     return rows

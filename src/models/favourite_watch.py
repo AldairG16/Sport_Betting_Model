@@ -42,12 +42,14 @@ historial (137 mil partidos, tres épocas):
    negra" de equipos grandes que vienen en decadencia. En el historial el
    grande que viene bien gana 3.9 más de cada 100 de lo que dice Pinnacle, el
    que viene mal 0.8 y el favorito sin gran nombre 0.1; pero lo del que viene
-   mal salió de 2012-23 y en 2023-26 fue al revés. Desde el 14-nov-26 el
-   nombre SÍ decide (el dueño: "arma las 4"; program_picks.name_off): el 🎯 es
-   solo para el grande que viene bien. Aquí se siguen midiendo los cuatro
-   grupos, con 🎯 o sin él, y los que la regla deja sin 🎯 tienen veredicto
-   propio (names.verdict): si con 100 partidos o más dejan dinero, la regla
-   les quita el 🎯 a apuestas buenas y el weekly lo avisa, una vez.
+   mal salió de 2012-23 y en 2023-26 fue al revés. El nombre no decide: el
+   🎯 de un grande que viene ganando lleva una marca (⭐), y aquí se miden los
+   cuatro grupos con los partidos nuevos.
+6. Las ligas nuevas (14-nov-26, program_picks.WIDE_LEAGUES): el dueño no quiso
+   menos picks y el 🎯 se amplió al favorito de 70+ en 12 ligas de Europa y
+   Asia sin pago anticipado. En el historial ganan 79 y 83 de cada 100 pero
+   casi no dejan (+0.1 y +0.6). Tienen veredicto propio (wide.verdict): si
+   con 100 partidos o más PIERDEN dinero más allá del azar, el weekly avisa.
 
 No cambia ningún pick: mide y avisa.
 """
@@ -64,6 +66,7 @@ log = get_logger(__name__)
 STATE_KEY = "favourite_watch"
 WINDOW_DAYS = 120
 STRONG = 0.65                               # el corte del 🎯 (program_picks.STRONG_FAV)
+WIDE_P = 0.70                               # el corte del 🎯 en las ligas nuevas (program_picks.WIDE_FAV)
 BANDS = (("65-70", 0.65, 0.70), ("70+", 0.70, 1.01))
 HISTORY = {"65-70": 1.3, "70+": 3.6}        # puntos de más en el historial (r2_fav60, 11-nov-26)
 PA_HISTORY = 1.3                            # de cada 100 apuestas al favorito, las que rescata el pago anticipado
@@ -82,12 +85,12 @@ LUCK_CUT = 0.33                             # favorito menos rival, en goles por
 LUCK_HISTORY = {"low": 4.8, "high": 2.6}    # 70+: puntos de más sin suerte y con suerte (m5, 11-nov-26)
 # puntos de más del muy favorito según su nombre y cómo viene (m20, 13-nov-26; big_names.group_of)
 NAMES_HISTORY = {"poor": 0.8, "normal": 2.8, "good": 3.9, "rest": 0.1}
-NAMES_OFF = ("rest", "poor", "normal")      # los grupos que la regla del nombre deja sin 🎯 (program_picks.NAME_OFF)
-NAMES_VERDICTS = {"en contra": "los muy favoritos que no son un grande que viene bien están dejando dinero: la regla "
-                               "del nombre les quita el 🎯 a apuestas buenas",
-                  "a favor": "los muy favoritos que no son un grande que viene bien pierden, como en el historial",
-                  "sin evidencia": "con los que no son un grande que viene bien todavía no se distingue del azar",
-                  "insuficiente": "los que no son un grande que viene bien todavía son pocos para opinar"}
+WIDE_HISTORY = {"europa": 79, "asia": 83}   # de cada 100 que gana el favorito de 70+ en las ligas nuevas (m36)
+WIDE_VERDICTS = {"en contra": "los favoritos de las ligas nuevas están PERDIENDO dinero: la ampliación del 🎯 a esas "
+                              "ligas no está funcionando",
+                 "a favor": "los favoritos de las ligas nuevas están dejando dinero",
+                 "sin evidencia": "con las ligas nuevas todavía no se distingue del azar",
+                 "insuficiente": "las ligas nuevas todavía tienen pocos partidos para opinar"}
 VERDICTS = {"en contra": "ganan MENOS de lo que dice Pinnacle: la base del 🎯 dejó de cumplirse",
             "a favor": "ganan más de lo que dice Pinnacle, como en el historial",
             "sin evidencia": "van como dice Pinnacle; todavía no se distingue del azar",
@@ -171,6 +174,15 @@ def luck_of(idx: dict, league, team, before, normalize=None) -> float | None:
     return sum(last) / len(last) if len(last) >= LUCK_MIN else None
 
 
+def gain_verdict(money: dict) -> str:
+    """El veredicto de una regla que AGREGA 🎯 (las ligas nuevas), con lo que
+    dejaron (_money): "en contra" si pierden dinero más allá del azar, "a
+    favor" si lo dejan. Al revés que price_verdict, que juzga lo que se quitó."""
+    if money.get("n", 0) < MIN_N:
+        return "insuficiente"
+    return "en contra" if money["z"] <= -Z else "a favor" if money["z"] >= Z else "sin evidencia"
+
+
 def _verdict(s: dict) -> str:
     if s.get("n", 0) < MIN_N:
         return "insuficiente"
@@ -203,10 +215,11 @@ def evaluate(rows: list, pa_leagues=None, now=None) -> dict:
                      "away_low": _stats([r for r in lucky if r.get("away") and r["luck"] <= LUCK_CUT]),
                      "away_high": _stats([r for r in lucky if r.get("away") and r["luck"] > LUCK_CUT])},
             # los grandes de nombre según cómo vienen (13-nov-26): en observación, nadie decide con esto
-            "names": (lambda off: {**{g: _stats([r for r in pa if r.get("name") == g])
-                                        for g in ("poor", "normal", "good", "rest")},
-                                     "off": off, "verdict": price_verdict(off)})(
-                _money([r for r in pa if r.get("name") in NAMES_OFF and r.get("odds")])),
+            "names": {g: _stats([r for r in pa if r.get("name") == g]) for g in ("poor", "normal", "good", "rest")},
+            # las ligas nuevas del 🎯 (14-nov-26): favoritos de 70+ sin pago anticipado, con veredicto propio
+            "wide": (lambda rows: (lambda money: {**_stats(rows), "money": money, "verdict": gain_verdict(money)})(
+                _money([r for r in rows if r.get("odds")])))(
+                [r for r in rest if r.get("wide") and r["p"] >= WIDE_P]),
             "early_payout": {"n": len(known), "rescued": rescued,
                              "per_100": round(100 * rescued / len(known), 1) if known else None},
             "policy": {"min_n": MIN_N, "z": Z, "history": HISTORY, "pa_history": PA_HISTORY,
@@ -221,11 +234,11 @@ def changed(previous: dict | None, state: dict) -> bool:
     before = (previous or {}).get("verdict")
     main = state.get("verdict") == "en contra" if before is None else before != state.get("verdict")
 
-    def moved(key):                    # el veredicto de una regla (precio, nombre)
+    def moved(key):                    # el veredicto de una regla (precio, ligas nuevas)
         was = ((previous or {}).get(key) or {}).get("verdict")
         now = (state.get(key) or {}).get("verdict")
         return now != was and bool({was, now} & {"en contra", "a favor"}) and not (was is None and now != "en contra")
-    return main or moved("price") or moved("names")
+    return main or moved("price") or moved("wide")
 
 
 def _line(name: str, s: dict, hist: float | None) -> str:
@@ -283,14 +296,22 @@ def _extra_lines(state: dict) -> list:
                                                               ("good", "los que venían bien"),
                                                               ("rest", "los favoritos sin gran nombre"))
                  if (names.get(g) or {}).get("n")]
-        lines.append("• El nombre y cómo viene (muy favoritos; desde el 14-nov el 🎯 es solo para el grande que "
-                     "viene bien): " + "; ".join(parts)
+        lines.append("• En observación, el nombre y cómo viene (muy favoritos; el grande que viene bien lleva ⭐): "
+                     + "; ".join(parts)
                      + f" (en el historial ganan {NAMES_HISTORY['poor']:g}, {NAMES_HISTORY['good']:g} y "
                        f"{NAMES_HISTORY['rest']:g} más de cada 100)")
-        verdict = names.get("verdict")
-        if verdict in ("en contra", "a favor"):
-            lines.append(f"• La regla del nombre: {NAMES_VERDICTS[verdict]}."
-                         + (" Conviene revisarla." if verdict == "en contra" else ""))
+    wide = state.get("wide") or {}
+    if wide.get("n"):
+        money = wide.get("money") or {}
+        lines.append(f"• Las ligas nuevas (favoritos de 70 o más sin pago anticipado, con 🎯 desde el 14-nov): ganaron "
+                     f"{round(100 * wide['won'] / wide['n'])} de cada 100 y Pinnacle decía "
+                     f"{round(100 * wide['expected'] / wide['n'])}, en {wide['n']} partidos"
+                     + (f"; apostando 50 a cada uno: {_pesos(money['profit_50'])}" if money.get("n") else "")
+                     + f" (en el historial ganan {WIDE_HISTORY['europa']} de cada 100 en Europa y {WIDE_HISTORY['asia']} "
+                       f"en Asia, y quedan casi tablas)")
+        if wide.get("verdict") in ("en contra", "a favor"):
+            lines.append(f"• La ampliación del 🎯: {WIDE_VERDICTS[wide['verdict']]}."
+                         + (" Conviene revisarla." if wide["verdict"] == "en contra" else ""))
     return lines
 
 
@@ -418,8 +439,10 @@ def read_rows(engine=None) -> list:
     first = pd.to_datetime(favs["match_date"], utc=True).min()
     leads = EP.load_leads(engine, first - pd.Timedelta(days=1), normalize_team)
     from src.models.program_picks import _ratio
+    from src.models.program_picks import WIDE_LEAGUES
     pa_leagues = [x for x in favs["league"].unique() if x in EP.PA_LEAGUES]
-    prices, ratio = price_index(_read_prices(engine, pa_leagues), normalize_team), _ratio(engine)
+    wide_leagues = [x for x in favs["league"].unique() if x in WIDE_LEAGUES and x not in EP.PA_LEAGUES]
+    prices, ratio = price_index(_read_prices(engine, pa_leagues + wide_leagues), normalize_team), _ratio(engine)
     from src.models import big_names as BN
     history = _read_history(engine, first - pd.Timedelta(days=LUCK_DAYS), pa_leagues)
     luck, points = luck_index(history, normalize_team), BN.points_index(history, normalize_team)
@@ -442,6 +465,7 @@ def read_rows(engine=None) -> list:
         rows.append({"p": float(r["p"]), "won": plan[r["id"]] == "win", "league": r["league"],
                      "lead": EP.lead_of(leads, r["match"], r["match_date"], r["market"], normalize_team),
                      "odds": odds, "pays": pays, "away": r["market"] == "away_win", "name": BN.group_of(big, pts),
+                     "wide": r["league"] in wide_leagues,
                      "luck": round(mine - theirs, 3) if mine is not None and theirs is not None else None})
     return rows
 

@@ -21,10 +21,11 @@ todavía puede ser azar (z −1.6). Y una lista POR NOMBRE habría señalado mal
 Chelsea ganó 20 de 26 viniendo mal y Juventus 12 de 15; fallaron Dortmund (11
 de 23) y Liverpool (7 de 16). Apostar en contra pierde (empate −14 a −22).
 
-El dueño eligió (2): **medir primero y avisar sin decidir**. Un día después
-(14-nov-26, "arma las 4") pidió además que el 🎯 se concentre en el grande que
-viene bien: esa regla vive en program_picks (name_off) y se alimenta de aquí
-(groups_of_match). El aviso "viene mal" sigue siendo solo un aviso. Aquí:
+El dueño eligió (2): **medir primero y avisar sin decidir**. El 14-nov-26 se
+probó además quitarle el 🎯 al favorito que no fuera un grande que viene bien
+(v2.13.0): dejaba 6 de cada 10 🎯 y el dueño no quiso menos picks. Desde
+v2.14.0 el nombre solo MARCA: el 🎯 de un grande que viene ganando lleva ⭐
+(program_picks.firm_note, con groups_of_match). Nada de aquí decide. Aquí:
 
 - "Grande de nombre" es una regla, no una lista a mano: los TOP_N equipos con
   más probabilidad media de ganar según Pinnacle en su liga en las REP_SEASONS

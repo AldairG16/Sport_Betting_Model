@@ -186,15 +186,16 @@ def winning_leagues(picks: pd.DataFrame, before=None) -> list:
     return sorted(out, key=lambda x: (-x["units"], -x["n"]))
 
 
-def strong_leg(r: dict, u, ratio=None, bias=None, weak=None, groups=None) -> dict | None:
+def strong_leg(r: dict, u, ratio=None, bias=None, weak=None) -> dict | None:
     """El favorito fuerte de un partido de model_vs_sharp con los momios de
     ahora (u): 65%+ en Pinnacle sin margen, liga con pago anticipado, −500 o
-    más largo (PP.strong_favourite), sin 4+ titulares fuera (weak) y, desde
-    v2.13.0, un grande de su liga que viene ganando (groups, PP.name_off)."""
+    más largo (PP.strong_favourite) y sin 4+ titulares fuera (weak). Solo en
+    las ligas con pago anticipado (LEAGUES): el 🎯 de una liga de
+    PP.WIDE_LEAGUES no es pierna."""
     if str(r.get("league") or "") not in LEAGUES:
         return None
     fav = PP.strong_favourite(PP._candidates_of(r, u, None, ratio, bias), r.get("league"))
-    if fav is None or fav["market"] in (weak or {}) or PP.name_off(groups, fav["market"]):
+    if fav is None or fav["market"] in (weak or {}):
         return None
     return fav
 
@@ -243,8 +244,7 @@ def group_parlays(found: list, exclude: dict | None = None, fixed_seq: dict | No
 
 
 def build_parlays(mvs: pd.DataFrame, upcoming: pd.DataFrame, ratio=None, normalize=None, bias=None,
-                  lineups_for=None, exclude: dict | None = None, fixed_seq: dict | None = None,
-                  groups_for=None) -> list:
+                  lineups_for=None, exclude: dict | None = None, fixed_seq: dict | None = None) -> list:
     """Función pura: los parlays con bono (group_parlays) de los partidos de
     model_vs_sharp que todavía no empiezan (la fila más reciente de cada uno)
     con sus momios de ahora (upcoming)."""
@@ -267,7 +267,7 @@ def build_parlays(mvs: pd.DataFrame, upcoming: pd.DataFrame, ratio=None, normali
             continue
         h, _, a = key.partition(" vs ")
         weak, lineup = lineups_for(h, a, r["match_date"]) if lineups_for else ({}, None)
-        leg = strong_leg(r, u, ratio, bias, weak, groups_for(h, a, r.get("league")) if groups_for else None)
+        leg = strong_leg(r, u, ratio, bias, weak)
         if not leg:
             continue
         team = u.home_team if leg["market"] == "home_win" else u.away_team
@@ -336,10 +336,8 @@ def snapshot_parlays(hours: int = PP.SNAPSHOT_HOURS, engine=None) -> int:
             up = pd.read_sql(text(PP._UPCOMING_SQL), engine, params={"h": hours})
             gone = {str(m).lower() for m in mvs["match"] if PP._row_key({"match": m}, normalize_team) in early}
             mvs = mvs[~mvs["match"].astype(str).str.lower().isin(gone)]
-            from src.models.big_names import picks_fns
             built = build_parlays(mvs, up, PP._ratio(engine), normalize_team, PP.load_bias(engine),
-                                  PP._lineups_for(engine, normalize_team), exclude, fixed_seq,
-                                  groups_for=picks_fns(engine, normalize_team)[1])
+                                  PP._lineups_for(engine, normalize_team), exclude, fixed_seq)
         built = [p for p in built if p["slot"] > lock and p["slot"] not in locked]
         rows = [leg for p in built for leg in p["legs"]]
         keep = sorted(s for s in locked if s > lock)
