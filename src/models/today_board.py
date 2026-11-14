@@ -79,12 +79,18 @@ def _star(r: dict) -> bool:
     return bool(r.get("label")) and not r.get("reason")
 
 
-def pick_text(label, star: bool, min_us=None, reason=None) -> str:
+def pick_text(label, star: bool, min_us=None, reason=None, follow: bool = True) -> str:
+    """El pick en una línea. El 🎯 lleva su momio mínimo; lo demás dice "solo
+    para seguir" y no lleva mínimo (14-nov-26: con un mínimo al lado parecía
+    una recomendación, y esos picks quedan tablas con las casas). follow=False
+    para nombrar el pick de antes en un cambio."""
     if not label:
         why = str(reason or "").split(":")[0].strip()
         return "Sin pick" + (f" · {why}" if why else "")
     from src.utils.min_odds import fmt_american
-    s = ("🎯 " if star else "") + label
+    if not star:
+        return label + (" · solo para seguir" if follow else "")
+    s = "🎯 " + label
     if min_us is not None and not pd.isna(min_us):
         s += f" · mín. {fmt_american(int(min_us))}"
     return s
@@ -108,7 +114,7 @@ def match_lines(r: dict, now: datetime, tz) -> list:
              f" · cuotas {_when(odds_time(r), now, tz)}"
              + (" · alineación ✓" if str(r.get("lineup") or "").startswith("confirmada") else "")]
     if recent:
-        before = pick_text(r.get("prev_label"), bool(r.get("prev_star")))
+        before = pick_text(r.get("prev_label"), bool(r.get("prev_star")), follow=False)
         lines.append(f"   🔄 cambió {_when(changed, now, tz)} · antes: {html.escape(before)}")
     return lines
 
@@ -131,6 +137,8 @@ def board_texts(rows: list, now: datetime, tz) -> list:
         tail.append(f"<i>Ya empezaron: {started}</i>")
     if any("🔄" in b for b in blocks):
         tail.append("<i>🔄 = el pick cambió en las últimas 24 h</i>")
+    if blocks:
+        tail.append("<i>🎯 = para apostar, si PlayDoit paga el mínimo o más. Lo demás es solo para seguir el partido.</i>")
     chunks, cur = [], head
     for b in blocks:
         if len(cur) + len(b) + 2 > CHUNK_CHARS:

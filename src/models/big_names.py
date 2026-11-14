@@ -21,7 +21,10 @@ todavía puede ser azar (z −1.6). Y una lista POR NOMBRE habría señalado mal
 Chelsea ganó 20 de 26 viniendo mal y Juventus 12 de 15; fallaron Dortmund (11
 de 23) y Liverpool (7 de 16). Apostar en contra pierde (empate −14 a −22).
 
-El dueño eligió (2): **medir primero y avisar sin decidir**. Aquí:
+El dueño eligió (2): **medir primero y avisar sin decidir**. Un día después
+(14-nov-26, "arma las 4") pidió además que el 🎯 se concentre en el grande que
+viene bien: esa regla vive en program_picks (name_off) y se alimenta de aquí
+(groups_of_match). El aviso "viene mal" sigue siendo solo un aviso. Aquí:
 
 - "Grande de nombre" es una regla, no una lista a mano: los TOP_N equipos con
   más probabilidad media de ganar según Pinnacle en su liga en las REP_SEASONS
@@ -184,6 +187,49 @@ def form_note(state: dict | None, league, home, away, names=None, normalize=None
     return " · ".join(notes) or None
 
 
+def groups_of_match(state: dict | None, league, home, away, normalize=None) -> dict:
+    """{"home_win": (grupo, puntos), "away_win": (grupo, puntos)} con el grupo
+    de cada equipo (group_of). El lado del que no se sabe (liga sin ranking,
+    como la Champions, o un grande sin sus 10 partidos) no aparece: ahí la
+    regla del 🎯 por nombre no se aplica."""
+    form = ((state or {}).get("form") or {}).get(str(league or "")) or {}
+    norm = _norm(normalize)
+    out = {}
+    for market, team in (("home_win", home), ("away_win", away)):
+        big = is_big(state, league, team, normalize)
+        pts = form.get(norm(team)) if big else None
+        group = group_of(big, pts)
+        if group:
+            out[market] = (group, None if pts is None else int(pts))
+    return out
+
+
+def _read_state(engine):
+    """El estado guardado, leído con el engine que le pasan (como load_bias).
+    None si no se puede leer: lo dice en el log y el pick sale igual."""
+    import json
+    if engine is None:
+        from config.database import engine
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT value FROM model_state WHERE key = :k"), {"k": STATE_KEY}).first()
+        if row and row[0] is not None:
+            return json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
+    except Exception as e:
+        log.warning(f"⚠️  Grandes de nombre: no se pudo leer su estado ({type(e).__name__}): los picks salen sin "
+                    f"el aviso y sin la regla del nombre")
+    return None
+
+
+def picks_fns(engine=None, normalize=None) -> tuple:
+    """(form_for, groups_for) para armar los picks, con UNA lectura del estado:
+    form_for(local, visitante, liga, nombres) → el aviso "viene mal";
+    groups_for(local, visitante, liga) → el grupo de cada lado (groups_of_match)."""
+    state = _read_state(engine)
+    return (lambda home, away, league, names=None: form_note(state, league, home, away, names, normalize),
+            lambda home, away, league: groups_of_match(state, league, home, away, normalize))
+
+
 def load_big_names() -> dict:
     from src.utils.model_state import load_state
     return load_state(STATE_KEY) or {}
@@ -193,18 +239,7 @@ def notes_for(engine=None, normalize=None):
     """fn(local, visitante, liga, nombres) → aviso, con el estado guardado (una
     lectura). Si no se puede leer, no hay aviso y se dice en el log: el pick
     sale igual."""
-    import json
-    if engine is None:
-        from config.database import engine
-    state = None
-    try:
-        with engine.connect() as conn:
-            row = conn.execute(text("SELECT value FROM model_state WHERE key = :k"), {"k": STATE_KEY}).first()
-        if row and row[0] is not None:
-            state = json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
-    except Exception as e:
-        log.warning(f"⚠️  Avisos de grandes que vienen mal: no se pudo leer su estado ({type(e).__name__})")
-    return lambda home, away, league, names=None: form_note(state, league, home, away, names, normalize)
+    return picks_fns(engine, normalize)[0]
 
 
 # ─────────────────────────────────────────────────────────────────────
