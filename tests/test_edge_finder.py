@@ -40,6 +40,23 @@ def test_closing_prices_win_over_opening():
     assert r["max_home"] is None and r["pin_over25"] is None
 
 
+def test_the_betfair_exchange_closing_price_is_stored_next_to_pinnacle():
+    """14-nov-26: football-data dejó de publicar Pinnacle en 2026 y sí trae el cierre de Betfair Exchange
+    (BFEC*) desde 2024-25. Se guarda aparte: es la referencia cuando falta Pinnacle."""
+    df = _csv(BFEH=[1.70, 6.2], BFED=[4.1, 4.6], BFEA=[5.4, 1.52], BFECH=[1.66, 6.6], BFECD=[4.3, 4.7], BFECA=[5.5, 1.47],
+              AvgCH=[1.62, 6.0], AvgCD=[4.0, 4.4], AvgCA=[5.0, 1.45])
+    r = LO.parse_odds(df, "soccer_epl", 2026, "E0/2627")[0]
+    assert (r["bfe_home"], r["bfe_draw"], r["bfe_away"], r["bfe_closing"]) == (1.66, 4.3, 5.5, True)   # el de cierre
+    assert r["pin_home"] is None and r["avg_home"] == 1.62                # sin Pinnacle: la fila entra igual
+    early = LO.parse_odds(_csv(BFEH=[1.70, 6.2], BFED=[4.1, 4.6], BFEA=[5.4, 1.52]), "soccer_epl", 2026, "E0/2627")[0]
+    assert (early["bfe_home"], early["bfe_closing"]) == (1.70, False)    # sin cierre: el de antes, y lo dice
+    none = LO.parse_odds(_csv(AvgH=[1.6, 6.0], AvgD=[4.0, 4.4], AvgA=[5.0, 1.45]), "soccer_epl", 2012, "E0/1213")[0]
+    assert none["bfe_home"] is None and none["bfe_closing"] is None
+    assert {"bfe_home", "bfe_draw", "bfe_away"} <= set(LO.ODDS_COLS) and "bfe_closing" in LO.COLUMNS
+    assert any("ADD COLUMN IF NOT EXISTS bfe_home" in a for a in LO.ALTERS)   # la tabla ya existía: hay que agregarlas
+    assert len(LO.ALTERS) == 4
+
+
 def test_old_seasons_use_betbrain_average_and_bad_rows_are_dropped():
     df = _csv(PSCH=[1.0, 2.0], PSCD=[3.0, 3.0], PSCA=[4.0, 4.0], BbAvH=[1.9, 2.1], BbAvD=[3.1, 3.2],
               BbAvA=[4.0, 3.5], FTHG=[1, None])
@@ -203,6 +220,50 @@ def test_an_idea_born_from_this_same_history_cannot_pass_with_it():
     assert "pasaría la prueba, pero la idea salió de mirar este mismo historial: falta verla en partidos nuevos" in text
     assert {"favorito_sin_suerte_local", "favorito_con_suerte_local", "favorito_sin_suerte_visita"} <= EF.FROM_THIS_HISTORY
     assert EF.FROM_THIS_HISTORY <= {k for k, *_ in EF.HYPOTHESES}        # ninguna clave huérfana
+
+
+def test_without_pinnacle_the_reference_is_betfair_brought_to_the_same_scale():
+    """14-nov-26. Betfair casi no tiene margen y pone al favorito un poco más arriba que Pinnacle sin margen:
+    sin el mapa, "70%+" no sería el mismo corte. Con Pinnacle, siempre Pinnacle."""
+    both = _match("2025-08-10", "a", "b", 1, 0, season=2025, odds=(1.40, 5.0, 8.0))
+    both.update(bfe_home=1.36, bfe_draw=5.4, bfe_away=9.0)
+    only = _match("2026-08-10", "c", "d", 1, 0, season=2026, odds=(1.40, 5.0, 8.0))
+    only.update(pin_home=None, pin_draw=None, pin_away=None, bfe_home=1.36, bfe_draw=5.4, bfe_away=9.0)
+    bare = _match("2026-08-17", "e", "g", 0, 0, season=2026)
+    bare.update(pin_home=None, pin_draw=None, pin_away=None, bfe_home=None, bfe_draw=None, bfe_away=None)
+    fair = EF._fair(pd.DataFrame([both, only, bare]))
+    assert list(fair.ref[:2]) == ["pinnacle", "betfair"] and pd.isna(fair.ref.iloc[2])
+    assert fair.fh.iloc[0] == pytest.approx(0.687, abs=1e-3)                 # con Pinnacle, Pinnacle (no se toca)
+    raw = (1 / 1.36) / (1 / 1.36 + 1 / 5.4 + 1 / 9.0)                        # Betfair tal cual: 71.3
+    assert raw == pytest.approx(0.713, abs=1e-3) and raw > fair.fh.iloc[1] > 0.69   # mapeado: baja hacia Pinnacle
+    assert fair.loc[fair.index[1], ["fh", "fd", "fa"]].sum() == pytest.approx(1.0)    # las tres vuelven a sumar 1
+    assert np.isnan(fair.fh.iloc[2])                                         # sin ninguno de los dos: sin referencia
+    assert fair.attrs["bfe_map"] == EF.BFE_MAP                               # con pocos partidos con los dos, el medido
+    # con suficientes partidos con los dos precios, el mapa se reajusta solo
+    rng = np.random.default_rng(7)
+    q = rng.uniform(0.15, 0.85, 1200)
+    p = 1 / (1 + np.exp(-(-0.05 + 0.90 * np.log(q / (1 - q)))))
+    a, b = EF.bfe_map(p, 1 - p, q, 1 - q)
+    assert b == pytest.approx(0.90, abs=0.01) and abs(a) < 0.06
+    assert EF.bfe_map(p[:100], 1 - p[:100], q[:100], 1 - q[:100]) == EF.BFE_MAP
+    # y un historial sin esas columnas (antes de la primera carga) sigue funcionando
+    plain = EF._fair(pd.DataFrame([_match("2025-08-10", "a", "b", 1, 0, season=2025)]))
+    assert list(plain.ref) == ["pinnacle"]
+
+
+def test_the_report_says_since_when_the_reference_is_betfair():
+    rows = [_match("2025-10-01", "a", "b", 1, 0, season=2025), _match("2025-10-08", "c", "d", 0, 1, season=2025)]
+    for r in rows:
+        r.update(bfe_home=None, bfe_draw=None, bfe_away=None)
+    late = _match("2026-10-01", "a", "c", 2, 2, season=2026)
+    late.update(pin_home=None, pin_draw=None, pin_away=None, bfe_home=2.0, bfe_draw=3.5, bfe_away=4.0)
+    rep = EF.build_report(pd.DataFrame(rows + [late]))
+    assert rep["pinnacle_until"] == "2025-10-08" and rep["reference_until"] == "2026-10-01"
+    assert rep["betfair"] == {"n": 1, "since": "2026-10-01"}
+    text = EF.format_report(rep, html=False)
+    assert ("Pinnacle dejó de venir en el historial el 2025-10-08; desde el 2026-10-01 la referencia es el cierre de "
+            "Betfair Exchange, llevado a la misma escala (1 partidos).") in text
+    assert "solo hasta" not in text                                          # con Betfair al día ya no hay hueco
 
 
 def test_more_ideas_need_more_evidence():

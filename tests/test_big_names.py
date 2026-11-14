@@ -332,7 +332,7 @@ def test_the_edge_finder_says_when_the_history_stopped_bringing_pinnacle_prices(
     late.update(pin_home=None, pin_draw=None, pin_away=None)
     rep = EF.build_report(pd.DataFrame(rows + [late]))
     assert rep["pinnacle_until"] == "2025-10-08" and rep["history_until"] == "2026-10-01"
-    assert ("El historial trae el precio de Pinnacle solo hasta 2025-10-08: lo jugado después (hasta 2026-10-01) no "
-            "entra a las ideas que dependen de ese precio.") in EF.format_report(rep, html=False)
+    assert ("El historial trae un precio de referencia (Pinnacle o Betfair Exchange) solo hasta 2025-10-08: lo jugado "
+            "después (hasta 2026-10-01) no entra a las ideas que dependen de ese precio.") in EF.format_report(rep, html=False)
     fresh = EF.build_report(pd.DataFrame(rows))
     assert "solo hasta" not in EF.format_report(fresh, html=False)                      # al día: no dice nada
