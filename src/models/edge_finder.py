@@ -54,7 +54,15 @@ PERIODS = (("2012-18", 2012, 2018), ("2019-22", 2019, 2022), ("2023+", 2023, 999
 MIN_N_PERIOD = 50
 ALPHA = 0.05
 LUCK_SHOT_GOALS = 0.3        # goles esperados por tiro a puerta (aprox.)
-PINNACLE_GAP_DAYS = 60       # con más días sin precio de Pinnacle al final del historial, el reporte lo dice
+PINNACLE_GAP_DAYS = 60       # con más días sin precio de referencia al final del historial, el reporte lo dice
+# Cuando falta Pinnacle, la referencia es el cierre de Betfair Exchange (14-nov-26), llevado a la escala de
+# Pinnacle: logit(p Pinnacle) = a + b·logit(p Betfair). Betfair casi no tiene margen (0.65% contra 3.4%), así
+# que pone al favorito un poco más arriba (+1.2 puntos en 70-80) y sin el mapa "70%+" no sería el mismo corte.
+# Medido con los 4,730 partidos que traen los dos (10 ligas, 2024-26): correlación 0.9985, error medio tras
+# el mapa 0.72 puntos, mismo lado del corte de 70 en 99.4%; y el favorito de 70+ gana de más lo mismo (+4.7
+# contra +4.5). El mapa se reajusta cada semana con los partidos que traen los dos; con pocos, vale este.
+BFE_MAP = (-0.0229, 0.9476)
+BFE_MIN_OVERLAP = 1000       # partidos con los dos precios para reajustar el mapa
 
 PASSES, PROMISING, DISCARDED, THIN = "pasa", "prometedora", "descartada", "pocos datos"
 # ideas que salieron de explorar este mismo historial: con él no pueden pasar
@@ -176,12 +184,45 @@ HYPOTHESES = (
 # Rasgos de cada partido (solo con partidos anteriores)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _logit(p):
+    return np.log(p / (1 - p))
+
+
+def bfe_map(pin_h, pin_a, bfe_h, bfe_a) -> tuple:
+    """(a, b) del mapa Betfair → Pinnacle ajustado con los partidos que traen
+    los dos precios (los lados local y visitante juntos); BFE_MAP con pocos."""
+    p, q = np.r_[np.asarray(pin_h, float), np.asarray(pin_a, float)], np.r_[np.asarray(bfe_h, float), np.asarray(bfe_a, float)]
+    ok = np.isfinite(p) & np.isfinite(q) & (p > 0.01) & (p < 0.99) & (q > 0.01) & (q < 0.99)
+    if ok.sum() < 2 * BFE_MIN_OVERLAP:
+        return BFE_MAP
+    coef, *_ = np.linalg.lstsq(np.column_stack([np.ones(ok.sum()), _logit(q[ok])]), _logit(p[ok]), rcond=None)
+    return float(coef[0]), float(coef[1])
+
+
 def _fair(df: pd.DataFrame) -> pd.DataFrame:
-    """Probabilidades sin margen de Pinnacle (proporcional)."""
+    """Probabilidades sin margen de la referencia (proporcional): Pinnacle y,
+    donde falta, el cierre de Betfair Exchange llevado a su escala (bfe_map).
+    ref dice de dónde salió cada fila ("pinnacle", "betfair" o None)."""
     inv = 1.0 / df[["pin_home", "pin_draw", "pin_away"]].astype(float)
     tot = inv.sum(axis=1, min_count=3)
     out = pd.DataFrame({"fh": inv["pin_home"] / tot, "fd": inv["pin_draw"] / tot,
                         "fa": inv["pin_away"] / tot}, index=df.index)
+    out["ref"] = np.where(out["fh"].notna(), "pinnacle", None)
+    if {"bfe_home", "bfe_draw", "bfe_away"} <= set(df.columns):
+        b = df[["bfe_home", "bfe_draw", "bfe_away"]].astype(float)
+        binv = 1.0 / b.where((b > 1).all(axis=1))
+        btot = binv.sum(axis=1, min_count=3)
+        raw = pd.DataFrame({"fh": binv["bfe_home"] / btot, "fd": binv["bfe_draw"] / btot,
+                            "fa": binv["bfe_away"] / btot}, index=df.index)
+        both = out["fh"].notna() & raw["fh"].notna()
+        a, k = bfe_map(out.loc[both, "fh"], out.loc[both, "fa"], raw.loc[both, "fh"], raw.loc[both, "fa"])
+        need = out["fh"].isna() & raw["fh"].notna()
+        if need.any():
+            mapped = 1 / (1 + np.exp(-(a + k * _logit(raw.loc[need, ["fh", "fd", "fa"]].clip(1e-4, 1 - 1e-4)))))
+            mapped = mapped.div(mapped.sum(axis=1), axis=0)            # las tres vuelven a sumar 1
+            out.loc[need, ["fh", "fd", "fa"]] = mapped.values
+            out.loc[need, "ref"] = "betfair"
+        out.attrs["bfe_map"] = (a, k)
     io, iu = 1.0 / df["pin_over25"].astype(float), 1.0 / df["pin_under25"].astype(float)
     out["fo"] = io / (io + iu)
     out["fu"] = iu / (io + iu)
@@ -342,12 +383,15 @@ def build_report(df: pd.DataFrame) -> dict:
                 "updated_at": datetime.now(timezone.utc).isoformat()}
     ev = evaluate(f)
     hyps = ev["hypotheses"]
-    last_pin, last_any = f.loc[f["fh"].notna(), "match_date"].max(), f["match_date"].max()
+    ref = f["ref"] if "ref" in f.columns else pd.Series(np.where(f["fh"].notna(), "pinnacle", None), index=f.index)
+    last_pin, last_ref = f.loc[ref == "pinnacle", "match_date"].max(), f.loc[f["fh"].notna(), "match_date"].max()
+    last_any, first_bfe = f["match_date"].max(), f.loc[ref == "betfair", "match_date"].min()
+    day = lambda t: None if pd.isna(t) else str(pd.Timestamp(t).date())
     return {
-        # hasta cuándo trae el historial el precio de Pinnacle (13-nov-26: la fuente dejó de publicarlo a
-        # principios de 2026 y nadie lo había notado; las ideas que dependen de él ya no suman partidos)
-        "pinnacle_until": None if pd.isna(last_pin) else str(pd.Timestamp(last_pin).date()),
-        "history_until": None if pd.isna(last_any) else str(pd.Timestamp(last_any).date()),
+        # hasta cuándo trae el historial un precio de referencia (13-nov-26: la fuente dejó de publicar el
+        # de Pinnacle a principios de 2026 y nadie lo había notado; 14-nov-26: desde ahí vale el de Betfair)
+        "pinnacle_until": day(last_pin), "reference_until": day(last_ref), "history_until": day(last_any),
+        "betfair": {"n": int((ref == "betfair").sum()), "since": day(first_bfe)},
         "n_matches": int(len(f)),
         "n_leagues": int(f["sport_key"].nunique()),
         "seasons": [int(f["season"].min()), int(f["season"].max())],
@@ -376,13 +420,14 @@ def read_history() -> pd.DataFrame:
     with engine.connect() as conn:
         if conn.execute(text("SELECT to_regclass('historical_odds')")).scalar() is None:
             return pd.DataFrame()
-    return pd.read_sql(text("""
-        SELECT sport_key, season, match_date, home, away, home_goals, away_goals,
-               home_shots_target, away_shots_target,
-               pin_home, pin_draw, pin_away, avg_home, avg_draw, avg_away,
-               pin_over25, pin_under25, avg_over25, avg_under25
-        FROM historical_odds
-    """), engine)
+    cols = ("sport_key, season, match_date, home, away, home_goals, away_goals, home_shots_target, away_shots_target, "
+            "pin_home, pin_draw, pin_away, avg_home, avg_draw, avg_away, pin_over25, pin_under25, avg_over25, avg_under25")
+    try:                                   # con el cierre de Betfair Exchange (14-nov-26)
+        return pd.read_sql(text(f"SELECT {cols}, bfe_home, bfe_draw, bfe_away FROM historical_odds"), engine)
+    except Exception as e:
+        if "bfe_home" not in str(e):       # la columna nace con la primera carga de momios después del 14-nov
+            raise
+        return pd.read_sql(text(f"SELECT {cols} FROM historical_odds"), engine)
 
 
 def run_edge_finder(verbose: bool = True) -> dict:
@@ -408,10 +453,14 @@ def format_report(rep: dict, html: bool = True) -> str:
              f"{rep['k']} ideas probadas en {rep['n_matches']:,} partidos de {rep['n_leagues']} ligas "
              f"({rep['seasons'][0]}-{rep['seasons'][1]}), al precio de una casa común."]
 
-    until, end = rep.get("pinnacle_until"), rep.get("history_until")
+    until, end = rep.get("reference_until", rep.get("pinnacle_until")), rep.get("history_until")
+    bfe = rep.get("betfair") or {}
+    if bfe.get("n"):
+        lines.append(f"ℹ️ Pinnacle dejó de venir en el historial el {rep.get('pinnacle_until')}; desde el {bfe['since']} la "
+                     f"referencia es el cierre de Betfair Exchange, llevado a la misma escala ({bfe['n']:,} partidos).")
     if until and end and (pd.Timestamp(end) - pd.Timestamp(until)).days > PINNACLE_GAP_DAYS:
-        lines.append(f"⚠️ El historial trae el precio de Pinnacle solo hasta {until}: lo jugado después (hasta {end}) "
-                     f"no entra a las ideas que dependen de ese precio.")
+        lines.append(f"⚠️ El historial trae un precio de referencia (Pinnacle o Betfair Exchange) solo hasta {until}: lo "
+                     f"jugado después (hasta {end}) no entra a las ideas que dependen de ese precio.")
 
     def line(key):
         h = hyps[key]

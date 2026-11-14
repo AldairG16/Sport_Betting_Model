@@ -94,8 +94,27 @@ Los mismos CSV de football-data que descarga el weekly traen el cierre de Pinnac
   football-data dejó de publicarlo y desde febrero vienen solo el promedio y el máximo de las
   casas. El historial sigue creciendo, pero las ideas que dependen de la probabilidad de Pinnacle
   ya no suman partidos, y el "2023 en adelante" es en realidad 2023 a enero de 2026. El reporte
-  lo dice cuando el hueco pasa de 60 días (`pinnacle_until`). Lo de 2026 en adelante se mide con
+  lo dice cuando el hueco pasa de 60 días (`reference_until`). Lo de 2026 en adelante se mide con
   los partidos que analiza el programa (`favourite_watch`, con el Pinnacle de The Odds API).
+- **Desde el 14-nov-2026 la referencia, cuando falta Pinnacle, es el cierre de Betfair Exchange**
+  (`bfe_home`, `bfe_draw`, `bfe_away`; football-data lo publica desde 2024-25, también en los
+  archivos de México, Brasil, MLS…). Es gratis y recupera lo jugado en 2026. El dueño lo pidió
+  como "juntar evidencia más rápido".
+  - **Llevado a la escala de Pinnacle** (`bfe_map`): Betfair casi no tiene margen (0.65% contra
+    3.4%) y pone al favorito un poco más arriba (+1.2 puntos en 70-80), así que "70%+" no sería
+    el mismo corte. `logit(p Pinnacle) = −0.0229 + 0.9476 · logit(p Betfair)`; se reajusta cada
+    semana con los partidos que traen los dos (mínimo 1,000) y, con menos, vale ese.
+  - **Validado** (`audit/m33_bfe.py`, 10 ligas con pago anticipado, 4,730 partidos con los dos
+    precios, 2024-26): correlación 0.9985; error medio tras el mapa 0.72 puntos; mismo lado del
+    corte de 70 en 99.4% de los partidos; y el favorito de 70+ gana de más lo mismo con una
+    referencia que con la otra (+4.7 contra +4.5 puntos).
+  - **Lo que recupera:** en esas 10 ligas, 2,514 partidos sin Pinnacle (1,541 de 2025-26 y 973 de
+    2026-27). En ellos el favorito de 70+ ganó 81.0 de cada 100 contra 77.1 que decía la
+    referencia (+3.8, 321 partidos), pero al precio promedio dejó −0.6 ± 2.7: el sesgo sigue ahí
+    y las casas pagan cada vez menos por él.
+  - Con Pinnacle, siempre Pinnacle: Betfair solo entra donde falta. `ref` dice de dónde salió
+    cada fila y el reporte del buscador lo cuenta. La primera vez se rellenaron 2024-25 y
+    2025-26 (`load_historical_odds(refill=2)`, que nunca pisa un dato que ya existe).
 - **Precio:** el promedio entre casas, porque PlayDoit paga casi igual. Medido el 19-oct en la
   Bundesliga: PlayDoit −2.2 pt contra el precio justo de Pinnacle, promedio −2.4.
 - **Sin mirar el futuro:** cada rasgo usa solo partidos anteriores de la misma liga y

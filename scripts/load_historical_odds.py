@@ -65,11 +65,13 @@ NEW_DIVISIONS = {
 ODDS_COLS = ["pin_home", "pin_draw", "pin_away", "avg_home", "avg_draw", "avg_away",
              "max_home", "max_draw", "max_away", "pin_over25", "pin_under25",
              "avg_over25", "avg_under25", "max_over25", "max_under25",
-             "ah_line", "pin_ah_home", "pin_ah_away", "avg_ah_home", "avg_ah_away"]
+             "ah_line", "pin_ah_home", "pin_ah_away", "avg_ah_home", "avg_ah_away",
+             # 14-nov-26: el cierre de Betfair Exchange (BFEC*), la referencia cuando falta Pinnacle
+             "bfe_home", "bfe_draw", "bfe_away"]
 STAT_COLS = ["home_goals_ht", "away_goals_ht", "home_shots_target", "away_shots_target",
              "home_corners", "away_corners"]
 COLUMNS = ["sport_key", "season", "match_date", "home", "away", "home_goals", "away_goals",
-           *STAT_COLS, *ODDS_COLS, "pin_closing", "avg_closing", "source"]
+           *STAT_COLS, *ODDS_COLS, "pin_closing", "avg_closing", "bfe_closing", "source"]
 
 DDL = f"""
     CREATE TABLE IF NOT EXISTS {TABLE} (
@@ -82,12 +84,16 @@ DDL = f"""
         home_goals INT, away_goals INT,
         {", ".join(f"{c} INT" for c in STAT_COLS)},
         {", ".join(f"{c} DOUBLE PRECISION" for c in ODDS_COLS)},
-        pin_closing BOOLEAN, avg_closing BOOLEAN,
+        pin_closing BOOLEAN, avg_closing BOOLEAN, bfe_closing BOOLEAN,
         source TEXT,
         loaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (sport_key, match_date, home, away)
     )
 """
+# columnas que nacieron después de la tabla (CREATE TABLE IF NOT EXISTS no las agrega)
+ALTERS = tuple(f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS {c} {t}"
+               for c, t in (("bfe_home", "DOUBLE PRECISION"), ("bfe_draw", "DOUBLE PRECISION"),
+                            ("bfe_away", "DOUBLE PRECISION"), ("bfe_closing", "BOOLEAN")))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -129,6 +135,7 @@ def parse_odds(df: pd.DataFrame, sport_key: str, season: int, source: str,
         "pin": [("PSCH", "PSCD", "PSCA"), ("PSH", "PSD", "PSA")],
         "avg": [("AvgCH", "AvgCD", "AvgCA"), ("AvgH", "AvgD", "AvgA"), ("BbAvH", "BbAvD", "BbAvA")],
         "max": [("MaxCH", "MaxCD", "MaxCA"), ("MaxH", "MaxD", "MaxA"), ("BbMxH", "BbMxD", "BbMxA")],
+        "bfe": [("BFECH", "BFECD", "BFECA"), ("BFEH", "BFED", "BFEA")],
     }.items():
         for k, trio in enumerate(options):
             if all(c in df.columns for c in trio):
@@ -168,6 +175,7 @@ def parse_odds(df: pd.DataFrame, sport_key: str, season: int, source: str,
     out["away"] = teams[away_c].map(norm)
     out["sport_key"], out["season"], out["source"] = sport_key, int(season), source
     out["pin_closing"], out["avg_closing"] = closing.get("pin"), closing.get("avg")
+    out["bfe_closing"] = closing.get("bfe")
     rows = out.astype(object).where(out.notna(), None).to_dict("records")
     for r in rows:
         for c in ("home_goals", "away_goals", *STAT_COLS):
@@ -239,17 +247,22 @@ def _save(engine, rows: list) -> dict:
     from src.utils.db_batch import insert_ignore_conflicts
     with engine.begin() as conn:
         conn.execute(text(DDL))
+        for alter in ALTERS:
+            conn.execute(text(alter))
         return insert_ignore_conflicts(conn, TABLE, COLUMNS, rows,
                                        ["sport_key", "match_date", "home", "away"],
-                                       fill_null=tuple(ODDS_COLS + STAT_COLS))
+                                       fill_null=tuple(ODDS_COLS + STAT_COLS + ["bfe_closing"]))
 
 
-def load_historical_odds(backfill: bool = False, verbose: bool = True, pause: float = 0.5) -> dict:
+def load_historical_odds(backfill: bool = False, verbose: bool = True, pause: float = 0.5, refill: int = 0) -> dict:
     """
     Temporada en curso de cada división, más las temporadas que todavía no
     estén en la tabla (así una descarga fallida se reintenta la semana
     siguiente). Con backfill=True, todas desde 2012-13. Los archivos /new/
     traen todas las temporadas: se cargan siempre completos.
+    refill: cuántas temporadas anteriores volver a bajar aunque ya estén, para
+    completar una columna nueva en sus filas (fill_null; 14-nov-26, el cierre de
+    Betfair Exchange de 2024-25 y 2025-26). Nunca pisa un dato que ya existe.
     Descarga primero y guarda después (la base corta conexiones quietas).
     """
     from config.database import engine
@@ -259,7 +272,7 @@ def load_historical_odds(backfill: bool = False, verbose: bool = True, pause: fl
     for code, sport_key in SEASON_DIVISIONS.items():
         for i, sc in enumerate(seasons):
             start = code_start(sc)
-            if not backfill and i < len(seasons) - 1 and (sport_key, start) in have:
+            if not backfill and i < len(seasons) - 1 - refill and (sport_key, start) in have:
                 continue
             df, why = _fetch(SEASON_URL.format(season=sc, code=code))
             time.sleep(pause)
