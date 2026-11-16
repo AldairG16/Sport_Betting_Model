@@ -23,6 +23,11 @@ Costo: Claude Haiku 5.5 con una imagen, ~2,000 tokens de entrada y ~500 de
 salida: una fracción de centavo por captura. Tope diario propio
 (PLAYDOIT_CHECKER_DAILY_USD, 0.25) además del de toda la cuenta.
 
+Boosts y combinadas (16-nov-26, el dueño: B1): Claude lee cada apuesta con sus
+patas; un boost de varias cosas se mide con lo que salió en los partidos
+parecidos del historial (src/models/combo_odds.py, una consulta de conteos
+en la base: no usa créditos de The Odds API ni más Claude).
+
 Uso:
     python scripts/playdoit_checker.py --listen --minutes 345
 """
@@ -45,7 +50,7 @@ from src.utils.log import get_logger
 log = get_logger(__name__)
 
 MODEL = "claude-haiku-5-5"
-MAX_TOKENS = 3000
+MAX_TOKENS = 6000           # un boost trae más patas; solo se cobra lo que se usa
 EST_COST_USD = 0.005
 OFFSET_KEY = "telegram_checker_offset"
 SPEND_KEY = "playdoit_checker_spend"
@@ -57,22 +62,39 @@ HELP = ("🔎 <b>Revisor de PlayDoit</b>\n"
         "Mándame una <b>captura</b> de PlayDoit (un partido, una lista o un momio mejorado) y te digo "
         "momio por momio si vale la pena: ✅ apuesta / ❌ no, con el mínimo que necesita.\n"
         "Reviso: ganador (1X2), doble oportunidad, empate anula, más/menos 2.5 goles y ambos anotan, "
-        "de los partidos que el sistema sigue en los próximos días.\n\n"
+        "de los partidos que el sistema sigue en los próximos días.\n"
+        "🚀 <b>Boosts y combinadas</b> (varias cosas en un solo momio): resultado, goles, ambos anotan, "
+        "goles de un equipo, del primer tiempo y córners. Lo de un jugador no lo puedo medir: te digo cuánto "
+        "tendría que salir.\n\n"
         "📣 <b>Canal de los partidos:</b> para que los partidos lleguen también a un canal, agrega este "
         "bot como administrador del canal y reenvíame cualquier mensaje de ahí.")
 
 SYSTEM = """\
-Lees capturas de pantalla de la casa de apuestas PlayDoit (México). Extrae CADA momio de fútbol que
-se vea en la imagen. Responde SOLO con un objeto JSON, sin texto antes ni después:
-{"items": [{"local": "<equipo local como aparece>", "visitante": "<equipo visitante>",
-  "mercado": "1x2" | "doble_oportunidad" | "empate_anula" | "total_goles" | "ambos_anotan" | "otro",
-  "seleccion": "local" | "empate" | "visitante" | "1x" | "x2" | "12" | "mas" | "menos" | "si" | "no" | "<otra>",
-  "linea": <número o null>, "momio": "<tal como aparece, ej. +150, -120 o 2.50>",
-  "mejorado": <true si aparece como momio mejorado / boost, si no false>,
+Lees capturas de pantalla de la casa de apuestas PlayDoit (México). Extrae CADA apuesta de fútbol que
+se vea en la imagen: los momios normales y también los boosts (PLAYBOOSTS, momios mejorados) y las
+combinadas que juntan varias cosas en un solo momio. Responde SOLO con un objeto JSON, sin texto antes
+ni después:
+{"items": [{
+  "patas": [{"local": "<equipo local como aparece>", "visitante": "<equipo visitante>",
+             "mercado": "1x2" | "doble_oportunidad" | "empate_anula" | "total_goles" | "ambos_anotan" |
+                        "corners_total" | "goles_local" | "goles_visitante" | "goles_primer_tiempo" |
+                        "resultado_primer_tiempo" | "jugador" | "otro",
+             "seleccion": "local" | "empate" | "visitante" | "1x" | "x2" | "12" | "mas" | "menos" | "si" | "no" | "<otra>",
+             "linea": <número o null>,
+             "jugador": "<nombre del jugador si la apuesta es de un jugador; si no, null>"}],
+  "momio": "<el momio que paga, tal como aparece: +243, -120 o 2.50>",
+  "momio_antes": "<el momio tachado de antes del boost, si se ve; si no, null>",
+  "mejorado": <true si es boost / momio mejorado / PLAYBOOST; si no, false>,
   "descripcion": "<texto corto de la apuesta como aparece>"}]}
-Reglas: el local es el equipo que aparece primero o arriba. "Más de 2.5" → mercado total_goles,
-seleccion mas, linea 2.5. "Ambos equipos anotan: Sí" → ambos_anotan, si. Si no se ve el equipo de
-un momio, no lo inventes: omite ese momio. Si la imagen no es de momios, responde {"items": []}."""
+Reglas: una apuesta normal lleva una sola pata; una combinada o un boost de varias cosas lleva una pata
+por cada cosa, cada una con su partido. El local es el equipo que aparece primero o arriba; si el boost
+no repite los equipos pero está en la página de un partido, usa los de ese partido. "Más de 2.5 goles"
+→ total_goles, mas, 2.5. "Ambos equipos anotan: Sí" → ambos_anotan, si. "Más de 8.5 tiros de esquina"
+→ corners_total, mas, 8.5. "Portugal gana" → 1x2 con la seleccion del lado de Portugal (local o
+visitante). Goles de un solo equipo → goles_local o goles_visitante. Lo que haga un jugador (anotar,
+remates, asistencias, tarjeta) → jugador, con seleccion lo que debe hacer (ej. "anota", "más de 1.5
+remates a puerta"). Si no se ve el equipo de una apuesta, no lo inventes: omítela. Si la imagen no es
+de momios, responde {"items": []}."""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -176,7 +198,7 @@ def read_screenshot(image: bytes, media_type: str, engine=None, client=None) -> 
         from config.database import engine
     if _today_spent(engine) + EST_COST_USD > DAILY_CAP_USD:
         return None, f"llegué al tope diario de ${DAILY_CAP_USD:.2f} del revisor; vuelve a intentar mañana"
-    ok, why = can_call(engine, estimate_call_cost(MODEL, 2500, 600))
+    ok, why = can_call(engine, estimate_call_cost(MODEL, 3000, 1500))
     if not ok:
         return None, f"tope de gasto de Claude: {why}"
     if client is None:
@@ -257,8 +279,10 @@ def handle_message(message: dict, token: str, owner_chat: str, engine=None, clie
             text = f"⚠️ {why}"
         else:
             fixtures = fixtures if fixtures is not None else PP.load_fixtures(engine)
+            from src.models import combo_odds as CO
             from src.models.program_picks import load_bias
-            rows = PP.evaluate_items(items, fixtures, normalize_team, load_bias(engine))
+            history = lambda legs, fh, fa, fo, league: CO.history_probability(engine, legs, fh, fa, fo, league)
+            rows = PP.evaluate_items(items, fixtures, normalize_team, load_bias(engine), history)
             text = PP.format_reply(rows)
             try:
                 PP.save_rows(engine, rows, message.get("message_id"))

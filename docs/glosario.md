@@ -17,6 +17,7 @@ Las palabras del proyecto, en el sentido en que se usan aquí.
 | **Sombra (shadow)** | Candidatas que no se juegan pero se guardan con su precio, su cierre y su resultado para aprender |
 | **Modo recolección** | Desde el 25-sep-26: el programa no registra apuestas propias, solo junta picks y sombra |
 | **Pago anticipado (PA)** | Promoción de PlayDoit: si tu equipo va 2 goles arriba, la apuesta se paga como ganada |
+| **Boost / PLAYBOOST** | Un momio subido de PlayDoit, a veces de varias cosas en una (resultado, goles, córners, un jugador). El revisor de capturas dice si vale con lo que salió en partidos parecidos ([08](08-picks-y-parlays.md)) |
 | **Bono de parlay** | PlayDoit paga extra sobre la ganancia de un parlay de 3+ piernas a -500 o mejor (5% a 35%) |
 | **Pierna** | Cada apuesta dentro de un parlay |
 | **Escalera del fin de semana** | Sábado y domingo: todos los parlays de 3 que quepan, uno de 6 y uno de 9 con los 🎯 de los dos días; cada uno se apuesta aparte (v2.15.0, [08](08-picks-y-parlays.md)) |

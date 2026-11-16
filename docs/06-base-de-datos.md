@@ -46,7 +46,7 @@ primera vez que las usa.
 | `model_proposals` | Lo que el modelo propuso y por qué no se apostó |
 | `lineup_alerts` | Avisos de alineación (4+ titulares fuera) con el veredicto de Claude |
 | `goalscorer_picks` | Picks de goleador (en papel) |
-| `playdoit_prices` | Precios de PlayDoit leídos de capturas (el revisor de Telegram); hoy casi vacía |
+| `playdoit_prices` | Precios de PlayDoit leídos de capturas (el revisor de Telegram); desde el 16-nov-26 también los boosts (`market` 'combinada'). Nace con la primera captura |
 | `pre_kickoff_analyses`, `analyst_heartbeat` | Lo que dijo el analista previo al partido y su latido |
 | `weekly_narrative` | El texto del reporte semanal |
 

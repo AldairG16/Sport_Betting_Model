@@ -13,6 +13,15 @@ promedio de las casas en goles y ambos anotan), menos 2 puntos
 con el tiempo se aprende cuánto paga PlayDoit frente al promedio de las
 casas, y el dashboard lo usa para estimar el momio de PlayDoit.
 
+16-nov-26, los boosts y las combinadas (el dueño, B1): una apuesta de varias
+cosas en un solo momio ("ambos anotan + más de 2.5 + más de 8.5 córners",
+"gana Portugal + anota Ramos") se mide con lo que salió en los partidos
+parecidos del historial (src/models/combo_odds.py) y se juzga con la misma
+regla de 2 puntos. Un partido que el sistema no sigue se mide con el 1X2 de
+PlayDoit si se ve en la captura; si no, solo se da la referencia de un
+partido promedio, sin ✅ ni ❌. Lo de un jugador no se puede medir: se dice
+cuánto tendría que salir.
+
 Funciones puras salvo las de base de datos (al final).
 """
 
@@ -207,11 +216,150 @@ def judge(price_decimal: float, market_p: float | None, model_p: float | None) -
             "ev": p * price_decimal - 1}
 
 
-def evaluate_items(items: list, fixtures: list, normalize=None, bias: dict | None = None) -> list:
-    """Cada momio leído de la captura con su veredicto. fixtures: partidos
-    próximos con momios y modelo (ver reference_probs); bias: sesgo aprendido."""
-    out = []
+def legs_of(item: dict) -> list:
+    """Las patas de una apuesta leída: las de "patas" (desde el 16-nov-26) o la
+    apuesta misma con su partido (el formato de antes). Una pata sin equipos
+    es del partido de la pata anterior."""
+    legs = item.get("patas")
+    if not isinstance(legs, list) or not legs:
+        return [item]
+    out, last = [], {}
+    for leg in legs:
+        if not isinstance(leg, dict):
+            continue
+        if not (leg.get("local") and leg.get("visitante")):
+            leg = {**leg, "local": last.get("local", ""), "visitante": last.get("visitante", "")}
+        out.append(leg)
+        last = leg
+    return out or [item]
+
+
+def flat_item(item: dict) -> dict:
+    """Una apuesta de una sola pata, con su momio, como la leía el sistema antes."""
+    leg = legs_of(item)[0]
+    return {**{k: v for k, v in item.items() if k != "patas"}, **{k: leg.get(k) for k in
+            ("local", "visitante", "mercado", "seleccion", "linea", "jugador") if k in leg}}
+
+
+def market_view(f: dict | None) -> tuple:
+    """(local, visitante, más de 2.5) sin margen del partido: Pinnacle en el
+    1X2 (el promedio de las casas si no hay), el promedio en los goles."""
+    if not f:
+        return None, None, None
+    p = _fair(f.get("pin_home_odds"), f.get("pin_draw_odds"), f.get("pin_away_odds")) or \
+        _fair(f.get("consensus_home_odds"), f.get("consensus_draw_odds"), f.get("consensus_away_odds"))
+    ou = _fair(f.get("consensus_over25_odds"), f.get("consensus_under25_odds")) or \
+        _fair(f.get("over25_odds"), f.get("under25_odds"))
+    return (p[0] if p else None), (p[2] if p else None), (ou[0] if ou else None)
+
+
+def screen_odds(items: list, normalize=None) -> dict:
+    """Los momios normales de la misma captura, por partido, para medir un boost
+    de un partido que el sistema no sigue: {(local, visitante): {"1x2": [..],
+    "ou": [más, menos]}} (decimales de PlayDoit, con su margen)."""
+    out = {}
     for it in items or []:
+        legs = legs_of(it)
+        price = parse_price(it.get("momio"))
+        if len(legs) != 1 or price is None or it.get("mejorado"):
+            continue
+        leg = legs[0]
+        key = market_key(leg)
+        m = out.setdefault((_norm(leg.get("local", ""), normalize), _norm(leg.get("visitante", ""), normalize)),
+                           {"1x2": [None, None, None], "ou": [None, None]})
+        if key in ("home_win", "draw", "away_win"):
+            m["1x2"][("home_win", "draw", "away_win").index(key)] = price
+        elif key in ("over25", "under25"):
+            m["ou"][("over25", "under25").index(key)] = price
+    return out
+
+
+def _screen_view(odds: dict | None) -> tuple:
+    if not odds:
+        return None, None, None
+    p = _fair(*odds["1x2"]) if None not in odds["1x2"] else None
+    ou = _fair(*odds["ou"]) if None not in odds["ou"] else None
+    return (p[0] if p else None), (p[2] if p else None), (ou[0] if ou else None)
+
+
+def evaluate_combo(item: dict, fixtures: list, normalize=None, history=None, screen: dict | None = None) -> dict:
+    """Un boost o una combinada: cada cuánto salen todas sus patas juntas en
+    los partidos parecidos (history: fn(patas, fh, fa, fo, liga) → estimado de
+    combo_odds) y su veredicto. Varios partidos se multiplican (no tienen que
+    ver entre sí). verdict: apuesta / no / jugador (depende de un jugador) /
+    referencia (partido que el sistema no sigue, sin su 1X2 en la captura) /
+    sin_mercado / sin_referencia / ilegible."""
+    from src.models import combo_odds as CO
+    price = parse_price(item.get("momio"))
+    row = {"item": item, "price": price, "combo": True, "matches": [], "key": "combinada",
+           "before": parse_price(item.get("momio_antes"))}
+    groups = []
+    for leg in legs_of(item):
+        mk = (_norm(leg.get("local", ""), normalize), _norm(leg.get("visitante", ""), normalize))
+        if not groups or groups[-1]["key"] != mk:
+            groups.append({"key": mk, "home": str(leg.get("local") or ""), "away": str(leg.get("visitante") or ""),
+                           "legs": []})
+        groups[-1]["legs"].append(CO.parse_leg(leg))
+    for g in groups:
+        f = find_fixture(g["home"], g["away"], fixtures, normalize)
+        if f:
+            fh, fa, fo = market_view(f)
+            source = "sistema" if fh is not None else "promedio"
+        else:
+            fh, fa, fo = _screen_view((screen or {}).get(g["key"]))
+            source = "captura" if fh is not None else "promedio"
+        row["matches"].append({"fixture": f, "home": f["home"] if f else g["home"], "away": f["away"] if f else g["away"],
+                               "legs": g["legs"], "fh": fh, "fa": fa, "fo": fo, "source": source, "est": None})
+    legs = [x for m in row["matches"] for x in m["legs"]]
+    if price is None:
+        row["verdict"] = "ilegible"
+        return row
+    if any(x["kind"] == "unknown" for x in legs):
+        row["verdict"] = "sin_mercado"
+        return row
+    if history is None:
+        row["verdict"] = "sin_referencia"
+        return row
+    p_team, any_team = 1.0, False
+    for m in row["matches"]:
+        team = [x for x in m["legs"] if x["kind"] != "player"]
+        if not team:
+            continue
+        est = history(team, m["fh"], m["fa"], m["fo"], (m["fixture"] or {}).get("sport_key"))
+        if est is None:
+            row["verdict"] = "sin_referencia"
+            return row
+        m["est"] = est
+        p_team *= est["p"]
+        any_team = True
+    row["prob"] = p_team if any_team else None
+    row["average"] = any(m["source"] == "promedio" and any(x["kind"] != "player" for x in m["legs"])
+                         for m in row["matches"])
+    if any(x["kind"] == "player" for x in legs):
+        row.update(CO.player_bound(price, p_team if any_team else None))
+        if row["average"] and row["verdict"] == "no":
+            row["verdict"] = "jugador"                     # con un partido promedio no hay ❌ firme
+        return row
+    row.update(CO.judge(price, p_team))
+    if any(m["source"] == "promedio" for m in row["matches"]):
+        row["verdict"] = "referencia"                      # sin el partido no se puede decir si vale
+    return row
+
+
+def evaluate_items(items: list, fixtures: list, normalize=None, bias: dict | None = None, history=None) -> list:
+    """Cada momio leído de la captura con su veredicto. fixtures: partidos
+    próximos con momios y modelo (ver reference_probs); bias: sesgo aprendido.
+    Una apuesta de una pata con mercado conocido (market_key) va como siempre;
+    un boost, una combinada o otro mercado medible, con evaluate_combo
+    (history: la consulta del historial)."""
+    out = []
+    screen = screen_odds(items, normalize)
+    for raw in items or []:
+        legs = legs_of(raw)
+        if len(legs) > 1 or (market_key(legs[0]) is None and legs[0].get("mercado") not in (None, "", "otro")):
+            out.append(evaluate_combo(raw, fixtures, normalize, history, screen))
+            continue
+        it = flat_item(raw)
         price = parse_price(it.get("momio"))
         f = find_fixture(it.get("local", ""), it.get("visitante", ""), fixtures, normalize)
         key = market_key(it)
@@ -235,12 +383,80 @@ def _esc(s) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _us(dec) -> str:
+    return fmt_american(to_american(dec)) if dec else "—"
+
+
+def _pct(p) -> str:
+    return f"{p * 100:.0f}"
+
+
+def combo_lines(r: dict) -> list:
+    """Las líneas de un boost o combinada en la respuesta."""
+    from src.models import combo_odds as CO
+    it = r["item"]
+    ms = r.get("matches") or []
+    what = " + ".join(CO.leg_label(x, m["home"], m["away"]) for m in ms for x in m["legs"])
+    where = " · ".join(f"{m['home']} vs {m['away']}" for m in ms)
+    boost = " 🚀" if it.get("mejorado") else ""
+    before = f" (antes {_us(r['before'])})" if r.get("before") else ""
+    head = f"<b>{_esc(where)}</b>\n{_esc(what)} · <b>{_us(r.get('price'))}</b>{boost}{before}"
+    v = r.get("verdict")
+    n = sum(int((m.get("est") or {}).get("n") or 0) for m in ms)
+    sample = f" en {n:,} partidos parecidos" if len(ms) == 1 and n else " en partidos parecidos"
+    if v in ("jugador", "no") and any(x["kind"] == "player" for m in ms for x in m["legs"]):
+        who = _esc(next((x.get("who") for m in ms for x in m["legs"] if x["kind"] == "player" and x.get("who")),
+                        "el jugador"))
+        if r.get("p_team") is None:
+            body = (f"➖ es de un jugador y no lo puedo medir: para que valga tendría que salir más de "
+                    f"{_pct(r['target'])} de cada 100 veces")
+        else:
+            rest = _esc(" + ".join(CO.leg_label(x, m["home"], m["away"]) for m in ms for x in m["legs"]
+                                   if x["kind"] != "player"))
+            if v == "no":
+                body = (f"❌ no vale: aunque {who} cumpliera siempre, {rest} sale {_pct(r['p_team'])} de cada 100 "
+                        f"y este momio necesita más de {_pct(r['target'])}")
+            elif r["need"] > 1:
+                body = (f"➖ {rest} sale {_pct(r['p_team'])} de cada 100 y este momio necesita más de "
+                        f"{_pct(r['target'])}: ni cumpliendo siempre {who} alcanzaría")
+            else:
+                what = _esc(next((x.get("what") for m in ms for x in m["legs"] if x["kind"] == "player"
+                                  and x.get("what")), "cumple"))
+                body = (f"➖ depende de {who}: {rest} sale {_pct(r['p_team'])} de cada 100; solo vale si {who} "
+                        f"{what} en más de {_pct(r['need'])} de cada 100 de esos partidos")
+            if r.get("average"):
+                body += " <i>(no sigo este partido: medido con un partido promedio)</i>"
+        return [head, body]
+    if v in ("apuesta", "no", "referencia"):
+        p, fair, mn = r["prob"], fmt_american(r["fair_us"]), fmt_american(r["min_american"])
+        if v == "apuesta":
+            body = f"✅ vale: sale {_pct(p)} de cada 100{sample}; lo justo es {fair} (deja {r['ev'] * 100:+.0f} por cada 100)"
+        elif v == "no":
+            body = f"❌ no vale: sale {_pct(p)} de cada 100{sample}; lo justo es {fair} y necesita {mn} o más"
+        else:
+            lead = ("no sigo este partido" if any(m["fixture"] is None and m["source"] == "promedio" for m in ms)
+                    else "no tengo los momios de este partido")
+            body = (f"➖ {lead}: en un partido promedio sale {_pct(p)} de cada 100 (lo justo {fair}). "
+                    "Si en la captura se ve también el ganador del partido (1X2), te digo si vale")
+        if v != "referencia" and any(m["source"] == "captura" for m in ms):
+            body += " <i>(medido con los momios de PlayDoit de la captura)</i>"
+        return [head, body]
+    if v == "sin_mercado":
+        return [head, "➖ tiene una apuesta que no puedo medir con el historial"]
+    if v == "ilegible":
+        return [head, "➖ no pude leer el momio"]
+    return [head, "➖ sin precio de referencia todavía"]
+
+
 def format_reply(rows: list) -> str:
-    """Respuesta de Telegram (HTML) agrupada por partido."""
+    """Respuesta de Telegram (HTML) agrupada por partido; los boosts y las
+    combinadas, aparte (combo_lines)."""
     if not rows:
         return ("🔎 No encontré momios en la captura. Manda la pantalla del partido en PlayDoit "
                 "con los momios a la vista.")
     lines = ["🔎 <b>PlayDoit — lo que vi en tu captura</b>"]
+    combos = [r for r in rows if r.get("combo")]
+    rows = [r for r in rows if not r.get("combo")]
     by_match, unknown = {}, []
     for r in rows:
         if r.get("fixture") is None:
@@ -272,6 +488,12 @@ def format_reply(rows: list) -> str:
     if unknown:
         names = sorted({f"{r['item'].get('local', '?')} vs {r['item'].get('visitante', '?')}" for r in unknown})
         lines += ["", "No están en mis partidos de los próximos días: " + _esc("; ".join(names))]
+    if combos:
+        lines += ["", "🚀 <b>Boosts y combinadas</b>"]
+        for r in combos:
+            lines += [""] + combo_lines(r)
+        lines += ["", "<i>Un boost junta varias apuestas: cuento cada cuánto salieron TODAS juntas en partidos "
+                      "que las casas veían parecidos (2012-2026), no cada una por separado.</i>"]
     lines += ["", "<i>Número más alto = paga más: -120 es mejor que -140 y +150 mejor que +130. "
                   "Apuesta solo lo que tenga ✅.</i>"]
     return "\n".join(lines)
@@ -323,6 +545,9 @@ def save_rows(engine, rows: list, message_id=None) -> int:
     with engine.begin() as conn:
         conn.execute(text(DDL))
         for r in rows:
+            if r.get("combo"):
+                saved += _save_combo(conn, r, message_id, json)
+                continue
             f = r.get("fixture")
             if not f or not r.get("price") or not r.get("key"):
                 continue
@@ -340,6 +565,29 @@ def save_rows(engine, rows: list, message_id=None) -> int:
                    "verdict": r.get("verdict"), "raw": json.dumps(r["item"], ensure_ascii=False)})
             saved += 1
     return saved
+
+
+def _save_combo(conn, r: dict, message_id, json) -> int:
+    """Un boost o combinada leído (market 'combinada'; pin_fair = lo que salió en
+    los partidos parecidos). Sirve para aprender cuánto paga PlayDoit en boosts."""
+    if not r.get("price"):
+        return 0
+    ms = r.get("matches") or []
+    f = next((m["fixture"] for m in ms if m.get("fixture")), None)
+    match = (f"{f['home_norm']} vs {f['away_norm']}" if f else
+             " | ".join(f"{m['home']} vs {m['away']}" for m in ms).lower())
+    raw = {"item": r["item"], "legs": [[x for x in m["legs"]] for m in ms],
+           "source": [m["source"] for m in ms], "n": [(m.get("est") or {}).get("n") for m in ms]}
+    conn.execute(text(f"""
+        INSERT INTO {TABLE} (message_id, match, kickoff, league, market, line, american, decimal, boosted,
+                             consensus_decimal, pin_fair, model_prob, min_american, verdict, raw)
+        VALUES (:mid, :match, :kick, :league, 'combinada', NULL, :am, :dec, :boost, NULL, :p, NULL, :minam,
+                :verdict, CAST(:raw AS jsonb))
+    """), {"mid": message_id, "match": match, "kick": (f or {}).get("match_date"), "league": (f or {}).get("sport_key"),
+           "am": to_american(r["price"]), "dec": r["price"], "boost": bool(r["item"].get("mejorado")),
+           "p": r.get("prob"), "minam": r.get("min_american"), "verdict": r.get("verdict"),
+           "raw": json.dumps(raw, ensure_ascii=False, default=str)})
+    return 1
 
 
 def playdoit_ratio(rows: list, min_n: int = RATIO_MIN_N) -> float | None:

@@ -20,7 +20,9 @@ palabras normales y momios americanos.
 | **Créditos de The Odds API** | Una vez al día, si se acaban | Dueño | `credit_budget.py` |
 
 **El revisor de capturas** (`playdoit_checker.py`, siempre escuchando en tandas de ~5 h 45 min): si el dueño
-le manda una captura de PlayDoit, Claude Haiku la lee y dice si el precio conviene. También registra el canal.
+le manda una captura de PlayDoit, Claude Haiku la lee y dice si el precio conviene. Desde el 16-nov-26 también los
+boosts y las combinadas (varias cosas en un solo momio): cuenta cada cuánto salieron todas juntas en partidos
+parecidos del historial ([08](08-picks-y-parlays.md)). También registra el canal.
 
 Ante un 429 de Telegram se espera lo que pide (`retry_after`). Una corrida que no logra mandar su mensaje sale
 en rojo.
