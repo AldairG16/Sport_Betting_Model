@@ -41,6 +41,30 @@ piernas y con 2 no tiene bono. El dueño eligió (1b, 2c, 4a):
   - reemplaza al anterior: lo guardado sigue en la tabla (rule 'seguro').
 Escocia no tiene pago anticipado y la Europa League no la baja el sistema:
 no entran.
+
+16-nov-26 (v2.15.0), la escalera del fin de semana. El dueño: "necesito que
+investigues de qué manera podemos potencializar lo de los parlays porque de ahí
+podemos sacar más ventaja". En 14 años de favoritos reales, con el bono, un
+parlay por fin de semana con los más fuertes de sábado y domingo juntos dejó
++10 (3 piernas), +28 (6) y +58 (9) por cada 100, positivo en las tres épocas;
+hasta entonces se armaba por día y solo con las ligas de pago anticipado.
+Eligió (A1):
+  - sábado y domingo (días de México) ya no tienen parlay del día ni de un
+    horario: tienen la escalera (LADDER). Entre semana todo sigue igual;
+  - las piernas son los 🎯 de las ligas con pago anticipado y también los de
+    las 12 ligas de Europa y Asia (PP.WIDE_LEAGUES, 70+ sin pago anticipado);
+  - todos los parlays de 3 que quepan, en orden de hora ('finde3': así cada
+    uno se fija tarde y más piernas ven su alineación); uno de 6 con las 6 más
+    fuertes ('finde6') y uno de 9 con las 9 más fuertes ('finde9') cuando
+    alcanza. Cada uno se fija 5 min antes de su primer partido; el de 6 y el
+    de 9 son uno por fin de semana;
+  - una pierna que empieza antes de las LADDER_FROM_HOUR de México no entra:
+    el parlay se tendría que apostar de madrugada (Japón y China casi siempre).
+En el historial (audit/m43_ladder.py, 577 fines de semana): 5 parlays por fin
+de semana, deja +19.8 por cada 100 apostados (±4.6; +23, +20, +15 por época) y
+en 85 de cada 100 fines de semana se gana al menos uno; el parlay del día de
+sábado y domingo dejaba +27.6 pero en 41 de cada 100. Apostando 50 a cada uno:
++49.6 por fin de semana contra +23.4.
 """
 
 import math
@@ -67,6 +91,12 @@ SLOT_MIN_LEGS = 3
 MIN_BLOCK_LEGS = SLOT_MIN_LEGS
 LEAGUES = EP.PA_LEAGUES
 FIXED_SINCE = "2026-10-22"   # el modelo corregido (= dashboard.board.MODEL_FIXED)
+# La escalera del fin de semana (v2.15.0, 16-nov-26)
+WEEKEND = (5, 6)                     # sábado y domingo, día de México
+LADDER = {"finde3": 3, "finde6": 6, "finde9": 9}
+LADDER_FROM_HOUR = 5                 # antes de las 5:00 de México no entra (12:30 de Londres en verano = 5:30)
+LADDER_LEAGUES = tuple(LEAGUES) + tuple(x for x in PP.WIDE_LEAGUES if x not in LEAGUES)
+KIND_ORDER = ("dia", "horario", "finde3", "finde6", "finde9")
 LOCK_MINUTES = 5             # la misma ventana de snapshot_picks: un partido a 5 min ya no se toca
 BLOCK_MINUTES = 30           # mismo horario: hasta 30 min después del primero (el dueño, 4-nov-26)
 MX_OFFSET = pd.Timedelta(hours=6)    # México, UTC-6 fijo
@@ -123,6 +153,40 @@ def _num(v):
 def mx_day(t) -> pd.Timestamp:
     """El día de México (UTC-6) de una hora de partido."""
     return (PP._utc(t) - MX_OFFSET).tz_localize(None).normalize()
+
+
+def is_weekend(t) -> bool:
+    """¿El partido es de sábado o domingo en México?"""
+    return mx_day(t).dayofweek in WEEKEND
+
+
+def weekend_of(t):
+    """El sábado (fecha) del fin de semana de México de una hora de partido."""
+    d = mx_day(t)
+    return (d - pd.Timedelta(days=int(d.dayofweek) - WEEKEND[0])).date()
+
+
+def ladder_hour_ok(t) -> bool:
+    """¿Empieza a una hora en que se puede apostar (LADDER_FROM_HOUR o más tarde en México)?"""
+    return (PP._utc(t) - MX_OFFSET).hour >= LADDER_FROM_HOUR
+
+
+def min_legs(kind) -> int:
+    """Las piernas que necesita un parlay de ese tipo."""
+    if kind in LADDER:
+        return LADDER[kind]
+    return DAY_MIN_LEGS if kind == "dia" else SLOT_MIN_LEGS
+
+
+def parlay_name(kind, seq, slot_local) -> str:
+    """El nombre que lee el dueño: "Parlay del día", "Parlay de las 13:00",
+    "Parlay de 3 del fin de semana #2", "Parlay de 9 del fin de semana"."""
+    seq = int(seq or 1)
+    if kind == "dia":
+        return "Parlay del día" + (f" #{seq}" if seq > 1 else "")
+    if kind in LADDER:
+        return f"Parlay de {LADDER[kind]} del fin de semana" + (f" #{seq}" if seq > 1 else "")
+    return f"Parlay de las {slot_local:%H:%M}"
 
 
 def bonus_for(n: int) -> float:
@@ -186,13 +250,14 @@ def winning_leagues(picks: pd.DataFrame, before=None) -> list:
     return sorted(out, key=lambda x: (-x["units"], -x["n"]))
 
 
-def strong_leg(r: dict, u, ratio=None, bias=None, weak=None) -> dict | None:
+def strong_leg(r: dict, u, ratio=None, bias=None, weak=None, leagues=LEAGUES) -> dict | None:
     """El favorito fuerte de un partido de model_vs_sharp con los momios de
-    ahora (u): 65%+ en Pinnacle sin margen, liga con pago anticipado, −500 o
-    más largo (PP.strong_favourite) y sin 4+ titulares fuera (weak). Solo en
-    las ligas con pago anticipado (LEAGUES): el 🎯 de una liga de
-    PP.WIDE_LEAGUES no es pierna."""
-    if str(r.get("league") or "") not in LEAGUES:
+    ahora (u): el 🎯 de PP.strong_favourite (65%+ en Pinnacle sin margen con
+    pago anticipado, 70+ en PP.WIDE_LEAGUES), −500 o más largo y sin 4+
+    titulares fuera (weak). Solo en `leagues`: el parlay de entre semana usa
+    las de pago anticipado (LEAGUES); la escalera, también las de
+    PP.WIDE_LEAGUES (LADDER_LEAGUES)."""
+    if str(r.get("league") or "") not in leagues:
         return None
     fav = PP.strong_favourite(PP._candidates_of(r, u, None, ratio, bias), r.get("league"))
     if fav is None or fav["market"] in (weak or {}):
@@ -204,27 +269,65 @@ def _ranked(legs: list) -> list:
     return sorted(legs, key=lambda x: (-x["market_prob"], PP._utc(x["match_date"]), x["match"]))
 
 
+def _by_time(legs: list) -> list:
+    return sorted(legs, key=lambda x: (PP._utc(x["match_date"]), -x["market_prob"], x["match"]))
+
+
 def _parlay(kind: str, seq: int, day, legs: list) -> dict:
     slot = min(PP._utc(x["match_date"]) for x in legs)        # se fija 5 min antes de su primer partido
+    day = mx_day(slot).date() if day is None else day
     return {"kind": kind, "seq": seq, "slot": slot,
             "legs": [{**x, "day": day, "slot": slot.to_pydatetime(), "rank": i + 1, "rule": RULE, "kind": kind,
                       "seq": seq} for i, x in enumerate(_ranked(legs))]}
 
 
-def group_parlays(found: list, exclude: dict | None = None, fixed_seq: dict | None = None) -> list:
+def ladder_parlays(legs: list, saturday, exclude: dict | None = None, fixed: dict | None = None) -> list:
+    """Función pura: la escalera de un fin de semana (v2.15.0).
+    - de 3 ('finde3'): todas las que quepan, en orden de hora, sin los
+      partidos de uno de 3 ya fijo (exclude['finde3']); se numeran después de
+      los fijos;
+    - de 6 y de 9 ('finde6', 'finde9'): las más fuertes, una por fin de
+      semana: si ya quedó fija (fixed), no se arma otra.
+    fixed: {(tipo, sábado): cuántos de ese tipo ya quedaron fijos}."""
+    exclude, fixed = exclude or {}, fixed or {}
+    out = []
+    rest = _by_time([x for x in legs if x["match"] not in exclude.get("finde3", set())])
+    seq = fixed.get(("finde3", saturday), 0)
+    n = LADDER["finde3"]
+    for k in range(0, len(rest) - n + 1, n):
+        seq += 1
+        out.append(_parlay("finde3", seq, None, rest[k:k + n]))
+    for kind in ("finde6", "finde9"):
+        n = LADDER[kind]
+        if not fixed.get((kind, saturday)) and len(legs) >= n:
+            out.append(_parlay(kind, 1, None, _ranked(legs)[:n]))
+    return out
+
+
+def group_parlays(found: list, exclude: dict | None = None, fixed_seq: dict | None = None,
+                  fixed_ladder: dict | None = None) -> list:
     """Función pura: los parlays de las piernas encontradas.
+    Entre semana (de lunes a viernes, día de México), con las piernas de las
+    ligas con pago anticipado (LEAGUES):
     - del día ('dia'): por día de México, los más fuertes, de DAY_MIN_LEGS a
       MAX_LEGS; si sobran DAY_MIN_LEGS o más, otro;
     - del horario ('horario'): SLOT_MIN_LEGS o más que empiezan juntos
       (blocks_of), hasta MAX_LEGS; si son los mismos partidos que un parlay
       del día, no se repite.
+    Sábado y domingo, la escalera (ladder_parlays) con todas las piernas que
+    empiezan desde las LADDER_FROM_HOUR.
     exclude: {tipo: partidos ya en un parlay fijo de ese tipo}; fixed_seq:
-    {día: cuántos parlays del día ya quedaron fijos} (para numerarlos).
+    {día: cuántos parlays del día ya quedaron fijos} (para numerarlos);
+    fixed_ladder: {(tipo, sábado): cuántos de la escalera ya quedaron fijos}.
     Cada parlay: {kind, seq, slot (hora UTC de su primer partido), legs con rank}."""
     exclude, fixed_seq = exclude or {}, fixed_seq or {}
-    out, by_day = [], {}
+    out, by_day, by_weekend = [], {}, {}
     for x in found:
-        by_day.setdefault(mx_day(x["match_date"]).date(), []).append(x)
+        if is_weekend(x["match_date"]):
+            if ladder_hour_ok(x["match_date"]):
+                by_weekend.setdefault(weekend_of(x["match_date"]), []).append(x)
+        elif x.get("league") in LEAGUES:
+            by_day.setdefault(mx_day(x["match_date"]).date(), []).append(x)
     for day in sorted(by_day):
         legs = by_day[day]
         rest = _ranked([x for x in legs if x["match"] not in exclude.get("dia", set())])
@@ -240,14 +343,18 @@ def group_parlays(found: list, exclude: dict | None = None, fixed_seq: dict | No
             if len(use) < SLOT_MIN_LEGS or {x["match"] for x in use} in daily:
                 continue
             out.append(_parlay("horario", 1, day, use))
+    for saturday in sorted(by_weekend):
+        out += ladder_parlays(by_weekend[saturday], saturday, exclude, fixed_ladder)
     return out
 
 
 def build_parlays(mvs: pd.DataFrame, upcoming: pd.DataFrame, ratio=None, normalize=None, bias=None,
-                  lineups_for=None, exclude: dict | None = None, fixed_seq: dict | None = None) -> list:
+                  lineups_for=None, exclude: dict | None = None, fixed_seq: dict | None = None,
+                  fixed_ladder: dict | None = None) -> list:
     """Función pura: los parlays con bono (group_parlays) de los partidos de
     model_vs_sharp que todavía no empiezan (la fila más reciente de cada uno)
-    con sus momios de ahora (upcoming)."""
+    con sus momios de ahora (upcoming). Las piernas salen de LADDER_LEAGUES;
+    group_parlays deja entre semana solo las de pago anticipado."""
     from src.models.side_bias import is_skipped
     up = {PP.match_key(r.home_team_norm, r.away_team_norm, normalize): r for r in upcoming.itertuples(index=False)}
     latest = {}
@@ -256,7 +363,7 @@ def build_parlays(mvs: pd.DataFrame, upcoming: pd.DataFrame, ratio=None, normali
         # un análisis que ya no vale (skipped_at: la última corrida no lo
         # evaluó, o es el horario viejo de un reprogramado) no es pierna: su
         # pick sale sin 🎯 (decide) y el mismo partido entraba dos veces
-        if r.get("league") not in LEAGUES or is_skipped(r):
+        if r.get("league") not in LADDER_LEAGUES or is_skipped(r):
             continue
         h, _, a = str(r["match"]).partition(" vs ")
         latest[(PP.match_key(h, a, normalize), str(r["match_date"]))] = r
@@ -267,7 +374,7 @@ def build_parlays(mvs: pd.DataFrame, upcoming: pd.DataFrame, ratio=None, normali
             continue
         h, _, a = key.partition(" vs ")
         weak, lineup = lineups_for(h, a, r["match_date"]) if lineups_for else ({}, None)
-        leg = strong_leg(r, u, ratio, bias, weak)
+        leg = strong_leg(r, u, ratio, bias, weak, LADDER_LEAGUES)
         if not leg:
             continue
         team = u.home_team if leg["market"] == "home_win" else u.away_team
@@ -279,7 +386,7 @@ def build_parlays(mvs: pd.DataFrame, upcoming: pd.DataFrame, ratio=None, normali
             "market_prob": round(float(leg["market_prob"]), 3), "safety": round(float(leg["market_prob"]), 3),
             "playdoit_odds": round(float(leg["playdoit_odds"]), 4), "lineup": lineup,
             "pa": EP.applies(r.get("league"), leg["market"])})
-    return group_parlays(found, exclude, fixed_seq)
+    return group_parlays(found, exclude, fixed_seq, fixed_ladder)
 
 
 def _ensure(conn) -> None:
@@ -326,18 +433,21 @@ def snapshot_parlays(hours: int = PP.SNAPSHOT_HOURS, engine=None) -> int:
                                                                    or PP._utc(r["slot"]) in started)]
         locked = {PP._utc(r["slot"]) for r in fixed}
         mine = [r for r in fixed if r.get("rule") == RULE]
-        exclude = {k: {r["match"] for r in mine if r.get("kind") == k} for k in ("dia", "horario")}
-        fixed_seq = {}
+        exclude = {k: {r["match"] for r in mine if r.get("kind") == k} for k in KIND_ORDER}
+        fixed_seq, fixed_ladder = {}, {}
         for r in mine:
             if r.get("kind") == "dia":
                 d = pd.Timestamp(r["day"]).date()
                 fixed_seq[d] = max(fixed_seq.get(d, 0), int(r.get("seq") or 1))
+            elif r.get("kind") in LADDER:
+                k = (r["kind"], weekend_of(r["slot"]))
+                fixed_ladder[k] = max(fixed_ladder.get(k, 0), int(r.get("seq") or 1))
         if not mvs.empty:
             up = pd.read_sql(text(PP._UPCOMING_SQL), engine, params={"h": hours})
             gone = {str(m).lower() for m in mvs["match"] if PP._row_key({"match": m}, normalize_team) in early}
             mvs = mvs[~mvs["match"].astype(str).str.lower().isin(gone)]
             built = build_parlays(mvs, up, PP._ratio(engine), normalize_team, PP.load_bias(engine),
-                                  PP._lineups_for(engine, normalize_team), exclude, fixed_seq)
+                                  PP._lineups_for(engine, normalize_team), exclude, fixed_seq, fixed_ladder)
         built = [p for p in built if p["slot"] > lock and p["slot"] not in locked]
         rows = [leg for p in built for leg in p["legs"]]
         keep = sorted(s for s in locked if s > lock)
@@ -357,7 +467,9 @@ def snapshot_parlays(hours: int = PP.SNAPSHOT_HOURS, engine=None) -> int:
         log.error(f"❌ Parlays no guardados: {type(e).__name__}: {str(e)[:200]}")
         return 0
     days = sum(1 for p in built if p["kind"] == "dia")
-    print(f"🧩 Parlays con bono: {days} del día y {len(built) - days} de un horario ({len(rows)} piernas)"
+    ladder = sum(1 for p in built if p["kind"] in LADDER)
+    print(f"🧩 Parlays con bono: {days} del día, {len(built) - days - ladder} de un horario y {ladder} de la "
+          f"escalera del fin de semana ({len(rows)} piernas)"
           + (f" · {len(locked)} horario(s) ya fijos, sin tocar" if locked else ""))
     return len(rows)
 

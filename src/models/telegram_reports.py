@@ -174,11 +174,8 @@ def times_text(p) -> str | None:
 
 
 def parlay_name(d: dict, tz) -> str:
-    slot = _ts(d["slot"]).astimezone(tz)
-    seq = int(d.get("seq") or 1)
-    if d.get("kind") == "dia":
-        return "Parlay del día" + (f" #{seq}" if seq > 1 else "")
-    return f"Parlay de las {slot:%H:%M}"
+    from src.models.program_parlays import parlay_name as _name
+    return _name(d.get("kind"), d.get("seq"), _ts(d["slot"]).astimezone(tz))
 
 
 def parlays_of(rows: list) -> list:
@@ -187,8 +184,10 @@ def parlays_of(rows: list) -> list:
     from dashboard.parlay import parlay_board
     if not rows:
         return []
+    from src.models.program_parlays import KIND_ORDER
     board = parlay_board(pd.DataFrame(rows), None)
-    return sorted(board["parlays"], key=lambda d: (d["slot"], 0 if d["kind"] == "dia" else 1, d["seq"]))
+    order = lambda k: KIND_ORDER.index(k) if k in KIND_ORDER else len(KIND_ORDER)
+    return sorted(board["parlays"], key=lambda d: (d["slot"], order(d["kind"]), d["seq"]))
 
 
 # ─── el estado de un pick ya empezado ────────────────────────────────────────

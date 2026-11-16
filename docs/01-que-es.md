@@ -44,8 +44,9 @@ Los horarios exactos y quién dispara cada corrida están en [04](04-corridas-y-
    anticipado** (PlayDoit da la apuesta por ganada si el equipo va 2 goles arriba). Si gana menos de 70 de
    cada 100, solo cuando su momio llega al mínimo (12-nov). Los partidos sin 🎯 dicen
    por qué no lo son ("no hay favorito claro", "paga muy poco (-667)", "esta liga no tiene pago anticipado").
-5. **El parlay** junta los 🎯 de un día o de un horario para cobrar el bono de PlayDoit por parlay (5% con 3
-   piernas, 7.5% con 4, 10% con 5…, sobre la ganancia) ([08](08-picks-y-parlays.md)).
+5. **El parlay** junta los 🎯 para cobrar el bono de PlayDoit por parlay (5% con 3 piernas, 7.5% con 4, 10%
+   con 5… 35% con 9, sobre la ganancia): de lunes a viernes, el del día o de un horario; sábado y domingo,
+   la escalera del fin de semana (todos los de 3, uno de 6 y uno de 9) ([08](08-picks-y-parlays.md)).
 
 Todo se mide "apostando 50 a cada uno".
 
@@ -58,7 +59,7 @@ Todo se mide "apostando 50 a cada uno".
 
 ## En qué estado está (noviembre de 2026)
 
-- **En producción**, versión del dashboard 2.14.0. `master` es producción.
+- **En producción**, versión del dashboard 2.15.0. `master` es producción.
 - **Modo recolección desde el 25-sep-26**: el programa ya no registra apuestas propias en `bets_history`
   (congelada); junta picks (`program_picks`) y sombra para aprender.
 - **Lo que dicen los datos (auditoría del 5-nov):** el modelo no le gana a Pinnacle en predecir; la única
@@ -74,7 +75,7 @@ Todo se mide "apostando 50 a cada uno".
 |---|---|
 | Picks | Un pick por partido analizado, siempre; los filtros solo marcan 🎯, nunca quitan (22-oct) |
 | 🎯 | Favorito fuerte (≥65 de cada 100 según Pinnacle), -500 o mejor, liga con pago anticipado; el 🎯 de goles se quitó (5-nov). De 65 a 70, solo si el momio estimado llega al mínimo (12-nov). Más picks, no menos (14-nov): también el favorito de 70+ en 12 ligas de Europa y Asia sin pago anticipado, y ⭐ para el grande que viene ganando |
-| Parlays | Bono de PlayDoit: parlay del día de 4 a 6 piernas y parlays de un mismo horario de 3+, esperando alineaciones (5-nov) |
+| Parlays | Bono de PlayDoit: parlay del día de 4 a 6 piernas y parlays de un mismo horario de 3+, esperando alineaciones (5-nov). Sábado y domingo, la escalera del fin de semana: todos los de 3, uno de 6 y uno de 9, con las ligas nuevas (16-nov) |
 | Dinero | Todo "apostando 50 a cada uno" (8-nov) |
 | Momios | Siempre americanos; los decimales solo internos |
 | Textos | Palabras normales: "de cada 100", "las casas", "recomendado", "ganancia"; nada de ROI, unidades, "pt" ni "mercado sin margen" |

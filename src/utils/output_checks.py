@@ -270,25 +270,44 @@ def early_payout_problems(rows: list, live: list, normalize=None) -> list:
 def bono_parlay_problems(rows: list) -> list:
     """v2.9.0: cada parlay con bono guardado cumple la regla: del día de 4 a 6
     piernas y de un horario de 3 a 6, cada una el favorito de 65%+ a −500 o más
-    largo en una liga con pago anticipado, sin partidos repetidos. rows: las
-    piernas (slot, kind, seq, match, market, league, market_prob, playdoit_odds)."""
+    largo en una liga con pago anticipado, sin partidos repetidos. v2.15.0: la
+    escalera del fin de semana tiene justo 3, 6 o 9 piernas, todas de sábado o
+    domingo (día de México) del mismo fin de semana, desde las
+    LADDER_FROM_HOUR, y también puede llevar el favorito de 70+ de las ligas
+    nuevas (PP.WIDE_LEAGUES). rows: las piernas (slot, kind, seq, match,
+    market, league, market_prob, playdoit_odds; match_date si se tiene)."""
     from src.models import program_parlays as PL
+    from src.models import program_picks as PP
     groups = defaultdict(list)
     for r in rows:
         groups[(str(r["slot"]), r.get("kind"), r.get("seq"))].append(r)
     bad = []
     for (slot, kind, seq), legs in groups.items():
-        lo = PL.DAY_MIN_LEGS if kind == "dia" else PL.SLOT_MIN_LEGS
+        ladder = kind in PL.LADDER
+        lo = PL.min_legs(kind)
+        hi = PL.LADDER[kind] if ladder else PL.MAX_LEGS
         name = f"{kind} {seq} de {slot[:16]}"
-        if not lo <= len(legs) <= PL.MAX_LEGS:
+        if not lo <= len(legs) <= hi:
             bad.append(f"{name}: {len(legs)} piernas")
         if len({x["match"] for x in legs}) != len(legs):
             bad.append(f"{name}: un partido repetido")
+        if ladder:
+            kicks = [x.get("match_date") if x.get("match_date") is not None else x["slot"] for x in legs]
+            if not all(PL.is_weekend(k) and PL.ladder_hour_ok(k) for k in kicks) or \
+                    len({PL.weekend_of(k) for k in kicks}) != 1:
+                bad.append(f"{name}: un partido fuera del fin de semana o de madrugada")
         for x in legs:
             p, o = _num(x.get("market_prob")), _num(x.get("playdoit_odds"))
-            if (x.get("market") not in ("home_win", "away_win") or x.get("league") not in PL.LEAGUES
-                    or p is None or p < PL.STRONG_FAV - 1e-9 or o is None or o < PL.MIN_LEG_ODDS - 1e-9):
-                bad.append(f"{name}: {x['match']} {x.get('market')} ({p}, {o}, {x.get('league')})")
+            lg = x.get("league")
+            if lg in PL.LEAGUES:
+                cut = PL.STRONG_FAV
+            elif ladder and lg in PL.LADDER_LEAGUES:
+                cut = PP.WIDE_FAV
+            else:
+                cut = None
+            if (x.get("market") not in ("home_win", "away_win") or cut is None
+                    or p is None or p < cut - 1e-9 or o is None or o < PL.MIN_LEG_ODDS - 1e-9):
+                bad.append(f"{name}: {x['match']} {x.get('market')} ({p}, {o}, {lg})")
     return bad
 
 
@@ -1074,7 +1093,8 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
 
     # 16) la regla del parlay con bono (v2.9.0)
     try:
-        legs = q("""SELECT slot, kind, seq, match, market, league, market_prob, playdoit_odds FROM program_parlays
+        legs = q("""SELECT slot, kind, seq, match, match_date, market, league, market_prob, playdoit_odds
+                    FROM program_parlays
                     WHERE rule = 'bono' AND slot >= NOW() - make_interval(days => :d)""", d=days).to_dict("records")
         bad = bono_parlay_problems(legs)
         seen.append(f"parlays con bono ({len({(str(x['slot']), x['kind'], x['seq']) for x in legs})})")

@@ -733,8 +733,10 @@ function loadLeagues(fresh){
 // ── Parlay (v2.6.0, 3-nov-26; con bono desde v2.9.0, 6-nov-26) ──
 // El dueño: "quiero agregar la función parley…". v2.9.0: favoritos de 65%+ con
 // pago anticipado; el bono de PlayDoit se paga sobre la ganancia (3 = 5%,
-// 4 = 7.5%, 5 = 10%, 6 = 15%). El del día (4 a 6) y el de un horario (3 o más
-// que empiezan juntos, con las alineaciones de todos).
+// 4 = 7.5%, 5 = 10%, 6 = 15%, 9 = 35%). Entre semana, el del día (4 a 6) y el de
+// un horario (3 o más que empiezan juntos, con las alineaciones de todos).
+// v2.15.0 (16-nov-26): sábado y domingo, la escalera del fin de semana (de 3,
+// de 6 y de 9, también con las ligas de 70+ sin pago anticipado).
 var _px = null;
 function pxIcon(x){
   if (x.pa_paid && (x.result === 'win')) return '<span title="Pago anticipado: fue 2 goles arriba y PlayDoit la pagó como ganada">⚡✅</span>';
@@ -763,7 +765,7 @@ function pxReady(d){
   var p = d.parlay;
   if (!p || p.status !== 'pending') return '';
   if (p.locked) return '<span class="small muted">🔒 ya empezó: así quedó</span>';
-  var one = d.kind === 'dia', what = one ? 'la alineación del primer partido' : 'las alineaciones de todos';
+  var one = d.kind !== 'horario', what = one ? 'la alineación del primer partido' : 'las alineaciones de todos';
   if (d.ready) return '<span class="small pos">📋 ya revisado con ' + what + '</span><span class="small muted">apuéstalo antes de las ' + mxtime(d.lock) + '</span>';
   return '<span class="small muted" title="Las alineaciones salen ~1 h antes; el parlay se revisa cada 30 min y Telegram lo manda en la última revisión antes de su primer partido">⏳ ' +
     (one ? 'falta ' : 'faltan ') + what + (one ? ' (sale' : ' (salen') + ' ~1 h antes) · puede cambiar hasta las ' + mxtime(d.lock) + '</span>';
@@ -774,8 +776,10 @@ function pxOdds(p){
   var n = Math.round(1 / p);
   return n > 1 ? 'más o menos 1 de cada ' + n + ' veces' : p100(p);
 }
+var PX_LADDER = {finde3: 3, finde6: 6, finde9: 9};
 function pxName(d){
   if (d.kind === 'dia') return 'Parlay del día' + (d.seq > 1 ? ' (' + d.seq + ')' : '');
+  if (PX_LADDER[d.kind]) return 'Parlay de ' + PX_LADDER[d.kind] + ' del fin de semana' + (d.seq > 1 ? ' (' + d.seq + ')' : '');
   return 'Parlay de las ' + mxtime(d.slot);
 }
 function pxBonus(p){
@@ -783,7 +787,8 @@ function pxBonus(p){
 }
 function pxBlock(d){
   var p = d.parlay, h = '<div class="small" style="margin:6px 0 4px"><b>' + pxName(d) + '</b> · ' + p.k + ' partidos' +
-    (d.kind === 'horario' ? ' <span class="muted">(empiezan a la misma hora: se arma ya con todas las alineaciones)</span>' : '') + '</div>';
+    (d.kind === 'horario' ? ' <span class="muted">(empiezan a la misma hora: se arma ya con todas las alineaciones)</span>' : '') +
+    (PX_LADDER[d.kind] ? ' <span class="muted">(escalera del fin de semana: cada parlay se apuesta aparte)</span>' : '') + '</div>';
   h += '<div class="tbl" style="margin-bottom:8px"><table><thead><tr><th>Hora</th><th>Partido</th><th>Apuesta</th><th>Momio</th>' +
        '<th class="hide-sm" title="De cada 100 partidos así, cuántos gana este equipo según Pinnacle">Gana</th><th></th></tr></thead><tbody>';
   for (var i = 0; i < d.legs.length; i++) {
@@ -808,23 +813,29 @@ function renderParlay(){
     (r.price_band ? ' (los de menos de ' + Math.round(r.price_band * 100) + ' de cada 100, solo si su momio llega al mínimo)' : '') +
     ', en ligas con pago anticipado ⚡ ' +
     '(si el equipo va 2 goles arriba, PlayDoit la paga como ganada aunque luego le empaten). ' +
-    'PlayDoit suma un bono a la ganancia: 3 partidos +5%, 4 +7.5%, 5 +10%, 6 +15%. ' +
-    '<b>Parlay del día:</b> de ' + r.day_min + ' a ' + r.max_legs + ' partidos. <b>Parlay de un horario:</b> ' + r.slot_min +
-    ' o más que empiezan a la misma hora, ya con las alineaciones. Ligas: ' + esc(r.leagues.join(', ')) + '.';
+    'PlayDoit suma un bono a la ganancia: 3 partidos +5%, 4 +7.5%, 5 +10%, 6 +15%, 9 +35%. ' +
+    '<b>De lunes a viernes:</b> el parlay del día, de ' + r.day_min + ' a ' + r.max_legs + ' partidos, y el de un horario, ' + r.slot_min +
+    ' o más que empiezan a la misma hora, ya con las alineaciones. Ligas: ' + esc(r.leagues.join(', ')) + '. ' +
+    (r.ladder ? '<b>Sábado y domingo, la escalera del fin de semana:</b> todos los parlays de 3 que quepan (en orden de hora), ' +
+      'uno de 6 con los 6 más fuertes y uno de 9 con los 9 más fuertes cuando alcanza, juntando los dos días. ' +
+      'Entran también los muy favoritos (' + Math.round(r.wide_fav * 100) + ' de cada 100 o más) de ' + esc(r.wide_leagues.join(', ')) +
+      ', y no entra un partido que empieza antes de las ' + r.ladder_from_hour + ':00 de México (habría que apostar de madrugada). ' +
+      'Cada parlay se apuesta aparte.' : '');
   var next = [], lastDay = '';
   for (i = _px.parlays.length - 1; i >= 0; i--) if (_px.parlays[i].day >= today) next.push(_px.parlays[i]);   // del más próximo
   for (i = 0; i < next.length; i++) {
     if (next[i].day !== lastDay) { h += '<div class="day">' + dayLabel(next[i].day) + '</div>'; lastDay = next[i].day; }
     h += pxBlock(next[i]);
   }
-  el('xnext').innerHTML = h || '<div class="muted">Por ahora no hay parlay: ningún día tiene ' + r.day_min + ' equipos muy favoritos en las ligas con pago anticipado ' +
-    '(ni ' + r.slot_min + ' a la misma hora). Se revisa cada 30 min; Telegram manda el parlay en la última revisión antes de su primer partido.</div>';
-  var t = _px.record.all, td = _px.record.dia, th = _px.record.horario;
+  el('xnext').innerHTML = h || '<div class="muted">Por ahora no hay parlay: entre semana ningún día tiene ' + r.day_min + ' equipos muy favoritos en las ligas con pago anticipado ' +
+    '(ni ' + r.slot_min + ' a la misma hora), y el fin de semana no hay 3. Se revisa cada 30 min; Telegram manda el parlay en la última revisión antes de su primer partido.</div>';
+  var t = _px.record.all, td = _px.record.dia, th = _px.record.horario, tf = _px.record.finde || {n: 0};
   el('xkpis').innerHTML = kpi(t.n, 'Parlays terminados') + kpi(t.won, '✅ Ganados', 'pos') + kpi(t.lost, '❌ Perdidos', 'neg') +
     kpi(money(t.units), 'Apostando 50 a cada parlay (con el bono)', t.units >= 0 ? 'pos' : 'neg') +
     kpi(t.legs ? t.legs_won + ' / ' + t.legs : '—', 'Partidos de los parlays que salieron (' + p100(t.legs_hit) + ')') +
     kpi(t.pa, '⚡ Cobrados por ir 2 goles arriba') +
-    kpi(td.n ? money(td.units) + ' en ' + td.n : '—', 'Del día') + kpi(th.n ? money(th.units) + ' en ' + th.n : '—', 'De un horario');
+    kpi(td.n ? money(td.units) + ' en ' + td.n : '—', 'Del día') + kpi(th.n ? money(th.units) + ' en ' + th.n : '—', 'De un horario') +
+    kpi(tf.n ? money(tf.units) + ' en ' + tf.n : '—', 'Del fin de semana');
   h = '';
   for (i = 0; i < _px.parlays.length; i++) {
     var d = _px.parlays[i], p = d.parlay;

@@ -145,7 +145,7 @@ def plan(picks: list, legs: list, sent: dict, announced: dict, now: datetime, co
     for key in sorted(by):
         ls = by[key]
         first = min(_ts(x["match_date"]) for x in ls)
-        need = PL.DAY_MIN_LEGS if ls[0].get("kind") == "dia" else PL.SLOT_MIN_LEGS
+        need = PL.min_legs(ls[0].get("kind"))
         if not now < first <= end or len(ls) < need:
             continue
         sig = PA.signature(ls)
