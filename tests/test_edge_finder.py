@@ -261,8 +261,9 @@ def test_the_report_says_since_when_the_reference_is_betfair():
     assert rep["pinnacle_until"] == "2025-10-08" and rep["reference_until"] == "2026-10-01"
     assert rep["betfair"] == {"n": 1, "since": "2026-10-01"}
     text = EF.format_report(rep, html=False)
-    assert ("Pinnacle dejó de venir en el historial el 2025-10-08; desde el 2026-10-01 la referencia es el cierre de "
-            "Betfair Exchange, llevado a la misma escala (1 partidos).") in text
+    assert ("El historial trae el precio de Pinnacle hasta el 2025-10-08. En 1 partidos sin él (el primero, del "
+            "2026-10-01) la referencia es el cierre de Betfair Exchange, llevado a la misma escala.") in text
+    assert "dejó de venir" not in text                                       # no se lee como contradicción
     assert "solo hasta" not in text                                          # con Betfair al día ya no hay hueco
 
 

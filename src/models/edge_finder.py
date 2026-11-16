@@ -456,8 +456,11 @@ def format_report(rep: dict, html: bool = True) -> str:
     until, end = rep.get("reference_until", rep.get("pinnacle_until")), rep.get("history_until")
     bfe = rep.get("betfair") or {}
     if bfe.get("n"):
-        lines.append(f"ℹ️ Pinnacle dejó de venir en el historial el {rep.get('pinnacle_until')}; desde el {bfe['since']} la "
-                     f"referencia es el cierre de Betfair Exchange, llevado a la misma escala ({bfe['n']:,} partidos).")
+        # 16-nov-26: decía "Pinnacle dejó de venir el 2026-01-14; desde el 2024-12-06 la referencia es Betfair",
+        # que se lee como una contradicción (algunos partidos de 2024-25 ya venían sin Pinnacle)
+        lines.append(f"ℹ️ El historial trae el precio de Pinnacle hasta el {rep.get('pinnacle_until')}. En {bfe['n']:,} "
+                     f"partidos sin él (el primero, del {bfe['since']}) la referencia es el cierre de Betfair Exchange, "
+                     f"llevado a la misma escala.")
     if until and end and (pd.Timestamp(end) - pd.Timestamp(until)).days > PINNACLE_GAP_DAYS:
         lines.append(f"⚠️ El historial trae un precio de referencia (Pinnacle o Betfair Exchange) solo hasta {until}: lo "
                      f"jugado después (hasta {end}) no entra a las ideas que dependen de ese precio.")
