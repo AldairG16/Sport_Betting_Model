@@ -17,6 +17,10 @@ juntos, con alineación). El bono de PlayDoit se paga sobre la ganancia
 (program_parlays.payout) y una pierna que fue 2 goles arriba se cobra por el
 pago anticipado (⚡). Solo se muestran los de la regla nueva (rule 'bono');
 los de antes siguen en la tabla.
+
+v2.15.0 (16-nov-26): sábado y domingo, la escalera del fin de semana (de 3,
+de 6 y de 9; src/models/program_parlays.py). Se ve como el del día: lista
+cuando vieron la alineación los de su primer horario.
 """
 
 import math
@@ -29,7 +33,8 @@ from src.utils.min_odds import fmt_american, to_american
 WIN_LIKE = ("win", "half_win")
 LOSS_LIKE = ("loss", "half_loss")
 VOID = ("push", "stale")          # la pierna se anula y el parlay sigue con las demás
-KINDS = ("dia", "horario")
+KINDS = ("dia", "horario", "finde3", "finde6", "finde9")   # = program_parlays.KIND_ORDER
+LADDER_KINDS = ("finde3", "finde6", "finde9")
 
 
 def _num(v):
@@ -137,11 +142,12 @@ def combine(legs: list) -> dict | None:
             "locked": any(x["started"] for x in legs)}
 
 
-def record(parlays: list, kind: str | None = None) -> dict:
-    """El historial de los parlays ya liquidados (de un tipo o de todos). Las
-    piernas cuentan aparte (¿qué tan seguras fueron?) y las cobradas por el
-    pago anticipado."""
-    done = [d for d in parlays if d["parlay"]["settled"] and (kind is None or d["kind"] == kind)]
+def record(parlays: list, kind=None) -> dict:
+    """El historial de los parlays ya liquidados (de un tipo, de varios o de
+    todos). Las piernas cuentan aparte (¿qué tan seguras fueron?) y las
+    cobradas por el pago anticipado."""
+    kinds = None if kind is None else ((kind,) if isinstance(kind, str) else tuple(kind))
+    done = [d for d in parlays if d["parlay"]["settled"] and (kinds is None or d["kind"] in kinds)]
     legs = [x for d in done for x in d["legs"] if x["result"] in WIN_LIKE + LOSS_LIKE]
     won = sum(1 for d in done if d["parlay"]["status"] == "win")
     lost = sum(1 for d in done if d["parlay"]["status"] == "loss")
@@ -209,4 +215,5 @@ def parlay_board(legs: pd.DataFrame, live: pd.DataFrame | None, now=None, normal
                     "ready": all(x["lineup_ok"] for x in need),
                     "waiting": [x["match"] for x in need if not x["lineup_ok"]],
                     "legs": ls, "parlay": combine(ls)})
-    return {"parlays": out, "record": {"all": record(out), **{k: record(out, k) for k in KINDS}}}
+    return {"parlays": out, "record": {"all": record(out), **{k: record(out, k) for k in KINDS},
+                                       "finde": record(out, LADDER_KINDS)}}

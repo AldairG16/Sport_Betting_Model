@@ -48,7 +48,11 @@ pena solo si PlayDoit lo paga a -260 o mejor", "no llega a muy favorito para est
 
 - Aprovechan el **bono de PlayDoit** sobre la ganancia: 3 piernas 5%, 4 = 7.5%, 5 = 10%, 6 = 15%, 7 = 20%,
   8 = 25%, 9 = 35%.
-- **Parlay del día** con 4 a 6 🎯, y **parlays de un mismo horario** con 3 o más, esperando las alineaciones.
+- **De lunes a viernes:** el **parlay del día** con 4 a 6 🎯 y los **parlays de un mismo horario** con 3 o
+  más, esperando las alineaciones. Solo ligas con pago anticipado.
+- **Sábado y domingo, la escalera del fin de semana** (desde v2.15.0, 16-nov-26): todos los parlays de 3 que
+  quepan (en orden de hora), uno de 6 con los 6 más fuertes y uno de 9 con los 9 más fuertes, juntando los
+  dos días y con los 🎯 de las 12 ligas nuevas también. Un partido antes de las 5:00 de México no entra.
 - Cada pierna es el 🎯 de su partido. Se fija al empezar la primera pierna y se avisa una vez por Telegram.
 
 **PlayDoit** no está en ninguna API. Su precio se toma como el promedio de las casas europeas (con evidencia de
@@ -491,16 +495,48 @@ Lo que eligió el dueño (1b, 2c, 3a, 4a):
   pago anticipado que fue 2 goles arriba. Una perdida sin la ventaja espera hasta 30 h
   (`WAIT_HOURS`); después se liquida perdida. Aplica a todo pick de ganador en esas ligas, no solo al 🎯
   (es lo que pagaría PlayDoit).
+- **La escalera del fin de semana, 16-nov-2026 (v2.15.0).** El dueño: "necesito que investigues de qué manera
+  podemos potencializar lo de los parlays porque de ahí podemos sacar más ventaja". Eligió la opción 1 (A1):
+  - **Cuándo:** sábado y domingo (días de México, `is_weekend`, `weekend_of` = el sábado). Esos días ya no
+    hay parlay del día ni de un horario. De lunes a viernes todo sigue igual.
+  - **Piernas:** los 🎯 de las ligas con pago anticipado y los de las 12 ligas nuevas (`LADDER_LEAGUES`,
+    `strong_leg(..., leagues=)`), sin 4+ titulares fuera. Un partido que empieza antes de las 5:00 de
+    México (`LADDER_FROM_HOUR`, `ladder_hour_ok`) no entra: habría que apostarlo de madrugada (Japón y China
+    casi siempre; las 12:30 de Londres en horario de verano son las 5:30).
+  - **Los parlays** (`ladder_parlays`): `finde3`, todos los de 3 que quepan en orden de hora (así cada uno se
+    fija tarde y más piernas ven su alineación; por fuerza dejaba casi lo mismo: +9.8 contra +9.0); `finde6`,
+    las 6 más fuertes; `finde9`, las 9 más fuertes. El de 6 y el de 9 son uno por fin de semana: si ya quedó
+    fijo no se arma otro (`fixed_ladder` en `snapshot_parlays`); los de 3 siguen numerándose. Las piernas se
+    repiten entre el de 3, el de 6 y el de 9: cada parlay se apuesta aparte.
+  - **Lo que dice el historial** (`audit/m43_ladder.py`, 577 fines de semana de 2012 a 2026, precio promedio
+    de las casas, sin pago anticipado, 50 a cada parlay):
+
+    | Sábado y domingo | Parlays por fin de semana | Arriesga | Deja por cada 100 | Deja por fin de semana | Se gana al menos uno |
+    |---|---|---|---|---|---|
+    | Antes: el del día (4 a 6, solo pago anticipado) | 1.7 | 85 | +27.6 ±9.0 | +23.4 | 41 de cada 100 |
+    | **La escalera** | 5.0 | 250 | +19.8 ±4.6 | +49.6 | 85 de cada 100 |
+
+    Por tamaño: el de 3 gana 46 de cada 100 y deja +9.8 (±3.1); el de 6, 27 y +27.9 (±10.9); el de 9, 12 y
+    +58 (±25). Por época, la escalera: +23, +20 y +15. Solo con las ligas de pago anticipado dejaba casi lo
+    mismo por cada 100 (+19.7) pero menos por fin de semana (+44.4).
+  - **En los partidos reales** (`audit/m44_ladder_real.py`, 24-oct al 8-nov, con el código de producción): 26
+    piernas en 3 fines de semana (5 de ligas nuevas, 1 de madrugada fuera); 11 parlays, 8 ganados, +769 pesos
+    apostando 50 a cada uno (de 3: 7 y 5 ganados; de 6: 3 y 3; de 9: 1 y 0). Lo de antes armaba 3 (+364).
+  - **Lo que no cambia:** el bono (3 = 5%, 6 = 15%, 9 = 35%), el momio estimado de PlayDoit y el aviso en la
+    última revisión antes de su primer partido (lo mismo que el del día: listo cuando vieron la alineación
+    los de su primer horario).
 - **Aviso "Parlay listo"** (`parlay_alerts.py`): el del horario cuando todas sus piernas vieron la
   alineación; el del día cuando la vieron las de su primer horario; a 40 min de fijarse avisa igual y lo
   dice (`READY_LATE_MIN`). Trae cada partido con 📋/⏳ y "PA", lo que paga y con el bono, y la probabilidad
   de que salgan todas según Pinnacle. Estado `telegram_parlays` con clave `horario|tipo|número`.
-- **Pestaña Parlay:** cada parlay del día y de un horario con sus piernas, "paga +X · con bono Y%: +Z",
-  ⚡ en la pierna cobrada por pago anticipado; el historial de los liquidados (todos, del día, de un
-  horario) a 1u con bono. Ya no hay botón de 2, 3 o 4. Lo de la regla anterior no se muestra.
+- **Pestaña Parlay:** cada parlay del día, de un horario y de la escalera del fin de semana con sus piernas,
+  "paga +X · con bono Y%: +Z", ⚡ en la pierna cobrada por pago anticipado; el historial de los liquidados
+  (todos, del día, de un horario, del fin de semana) a 1u con bono. Ya no hay botón de 2, 3 o 4. Lo de la
+  regla anterior no se muestra.
 - **Chequeo diario** (`output_checks`): la liquidación independiente acepta la ganada por pago anticipado
   (`pa_paid`); la 15 revisa que cada una tenga en `live_scores` la ventaja de 2+; la 16, que cada parlay
-  con bono cumpla la regla (piernas, momio, probabilidad, liga, sin repetidos).
+  con bono cumpla la regla (piernas, momio, probabilidad, liga, sin repetidos; la escalera, justo 3, 6 o 9
+  piernas del mismo fin de semana y desde las 5:00 de México, y 70+ en una liga nueva).
 - Lo que no se puede: leer el precio real de PlayDoit (el widget de Altenar responde 403 a scripts: no se
   raspa). El parlay usa el promedio de las casas; el dueño ve el precio real al apostarlo.
 

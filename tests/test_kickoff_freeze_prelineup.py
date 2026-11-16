@@ -90,7 +90,7 @@ def _parlay_patch(monkeypatch, stored, kicks):
 def test_a_parlay_slot_freezes_when_espn_says_one_of_its_matches_started(monkeypatch):
     from tests.test_program_parlays import NOW
     eng = FakeEngine()
-    slot = UTC("2030-01-05 19:45")                                   # el sistema: 19:45; ESPN: napoli a las 14:50
+    slot = UTC("2030-01-08 19:45")                                   # el sistema: 19:45; ESPN: napoli a las 14:50
     stored = pd.DataFrame([{"slot": slot, "match": "napoli vs lecce"}, {"slot": slot, "match": "roma vs como"}])
     _parlay_patch(monkeypatch, stored, [{"home": "napoli", "away": "lecce", "kickoff": slot,
                                          "espn_kickoff": NOW - pd.Timedelta(minutes=10)}])
@@ -103,7 +103,7 @@ def test_a_parlay_slot_freezes_when_espn_says_one_of_its_matches_started(monkeyp
 def test_a_match_that_espn_says_started_does_not_enter_a_new_parlay(monkeypatch):
     from tests.test_program_parlays import NOW
     eng = FakeEngine()
-    _parlay_patch(monkeypatch, None, [{"home": "napoli", "away": "lecce", "kickoff": UTC("2030-01-05 17:45"),
+    _parlay_patch(monkeypatch, None, [{"home": "napoli", "away": "lecce", "kickoff": UTC("2030-01-08 17:45"),
                                        "espn_kickoff": NOW - pd.Timedelta(minutes=10)}])
     # v2.9.0: sin napoli quedan 3 favoritos en horarios distintos, no alcanzan para el parlay del día
     assert PL.snapshot_parlays(engine=eng) == 0

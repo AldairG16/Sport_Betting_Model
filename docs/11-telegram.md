@@ -102,7 +102,9 @@ El dueño eligió solo 🎯 y parlays, en la última revisión. `src/models/fina
 - **Qué**: un mensaje por corrida, y solo si hay algo que decir.
   - Los 🎯, con el momio mínimo, ⚡, si ya vio la alineación y quién falta (de `lineup_alerts`).
   - Los que salieron 🎯 en el mensaje de la mañana o en el avance de la noche y ya no lo son, con el porqué.
-  - Los parlays con bono que se fijan ahí (`parlay_alerts.alert_text`).
+  - Los parlays con bono que se fijan ahí (`parlay_alerts.alert_text`). Desde v2.15.0 también los de la
+    escalera del fin de semana ("Parlay de 3 del fin de semana #2", "Parlay de 9 del fin de semana"), con la
+    nota de que cada uno se apuesta aparte.
   - El 🎯 que no estaba en la mañana va marcado "nuevo". Solo en un día cuyo mensaje quedó guardado:
     `notify_telegram._remember_announced` guarda en `model_state 'telegram_announced'` los 🎯 y el día.
 - **Una vez**: cada partido y cada parlay sale una sola vez (`model_state 'telegram_final_picks'`). Si una corrida

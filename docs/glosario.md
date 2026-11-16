@@ -19,6 +19,7 @@ Las palabras del proyecto, en el sentido en que se usan aquí.
 | **Pago anticipado (PA)** | Promoción de PlayDoit: si tu equipo va 2 goles arriba, la apuesta se paga como ganada |
 | **Bono de parlay** | PlayDoit paga extra sobre la ganancia de un parlay de 3+ piernas a -500 o mejor (5% a 35%) |
 | **Pierna** | Cada apuesta dentro de un parlay |
+| **Escalera del fin de semana** | Sábado y domingo: todos los parlays de 3 que quepan, uno de 6 y uno de 9 con los 🎯 de los dos días; cada uno se apuesta aparte (v2.15.0, [08](08-picks-y-parlays.md)) |
 | **Stale / anulada** | Una fila que ya no vale (un horario reprogramado, una apuesta sin datos): no cuenta ni gana ni pierde |
 | **Reprogramado / pospuesto** | Partido que cambió de fecha o no se jugó; el horario viejo se anula |
 | **Closing (cierre)** | El modo que corre cada 30 min: cuotas, alineaciones, picks y avisos |

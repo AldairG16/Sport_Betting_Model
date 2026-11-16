@@ -910,6 +910,7 @@ def api_board_parlay():
     from dashboard import parlay as _px
     from src.features.espn_lineups import espn_leagues
     from src.models import program_parlays as _pl
+    from src.models import program_picks as _pp
     from src.utils.team_normalizer import normalize_team
     # la tabla nace con el primer parlay que guarda el pipeline; * porque las columnas
     # (slot de v2.7.0, rule/kind/seq/pa de v2.9.0) las agrega el pipeline
@@ -936,7 +937,12 @@ def api_board_parlay():
                               "day_min": _pl.DAY_MIN_LEGS, "slot_min": _pl.SLOT_MIN_LEGS, "max_legs": _pl.MAX_LEGS,
                               "bonus": {str(k): v for k, v in _pl.BONUS.items()},
                               "block_minutes": _pl.BLOCK_MINUTES,
-                              "leagues": [league_name(x) for x in _pl.LEAGUES]}})
+                              "leagues": [league_name(x) for x in _pl.LEAGUES],
+                              # la escalera del fin de semana (v2.15.0)
+                              "ladder": sorted(_pl.LADDER.values()), "ladder_from_hour": _pl.LADDER_FROM_HOUR,
+                              "wide_fav": _pp.WIDE_FAV,
+                              "wide_leagues": [league_name(x) for x in _pl.LADDER_LEAGUES
+                                               if x not in _pl.LEAGUES]}})
 
 
 @app.route("/api/board/teams")

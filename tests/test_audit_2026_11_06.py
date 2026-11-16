@@ -57,17 +57,17 @@ def test_the_pick_is_saved_once_at_the_new_time():
 def test_an_analysis_that_no_longer_counts_is_never_a_parlay_leg():
     up = pd.DataFrame([_up(), _up(home="roma", away="genoa"), _up(home="inter", away="lecce"),
                        _up(home="milan", away="como")])
-    games = [("napoli vs lecce", "2030-01-05 19:45"), ("roma vs genoa", "2030-01-05 19:45"),
-             ("inter vs lecce", "2030-01-05 19:45"), ("milan vs como", "2030-01-05 19:45")]
+    games = [("napoli vs lecce", "2030-01-08 19:45"), ("roma vs genoa", "2030-01-08 19:45"),
+             ("inter vs lecce", "2030-01-08 19:45"), ("milan vs como", "2030-01-08 19:45")]
     mvs = [_mvs(match=m, kick=k) for m, k in games]
-    built = PL.build_parlays(pd.DataFrame(mvs), up)
+    built = PL.build_parlays(pd.DataFrame(mvs), up)               # martes: el parlay del día (v2.15.0)
     assert {x["match"] for p in built for x in p["legs"]} == {m for m, _ in games}
     # el horario viejo de Napoli (anulado) junto al nuevo: Napoli una sola vez
-    phantom = pd.DataFrame(mvs + [_mvs(kick="2030-01-05 17:00", skipped_at=VOIDED)])
+    phantom = pd.DataFrame(mvs + [_mvs(kick="2030-01-08 17:00", skipped_at=VOIDED)])
     for p in PL.build_parlays(phantom, up):
         names = [x["match"] for x in p["legs"]]
         assert len(names) == len(set(names))
-        assert all(pd.Timestamp(x["match_date"]) != pd.Timestamp("2030-01-05 17:00", tz="UTC") for x in p["legs"])
+        assert all(pd.Timestamp(x["match_date"]) != pd.Timestamp("2030-01-08 17:00", tz="UTC") for x in p["legs"])
 
 
 def test_proximos_shows_a_rescheduled_match_once():

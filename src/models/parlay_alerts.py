@@ -23,6 +23,10 @@ v2.11.0 (8-nov-26): ya no hay "Parlay listo" ni "Cambió el parlay" aparte. El
 dueño: "quiero que solo llegue el último cambio… y si hay parley también
 mandarlo". El parlay sale una vez, con los picks finales, en la última revisión
 antes de su primer partido (src/models/final_alerts.py, que usa este texto).
+
+v2.15.0 (16-nov-26): la escalera del fin de semana (de 3, de 6 y de 9) se
+avisa como el del día: listo cuando vieron la alineación los de su primer
+horario.
 """
 
 import html
@@ -78,8 +82,9 @@ def first_block(legs: list) -> list:
 
 
 def needs(legs: list) -> list:
-    """Las piernas que tienen que ver la alineación antes de avisar."""
-    return first_block(legs) if (legs and legs[0].get("kind") == "dia") else legs
+    """Las piernas que tienen que ver la alineación antes de avisar: todas en el
+    de un horario; las de su primer horario en el del día y en la escalera."""
+    return first_block(legs) if (legs and (legs[0].get("kind") or "horario") != "horario") else legs
 
 
 def is_ready(legs: list, covered=None) -> bool:
@@ -106,7 +111,7 @@ def alert_text(legs: list, tz, changed: bool = False, late: bool = False) -> str
     slot = min(_ts(x["match_date"]) for x in legs).astimezone(tz)
     fixed = slot - timedelta(minutes=PL.LOCK_MINUTES)
     kind, seq = legs[0].get("kind") or "horario", int(legs[0].get("seq") or 1)
-    name = (f"Parlay del día{f' #{seq}' if seq > 1 else ''}" if kind == "dia" else f"Parlay de las {slot:%H:%M}")
+    name = PL.parlay_name(kind, seq, slot)
     title = f"🔄 <b>Cambió el {name[0].lower() + name[1:]}</b>" if changed else f"🧩 <b>{name}</b> · {len(legs)} partidos"
     parts = [title + f"\n<i>{DIAS[slot.weekday()]} {slot.day} {MESES[slot.month - 1]} · "
                      f"apuéstalo antes de las {fixed:%H:%M} (hora de México)</i>"]
@@ -130,7 +135,11 @@ def alert_text(legs: list, tz, changed: bool = False, late: bool = False) -> str
                  + (f"\nSe gana {times_text(p_all)} (según Pinnacle)" if p_all is not None else ""))
     notes = ["📋 vio la alineación · ⏳ todavía no (sale ~1 h antes)",
              "⚡ = pago anticipado: si el favorito va 2 goles arriba, PlayDoit la paga como ganada",
-             "El momio de PlayDoit es estimado; el bono se suma a la ganancia (3 partidos +5%, 4 +7.5%, 5 +10%, 6 +15%)"]
+             "El momio de PlayDoit es estimado; el bono se suma a la ganancia (3 partidos +5%, 4 +7.5%, 5 +10%, "
+             "6 +15%, 9 +35%)"]
+    if kind in PL.LADDER:
+        notes.append("Es de la escalera del fin de semana: los de 3, el de 6 y el de 9 se apuestan aparte, "
+                     "cada uno con lo mismo")
     if late:
         notes.insert(0, "Faltan alineaciones del primer horario y ya casi se fija: revísalas antes de apostar")
     parts.append("<i>" + "\n".join(notes) + "</i>")
