@@ -604,6 +604,29 @@ PlayDoit al bot, en el mismo chat de los avisos, y el bot responde momio por mom
   momio mejorado se aprende la mediana de (momio PlayDoit / promedio de las casas)
   (`playdoit_ratio`). El dashboard estima con ella el momio de PlayDoit ("PlayDoit est.");
   sin muestra suficiente usa el promedio tal cual (medido el 19-oct: PlayDoit ≈ promedio).
+- **Boosts y combinadas (16-nov-2026, el dueño: B1).** "Muchas veces en PlayDoit sale este tipo de
+  apuestas, donde son positivas pero son varios resultados en 1". Claude lee cada apuesta con sus
+  patas (`patas`, `momio_antes`); una de varias cosas, o de un mercado que el sistema no tiene (otra
+  línea de goles, córners, goles de un equipo, del primer tiempo), va a `evaluate_combo`:
+  - **Cómo se mide** (`src/models/combo_odds.py`): cada cuánto salieron TODAS juntas en los
+    partidos que el mercado veía parecidos (probabilidad del local, del visitante y de más de 2.5, a
+    ±3 puntos; ±5 o ±8 si hay menos de 800), en `historical_odds` 2012 a enero de 2026, con la liga
+    encogida hacia el total (300 partidos). Una consulta que solo devuelve conteos (~0.5 s).
+  - **Por qué así:** con 3,000 partidos de 2024-26 medidos solo con los de antes
+    (`audit/m45_combo_calib.py`) sale como dice, por tercios a 1-3 puntos; multiplicar cada pieza se
+    equivoca hasta 15 puntos (ambos anotan + más de 2.5: 26.9 contra 41.7 que salió).
+  - **Cómo decide:** la misma regla de 2 puntos. "❌ no vale: sale 29 de cada 100 en 2,205 partidos
+    parecidos; lo justo es +247 y necesita +274 o más". Varios partidos se multiplican.
+  - **Un partido que no sigue el sistema:** se mide con el 1X2 de PlayDoit de la misma captura, sin
+    su margen; si no se ve, solo la referencia de un partido promedio, sin ✅ ni ❌.
+  - **Lo de un jugador** (anota, remates) no se puede medir: "depende de Ramos: Gana Portugal sale 55
+    de cada 100; solo vale si Ramos anota en más de 76 de cada 100 de esos partidos", o "❌ no vale:
+    aunque cumpliera siempre…". El empate anula dentro de una combinada tampoco.
+  - **Se guarda** en `playdoit_prices` con `market` 'combinada' (`pin_fair` = lo que salió en los
+    parecidos), para aprender cuánto paga PlayDoit en boosts. No entra a `playdoit_ratio`.
+  - **Lo que cuesta:** lo mismo que antes, Claude Haiku 5.5 con `MAX_TOKENS` 6,000 (solo se cobra lo
+    que escribe). No usa créditos de The Odds API. En la cuenta, todo Claude del mes iba en US$0.37 el
+    16-nov; el revisor no había leído ninguna captura todavía.
 
 ---
 
