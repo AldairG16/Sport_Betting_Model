@@ -34,6 +34,9 @@ cada vez; la próxima clase que aparezca se agrega aquí.
  11. Los próximos partidos con los nombres de hoy: una fila de
      upcoming_matches con el nombre normalizado de antes de un alias es el
      mismo partido dos veces (23-oct-26: Gaziantep vs "erzurum bb").
+ 12. Repetidos que vuelven: un partido que la fusión ya había borrado y que
+     otra carga vuelve a meter (17-nov-26: el CSV de selecciones escribe
+     "China" y la base "China PR"; cada weekly metía y borraba los mismos 19).
 Corre en el weekly (paso "Auditoría del sistema", sin el 1, que ya corrió en
 el evening) y a mano:
     python scripts/system_audit.py
@@ -55,6 +58,16 @@ BIAS_MAX_AGE_D = 8                # el weekly aprende el sesgo cada domingo
 RESIDUAL_MAX = 0.03               # sesgo que queda después de corregir: más de 3 pt…
 RESIDUAL_T = 3.0                  # …y a 3 errores estándar de 0 (no es ruido)
 RESIDUAL_MIN_N = 30
+RETURNING_DAYS = 6                # el weekly corre cada 7 días: lo borrado en su última corrida
+# Repetidos que la fusión ya había borrado y volvieron a entrar (17-nov-26): una carga que
+# escribe el equipo con otro nombre los mete otra vez cada vez que corre.
+RETURNING_SQL = """
+    SELECT date, LOWER(home_team) AS h, LOWER(away_team) AS a, COUNT(DISTINCT backup_at) AS times
+    FROM matches_identity_backup
+    WHERE backup_action = 'delete_duplicate'
+    GROUP BY 1, 2, 3
+    HAVING COUNT(DISTINCT backup_at) >= 2 AND MAX(backup_at) >= NOW() - make_interval(days => :days)
+    ORDER BY 1"""
 # palabra que tiene que traer el nombre de la liga en ESPN
 ESPN_EXPECTED = {
     "soccer_epl": "Premier", "soccer_efl_champ": "Championship", "soccer_spain_la_liga": "LALIGA",
@@ -129,6 +142,17 @@ def dc_problems(counts: dict, dc_teams: set, min_matches: int) -> list:
     return [f"Dixon-Coles: {len(missing)} equipo(s) próximos con historia que no están en el ajuste "
             f"({', '.join(missing[:6])}): el ajuste es más viejo que la historia; corre el paso "
             f"'Fit DC-MLE parameters' del weekly"]
+
+
+def returning_problems(rows: list) -> list:
+    """rows: [(fecha, local, visitante, veces)] de repetidos que la fusión borró
+    más de una vez, la última en los últimos RETURNING_DAYS días."""
+    if not rows:
+        return []
+    ex = ", ".join(f"{h} vs {a} ({d})" for d, h, a, *_ in rows[:3])
+    return [f"Repetidos que vuelven: {len(rows)} partido(s) que la fusión ya había borrado volvieron a "
+            f"entrar ({ex}): una carga los escribe con otro nombre y los mete otra vez cada vez que corre; "
+            f"ponle el alias en esa carga"]
 
 
 def espn_problems(names: dict, leagues: dict) -> list:
@@ -237,6 +261,16 @@ def run_system_audit(include_daily: bool = True, espn_get=None) -> dict:
         return [f"Próximos partidos: {len(bad)} fila(s) con el nombre de antes de un alias "
                 f"({', '.join(f'{h} vs {a}' for _, h, a in bad[:3])}) — el partido queda dos veces"] if bad else []
     check("Nombres de los próximos partidos", upcoming_names)
+
+    def returning():
+        from sqlalchemy import text
+        from config.database import engine
+        with engine.connect() as conn:
+            if conn.execute(text("SELECT to_regclass('matches_identity_backup')")).scalar() is None:
+                return []                  # nace con el primer respaldo
+            rows = conn.execute(text(RETURNING_SQL), {"days": RETURNING_DAYS}).fetchall()
+        return returning_problems(rows)
+    check("Repetidos que vuelven", returning)
 
     def elo():
         from src.features.elo_rating import compute_elo

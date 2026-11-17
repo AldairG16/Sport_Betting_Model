@@ -103,6 +103,10 @@ TEAM_NAME_MAP = {
     "Türkiye":                   "Turkey",
     "FYR Macedonia":             "North Macedonia",
     "Macedonia":                 "North Macedonia",
+    # 17-nov-26: el CSV dice "China" y la base guarda sus 19 partidos como "China PR" (la
+    # carga de historia del ~20-oct). Cada weekly los volvía a meter con "China" y la fusión
+    # de repetidos los borraba 4 minutos después (9, 11 y 16-nov).
+    "China":                     "China PR",
 }
 
 

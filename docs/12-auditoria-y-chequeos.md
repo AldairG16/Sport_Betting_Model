@@ -12,7 +12,7 @@ Hay cuatro capas:
 |---|---|---|
 | **Watchdog** (`scripts/watchdog.py`) | 4 veces al día | Que la base conteste (y por qué no), que las cuotas estén al día, que cada corrida corra a su ritmo (`pipeline_runs`), el latido del analista |
 | **Chequeo de salidas** (`src/utils/output_checks.py`) | Cada noche (evening) | Lo que sale: 23 chequeos, abajo |
-| **Auditoría del sistema** (`scripts/system_audit.py`) | Cada lunes (weekly) y a mano | 11 secciones, abajo |
+| **Auditoría del sistema** (`scripts/system_audit.py`) | Cada lunes (weekly) y a mano | 12 secciones, abajo |
 | **Auditoría semanal de sanidad** (`scripts/weekly_sanity_audit.py`) | Cada lunes | Repetidos, xG, calibración rodante, apuestas dobles, liquidación atorada, integridad numérica |
 
 Además, cada corrida avisa sus **errores tolerados** (los que no la tumbaron) y guarda lo que leyó de la base.
@@ -47,7 +47,7 @@ Además, cada corrida avisa sus **errores tolerados** (los que no la tumbaron) y
 | 5 (ampliado el 13-nov) | También vigila `big_names` (los grandes de nombre y cómo vienen, que se refrescan a diario): con 9 días sin refrescarse, avisa |
 | 5 (ampliado el 11-nov) | Lo aprendido por el weekly incluye la vigilancia de los supuestos del 🎯 (`favourite_watch`): si deja de correr 9 días, avisa |
 
-### Las 11 secciones de la auditoría del sistema
+### Las 12 secciones de la auditoría del sistema
 
 1. Salidas (los chequeos de arriba; en el weekly se omite porque ya corrió en el evening).
 2. Equipos próximos con historia y sin la historia partida en dos nombres.
@@ -60,6 +60,7 @@ Además, cada corrida avisa sus **errores tolerados** (los que no la tumbaron) y
 9. Dixon-Coles al día con la historia.
 10. Kalshi con su partido (a más de 10 puntos de Pinnacle es otro partido).
 11. Los próximos partidos con los nombres de hoy.
+12. Repetidos que vuelven: un partido que la fusión ya había borrado y otra carga vuelve a meter.
 
 `python scripts/system_audit.py` la corre a mano. Sale con código 0 si todo está bien.
 
@@ -109,6 +110,7 @@ están todas las clases que ya pasaron, como chequeos que corren igual cada vez:
 | Alineaciones de ESPN | Que cada alineación sea de su partido y su equipo (`espn_lineups.identity_problems`): un partido de ESPN guardado con más de dos equipos, o alineaciones que no comparten jugadores con su equipo | Weekly |
 | Dixon-Coles al día | Que ningún equipo de los próximos 3 días con la historia que pide el ajuste (8+ partidos en 3 años) falte del ajuste Dixon-Coles: si falta, el ajuste es más viejo que la historia y sus partidos se saltan | Weekly |
 | Kalshi con su partido | Que el 1X2 guardado de Kalshi no esté a más de 10 pt del de Pinnacle a la misma hora (`kalshi.stored_mismatches`, la foto de Pinnacle más cercana, a 3 h o menos): si lo está, es otro partido. Antes comparaba con la última foto de Pinnacle: Panathinaikos–AEK (1-nov) salía como otro partido porque Pinnacle se movió de +114 a -333 después de la última foto de Kalshi. Se limpia con `scripts/fix_kalshi_mismatches.py --apply`. La captura (`capture_kalshi`) usa la misma regla antes de guardar: solo juzga con un Pinnacle descargado hace 3 h o menos (`odds_fetched_at`). El 1-nov tiró el cierre de FC Seoul–Incheon contra un Pinnacle de 5.5 h antes | Weekly |
+| Repetidos que vuelven | Que ningún partido que la fusión de repetidos ya borró vuelva a entrar (`RETURNING_SQL`: borrado 2+ veces en `matches_identity_backup`, la última en los últimos 6 días). Si vuelve, una carga lo escribe con otro nombre y lo mete cada vez que corre. El 17-nov-26 el CSV de selecciones escribía "China" y la base "China PR": cada weekly metía los mismos 19 partidos y la fusión los borraba 4 minutos después (9, 11 y 16-nov). Se arregla con el alias en esa carga | Weekly |
 | Nombres de los próximos partidos | Que ninguna fila de `upcoming_matches` siga con el nombre normalizado de antes de un alias (`update_upcoming_matches.stale_norms`): sería el mismo partido dos veces. Cada recarga de momios los re-normaliza antes de limpiar duplicados | Weekly |
 
 - Corre en el weekly (paso "Auditoría del sistema", después del ajuste Dixon-Coles); las

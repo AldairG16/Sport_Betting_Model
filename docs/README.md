@@ -34,7 +34,7 @@ decisión.
 
 | # | Documento | Qué tiene |
 |---|---|---|
-| 12 | [Auditoría y chequeos](12-auditoria-y-chequeos.md) | El watchdog, el chequeo diario de salidas (23 chequeos), la auditoría del sistema (11 secciones) y cómo auditar |
+| 12 | [Auditoría y chequeos](12-auditoria-y-chequeos.md) | El watchdog, el chequeo diario de salidas (23 chequeos), la auditoría del sistema (12 secciones) y cómo auditar |
 | 13 | [Comandos](13-comandos.md) | Cómo correr cada modo, los agentes, las auditorías, las pruebas y el dashboard |
 | 14 | [Convenciones y preferencias del dueño](14-convenciones.md) | Cómo se trabaja: ramas, pruebas, idioma, y lo que el dueño pidió (palabras normales, momios americanos, nada a mano, nunca esconder un pick) |
 

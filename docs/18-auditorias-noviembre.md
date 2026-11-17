@@ -146,3 +146,11 @@ Se encontró:
   - Estoril vs Marítimo se pospuso (ESPN `postponed`) y pasa solo a `stale` a los 10 días.
   - Nacional vs Académico de Viseu es la fila del horario viejo, sin pick.
 - **ClubElo volvió el 17-nov:** foto nueva con 299 clubes y sin el aviso de bloqueo.
+- **Los mismos 19 partidos de China entraban y salían cada weekly** (lo vio la revisión del weekly del
+  16-nov). El CSV de selecciones (`load_international_data`) escribe "China". La base los guarda como
+  "China PR" desde la carga de historia del ~20-oct.
+  - Cada weekly los metía otra vez ("19 nuevas") y la fusión de repetidos los borraba 4 minutos después,
+    antes del ajuste Dixon-Coles: el 9, el 11 y el 16-nov. El modelo nunca los vio dobles.
+  - Arreglado con el alias en `TEAM_NAME_MAP`. Los 19 partidos de competencia del CSV desde 2023 ya están en
+    la base con "China PR"; los otros 10 son amistosos, que la carga no toma.
+  - Chequeo nuevo, sección 12 de la auditoría del sistema: "Repetidos que vuelven".
