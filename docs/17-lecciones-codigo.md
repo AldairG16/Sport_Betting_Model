@@ -178,3 +178,11 @@ pandas, así que 3 de cada 4 corridas no guardaban su consumo. Solo quedaba un `
 `db_meter.install` importa al arrancar todo lo que la salida necesita. La prueba corre un proceso aparte, porque
 dentro de pytest pandas ya está cargado y el error no se ve. **Regla:** lo que corre en `atexit` usa solo módulos
 ya importados.
+
+**Un chequeo que lee lo mismo que el código no ve su error (17-nov-26).** El pick se fija a la hora de ESPN
+cuando es más temprana (`espn_kickoffs`), y el chequeo §14 revisaba que ningún pick se guardara después de la
+hora real. Lo hacía leyendo esa misma tabla. El 8-nov ESPN no emparejó Iraklis–Panathinaikos (150 min antes
+de la hora de The Odds API, fuera del ±90 min): no hubo fila, el pick no se fijó y §14 tampoco vio nada. Lo
+encontró la auditoría, comparando con el final de ESPN que guarda el evening (`live_scores`), que viene de otro
+camino. **Regla:** un chequeo de "esto no debió pasar" toma su verdad de una fuente distinta de la que usó el
+código para decidir.

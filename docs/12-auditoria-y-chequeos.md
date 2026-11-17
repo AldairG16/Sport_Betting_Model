@@ -31,7 +31,7 @@ Además, cada corrida avisa sus **errores tolerados** (los que no la tumbaron) y
 | 8 | Ningún 🎯 a un equipo con 4+ titulares fuera |
 | 9 | Córners y tarjetas de ESPN de lo jugado |
 | 10 | Un partido reprogramado no cuenta dos veces |
-| 11 | El 🎯 contra el mercado (una familia que gana muy por encima de lo esperado es sospechosa) |
+| 11 | El 🎯 contra el mercado (una familia que gana muy por debajo de lo que esperaba el mercado elige peor que él) |
 | 12 | Cierres guardados de los partidos |
 | 13 | El ritmo de créditos de The Odds API |
 | 14 | Ni el pick ni el parlay se rehacen con el partido ya empezado |
@@ -251,8 +251,9 @@ tolerados":
   normal es 98-100%. Si el aviso de "sin créditos" salió hoy, es WARNING y no ERROR.
 - **picks en juego** (sección 14, 5-nov-26, `repicked_after_start`): ningún pick ni pierna de
   parlay de los últimos 3 días guardado (`picked_at`) más de 2 min después del inicio real, la
-  hora más temprana entre la del sistema y la de ESPN (`espn_kickoffs`). Los reconstruidos se
-  saltan: se guardan después del partido a propósito. Ver [16](16-lecciones-cuotas-y-creditos.md), "La hora de The Odds API puede
+  hora más temprana entre la del sistema y la de ESPN (`espn_kickoffs` y, desde el 17-nov-26, la
+  del final de ESPN en `live_scores`, a ±36 h: Iraklis–Panathinaikos no estaba en la primera).
+  Los reconstruidos, los anulados (`stale`) y los que no tienen pick se saltan. Ver [16](16-lecciones-cuotas-y-creditos.md), "La hora de The Odds API puede
   venir tarde".
 
 Al final de cada corrida del pipeline, `pipeline_invariants` revisa los goles esperados en

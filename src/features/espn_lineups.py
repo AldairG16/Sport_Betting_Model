@@ -175,17 +175,17 @@ def system_names(event: dict, candidates: list) -> tuple | None:
     return scored[0][1], scored[0][2]
 
 
-def assign_events(sport_key: str, events: list, fixtures: list) -> dict:
+def assign_events(sport_key: str, events: list, fixtures: list, window_s: int = KICK_WINDOW_S) -> dict:
     """{id de ESPN: (local, visitante, inicio)} con los partidos del sistema
     (fixtures: [(liga, local, visitante, inicio)]): misma liga, inicio a
-    ±90 min, los dos nombres parecidos, y cada partido de ESPN con un solo
-    partido del sistema y viceversa (gana el más parecido)."""
+    ±window_s (90 min de base), los dos nombres parecidos, y cada partido de
+    ESPN con un solo partido del sistema y viceversa (gana el más parecido)."""
     from src.utils.team_normalizer import normalize_team
     pairs = []
     for ev in events:
         eh, ea = normalize_team(ev["home"]), normalize_team(ev["away"])
         for lg, h, a, k in fixtures:
-            if lg != sport_key or abs((pd.Timestamp(k) - pd.Timestamp(ev["kick"])).total_seconds()) > KICK_WINDOW_S:
+            if lg != sport_key or abs((pd.Timestamp(k) - pd.Timestamp(ev["kick"])).total_seconds()) > window_s:
                 continue
             sc = pair_score(eh, ea, h, a)
             if sc is not None:

@@ -42,12 +42,47 @@ def test_the_closing_saves_espn_kickoff_of_what_starts_soon_even_if_it_already_b
     LS.capture_live_scores(eng, get=lambda url, headers=None, timeout=None: R(),
                            now=UTC("2026-10-24 18:01").to_pydatetime())
     (sql, window), = [x for x in eng.executed if "FROM upcoming_matches" in x[0]]
-    assert window["b"] == UTC("2026-10-24 21:01")                    # también lo que empieza en las próximas 3 h
+    assert window["b"] == UTC("2026-10-25 00:01")                    # también lo que empieza en las próximas 6 h
     (sql, rows), = eng.statements("INSERT INTO espn_kickoffs")
     assert rows[0]["home"] == "chelsea" and rows[0]["kickoff"] == system
     assert rows[0]["espn_kickoff"] == UTC("2026-10-24 17:30")
     assert eng.statements("INSERT INTO live_scores") == []           # el marcador sigue igual que antes
     assert LS.kick_differences(rows) == rows                         # 90 min de diferencia: se avisa en el log
+
+
+def test_an_espn_kickoff_two_and_a_half_hours_earlier_is_saved_and_freezes_the_pick():
+    """17-nov-26: el 8-nov The Odds API tenía Iraklis–Panathinaikos a las 18:00 y empezó a las 15:30. Con el
+    ±90 min y las 3 h de antes no se emparejó: el closing rehízo el pick con momios en juego hasta las 17:33 y el
+    🎯 de Panathinaikos (ganó 2-1) se volvió "Menos de 3.5"."""
+    from tests.test_live_scores import _ev
+    system = UTC("2026-11-08 18:00").to_pydatetime()
+    eng = FakeEngine(lambda sql, p: FakeResult(rows=[("soccer_greece_super_league", "iraklis fc", "panathinaikos",
+                                                       system)])
+                     if "FROM upcoming_matches" in sql and p["b"] >= system else FakeResult())
+    ev = _ev("401", "Iraklis", "Panathinaikos", 0, 0, state="pre", completed=False)
+    ev["date"] = "2026-11-08T15:30Z"
+
+    class R:
+        status_code = 200
+
+        def json(self):
+            return {"events": [ev]}
+    LS.capture_live_scores(eng, get=lambda url, headers=None, timeout=None: R(),
+                           now=UTC("2026-11-08 15:02").to_pydatetime())   # el closing de antes de empezar
+    (sql, rows), = eng.statements("INSERT INTO espn_kickoffs")
+    assert rows[0]["home"] == "iraklis fc" and rows[0]["espn_kickoff"] == UTC("2026-11-08 15:30")
+    assert PP.frozen_by_espn(rows, UTC("2026-11-08 15:32")) == {"iraklis fc vs panathinaikos"}
+    assert PP.frozen_by_espn(rows, UTC("2026-11-08 15:02")) == set()      # a las 15:02 todavía se rehace
+    assert LS.AHEAD_H == 6 and LS.KICKS_WINDOW_S == 6 * 3600
+
+
+def test_the_scores_keep_the_ninety_minute_window():
+    """La hora de inicio se empareja a ±6 h; el marcador sigue a ±90 min de la hora del sistema."""
+    from src.features import espn_lineups as EL
+    ev = {"event": "1", "home": "Iraklis", "away": "Panathinaikos", "kick": UTC("2026-11-08 15:30")}
+    fx = [("soccer_greece_super_league", "iraklis fc", "panathinaikos", UTC("2026-11-08 18:00"))]
+    assert EL.assign_events("soccer_greece_super_league", [ev], fx) == {}
+    assert EL.assign_events("soccer_greece_super_league", [ev], fx, LS.KICKS_WINDOW_S) == {"1": fx[0][1:]}
 
 
 def test_a_pick_freezes_at_espn_kickoff_when_it_is_earlier():
@@ -124,10 +159,31 @@ def test_the_daily_check_catches_a_pick_saved_after_the_real_kickoff():
     assert len(out) == 1 and out[0].startswith("panathinaikos vs aek athens") and "17:30" in out[0]
 
 
+def test_the_daily_check_also_reads_the_real_kickoff_from_espn_finals():
+    """17-nov-26: espn_kickoffs no tenía Iraklis–Panathinaikos (2.5 h antes) y el chequeo no lo vio. El final que
+    guarda el evening (live_scores) sí trae la hora de ESPN."""
+    from src.utils.output_checks import repicked_after_start
+    finals = [{"home": "iraklis fc", "away": "panathinaikos", "kickoff": UTC("2026-11-08 15:30")},
+              {"home": "central cordoba", "away": "lanus", "kickoff": UTC("2026-11-08 22:30")}]
+    picks = [{"match": "iraklis fc vs panathinaikos", "match_date": UTC("2026-11-08 18:00"),
+              "picked_at": UTC("2026-11-08 17:33"), "market": "under_3.5", "result": "win"},   # en juego
+             {"match": "central cordoba vs lanus", "match_date": UTC("2026-11-08 00:00"),         # ESPN más tarde:
+              "picked_at": UTC("2026-11-07 23:32"), "market": "under25", "result": "win"},       # se fijó antes, bien
+             {"match": "nacional vs academico de viseu", "match_date": UTC("2026-11-08 15:30"),
+              "picked_at": UTC("2026-11-08 15:02"), "market": None, "result": None}]             # sin pick
+    finals.append({"home": "nacional", "away": "academico de viseu", "kickoff": UTC("2026-11-07 15:30")})
+    out = repicked_after_start(picks, [], finals=finals)
+    assert len(out) == 1 and out[0].startswith("iraklis fc vs panathinaikos") and "15:30" in out[0]
+    stale = [{**picks[0], "result": "stale"}]                                    # el horario viejo, anulado
+    assert repicked_after_start(stale, [], finals=finals) == []
+    far = [{"home": "iraklis fc", "away": "panathinaikos", "kickoff": UTC("2026-11-01 15:30")}]  # otro partido
+    assert repicked_after_start(picks[:1], [], finals=far) == []
+
+
 def test_the_daily_check_skips_rebuilt_picks_and_reads_parlays_too():
     from src.utils import output_checks as OC
     src = inspect.getsource(OC.run_output_checks)
-    assert "FROM espn_kickoffs" in src and "program_parlays" in src
+    assert "FROM espn_kickoffs" in src and "program_parlays" in src and "FROM live_scores" in src
     assert "source IS DISTINCT FROM 'reconstruido'" in src            # se guardan después del partido a propósito
 
 

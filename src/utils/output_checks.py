@@ -680,28 +680,41 @@ def lineup_pick_problems(picks: list, lineups: list, profiles: dict) -> dict:
 
 
 REPICK_GRACE_MIN = 2             # el closing tarda; más que esto después del inicio = momios en juego
+FINALS_WINDOW_H = 36             # el final de ESPN del mismo partido: los mismos dos equipos, a ±36 h
 
 
-def repicked_after_start(picks: list, kicks: list, normalize=None) -> list:
+def repicked_after_start(picks: list, kicks: list, normalize=None, finals: list | None = None) -> list:
     """Función pura (5-nov-26): el 1-nov dos picks se rehicieron con el
     partido ya empezado (The Odds API con la hora 1-1.5 h tarde). picks:
-    filas de program_picks / program_parlays (match, match_date, picked_at);
-    kicks: espn_kickoffs (home, away, kickoff, espn_kickoff). Devuelve los
-    que se guardaron más de REPICK_GRACE_MIN después del inicio real (la
-    hora más temprana entre la del sistema y la de ESPN)."""
+    filas de program_picks / program_parlays (match, match_date, picked_at;
+    market y result si los hay); kicks: espn_kickoffs (home, away, kickoff,
+    espn_kickoff); finals: live_scores (home, away, kickoff) — el final que
+    guarda el evening trae la hora de ESPN aunque el closing no la haya
+    emparejado (17-nov-26: Iraklis–Panathinaikos del 8-nov empezó 2.5 h antes
+    de lo que decía The Odds API y espn_kickoffs no lo tenía, así que este
+    chequeo no lo vio). Devuelve los que se guardaron más de REPICK_GRACE_MIN
+    después del inicio real (la hora más temprana entre la del sistema y la
+    de ESPN). Sin pick (market vacío) o anulados ('stale': el horario viejo
+    de un reprogramado) no cuentan."""
     import pandas as pd
     from src.models.program_picks import match_key
     utc = lambda t: (lambda x: x.tz_convert("UTC") if x.tzinfo else x.tz_localize("UTC"))(pd.Timestamp(t))
-    idx = defaultdict(list)
+    idx, fin = defaultdict(list), defaultdict(list)
     for k in kicks:
         idx[match_key(k["home"], k["away"], normalize)].append((utc(k["kickoff"]), utc(k["espn_kickoff"])))
+    for f in finals or []:
+        fin[match_key(f["home"], f["away"], normalize)].append(utc(f["kickoff"]))
     out = []
     for p in picks:
         if p.get("picked_at") is None or pd.isna(p.get("picked_at")):
             continue
+        if ("market" in p and not isinstance(p.get("market"), str)) or p.get("result") == "stale":
+            continue
         h, _, a = str(p["match"]).partition(" vs ")
         kick = utc(p["match_date"])
-        espn = [e for s, e in idx.get(match_key(h, a, normalize), []) if abs((s - kick).total_seconds()) <= 3 * 3600]
+        key = match_key(h, a, normalize)
+        espn = [e for s, e in idx.get(key, []) if abs((s - kick).total_seconds()) <= 3 * 3600]
+        espn += [e for e in fin.get(key, []) if abs((e - kick).total_seconds()) <= FINALS_WINDOW_H * 3600]
         real = min([kick] + espn)
         if utc(p["picked_at"]) > real + timedelta(minutes=REPICK_GRACE_MIN):
             out.append(f"{p['match']} (guardado {utc(p['picked_at']):%d-%m %H:%M}, empezó {real:%H:%M} UTC)")
@@ -1058,7 +1071,15 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     try:
         kicks = q("""SELECT home, away, kickoff, espn_kickoff FROM espn_kickoffs
                      WHERE kickoff >= NOW() - make_interval(days => :d) - INTERVAL '3 hours'""", d=days)
-        played = """SELECT match, match_date, picked_at FROM {t}
+        try:                                       # el final de ESPN, con su hora (17-nov-26)
+            finals = q("""SELECT home, away, kickoff FROM live_scores
+                          WHERE kickoff >= NOW() - make_interval(days => :d) - INTERVAL '2 days'
+                            AND status <> 'postponed'""", d=days).to_dict("records")
+        except Exception as e:
+            if "does not exist" not in str(e):
+                raise
+            finals = []
+        played = """SELECT match, match_date, picked_at, market, result FROM {t}
                     WHERE match_date BETWEEN NOW() - make_interval(days => :d) AND NOW() {extra}"""
         # los reconstruidos (backfill_picks) se guardan después del partido a propósito
         rows14 = q(played.format(t="program_picks", extra="AND source IS DISTINCT FROM 'reconstruido'"),
@@ -1068,7 +1089,7 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
         except Exception as e:
             if "does not exist" not in str(e):
                 raise
-        late = repicked_after_start(rows14, kicks.to_dict("records"), normalize)
+        late = repicked_after_start(rows14, kicks.to_dict("records"), normalize, finals)
         seen.append(f"picks rehechos ya empezado el partido ({len(late)})")
         if late:
             problems.append(f"Picks en juego: {len(late)} picks o piernas de parlay se guardaron con el partido ya "

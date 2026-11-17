@@ -207,6 +207,29 @@ cambios con la alineación (el precio no cuadraba).
 - `snapshot_parlays`: un horario con un partido así queda fijo como estaba (no se borra el
   borrador ni se escribe otro en ese horario) y ese partido no entra a otro parlay.
 - Sin `espn_kickoffs` (antes del primer closing de v2.8.0, o si no se pudo leer) manda la hora
-  del sistema, como antes. Lo que ESPN no empareja (más de 90 min de diferencia o ligas fuera de
-  ESPN) tampoco se corrige.
+  del sistema, como antes. Lo que ESPN no empareja tampoco se corrige: hasta el 17-nov-26, más de
+  90 min de diferencia; hoy, más de 6 h o una liga fuera de ESPN (solo la K-League, sin 🎯).
 - El chequeo de salidas §14 avisa si vuelve a pasar.
+
+**2.5 h tarde (8-nov-2026, visto en la auditoría del 17-nov).** Iraklis–Panathinaikos: The Odds
+API decía 18:00 UTC y empezó a las 15:30.
+- **Por qué no se fijó:** la hora de ESPN se emparejaba igual que el marcador, a ±90 min, y solo
+  de lo que el sistema creía que empezaba en las próximas 3 h. A 150 min no se emparejó: sin fila
+  en `espn_kickoffs`, nada fijó el pick.
+- **Qué pasó:** el closing lo rehízo con momios EN JUEGO hasta las 17:33, con el partido ya
+  terminado. El 🎯 "Gana el visitante" (Panathinaikos a -380; ganó 2-1) pasó a las 16:03 a
+  "Menos de 3.5 goles", sin 🎯.
+- **El chequeo §14 tampoco lo vio,** porque leía la misma tabla, y los chequeos del 9 al 11-nov no
+  corrieron por la caída de Neon.
+- **Arreglo:**
+  - la hora de inicio se empareja a ±6 h (`live_scores.KICKS_WINDOW_S`) con lo que empieza en las
+    próximas 6 h (`AHEAD_H`). El marcador sigue a ±90 min de la hora del sistema; los nombres se
+    siguen pidiendo parecidos, y los mismos dos equipos no juegan dos veces en 6 h;
+  - §14 también toma la hora del final de ESPN que guarda el evening (`live_scores`, ±36 h);
+  - el cierre de las sombra (`save_bets.real_kickoff`) ya no toma una cuota descargada después de
+    la hora de ESPN. En octubre, 5 partidos se cerraron con momios en juego (49 sombra), y de esos
+    cierres aprende el peso del modelo. Se dejaron: ya salen de la ventana;
+  - `scripts/fix_inplay_picks.py` rehízo el pick con el análisis y los momios de las 14:32, con
+    respaldo en `program_picks_fix_backup`. El récord del 🎯 pasó de 212 a 213 (121 ganados).
+- **Otro caso:** Gimnasia–Sarmiento (23-oct, 60 min) quedó como estaba. Es de antes de la regla de
+  v2.9.0, y rehacerlo cambiaría la regla, no el error.

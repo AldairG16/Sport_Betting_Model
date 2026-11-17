@@ -68,7 +68,14 @@ SCORE_COLS = ("home_goals", "away_goals", "home_corners", "away_corners", "home_
 POSTPONED = "postponed"     # ESPN lo da por terminado sin jugarse (9-nov-26): sin marcador
 POSTPONED_TEXT = "se pospuso"
 LOOKBACK_H = 6              # partidos que empezaron en las últimas horas
-AHEAD_H = 3                 # y la hora de ESPN de los que empiezan en las próximas
+# 17-nov-26: la hora de ESPN de los que empiezan en las próximas AHEAD_H, emparejada a ±KICKS_WINDOW_S. El
+# 8-nov The Odds API tenía Iraklis–Panathinaikos a las 18:00 y empezó a las 15:30 (2.5 h antes). Con 3 h y el
+# ±90 min de las alineaciones no se emparejó: el closing rehízo su pick con momios en juego hasta las 17:33 y el
+# 🎯 de Panathinaikos (ganó 2-1) se volvió "Menos de 3.5". Con 6 h alcanza un inicio hasta ~5.5 h antes de lo
+# que dice el sistema; los nombres se siguen pidiendo parecidos y los mismos dos equipos no juegan dos veces en
+# 6 h. Los marcadores siguen con la hora del sistema y sus ±90 min.
+AHEAD_H = 6
+KICKS_WINDOW_S = 6 * 3600
 KICK_DIFF_MIN = 5           # más diferencia que esto con la hora del sistema se avisa en el log
 
 # La hora de inicio de ESPN de cada partido del sistema (kickoff = la del
@@ -187,7 +194,7 @@ def capture_live_scores(engine=None, get=None, now=None) -> int:
             rows.append({"sport_key": sport_key, "kickoff": k, "home": h, "away": a, "espn_id": eid,
                          **{c: e.get(c) for c in SCORE_COLS}})
         every = {e["event"]: e for e in events}
-        for eid, (h, a, k) in assign_events(sport_key, list(every.values()), fixtures).items():
+        for eid, (h, a, k) in assign_events(sport_key, list(every.values()), fixtures, KICKS_WINDOW_S).items():
             kicks.append({"sport_key": sport_key, "kickoff": k, "home": h, "away": a,
                           "espn_kickoff": every[eid]["kick"], "espn_id": eid})
     if asked and not read:

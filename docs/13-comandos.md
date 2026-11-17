@@ -49,6 +49,7 @@ python scripts/db_smoke_test.py                  # 36 checks contra la base real
 python -c "from scripts.revalidate_pending_bets import revalidate_pending_bets as r; r(dry_run=True)"  # qué cancelaría ahora
 python scripts/fix_stat_settlements.py           # en seco; --apply corrige liquidaciones (--motivo "...")
 python scripts/fix_match_stats.py                # en seco; --apply restaura córners y tiros reales del CSV
+python scripts/fix_inplay_picks.py               # en seco; --apply rehace los picks guardados con el partido ya empezado
 
 # Tests
 python -m pytest tests/ -v
