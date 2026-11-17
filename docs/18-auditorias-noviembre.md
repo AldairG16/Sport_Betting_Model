@@ -1,6 +1,6 @@
 # 18 · Auditorías de noviembre de 2026
 
-Lo que encontraron las auditorías del 6 y del 9 de noviembre comparando el dashboard con la base: fantasmas de reprogramados, nombres gemelos, repetidos con un día de diferencia y pospuestos con la fecha equivocada. Cada defecto quedó con su chequeo. La caída de Neon del 9-nov y lo que se hizo para que no vuelva está en [06](06-base-de-datos.md).
+Lo que encontraron las auditorías del 6, del 9 y del 17 de noviembre. Las dos primeras compararon el dashboard con la base y encontraron fantasmas de reprogramados, nombres gemelos, repetidos con un día de diferencia y pospuestos con la fecha equivocada. Cada defecto quedó con su chequeo. La caída de Neon del 9-nov y lo que se hizo para que no vuelva está en [06](06-base-de-datos.md).
 
 <!-- detalle movido de OPERACION.md -->
 
@@ -120,3 +120,29 @@ Además:
 - Los datos de antes se arreglaron una vez: los 2 pospuestos de `live_scores` (Nacional el 7, Estoril
   vs Marítimo el 8) pasaron a `postponed`, y `void_rescheduled` recuperó el 8 de Nacional y el 9 de
   Kristiansund, y anuló el 7 de Nacional.
+
+**Auditoría del 17-nov-26 (v2.15.0).** El dueño: "corre la auditoría completa del sistema". Se revisó:
+
+- **Corridas:** las 400 desde el 12-nov salieron bien. Hay 281 closings sin un hueco de más de 35 min. Se leyeron
+  260 registros, entre morning, evening, weekly, resultados, resolvedor, watchdog, closings y el revisor.
+- **Auditoría y chequeos:** `system_audit` 11/11, `db_smoke_test` 35/35 y el chequeo de salidas limpio.
+- **La base:** las filas por día de cada tabla y la calidad por día de partido solo bajan en el apagón de Neon
+  (9 al 11-nov) y en la fecha FIFA.
+- **El dashboard contra la base:** el encabezado (212 🎯, 120 ganados, 92 perdidos, +3.08) y "Ganadas y
+  perdidas" (537 picks, sin los 27 de poca historia, −18.71) dan lo mismo que la base.
+
+Se encontró:
+
+- **El medidor no guardaba el consumo del revisor de PlayDoit** ([17](17-lecciones-codigo.md), "Al salir no se
+  importa nada nuevo"). Arreglado, con su prueba.
+- **Argentina ve tarde la alineación.** De los picks del 27-oct al 14-nov, 367 de 395 la vieron, y los 🎯 109
+  de 114. Argentina fue 19 de 32: ESPN la publica unos 30 min antes, y en los partidos de :00 el último closing
+  antes de que se fije el pick llega 28-30 min antes. No se cambió nada, por tres razones:
+  - América tiene el 🎯 en pausa;
+  - Argentina no tiene pago anticipado;
+  - una corrida más a :15 y :45 duplicaría el closing.
+  La K-League no tiene alineaciones en ESPN (0 de 12).
+- **Dos picks del 8-nov sin cobrar:**
+  - Estoril vs Marítimo se pospuso (ESPN `postponed`) y pasa solo a `stale` a los 10 días.
+  - Nacional vs Académico de Viseu es la fila del horario viejo, sin pick.
+- **ClubElo volvió el 17-nov:** foto nueva con 299 clubes y sin el aviso de bloqueo.

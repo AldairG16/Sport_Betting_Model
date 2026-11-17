@@ -168,3 +168,13 @@ pago de Neon era solo el correo de Neon a los $15: nadie podía saber si llegaba
 vencer el mes pagado nada recordaba bajar al gratis. Regla: lo que cuida dinero del dueño lo calcula
 y lo avisa el programa, con pruebas (`db_budget.paid_bill`, `bill_message`, `downgrade_message`); la
 alerta del proveedor queda de respaldo.
+
+**Al salir no se importa nada nuevo (17-nov-26).** `db_meter._record_at_exit` guarda en `pipeline_runs` lo que
+gastó de la base cada proceso que no es el orquestador, al terminar (`atexit`). Importaba
+`src.utils.pipeline_runs`, y con él pandas, en ese momento. Python ya cerró los hilos cuando corren los
+`atexit`, y pandas registra uno propio al importarse por primera vez: `RuntimeError: can't register atexit after
+shutdown`. El revisor de PlayDoit que escuchaba 6 h sin mensajes solo leía su offset y nunca había cargado
+pandas, así que 3 de cada 4 corridas no guardaban su consumo. Solo quedaba un `⚠️` en su log. Ahora
+`db_meter.install` importa al arrancar todo lo que la salida necesita. La prueba corre un proceso aparte, porque
+dentro de pytest pandas ya está cargado y el error no se ve. **Regla:** lo que corre en `atexit` usa solo módulos
+ya importados.

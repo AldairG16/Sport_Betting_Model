@@ -130,6 +130,12 @@ def install(engine) -> None:
     from sqlalchemy import event
     event.listen(engine, "after_cursor_execute", _after_execute)
     _INSTALLED.add(id(engine))
+    # Lo que _record_at_exit usa se importa ahora (17-nov-26): al salir, Python ya
+    # cerró los hilos y no deja importar pandas por primera vez ("can't register
+    # atexit after shutdown"). El revisor de PlayDoit que no atendía mensajes nunca
+    # cargaba pandas: 3 de cada 4 corridas no guardaban su consumo.
+    import importlib
+    importlib.import_module("src.utils.pipeline_runs")
 
 
 def reset() -> None:

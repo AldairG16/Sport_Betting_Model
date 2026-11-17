@@ -47,7 +47,7 @@ Léelo antes de cambiar la parte correspondiente: cada punto es un error real, c
 | 15 | [Lecciones: datos y fuentes](15-lecciones-datos.md) | Fechas, temporadas, nombres de equipos, football-data, ESPN, NaN y lo que entra al modelo |
 | 16 | [Lecciones: cuotas y créditos](16-lecciones-cuotas-y-creditos.md) | The Odds API, presupuesto de créditos, cierres válidos y líneas |
 | 17 | [Lecciones: código y base](17-lecciones-codigo.md) | Pasos "OK" que no hicieron nada, transacciones, pandas, el runner de GitHub, handicap asiático |
-| 18 | [Auditorías de noviembre](18-auditorias-noviembre.md) | Auditoría del 6-nov, repetidos y pospuestos del 9-nov |
+| 18 | [Auditorías de noviembre](18-auditorias-noviembre.md) | Auditoría del 6-nov, repetidos y pospuestos del 9-nov, auditoría del 17-nov |
 | 19 | [Mundial 2026](19-mundial-2026.md) | El torneo, el kill-switch y el paper-trading |
 
 [Glosario](glosario.md): las palabras del proyecto (🎯, sombra, cierre, CLV, Pinnacle, PA, stale, …).
