@@ -296,13 +296,34 @@ def test_the_audit_runs_every_check_and_reports_each_problem(monkeypatch):
     monkeypatch.setattr(DB, "engine", _NoRowsEngine())
     out = SA.run_system_audit()
     assert out["Sesgo del modelo"] == [] and out["Alineaciones de ESPN"] == [] and out["Dixon-Coles al día"] == []
-    assert out["Kalshi con su partido"] == []
+    assert out["Kalshi con su partido"] == [] and out["Repetidos que vuelven"] == []
     assert out["Equipos próximos con historia"] == [] and out["Ligas de ESPN"] == []
     assert out["Salidas y datos de entrada"] == ["Datos: 40 partidos repetidos"]
     assert out["Nombres de Understat y ESPN"] == ["lineups (ESPN): 1"]
     assert out["Elo"] and out["Lo que entra al modelo"]
     assert sum(1 for e in RUN_ISSUES.errors() if "Auditoría del sistema" in e) == 4
     RUN_ISSUES.reset()
+
+
+def test_a_duplicate_that_the_merge_already_deleted_and_came_back_is_an_error(monkeypatch):
+    """17-nov-26: el CSV de selecciones escribe "China" y la base "China PR". Cada weekly
+    metía los mismos 19 partidos y la fusión los borraba (9, 11 y 16-nov)."""
+    import scripts.system_audit as SA
+    from datetime import date
+    rows = [(date(2023, 11, 16), "thailand", "china", 3), (date(2024, 1, 13), "china", "tajikistan", 3)]
+    out = SA.returning_problems(rows)
+    assert len(out) == 1 and out[0].startswith("Repetidos que vuelven: 2 partido(s)")
+    assert "thailand vs china (2023-11-16)" in out[0]
+    assert SA.returning_problems([]) == []
+    # la consulta: borrados 2+ veces y la última en la semana del weekly
+    assert "COUNT(DISTINCT backup_at) >= 2" in SA.RETURNING_SQL and "delete_duplicate" in SA.RETURNING_SQL
+    assert SA.RETURNING_DAYS < 7
+
+
+def test_the_national_teams_csv_writes_china_like_the_database():
+    from scripts.load_international_data import normalize_team
+    assert normalize_team("China") == "China PR"
+    assert normalize_team("China PR") == "China PR"
 
 
 def test_the_weekly_runs_the_system_audit_after_the_dc_fit(monkeypatch):
