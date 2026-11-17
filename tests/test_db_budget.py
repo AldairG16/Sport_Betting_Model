@@ -108,6 +108,51 @@ def test_other_processes_save_what_they_spent_when_they_finish(monkeypatch):
     M.reset()
 
 
+_EXIT_SCRIPT = r'''
+import contextlib, os, sys, types
+os.environ["GITHUB_ACTIONS"] = "true"
+OUT = sys.argv[1]
+
+class _Conn:
+    def execute(self, stmt, params=None):
+        with open(OUT, "a", encoding="utf-8") as f:
+            f.write(" ".join(str(stmt).split())[:40] + "\n")
+
+class _Engine:
+    @contextlib.contextmanager
+    def begin(self):
+        yield _Conn()
+
+fake = types.ModuleType("config.database")
+fake.engine = _Engine()
+sys.modules["config.database"] = fake
+
+import sqlalchemy
+from src.utils import db_meter as M
+M.install(sqlalchemy.create_engine("sqlite://"))
+M.record("SELECT offset FROM model_state", 1, 1, 32)
+print("pandas antes de salir:", "pandas" in sys.modules)
+'''
+
+
+def test_a_process_that_never_loaded_pandas_still_saves_what_it_spent(tmp_path):
+    """17-nov-26: el revisor de PlayDoit que escucha 6 h sin mensajes solo lee su
+    offset y nunca carga pandas. Al salir, Python ya no deja importarlo ("can't
+    register atexit after shutdown") y su consumo no se guardaba. Se corre en un
+    proceso aparte: así es como sale de verdad."""
+    import os
+    import subprocess
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    script, out = tmp_path / "proc.py", tmp_path / "out.txt"
+    script.write_text(_EXIT_SCRIPT, encoding="utf-8")
+    env = {**os.environ, "PYTHONPATH": str(root), "PYTHONIOENCODING": "utf-8"}
+    run = subprocess.run([sys.executable, str(script), str(out)], cwd=root, env=env,
+                         capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert "no se pudo guardar" not in run.stdout, run.stdout + run.stderr
+    assert "INSERT INTO pipeline_runs" in out.read_text(encoding="utf-8")
+
+
 # ── El pronóstico del mes ────────────────────────────────────────────────────
 
 NOW = datetime(2026, 12, 11, 12, tzinfo=timezone.utc)
