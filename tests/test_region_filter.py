@@ -70,13 +70,32 @@ def test_the_classic_filters_do_not_change(monkeypatch):
                                          "liga_dura": True}                         # el pipeline lee los mismos tres
 
 
-def test_the_report_says_what_the_region_filter_does():
+def test_the_report_says_what_the_region_filter_does(monkeypatch):
+    # si algún día una liga de América tuviera 🎯, la pausa sí lo quitaría y lo devolvería
+    monkeypatch.setattr(FL, "star_leagues", lambda region: ["soccer_usa_mls"])
     st = FL.learn_filters(None, {}, AMERICA + REST)
     txt = FL.format_report(st, {})
     assert "🎯 en América" in txt and "PRENDIDO, 🎯 en pausa (desde hoy)" in txt
     assert "región -7.6pt (n=59) contra el resto +10.2pt (n=133)" in txt
     back = FL.format_report(FL.learn_filters(None, st, _rows("soccer_usa_mls", 40, 59, tag="a") + REST), st)
     assert "APAGADO (el 🎯 vuelve hoy)" in back
+
+
+def test_the_report_does_not_promise_a_target_that_america_cannot_have():
+    """18-nov-26: desde v2.9.0 el 🎯 es solo para las ligas con pago anticipado y las 12 de Europa y Asia
+    (v2.14.0); ninguna es de América. Al apagarse, el reporte iba a decir "el 🎯 vuelve hoy" y no era
+    cierto. El dueño eligió corregir el texto."""
+    assert FL.star_leagues("america") == []
+    assert FL.star_leagues("big5") and FL.star_leagues("asia")
+    st = FL.learn_filters(None, {}, AMERICA + REST)
+    txt = FL.format_report(st, {})
+    assert "PRENDIDO (desde hoy), no cambia ningún 🎯: América no tiene ligas con 🎯" in txt
+    assert "🎯 en pausa" not in txt
+    assert "América no tiene ninguna, así que prendido o apagado los picks son los mismos" in txt
+    back = FL.format_report(FL.learn_filters(None, st, _rows("soccer_usa_mls", 40, 59, tag="a") + REST), st)
+    assert "APAGADO (desde hoy), no cambia ningún 🎯" in back and "vuelve" not in back
+    still = FL.format_report(st, st)                                  # sigue prendido: sin "(desde hoy)"
+    assert "PRENDIDO, no cambia ningún 🎯: América no tiene ligas con 🎯" in still
 
 
 def test_the_weekly_reads_only_picks_that_passed_the_rule():

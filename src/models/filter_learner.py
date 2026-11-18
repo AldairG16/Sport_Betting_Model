@@ -237,21 +237,43 @@ def format_report(state: dict, previous: dict | None = None, html: bool = False)
     lines.append(f"(+ = su grupo sí es peor y el filtro ayuda.) Se apaga solo si su grupo acierta "
                  f"mejor que el resto con n ≥ {MIN_N} en {MIN_CLUSTERS} partidos; "
                  f"el filtro Pinnacle sigue igual.")
-    if any((n or {}).get("kind") == "region" for n in (state.get("filters") or {}).values()):
+    regions = [k for k, n in (state.get("filters") or {}).items() if (n or {}).get("kind") == "region"]
+    if regions:
+        idle = [REGION_SHORT.get(r, r) for r in regions if not star_leagues(r)]
         lines.append(f"(Por región: brecha = acierto − lo que esperaba el mercado, picks que pasan la regla de "
                      f"{REGION_WINDOW_DAYS} días. Se prende si la región pierde contra el resto fuera del margen de "
                      f"error, con {MIN_N_GROUP}+ picks en {MIN_CLUSTERS_GROUP}+ partidos por grupo; se apaga en "
-                     f"cuanto deja de perder. Prendido: el pick se ve igual, sin 🎯.)")
+                     f"cuanto deja de perder. Prendido: el pick se ve igual, sin 🎯."
+                     + (f" Hoy el 🎯 es solo para las ligas con pago anticipado y las 12 de Europa y Asia: "
+                        f"{', '.join(idle)} no tiene ninguna, así que prendido o apagado los picks son los mismos."
+                        if idle else "") + ")")
     return "\n".join(lines)
+
+
+REGION_SHORT = {"america": "América"}
+
+
+def star_leagues(region: str) -> list:
+    """Las ligas de la región donde hoy puede haber 🎯 (program_picks.strong_favourite: las de pago
+    anticipado y WIDE_LEAGUES). 18-nov-26: desde v2.9.0 (6-nov) ninguna es de América, así que su
+    pausa no cambia ningún 🎯, prendida o apagada; el reporte decía "el 🎯 vuelve hoy" al apagarse y
+    no era cierto (el dueño eligió corregir el texto). Vacío = la pausa no cambia ningún pick."""
+    from src.models.early_payout import PA_LEAGUES
+    from src.models.program_picks import WIDE_LEAGUES
+    from src.models.side_bias import region_of
+    return sorted({lg for lg in (*PA_LEAGUES, *WIDE_LEAGUES) if region_of(lg) == region})
 
 
 def _region_line(name: str, node: dict, prev_paused: set) -> str:
     on = bool(node.get("on"))
-    status = "PRENDIDO, 🎯 en pausa" if on else "APAGADO"
+    idle = not star_leagues(name)
+    status = "PRENDIDO" if idle and on else "PRENDIDO, 🎯 en pausa" if on else "APAGADO"
     if on and name not in prev_paused:
         status += " (desde hoy)"
     elif not on and name in prev_paused:
-        status += " (el 🎯 vuelve hoy)"
+        status += " (desde hoy)" if idle else " (el 🎯 vuelve hoy)"
+    if idle:
+        status += f", no cambia ningún 🎯: {REGION_SHORT.get(name, name)} no tiene ligas con 🎯"
     if node.get("region_gap") is None:
         val = f"sin datos (n={node.get('n', 0)})"
     else:
