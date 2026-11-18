@@ -1241,6 +1241,38 @@ SHADOW_CLOSING_SQL = f"""
 """
 
 
+def _espn_kicks() -> dict:
+    """{partido: [(hora del sistema, hora de ESPN)]} de espn_kickoffs, la hora real de inicio que guarda el
+    closing (live_scores.capture_live_scores). Vacío si la tabla no está o no se pudo leer: entonces manda
+    la hora del sistema, como antes."""
+    try:
+        df = pd.read_sql(text("""SELECT home, away, kickoff, espn_kickoff FROM espn_kickoffs
+                                 WHERE kickoff >= NOW() - INTERVAL '11 days'"""), engine)
+    except Exception as e:
+        if "does not exist" not in str(e):
+            log.warning(f"⚠️  Shadow closing sin la hora de ESPN ({type(e).__name__}): se usa la del sistema")
+        return {}
+    if not {"home", "away", "kickoff", "espn_kickoff"} <= set(df.columns):
+        return {}
+    out: dict = {}
+    for r in df.itertuples(index=False):
+        k = f"{normalize_team(str(r.home)).lower()} vs {normalize_team(str(r.away)).lower()}"
+        out.setdefault(k, []).append((pd.to_datetime(r.kickoff, utc=True), pd.to_datetime(r.espn_kickoff, utc=True)))
+    return out
+
+
+def real_kickoff(kicks: dict, home: str, away: str, match_date) -> pd.Timestamp:
+    """La hora real de inicio de un partido: la más temprana entre la del sistema y la de ESPN (17-nov-26).
+    Un cierre descargado después ya es en vivo: en octubre 5 partidos (San Lorenzo–Riestra, Panathinaikos–
+    Asteras, Racing–Independiente, Cincinnati–Columbus, Gimnasia–Sarmiento; 49 shadow) se cerraron con
+    momios en juego porque The Odds API tenía la hora 1-2.5 h tarde, y de esos cierres aprende el peso del
+    modelo."""
+    kick = pd.to_datetime(match_date, utc=True)
+    k = f"{normalize_team(str(home)).lower()} vs {normalize_team(str(away)).lower()}"
+    espn = [e for s, e in kicks.get(k, []) if abs((s - kick).total_seconds()) <= 3 * 3600]
+    return min([kick] + espn)
+
+
 def _update_shadow_closing():
     """Rellena closing_odds de shadow_bets con el MISMO lookup y mapeo que
     bets_history (B2, ronda 7) — el CLV por bandas depende de esto.
@@ -1257,6 +1289,7 @@ def _update_shadow_closing():
     sdf = pd.read_sql(text(SHADOW_CLOSING_SQL), engine)
     if sdf.empty:
         return
+    kicks = _espn_kicks()
 
     s_updated = 0
     rows_cache: dict = {}
@@ -1278,7 +1311,7 @@ def _update_shadow_closing():
             if odds_df.empty:
                 continue
 
-            sets = closing_updates(row, market, odds_df.iloc[0], bet_match_date)
+            sets = closing_updates(row, market, odds_df.iloc[0], real_kickoff(kicks, home, away, bet_match_date))
             if not sets:
                 continue
             apply_closing_updates(conn, "shadow_bets", row["id"], sets)

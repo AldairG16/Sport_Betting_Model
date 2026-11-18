@@ -1,6 +1,6 @@
 # 18 · Auditorías de noviembre de 2026
 
-Lo que encontraron las auditorías del 6, del 9 y del 17 de noviembre. Las dos primeras compararon el dashboard con la base y encontraron fantasmas de reprogramados, nombres gemelos, repetidos con un día de diferencia y pospuestos con la fecha equivocada. Cada defecto quedó con su chequeo. La caída de Neon del 9-nov y lo que se hizo para que no vuelva está en [06](06-base-de-datos.md).
+Lo que encontraron las auditorías del 6, del 9 y del 17 de noviembre (dos ese día). Las dos primeras compararon el dashboard con la base y encontraron fantasmas de reprogramados, nombres gemelos, repetidos con un día de diferencia y pospuestos con la fecha equivocada. Cada defecto quedó con su chequeo. La caída de Neon del 9-nov y lo que se hizo para que no vuelva está en [06](06-base-de-datos.md).
 
 <!-- detalle movido de OPERACION.md -->
 
@@ -154,3 +154,47 @@ Se encontró:
   - Arreglado con el alias en `TEAM_NAME_MAP`. Los 19 partidos de competencia del CSV desde 2023 ya están en
     la base con "China PR"; los otros 10 son amistosos, que la carga no toma.
   - Chequeo nuevo, sección 12 de la auditoría del sistema: "Repetidos que vuelven".
+
+**Segunda auditoría del 17-nov-26, de punta a punta.** El dueño: "quiero un programa funcionando
+correctamente y no tenga fallos al mostrar los resultados ni bugs silenciosos que alteren los picks". Además
+de los chequeos, se rehízo cada cosa por fuera del código:
+
+- **Corridas:** las del 17-nov salieron bien. Los 19 registros desde las 15:30 UTC no tienen ⚠️ ni errores.
+- **Auditoría del sistema:** 11 de 12. La 12 ("Repetidos que vuelven") es el caso de China ya arreglado y se
+  limpia con el weekly del 23-nov.
+- **La regla del 🎯:**
+  - `strong_favourite` y `no_star_note` contra una versión escrita aparte: 98,357 casos (14,051 fotos de
+    momios reales × 7 ligas), 0 diferencias;
+  - los 169 picks desde el 6-nov contra la foto de momios de cuando se guardaron: 0 diferencias.
+- **La liquidación:** 610 picks de 30 días, cobrados otra vez con el marcador de `matches`. 0 errores; los 7
+  `stale` con marcador son el horario viejo de un reprogramado.
+- **Lo que ve el dueño:**
+  - el dashboard da lo mismo que la base: el encabezado (212 🎯), "Ganadas y perdidas" (537) y los 11
+    partidos por jugar, pick por pick;
+  - el mensaje de la mañana (0 🎯) también cuadra.
+
+Se encontró:
+
+- **Un 🎯 cambiado con el partido ya empezado:** Iraklis–Panathinaikos del 8-nov
+  ([16](16-lecciones-cuotas-y-creditos.md), "2.5 h tarde"). La hora real de ESPN solo se emparejaba a
+  ±90 min y el chequeo §14 leía la misma tabla.
+  - **Arreglo:** la hora se empareja a ±6 h, §14 lee también el final de ESPN y el cierre de las sombra se
+    detiene en la hora real.
+  - **El pick se rehízo** (`scripts/fix_inplay_picks.py`, respaldo en `program_picks_fix_backup`).
+  - **El récord del 🎯 quedó en 213:** 121 ganados, 92 perdidos, +3.35.
+  - **"Ganadas y perdidas" quedó en 538:** el pick en juego decía "poca historia" y no contaba.
+- **El filtro de América ya no cambia ningún 🎯.** Desde v2.9.0 (6-nov) el 🎯 es solo para ligas con pago
+  anticipado y, desde v2.14.0, para las 12 de Europa y Asia; ninguna es de América.
+  - El filtro mide los picks que pasaban la regla vieja, y apagarlo solo cambia el motivo guardado
+    ("Región América en pausa" por "No es el muy favorito").
+  - El dashboard muestra la nota del favorito (`star_note`), que sí es correcta.
+  - El reporte del weekly ("PRENDIDO, 🎯 en pausa") hace creer otra cosa. Se le preguntó al dueño qué
+    hacer con él.
+- **Sin cambio:**
+  - Estoril–Marítimo, pospuesto, pasa solo a `stale` el 18-nov;
+  - Gimnasia–Sarmiento (23-oct) es de antes de la regla de v2.9.0;
+  - los 5 cierres en juego de octubre ya salen de la ventana del aprendizaje.
+- **La tabla vieja `program_picks_backup`** (565 filas del 22-oct, de la reconstrucción de picks) se dejó
+  como estaba.
+- **En [12](12-auditoria-y-chequeos.md), la fila 11** decía "muy por encima"; el chequeo avisa cuando una
+  familia gana muy por DEBAJO de lo que esperaba el mercado.

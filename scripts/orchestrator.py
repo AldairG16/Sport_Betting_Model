@@ -609,8 +609,9 @@ def step_live_scores():
     dashboard muestra si el pick se ganó o se perdió sin esperar a la noche
     (src/features/live_scores.py). Gratis; no toca matches ni la liquidación.
     Desde v2.8.0 también guarda la hora de inicio de ESPN de lo que empieza en
-    las próximas 3 h (espn_kickoffs): el pick y el parlay, que van después,
-    quedan fijos a la más temprana."""
+    las próximas 6 h (espn_kickoffs; 3 h hasta el 17-nov-26): el pick y el
+    parlay, que van después, quedan fijos a la más temprana. El cierre de las
+    sombra va antes y usa la que guardó el closing anterior (con 6 h ya está)."""
     from src.features.live_scores import capture_live_scores
     capture_live_scores()
 

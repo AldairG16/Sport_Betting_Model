@@ -352,3 +352,24 @@ def test_pipeline_records_pinnacle_at_open(monkeypatch):
         assert alpha[m]["pin_prob"] == pytest.approx(pinnacle_prob(m, row))
     others = [s for s in captured["shadow"] if s["match"] != "alpha vs beta"]
     assert others and all(s["pin_prob"] is None for s in others)
+
+
+def test_shadow_closing_stops_at_espn_kickoff_when_it_is_earlier(monkeypatch):
+    """17-nov-26: en octubre 5 partidos se cerraron con momios en juego porque The Odds API tenía la hora
+    1-2.5 h tarde (de esos cierres aprende el peso del modelo). La cuota de 14:20 ya es en vivo si ESPN dice
+    que empezó a las 12:30."""
+    import src.models.save_bets as sb
+    from tests.fake_db import FakeEngine
+    rows = pd.DataFrame([{"id": 3, "match": "alpha vs beta", "market": "away_win",
+                          "match_date": KO, "closing_odds": np.nan,
+                          "closing_fetched_at": pd.NaT, "pin_close_at": pd.NaT}])
+    for espn, writes in ((_t(-150), False), (KO, True)):
+        kicks = pd.DataFrame([{"home": "alpha", "away": "beta", "kickoff": KO, "espn_kickoff": espn}])
+        eng = FakeEngine()
+        monkeypatch.setattr(sb, "engine", eng)
+        monkeypatch.setattr(pd, "read_sql", lambda sql, *a, **k: (kicks if "espn_kickoffs" in str(sql)
+                                                                   else rows).copy())
+        monkeypatch.setattr(sb, "_nearest_market_row", lambda h, a, d: pd.DataFrame([_odds_row()]))
+        sb._update_shadow_closing()
+        assert bool(eng.statements("UPDATE shadow_bets")) is writes
+    assert sb.real_kickoff({}, "Alpha", "Beta", KO) == pd.Timestamp(KO)          # sin ESPN: la del sistema

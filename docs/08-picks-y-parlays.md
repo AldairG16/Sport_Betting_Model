@@ -194,7 +194,7 @@ de responder "cómo nos fue con los picks".
       córners y tarjetas. Lo guarda en `live_scores`, aparte: `matches` y la liquidación oficial
       no cambian. El emparejamiento es el estricto de las alineaciones.
     - Desde v2.8.0 también guarda la hora de inicio de ESPN de lo que empieza en las próximas
-      3 h (`espn_kickoffs`): el pick y el parlay quedan fijos a la más temprana ([16](16-lecciones-cuotas-y-creditos.md), "La hora de
+      6 h, emparejada a ±6 h desde el 17-nov-26 (`espn_kickoffs`): el pick y el parlay quedan fijos a la más temprana ([16](16-lecciones-cuotas-y-creditos.md), "La hora de
       The Odds API puede venir tarde").
     - En Anteriores se ve el marcador ("● 67'" en juego, "final" al terminar). Con el final, el
       pick sale ✅ o ❌ con la misma regla de liquidación (`provisional_result` →
