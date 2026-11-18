@@ -188,8 +188,9 @@ Se encontró:
   - El filtro mide los picks que pasaban la regla vieja, y apagarlo solo cambia el motivo guardado
     ("Región América en pausa" por "No es el muy favorito").
   - El dashboard muestra la nota del favorito (`star_note`), que sí es correcta.
-  - El reporte del weekly ("PRENDIDO, 🎯 en pausa") hace creer otra cosa. Se le preguntó al dueño qué
-    hacer con él.
+  - El reporte del weekly ("PRENDIDO, 🎯 en pausa") hacía creer otra cosa, y al apagarse iba a decir "el
+    🎯 vuelve hoy". El 18-nov el dueño eligió corregir el texto y no quitar el filtro. Ahora dice "no
+    cambia ningún 🎯: América no tiene ligas con 🎯" ([09](09-aprendizaje.md)).
 - **Sin cambio:**
   - Estoril–Marítimo, pospuesto, pasa solo a `stale` el 18-nov;
   - Gimnasia–Sarmiento (23-oct) es de antes de la regla de v2.9.0;

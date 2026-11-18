@@ -19,7 +19,7 @@ porque las corridas de GitHub no guardan nada.
 |---|---|---|
 | Peso del modelo | `anchor_learner.py` | Cuánto creerle al modelo frente a Pinnacle (encogido a 0.35, entre 0 y 0.5, ±0.10 por semana). Hoy ~0.07 |
 | Sesgo por lado | `side_bias.py` | La corrección que le falta al modelo por lado (local, empate, visitante), por región y en goles |
-| Filtros aprendidos | `filter_learner.py` | Qué regiones pausan el 🎯 (América desde el 3-nov; se quita solo cuando deje de perder) |
+| Filtros aprendidos | `filter_learner.py` | Qué regiones pausan el 🎯 (América desde el 3-nov; se quita solo cuando deje de perder). Desde el 6-nov no cambia ningún 🎯: América no tiene ligas con 🎯 |
 | Supuestos del 🎯 | `favourite_watch.py` | No decide nada: mide con todos los muy favoritos analizados (con pick o sin él) si siguen ganando más de lo que dice Pinnacle y cada cuánto paga el pago anticipado. Avisa si el veredicto cambia |
 | Grandes de nombre | `big_names.py` | No decide nada: qué equipos son los grandes de su liga y cómo vienen. De ahí sale el aviso "viene mal" de cada pick; la vigilancia y el buscador lo miden |
 | Evidencia de reglas | `rule_evidence.py` | Si las reglas a mano tienen evidencia contra resultados reales |
@@ -145,6 +145,14 @@ y **sin escalar**), y el evening la liquida (`result`, `profit` por unidad).
   - Al prenderse (2-nov): América −10.3 pt contra el resto +8.6 pt, diferencia +18.9 ± 15.2.
     Coincide con los tiros que no tenía (ver "Tiros y córners de ESPN"); con ellos, el filtro
     dirá solo si América deja de perder.
+  - **Desde v2.9.0 (6-nov) no cambia ningún 🎯.** El 🎯 es solo para las ligas con pago anticipado
+    y, desde v2.14.0, las 12 de Europa y Asia; ninguna es de América (`filter_learner.star_leagues`).
+    Prendido o apagado, los picks son los mismos: solo cambia el motivo guardado ("Región América en
+    pausa…" o "No es el muy favorito…"), y el dashboard y Telegram muestran la nota del favorito.
+    El reporte del weekly iba a decir "el 🎯 vuelve hoy" al apagarse. Desde el 18-nov dice "no
+    cambia ningún 🎯: América no tiene ligas con 🎯" (el dueño eligió corregir el texto y no quitar el
+    filtro). Si algún día una liga de América entra al 🎯, el reporte vuelve a decir que la pausa lo
+    quita y lo devuelve.
 
 Llega a Telegram en el weekly solo si algún veredicto ya tiene datos suficientes o si
 la escala se movió. Push y medias (AH de cuarto, DNB con empate) cuentan en el ROI pero
