@@ -186,6 +186,31 @@ def test_a_closing_that_suddenly_reads_much_more_is_flagged():
 
 
 
+def test_more_leagues_coming_back_is_not_a_jump_but_reading_more_per_league_is():
+    """18-nov-26: al volver las ligas después de la fecha FIFA, el closing pasó de 2 a 11 ligas en las próximas
+    72 h y de ~27 mil a ~56 mil celdas (menos por liga), y el chequeo avisó como si el código leyera de más."""
+    from src.utils.output_checks import READS_BASE_LEAGUES, reads_jump
+
+    def runs(today_cells, today_leagues, before_cells, before_leagues, n=10):
+        out = [{"ran_at": NOW - pd.Timedelta(hours=1 + i * 2), "cells_read": today_cells, "leagues": today_leagues}
+               for i in range(n)]
+        return out + [{"ran_at": NOW - pd.Timedelta(days=2 + i * 0.5), "cells_read": before_cells,
+                       "leagues": before_leagues} for i in range(n)]
+    assert reads_jump(runs(55_706, 11, 27_008, 2), NOW) == []                   # el 18-nov: más ligas
+    assert reads_jump(runs(82_572, 17, 27_008, 2), NOW) == []                   # el 19-nov
+    msg, = reads_jump(runs(140_000, 11, 55_706, 11), NOW)                       # mismas ligas, 2.5× más
+    assert "2.5 veces más por liga que juega en las próximas 72 h" in msg and ", por liga)" in msg
+    assert reads_jump(runs(140_000, None, 55_706, None), NOW)                   # sin ligas: en celdas, como antes
+    assert READS_BASE_LEAGUES == 2
+
+
+def test_the_check_counts_the_leagues_of_the_next_72_hours():
+    from src.utils.output_checks import READS_LEAGUES_SQL
+    sql = " ".join(READS_LEAGUES_SQL.split())
+    assert "COUNT(DISTINCT p.league) FROM program_picks p" in sql
+    assert "p.match_date > r.ran_at AND p.match_date <= r.ran_at + INTERVAL '72 hours'" in sql
+
+
 def test_old_shadow_closings_are_not_reread_every_half_hour():
     """11-nov-26 (db_meter): cada closing releía ~2,000 apuestas sombra de 10
     días para "mejorar" un cierre que ya no puede mejorar (solo cuentan cuotas
