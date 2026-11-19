@@ -70,8 +70,16 @@ el dashboard: `program_picks` (🎯 = sin `reason`) y los parlays con bono de `p
 `dashboard.parlay.parlay_board`.
 - **Mañana** (`notify_best_bets`): los 🎯 de hoy con "apuesta si PlayDoit paga X o más" (`min_us`), los
   parlays con lo que pagan y "se gana más o menos 1 de cada N veces", y cuántos partidos más hay sin 🎯.
-- **Noche** (`send_evening_summary`): cómo terminó cada 🎯, cada parlay, los demás picks en una línea, los
-  🎯 desde el 22 oct (111 de 203 el 6-nov, lo mismo que el dashboard) y cuántos 🎯 hay mañana.
+- **Noche** (`send_evening_summary`): cómo terminó cada 🎯, cada parlay, cada uno de los demás picks (desde el
+  18-nov; antes iban en una sola línea), los 🎯 desde el 22 oct (111 de 203 el 6-nov, lo mismo que el
+  dashboard) y cuántos 🎯 hay mañana.
+  - **Partidos que terminan tarde** (18-nov-26): a las 21:05 de México los de las 18:30 o más tarde todavía
+    no se cobran (la liquidación espera 3 h y el resultado oficial). La noche los dejaba fuera sin decirlo:
+    el 18-nov dijo "4 ganados y 0 perdidos · +177", con Corinthians 4-0 y Grêmio 0-0 perdidos (+77).
+  - Ahora van con el marcador final de ESPN (`with_espn_finals`, la misma regla del dashboard): "perdido
+    según ESPN" y "(2 con el marcador final de ESPN: falta el resultado oficial)". El que no tiene ni eso
+    se cuenta aparte ("· 1 todavía sin resultado") y sale con ⏳.
+  - Lo acumulado desde el 22 oct sigue con lo cobrado, como el dashboard.
 - **Semanal** (`send_weekly_report`): la semana de 🎯 (mejor y peor liga), los parlays y los demás picks,
   lo acumulado y los cambios con la alineación (`lineup_changes.format_lines`, ahora con "¿Conviene cambiar
   el pick con la alineación?" en vez de z-scores).

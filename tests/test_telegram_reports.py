@@ -97,11 +97,45 @@ def test_the_evening_says_how_each_target_ended_and_the_gain_on_50():
     assert "✅ Rb Leipzig vs Augsburg — Gana Rb Leipzig: ganado ⚡ (cobrado por ir 2 goles arriba) (+23)" in msg
     assert "❌ Mainz vs Bayern — Gana Bayern: perdido (-50)" in msg
     assert "❌ Parlay del día (3 partidos): perdido (2 de 3 ganados) · apostando 50: -50" in msg
-    assert "🤖 Los demás picks (solo para seguirlos): 1 ganado y 0 perdidos · apostando 50 a cada uno: <b>+43</b>" in msg
+    assert "🤖 <b>Los demás picks</b> (solo para seguirlos): 1 ganado y 0 perdidos · apostando 50 a cada uno: <b>+43</b> · 1 todavía sin resultado" in msg
     assert "📈 <b>Desde el 22 oct</b>, 🎯 recomendados: 111 de 203 ganados · apostando 50 a cada uno: <b>-2380</b>" in msg
     assert "🗓️ <b>Mañana</b>: 11 🎯 recomendados y 3 parlays" in msg
-    assert "Toulouse" not in msg                                       # no es 🎯: va en la línea de los demás
+    # 18-nov-26: cada pick, también los que no son 🎯 ("we need to log every pick")
+    assert "✅ Leeds vs Tottenham — Menos de 2.5 goles: ganado (+43)" in msg
+    assert "⏳ Toulouse vs Strasbourg — Menos de 9.5 córners: esperando el dato oficial de córners" in msg
     _plain(msg)
+
+
+def test_a_late_match_counts_with_the_espn_final_and_says_it_is_not_official():
+    """18-nov-26: a las 21:05 de México Corinthians 4-0 y Grêmio 0-0 (18:30) todavía no se cobraban y la noche
+    dijo "4 ganados y 0 perdidos · +177". Con el final de ESPN, son 2 perdidos y se dice que falta el oficial."""
+    done = [_pick(f"team{i} vs other{i}", "22:30", market="under_3.5", reason="x", result="win", profit=0.46,
+                  label="Menos de 3.5 goles", family="Goles") for i in range(4)]
+    late = [_pick("corinthians vs botafogo rj", "00:30", market="under25", reason="x", label="Menos de 2.5 goles",
+                  family="Goles", odds=1.921),
+            _pick("gremio vs bahia", "00:30", market="home_win", reason="x", odds=2.329, display="Grêmio vs Bahia")]
+    for r in late:
+        r["match_date"] = pd.Timestamp("2026-11-08 00:30", tz="UTC")
+    finals = [{"home": "corinthians", "away": "botafogo rj", "kickoff": pd.Timestamp("2026-11-08 00:30", tz="UTC"),
+               "home_goals": 4, "away_goals": 0, "home_corners": 2, "away_corners": 2, "home_cards": 3, "away_cards": 2},
+              {"home": "gremio", "away": "bahia", "kickoff": pd.Timestamp("2026-11-08 00:30", tz="UTC"),
+               "home_goals": 0, "away_goals": 0, "home_corners": 7, "away_corners": 4, "home_cards": 2, "away_cards": 2}]
+    picks = TR.with_espn_finals(done + late, finals)
+    assert [r.get("provisional", False) for r in picks] == [False] * 4 + [True, True]
+    assert [r["result"] for r in picks[4:]] == ["loss", "loss"]
+    msg = TR.evening_text(DAY, picks, [], [], {}, NIGHT, MX)
+    assert ("🤖 <b>Los demás picks</b> (solo para seguirlos): 4 ganados y 2 perdidos · apostando 50 a cada uno: "
+            "<b>-8</b> (2 con el marcador final de ESPN: falta el resultado oficial)") in msg
+    assert "Menos de 2.5 goles: perdido según ESPN (-50)" in msg and "Gana Grêmio: perdido según ESPN (-50)" in msg
+    # sin final de ESPN se queda esperando, y la cuenta lo dice
+    alone = TR.with_espn_finals(done + late, finals[:1])
+    assert "4 ganados y 1 perdido" in TR.evening_text(DAY, alone, [], [], {}, NIGHT, MX)
+    assert "· 1 todavía sin resultado" in TR.evening_text(DAY, alone, [], [], {}, NIGHT, MX)
+    # un final de otro día (más de 36 h) no es el mismo partido
+    far = [{**finals[0], "kickoff": pd.Timestamp("2026-11-12 00:30", tz="UTC")}]
+    assert not TR.with_espn_finals(late, far)[0].get("provisional")
+    # lo ya cobrado no se toca
+    assert TR.with_espn_finals([{**late[0], "result": "win", "profit": 0.92}], finals)[0]["result"] == "win"
 
 
 def test_a_pending_target_says_what_it_waits_for():
