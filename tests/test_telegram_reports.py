@@ -65,14 +65,31 @@ def test_the_morning_lists_the_targets_with_their_minimum_and_the_parlays():
     _plain(msg)
 
 
-def test_a_morning_without_targets_says_there_is_no_need_to_bet():
+def test_a_morning_without_targets_only_says_it_for_sure_when_no_league_can_have_one():
+    """19-nov-26, el dueño: "mandemos los partidos pero después mandemos otro donde dice que no hay partidos
+    recomendados, no sabemos si habrá partidos recomendados porque no tenemos las alineaciones". Un partido de una
+    liga con 🎯 todavía puede serlo hasta su última revisión; uno de Brasil o la MLS, nunca."""
+    # Bundesliga (con pago anticipado): todavía puede haber 🎯
     msg, n = TR.morning_text(DAY, [_pick("a vs b", "15:00", reason="No es el muy favorito")], [], MX)
     assert n == 0
-    assert "🎯 Hoy no hay recomendados" in msg and "No hace falta apostar" in msg
+    assert "🎯 Hoy, por ahora, no hay recomendados. Un partido de hoy es de ligas donde sí puede haber 🎯" in msg
+    assert "si alguno queda 🎯 llega en ese momento como pick final" in msg
+    assert "No hace falta apostar" not in msg and "no habrá" not in msg
+    assert "🤖 El partido de hoy sale en \"Partidos de hoy\" (mensaje fijado) y en el dashboard, con su pick." in msg
     assert "Parlays" not in msg
     _plain(msg)
+    # el 19-nov: solo Brasil y la MLS, donde el 🎯 no existe
+    br = [_pick(f"t{i} vs u{i}", "21:30", reason="x", league="soccer_brazil_campeonato") for i in range(4)]
+    br += [_pick("orlando vs cincinnati", "23:30", reason="x", league="soccer_usa_mls")]
+    msg, _ = TR.morning_text(DAY, br, [], MX)
+    assert ("🎯 Hoy no habrá recomendados: los 5 partidos de hoy son de ligas donde el 🎯 no existe (solo hay 🎯 "
+            "en las ligas con pago anticipado y en 12 de Europa y Asia).") in msg
+    assert "Los 5 partidos de hoy salen" in msg and "por ahora" not in msg
+    # una liga de las 12 de Europa y Asia también cuenta
+    two, _ = TR.morning_text(DAY, br + [_pick("x vs y", "15:00", reason="x", league="soccer_efl_champ")], [], MX)
+    assert "Un partido de hoy es de ligas donde sí puede haber 🎯" in two
     tomorrow, _ = TR.morning_text(DAY, [], [], MX, when="Mañana")
-    assert tomorrow.startswith("🌙 <b>Mañana, sábado 7 nov</b>") and "Mañana no hay recomendados" in tomorrow
+    assert tomorrow.startswith("🌙 <b>Mañana, sábado 7 nov</b>") and "Mañana todavía no hay partidos analizados" in tomorrow
 
 
 # ─── noche ───────────────────────────────────────────────────────────────────

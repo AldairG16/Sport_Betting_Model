@@ -70,6 +70,14 @@ el dashboard: `program_picks` (🎯 = sin `reason`) y los parlays con bono de `p
 `dashboard.parlay.parlay_board`.
 - **Mañana** (`notify_best_bets`): los 🎯 de hoy con "apuesta si PlayDoit paga X o más" (`min_us`), los
   parlays con lo que pagan y "se gana más o menos 1 de cada N veces", y cuántos partidos más hay sin 🎯.
+  - **Sin 🎯 todavía** (19-nov-26, `no_targets_text`). El dueño: "mandemos los partidos pero después mandemos
+    otro donde dice que no hay partidos recomendados, no sabemos si habrá partidos recomendados porque no
+    tenemos las alineaciones". Antes decía "Hoy no hay recomendados… No hace falta apostar" como si fuera
+    seguro.
+  - Un partido de una liga con 🎯 (pago anticipado o las 12 de Europa y Asia) todavía puede serlo: el pick se
+    rehace con los momios y la alineación hasta unos 30 min antes, y si queda 🎯 sale en los picks finales.
+  - Ahora dice "por ahora no hay recomendados" y cuántos partidos todavía pueden tener 🎯. Solo dice "no
+    habrá" cuando ningún partido es de una liga con 🎯 (el 19-nov: Brasil y la MLS).
 - **Noche** (`send_evening_summary`): cómo terminó cada 🎯, cada parlay, cada uno de los demás picks (desde el
   18-nov; antes iban en una sola línea), los 🎯 desde el 22 oct (111 de 203 el 6-nov, lo mismo que el
   dashboard) y cuántos 🎯 hay mañana.
