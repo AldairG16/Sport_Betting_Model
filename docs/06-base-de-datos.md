@@ -109,6 +109,15 @@ plan gratis, con una base de 236 MB. La base vuelve al empezar el mes o al subir
   No son bytes (psycopg2 no los da), pero ordenan bien qué pesa.
 - **Chequeo de salidas 21** (`reads_jump`): si el closing de las últimas 24 h lee el doble o más que
   la mediana de los 7 días anteriores (y más de 50 mil celdas), avisa.
+  - **Se compara por liga** (18-nov-26): lo que lee un closing crece con las ligas que juegan en las
+    próximas 72 h. De cada liga se lee un año de córners y tarjetas (`props_fair.load_history`), la
+    consulta más pesada del closing.
+  - Al volver las ligas después de la fecha FIFA pasó de 2 a 11-17 ligas, y de ~27 mil a ~83 mil
+    celdas (1.2 MB por closing). Por liga leía menos (13 mil → 4.9 mil), pero el chequeo avisaba cada
+    noche.
+  - Ahora divide entre las ligas de `program_picks` en las próximas 72 h más 2
+    (`READS_BASE_LEAGUES`: lo que todo closing lee aunque no haya partidos, ~15 mil celdas).
+  - El 18-nov la cuenta del mes iba en $3.72 de $15; en el plan gratis serían 2.9 de 5 GB (58%).
 - **Antes de agregar una lectura**, multiplícala por 48 closings al día y por las recargas del
   dashboard. Por medir con el medidor: las fotos de momios de 72 h (`_SNAPS_SQL`) y el
   `SELECT * FROM model_vs_sharp` de Próximos.

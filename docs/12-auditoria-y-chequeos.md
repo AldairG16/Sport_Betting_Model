@@ -41,7 +41,7 @@ Además, cada corrida avisa sus **errores tolerados** (los que no la tumbaron) y
 | 18 | Cada pierna de un parlay por jugar es el 🎯 de su partido |
 | 19 | Al canal le llega lo que se le manda |
 | 20 | Un reprogramado con la fecha que vale (y su análisis) |
-| 21 | Un cierre que de golpe lee el doble de la base |
+| 21 | Un cierre que de golpe lee el doble de la base, por liga que juega en las próximas 72 h (18-nov-26: más ligas no es leer de más) |
 | 22 | El medidor de la base guardó algo en 24 h; modo esencial |
 | 23 | El respaldo semanal en la PC tiene menos de 10 días |
 | 5 (ampliado el 13-nov) | También vigila `big_names` (los grandes de nombre y cómo vienen, que se refrescan a diario): con 9 días sin refrescarse, avisa |
