@@ -186,3 +186,9 @@ de la hora de The Odds API, fuera del ±90 min): no hubo fila, el pick no se fij
 encontró la auditoría, comparando con el final de ESPN que guarda el evening (`live_scores`), que viene de otro
 camino. **Regla:** un chequeo de "esto no debió pasar" toma su verdad de una fuente distinta de la que usó el
 código para decidir.
+
+**Una cuenta que deja fuera lo que falta tiene que decirlo (18-nov-26).** La noche contaba "los demás picks" con
+`record`, que solo mira lo ya cobrado. Los partidos de las 18:30 de México todavía no se cobran a las 21:05, así
+que el 18-nov dijo "4 ganados y 0 perdidos · +177" con 2 perdidos fuera (+77 de verdad). El número no era
+falso, pero se leía como el día completo. Ahora toma el final de ESPN para lo que todavía no se cobra y cuenta
+aparte lo que no tiene ni eso. **Regla:** un resumen dice cuántos le faltan, nunca solo los que ya tiene.

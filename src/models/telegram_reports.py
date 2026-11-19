@@ -144,7 +144,7 @@ def pick_label(r: dict) -> str:
 
 def record(rows: list) -> dict:
     """Ganados, perdidos y anulados de lo ya liquidado; la ganancia solo de los
-    que tienen momio de PlayDoit (como el dashboard)."""
+    que tienen momio de PlayDoit (como el dashboard, que usa esta misma cuenta)."""
     done = [r for r in rows if _str(r.get("result")) in PLAYED]
     won = sum(1 for r in done if r["result"] in WIN_LIKE)
     lost = sum(1 for r in done if r["result"] in LOSS_LIKE)
@@ -153,8 +153,20 @@ def record(rows: list) -> dict:
             "units": round(sum(priced), 4), "priced": len(priced)}
 
 
+def day_record(rows: list) -> dict:
+    """record de los picks de un día, con lo que la noche también dice (18-nov-26):
+    cuántos van con el final de ESPN (with_espn_finals) y cuántos todavía no tienen
+    resultado."""
+    rec = record(rows)
+    done = [r for r in rows if _str(r.get("result")) in PLAYED]
+    return {**rec, "provisional": sum(1 for r in done if r.get("provisional")), "pending": len(rows) - len(done)}
+
+
 def record_text(rec: dict) -> str:
-    """'2 ganados y 1 perdido · apostando 50 a cada uno: +23'."""
+    """'2 ganados y 1 perdido · apostando 50 a cada uno: +23'. Dice cuántos van con
+    el marcador de ESPN y cuántos faltan (18-nov-26: la noche decía "4 ganados y 0
+    perdidos" con 2 perdidos que todavía no se cobraban)."""
+    pending = rec.get("pending") or 0
     if not rec["n"]:
         return "todavía no termina ninguno"
     parts = [f"{rec['won']} ganado{'s' if rec['won'] != 1 else ''}",
@@ -164,7 +176,62 @@ def record_text(rec: dict) -> str:
     s = ", ".join(parts[:-1]) + " y " + parts[-1]
     if rec["priced"]:
         s += f" · apostando {STAKE} a cada uno: <b>{money(rec['units'])}</b>"
+    if rec.get("provisional"):
+        s += f" ({rec['provisional']} con el marcador final de ESPN: falta el resultado oficial)"
+    if pending:
+        s += f" · {pending} todavía sin resultado"
     return s
+
+
+# 18-nov-26: los partidos que terminan después del resumen de la noche (Brasil a las 18:30 de México) todavía no
+# se cobran a las 21:05 (la liquidación espera 3 h y el resultado oficial). La noche los dejaba fuera sin decirlo:
+# "4 ganados y 0 perdidos" con Corinthians 4-0 y Grêmio 0-0 perdidos. Ahora van con el final de ESPN, como en el
+# dashboard (live_scores.provisional_result), y se dice que falta el oficial.
+FINALS_SQL = """
+    SELECT home, away, kickoff, home_goals, away_goals, home_corners, away_corners, home_cards, away_cards
+    FROM live_scores WHERE status = 'final' AND kickoff >= :a AND kickoff < :b
+"""
+FINALS_WINDOW_H = 36
+
+
+def load_finals(engine, a: datetime, b: datetime) -> list:
+    """Los finales de ESPN alrededor del día (live_scores). Vacío si la tabla no está."""
+    try:
+        df = pd.read_sql(text(FINALS_SQL), engine, params={"a": a - timedelta(days=1), "b": b + timedelta(days=1)})
+    except Exception as e:
+        if "does not exist" in str(e):
+            return []
+        raise
+    if not {"home", "away", "kickoff", "home_goals", "away_goals"} <= set(df.columns):
+        return []
+    return df.to_dict("records")
+
+
+def with_espn_finals(picks: list, finals: list, normalize=None) -> list:
+    """Función pura: los picks sin liquidar cuyo partido ya tiene final en ESPN,
+    ganados o perdidos con ese marcador y la misma regla de liquidación
+    (provisional=True). Los ya liquidados y los que no tienen final, igual."""
+    from src.features.live_scores import provisional_result
+    from src.models.program_picks import match_key
+    idx = {}
+    for f in finals or []:
+        idx.setdefault(match_key(f["home"], f["away"], normalize), []).append(f)
+    out = []
+    for r in picks:
+        kick = _ts(r.get("match_date"))
+        if _str(r.get("result")) in PLAYED or kick is None or not _str(r.get("market")):
+            out.append(r)
+            continue
+        h, _, a = str(r.get("match") or "").partition(" vs ")
+        near = [f for f in idx.get(match_key(h, a, normalize), [])
+                if abs((_ts(f["kickoff"]) - kick).total_seconds()) <= FINALS_WINDOW_H * 3600]
+        if not near:
+            out.append(r)
+            continue
+        f = min(near, key=lambda f: abs((_ts(f["kickoff"]) - kick).total_seconds()))
+        outcome, profit = provisional_result(r.get("market"), f, _num(r.get("playdoit_odds")))
+        out.append({**r, "result": outcome, "profit": profit, "provisional": True} if outcome in PLAYED else r)
+    return out
 
 
 def times_text(p) -> str | None:
@@ -195,17 +262,18 @@ def parlays_of(rows: list) -> list:
 def pick_status(r: dict, now: datetime) -> tuple[str, str]:
     """(ícono, texto) de cómo terminó o en qué va un pick."""
     res = _str(r.get("result"))
+    espn = " según ESPN" if r.get("provisional") else ""     # todavía sin el resultado oficial (18-nov-26)
     if res == "win":
         paid = r.get("pa_paid") is True or str(r.get("pa_paid")).lower() == "true"
-        return "✅", "ganado" + (" ⚡ (cobrado por ir 2 goles arriba)" if paid else "")
+        return "✅", "ganado" + espn + (" ⚡ (cobrado por ir 2 goles arriba)" if paid else "")
     if res == "half_win":
-        return "✅", "medio ganado"
+        return "✅", "medio ganado" + espn
     if res == "loss":
-        return "❌", "perdido"
+        return "❌", "perdido" + espn
     if res == "half_loss":
-        return "❌", "medio perdido"
+        return "❌", "medio perdido" + espn
     if res == "push":
-        return "↔️", "anulado: se devuelve lo apostado"
+        return "↔️", "anulado: se devuelve lo apostado" + espn
     kick = _ts(r.get("match_date"))
     mins = (now - kick).total_seconds() / 60 if kick is not None else 0
     if mins < 0:
@@ -272,12 +340,15 @@ def evening_text(day, picks: list, parlay_rows: list, since_rows: list, tomorrow
     stars = [r for r in picks if is_star(r)]
     others = [r for r in picks if not is_star(r)]
     lines = [f"🌙 <b>Así terminó el {day_name(day)}</b>", ""]
+
+    def pick_line(r: dict) -> str:
+        icon, what = pick_status(r, now)
+        gain = f" ({money(r['profit'])})" if _num(r.get("profit")) is not None and r.get("result") in PLAYED else ""
+        return f"{icon} {html.escape(match_name(r))} — {html.escape(pick_label(r))}: {what}{gain}"
+
     if stars:
-        lines.append(f"🎯 <b>Recomendados</b>: {record_text(record(stars))}")
-        for r in stars:
-            icon, what = pick_status(r, now)
-            gain = f" ({money(r['profit'])})" if _num(r.get("profit")) is not None and r.get("result") in PLAYED else ""
-            lines.append(f"{icon} {html.escape(match_name(r))} — {html.escape(pick_label(r))}: {what}{gain}")
+        lines.append(f"🎯 <b>Recomendados</b>: {record_text(day_record(stars))}")
+        lines += [pick_line(r) for r in stars]
         lines.append("")
     else:
         lines += ["🎯 Hoy no hubo recomendados.", ""]
@@ -298,9 +369,11 @@ def evening_text(day, picks: list, parlay_rows: list, since_rows: list, tomorrow
                 lines.append(f"⏳ {name}: {p['won_legs']} de {p['k']} ganados hasta ahora")
         lines.append("")
     if others:
-        rec = record(others)
-        lines.append(f"🤖 Los demás picks (solo para seguirlos): {record_text(rec)}"
-                     if rec["n"] else f"🤖 Los demás picks ({len(others)}) todavía no terminan.")
+        # 18-nov-26, el dueño: cada pick, no solo la cuenta ("we need to log every pick")
+        rec = day_record(others)
+        lines.append(f"🤖 <b>Los demás picks</b> (solo para seguirlos): {record_text(rec)}"
+                     if rec["n"] else f"🤖 <b>Los demás picks</b> ({len(others)}) todavía no terminan.")
+        lines += [pick_line(r) for r in others]
         lines.append("")
     tot = record([r for r in since_rows if is_star(r)])
     if tot["n"]:

@@ -997,7 +997,9 @@ def send_evening_summary(target_date=None):
         today = (loc - timedelta(days=1)).date() if loc.hour < 12 else loc.date()
     try:
         a, b = TR.day_bounds(today, tz)
-        picks = TR.load_picks(engine, a, b)
+        from src.utils.team_normalizer import normalize_team
+        # los que terminan después de la noche, con el final de ESPN (18-nov-26)
+        picks = TR.with_espn_finals(TR.load_picks(engine, a, b), TR.load_finals(engine, a, b), normalize_team)
         msg = TR.evening_text(today, picks, TR.load_parlays(engine, today), TR.load_since(engine, now),
                               TR.tomorrow_counts(engine, today, tz), now, tz)
     except Exception as e:
