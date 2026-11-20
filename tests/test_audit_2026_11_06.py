@@ -85,8 +85,8 @@ def test_proximos_shows_a_rescheduled_match_once():
 def test_the_boards_and_the_lineup_alert_skip_the_voided_slot():
     import inspect
     from src.models import lineup_alerts as LA
-    from src.models import today_board as TB
-    assert "result IS DISTINCT FROM 'stale'" in TB._SQL
+    from src.models import match_blocks as MB                # "Partidos de hoy" hasta el 19-nov-26
+    assert "result IS DISTINCT FROM 'stale'" in MB._SQL
     assert "result IS DISTINCT FROM 'stale'" in inspect.getsource(LA.load_pick)
     import dashboard.app as app
     assert "result IS DISTINCT FROM 'stale'" in inspect.getsource(app.api_predictions)

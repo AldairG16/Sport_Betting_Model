@@ -56,7 +56,7 @@ prediction_pipeline       →  model_vs_sharp (probabilidades del modelo y de Pi
 program_picks.snapshot    →  program_picks (el pick y el 🎯 de cada partido, con su motivo)
 program_parlays.snapshot  →  program_parlays (parlays del día y de cada horario)
 espn_lineups / lineup_alerts → lineups / lineup_alerts (quién juega y quién falta)
-final_alerts / today_board →  Telegram (pick final por partido, "Partidos de hoy")
+match_blocks / final_alerts → Telegram (los partidos por bloques y con alineación; los parlays finales)
 fetch_results (+ fbdata, ESPN, TheSportsDB) → matches (marcador y estadísticas)
 resolve_picks / resolve_parlays / shadow → result y profit de cada fila
 weekly: side_bias, anchor_learner, filter_learner, … → model_state (lo aprendido)

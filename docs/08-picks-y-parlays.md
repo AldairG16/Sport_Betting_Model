@@ -33,8 +33,8 @@ ganando (20 puntos o más de sus últimos 30; `firm_note`, guardada en `form_not
 marca o sin ella. En el historial esos favoritos ganan 81 de cada 100; el resto, 75.
 
 **Los picks sin 🎯 son solo para seguir el partido, no para apostar** (quedan tablas con las casas: 55 de cada
-100). Lo dicen la leyenda y cada tarjeta del dashboard, y el tablero de Telegram, donde ya no llevan momio
-mínimo (14-nov-26).
+100). Lo dicen la leyenda y cada tarjeta del dashboard, y cada partido en Telegram ("solo para seguir", sin
+momio mínimo desde el 14-nov-26; por bloques desde el 20-nov-26, [11](11-telegram.md)).
 
 **El aviso "viene mal"** (`form_note`, v2.12.2, 13-nov-26): si en el partido juega un equipo grande de nombre que
 viene con 15 puntos o menos de sus últimos 30 en liga, el pick lo dice ("Juventus viene mal: 15 puntos de sus
