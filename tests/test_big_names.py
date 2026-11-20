@@ -153,10 +153,11 @@ def test_the_final_pick_in_telegram_carries_the_warning_in_plain_words():
     mixed = dict(row, form_note=firm["form_note"] + " · " + BN.FORM_NOTE.format(team="Lecce", pts=9))
     assert FA.form_line(mixed) == ("⭐ Napoli es de los más firmes · ⚠️ Lecce viene mal: 9 puntos de sus últimos 30 en "
                                    "liga <i>(es un aviso: el pick no cambia)</i>")
-    (msg,) = FA.final_texts([{"kind": "star", "row": row, "new": False, "late": False}], {}, ZoneInfo("America/Mexico_City"),
-                            {"soccer_italy_serie_a"})
-    assert "🎯 <b>13:00</b> Napoli vs Lecce" in msg and "   ⚠️ Napoli viene mal: 12 puntos de sus últimos 30 en liga" in msg
-    assert "form_note" in FA._PICKS_SQL and "ROI" not in msg
+    # desde el 20-nov-26 el pick va por bloques (match_blocks): con alineación y en el último aviso
+    from src.models import match_blocks as MB
+    (msg,) = MB.lineup_texts([{"row": row, "before": None}], ZoneInfo("America/Mexico_City"), {})
+    assert "🎯 <b>13:00</b> Napoli vs Lecce ✅" in msg and "   ⚠️ Napoli viene mal: 12 puntos de sus últimos 30 en liga" in msg
+    assert "form_note" in MB._SQL and "ROI" not in msg
 
 
 def test_the_dashboard_shows_the_warning_with_or_without_target():

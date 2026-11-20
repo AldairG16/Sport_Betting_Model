@@ -115,7 +115,7 @@ PICKS_ALTERS = ("ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS source TEXT"
                 "ALTER TABLE program_picks ALTER COLUMN market DROP NOT NULL",
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS lineup TEXT",
                 # el pick cambió al recalcularse (30-oct-26): cuál era y cuándo
-                # cambió, para el aviso de Telegram (src/models/today_board.py)
+                # cambió (lo usaba "Partidos de hoy" en Telegram hasta el 20-nov-26)
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS prev_label TEXT",
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS prev_star BOOLEAN",
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS changed_at TIMESTAMPTZ",

@@ -146,6 +146,11 @@ def test_the_live_snapshot_applies_the_learned_pause(monkeypatch):
 
 
 def test_the_telegram_board_shows_the_paused_pick_without_the_target():
-    from src.models.today_board import pick_text
-    r = {"label": "Más de 2.5 goles", "reason": PK.REGION_PAUSED.format(region="América")}
-    assert pick_text(r["label"], bool(r["label"]) and not r["reason"]) == "Más de 2.5 goles · solo para seguir"
+    import pandas as pd
+    from zoneinfo import ZoneInfo
+    from src.models import match_blocks as MB               # "Partidos de hoy" hasta el 19-nov-26
+    r = {"match": "coritiba vs santos", "display": "Coritiba vs Santos", "market": "over25",
+         "label": "Más de 2.5 goles", "reason": PK.REGION_PAUSED.format(region="América"),
+         "match_date": pd.Timestamp("2026-11-18 22:30", tz="UTC"), "league": "soccer_brazil_campeonato"}
+    lines = MB.match_lines(r, ZoneInfo("America/Mexico_City"))
+    assert lines[1] == "   Más de 2.5 goles · solo para seguir" and not lines[0].startswith("🎯")

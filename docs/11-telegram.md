@@ -8,10 +8,12 @@ palabras normales y momios americanos.
 
 | Mensaje | Cuándo | A quién | Módulo |
 |---|---|---|---|
-| **La mañana** | ~6:00 | Dueño y canal | `notify_telegram.py`, `telegram_reports.py` |
-| **Partidos de hoy** | Se edita sin sonar en cada cierre | Dueño | `today_board.py` |
-| **Pick final** | Una vez por partido, en la última revisión antes de empezar: el 🎯 (con ⭐ si es de los más firmes, desde v2.14.0) o por qué dejó de serlo, quién falta, el aviso de que un grande de nombre viene mal (⚠️, desde v2.12.2: solo informa) y el parlay que se fija ahí. Desde v2.11.0 ya no hay "Cambió el pick" ni "Parlay listo" aparte | Dueño y canal | `final_alerts.py` |
-| **La noche** | ~21:05: cómo le fue al día, con un avance de mañana | Dueño y canal | `notify_telegram.py`, `telegram_reports.py` |
+| **Bloque de la mañana** | En la primera revisión desde las 06:00: todos los partidos de hoy de antes de las 12:00, cada uno con su pick, "🎯 RECOMENDADO" y su momio mínimo o "solo para seguir", ✅ si ya tiene alineación, y los parlays que empiezan ahí | Dueño | `match_blocks.py` |
+| **Bloque de la tarde** | En la primera revisión desde las 12:00: los de las 12:00 hasta las 06:00 del día siguiente | Dueño | `match_blocks.py` |
+| **Con alineación** | En cada revisión, un mensaje nuevo con los partidos que acaban de tener alineación (1, 3, los que haya), con su pick ya revisado y "antes: …" si cambió desde el bloque | Dueño y canal | `match_blocks.py` |
+| **Último aviso** | En la última revisión antes del partido: el que cambió después de mandarse ("cambió a última hora") y el que nunca tuvo alineación (su pick final) | Dueño y canal | `match_blocks.py` |
+| **Parlays finales** | En la última revisión antes de su primer partido | Dueño | `final_alerts.py` |
+| **La noche** | ~21:05: cómo terminó cada pick y cuántos partidos hay mañana | Dueño | `notify_telegram.py`, `telegram_reports.py` |
 | **La semana** | Lunes, con el weekly | Dueño | `telegram_reports.py`, `weekly_narrator.py` |
 | **Avisos de la base** | Al pasar del 50% y del 75% del plan gratis y al cambiar de modo | Dueño | `db_budget.py` |
 | **Errores tolerados** | Al final de una corrida con errores que no la tumbaron | Dueño | `orchestrator.py` |
@@ -27,9 +29,43 @@ parecidos del historial ([08](08-picks-y-parlays.md)). También registra el cana
 Ante un 429 de Telegram se espera lo que pide (`retry_after`). Una corrida que no logra mandar su mensaje sale
 en rojo.
 
+### Los partidos por bloques (20-nov-2026)
+
+El dueño, al ver "Partidos de hoy" (un mensaje fijado que se editaba cada 30 min) y luego "Hoy no hay
+recomendados… No hace falta apostar": "esto se me hace una incongruencia y estar llenando de basura el canal,
+necesito que cada que mires el partido se mueve mandes ese partido no que me actualices el mismo mensaje, se
+pierde … tampoco quiero el mensaje de no hay partidos recomendados … mejor en los partidos dime cuál es
+recomendado y cuál no … de las 12 pm para abajo mándame unos y de las 12 para arriba otros … si el partido ya
+tiene alineación ponlo con una palomita en verde". Eligió:
+
+- (1a) cada partido cuando sale su alineación, con aviso si cambia en los últimos 30 min;
+- (2a) todos los partidos en esos mensajes, cada uno recomendado o no;
+- (3) un bloque con todos los partidos de antes de las 12:00 y otro con todos los demás;
+- (4) al canal, solo los partidos cuando ya tienen alineación.
+
+Cómo quedó (`src/models/match_blocks.py`, paso "Partidos por bloques (Telegram)" del closing). **Todo son
+mensajes nuevos: nada se edita ni se fija.**
+
+- **Los bloques del día** salen en la primera revisión desde las 06:00 y desde las 12:00 (hora de México), una
+  vez al día cada uno (`model_state` 'telegram_blocks').
+- **Cada partido sale una vez** con su alineación o en el último aviso, y otra vez solo si cambia.
+  - Un partido que ya tiene alineación cuando sale su bloque llega en los dos: el canal no recibe los bloques.
+  - La alineación se ve casi siempre en la última revisión (mediana 28 min antes, medido el 8-nov), así que el
+    mensaje "con alineación" suele ser ya el pick final.
+- **Se quitaron:**
+  - el mensaje de la mañana y el avance de mañana (`notify_best_bets`, `send_tomorrow_preview`);
+  - el tablero fijado "Partidos de hoy" (`today_board.py`; la primera corrida lo quita de arriba del chat y
+    del canal, `retire_board`);
+  - los picks finales de cada 🎯 (`final_alerts` quedó solo con los parlays, al dueño);
+  - la copia de la noche al canal;
+  - el "🎯 Recomendados en el mensaje de hoy" del aviso de fallas de la mañana.
+- **La noche** ya no dice "por ahora sin 🎯": dice cuántos partidos hay mañana y cuándo llegan.
+- Un sábado normal (7-nov) tuvo 80 partidos en 26 horarios: el bloque de la mañana del 21-nov tiene 46.
+
+### Antes: "Partidos de hoy" en Telegram (30-oct al 19-nov-2026)
+
 <!-- detalle movido de OPERACION.md -->
 
-### "Partidos de hoy" en Telegram (30-oct-2026)
 
 **Desde el 14-nov-2026 (v2.13.0)** el tablero separa lo que es para apostar de lo que no: el 🎯 lleva su momio
 mínimo ("🎯 Gana Arsenal · mín. -260"); los demás picks dicen "solo para seguir" y ya no llevan mínimo, porque

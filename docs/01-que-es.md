@@ -21,10 +21,10 @@ Lo recibe por dos vías:
 
 | Hora | Qué pasa | Dónde se ve |
 |---|---|---|
-| 6:00 | **Mañana**: baja cuotas, analiza los partidos del día y de los siguientes, guarda un pick por partido | Telegram ("la mañana") y dashboard |
-| Cada 30 min | **Cierre**: vuelve a bajar cuotas, guarda la alineación ~1 h antes, rehace el pick con ella y lo fija al empezar el partido | "Partidos de hoy" en Telegram (se edita sin sonar), dashboard |
-| Antes de cada partido | **Pick final**: un solo mensaje por partido con el 🎯 (o por qué ya no lo es), quién falta y el parlay de ese horario | Telegram del dueño y canal |
-| ~21:00 | **Noche**: baja resultados, cobra los picks, corre los chequeos y manda el resumen con un avance de mañana | Telegram ("la noche") |
+| 6:00 | **Mañana**: baja cuotas, analiza los partidos del día y de los siguientes, guarda un pick por partido | Dashboard (desde el 20-nov-26 sin mensaje de la mañana) |
+| Cada 30 min | **Cierre**: vuelve a bajar cuotas, guarda la alineación ~1 h antes, rehace el pick con ella y lo fija al empezar el partido. En la revisión de las 06:00 manda el bloque con todos los partidos de antes de las 12:00 y en la de las 12:00 el de los demás, cada uno 🎯 recomendado o solo para seguir | Telegram del dueño (los bloques), dashboard |
+| Antes de cada partido | **Con alineación**: los partidos que acaban de tener alineación, con ✅ y su pick ya revisado; si cambia en los últimos 30 min, un **último aviso**. El parlay, en la última revisión antes de su primer partido | Telegram del dueño y canal (el parlay, solo el dueño) |
+| ~21:00 | **Noche**: baja resultados, cobra los picks, corre los chequeos y manda el resumen con cada pick y cuántos partidos hay mañana | Telegram del dueño ("la noche") |
 | Lunes 13:00 | **Semanal**: aprende de lo juntado, recarga datos, ajusta Dixon-Coles, audita todo y manda el reporte | Telegram ("la semana") |
 | Todo el día | **Vigilancia**: el watchdog (4 veces al día) avisa si algo dejó de correr | Telegram, solo si hay problema |
 
