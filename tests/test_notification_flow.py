@@ -227,6 +227,8 @@ class TestSendTomorrowPreviewIncludesPaper:
         nt.send_tomorrow_preview()
 
         assert len(sent_messages) == 1
-        # sin 🎯 recomendados el mensaje lo dice en palabras normales (6-nov-26)
-        assert "no hay recomendados" in sent_messages[0] and "No hace falta apostar" in sent_messages[0]
+        # sin 🎯 recomendados el mensaje lo dice en palabras normales (6-nov-26); sin partidos analizados todavía no
+        # promete nada (19-nov-26: "no sabemos si habrá partidos recomendados porque no tenemos las alineaciones")
+        assert "todavía no hay partidos analizados" in sent_messages[0]
+        assert "No hace falta apostar" not in sent_messages[0]
         assert "PAPER" not in sent_messages[0]

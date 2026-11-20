@@ -287,6 +287,36 @@ def pick_status(r: dict, now: datetime) -> tuple[str, str]:
 
 # ─── mañana ──────────────────────────────────────────────────────────────────
 
+def star_league(league) -> bool:
+    """¿En esta liga puede haber 🎯? Las de pago anticipado y WIDE_LEAGUES (program_picks.strong_favourite)."""
+    from src.models.early_payout import PA_LEAGUES
+    from src.models.program_picks import WIDE_LEAGUES
+    return str(league or "") in PA_LEAGUES or str(league or "") in WIDE_LEAGUES
+
+
+def no_targets_text(picks: list, when: str = "Hoy") -> str:
+    """La línea del 🎯 cuando todavía no hay ninguno (19-nov-26). El dueño: "mandemos los partidos pero después
+    mandemos otro donde dice que no hay partidos recomendados, no sabemos si habrá partidos recomendados porque
+    no tenemos las alineaciones". La mañana decía "Hoy no hay recomendados… No hace falta apostar" como si fuera
+    seguro, y un partido de una liga con 🎯 todavía puede serlo: el pick se rehace con los momios y la alineación
+    hasta ~30 min antes, y si queda 🎯 sale en los picks finales (final_alerts). Solo se dice seguro cuando ningún
+    partido es de una liga con 🎯."""
+    hoy = when.lower()
+    matches = {r["match"] for r in picks}
+    open_ = {r["match"] for r in picks if star_league(r.get("league"))}
+    if not matches:
+        return f"🎯 {when} todavía no hay partidos analizados."
+    if not open_:
+        n = len(matches)
+        return (f"🎯 {when} no habrá recomendados: {'el partido' if n == 1 else f'los {n} partidos'} de {hoy} "
+                f"{'es' if n == 1 else 'son'} de ligas donde el 🎯 no existe (solo hay 🎯 en las ligas con pago "
+                f"anticipado y en 12 de Europa y Asia).")
+    k = len(open_)
+    return (f"🎯 {when}, por ahora, no hay recomendados. {'Un partido' if k == 1 else f'{k} partidos'} de {hoy} "
+            f"{'es' if k == 1 else 'son'} de ligas donde sí puede haber 🎯: el pick se revisa con los momios y la "
+            f"alineación hasta unos 30 min antes, y si alguno queda 🎯 llega en ese momento como pick final.")
+
+
 def morning_text(day, picks: list, parlay_rows: list, tz, when: str = "Hoy") -> tuple[str, int]:
     """El mensaje de la mañana (o el avance de mañana, when="Mañana") y
     cuántos 🎯 lleva."""
@@ -308,8 +338,7 @@ def morning_text(day, picks: list, parlay_rows: list, tz, when: str = "Hoy") -> 
                          f"   {html.escape(pick_label(r))}{pa} · {price}")
         lines.append("")
     else:
-        lines += [f"🎯 {when} no hay recomendados: ningún equipo muy favorito paga bien en una liga con "
-                  "pago anticipado. No hace falta apostar.", ""]
+        lines += [no_targets_text(picks, when), ""]
     pls = [d for d in parlays_of(parlay_rows) if d["parlay"]]
     if pls:
         lines.append("🧩 <b>Parlays</b>")
@@ -321,10 +350,13 @@ def morning_text(day, picks: list, parlay_rows: list, tz, when: str = "Hoy") -> 
                          + (f"\n   se gana {odds}" if odds else ""))
         lines += ["<i>El parlay final llega con los picks finales, en la última revisión antes de su primer "
                   "partido.</i>", ""]
-    if others:
+    if others and stars:
         lines.append(f"🤖 Otro partido de {hoy} no tiene 🎯: sale" if others == 1 else
                      f"🤖 Otros {others} partidos de {hoy} no tienen 🎯: salen")
         lines[-1] += f" en \"Partidos de hoy\" (mensaje fijado){DASHBOARD_BIT}, solo para seguirlos."
+    elif others:                                   # sin 🎯 (19-nov-26): ver no_targets_text
+        lines.append(f"🤖 El partido de {hoy} sale" if others == 1 else f"🤖 Los {others} partidos de {hoy} salen")
+        lines[-1] += f" en \"Partidos de hoy\" (mensaje fijado){DASHBOARD_BIT}, con su pick."
     if stars:
         lines.append("<i>⚡ = pago anticipado: si el equipo va 2 goles arriba, PlayDoit la paga como ganada. "
                      "El pick final llega en la última revisión antes de cada partido: unos 30 min antes (15 si "
