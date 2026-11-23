@@ -109,15 +109,29 @@ class FakeHttp:
 
 
 class FakeClaude:
-    def __init__(self, text):
+    """Claude de mentira: create() o stream() (23-nov-26: el revisor lee con streaming); stop: por qué paró."""
+
+    def __init__(self, text, stop="end_turn"):
         self.calls = []
-        self.messages = SimpleNamespace(create=self._create)
-        self._text = text
+        self.messages = SimpleNamespace(create=self._create, stream=self._stream)
+        self._text, self._stop = text, stop
 
     def _create(self, **kw):
         self.calls.append(kw)
-        return SimpleNamespace(content=[SimpleNamespace(type="text", text=self._text)], stop_reason="end_turn",
+        return SimpleNamespace(content=[SimpleNamespace(type="thinking", thinking="..."),
+                                        SimpleNamespace(type="text", text=self._text)], stop_reason=self._stop,
                                usage=SimpleNamespace(input_tokens=2100, output_tokens=400, cache_read_input_tokens=0))
+
+    def _stream(self, **kw):
+        msg = self._create(**kw)
+
+        class _S:
+            def __enter__(self):
+                return SimpleNamespace(get_final_message=lambda: msg)
+
+            def __exit__(self, *a):
+                return False
+        return _S()
 
 
 @pytest.fixture
@@ -231,3 +245,48 @@ def test_the_listener_waits_what_telegram_asks_and_backs_off(checker, monkeypatc
     slept = []
     C.listen(10, "TOKEN", "555", http=FlakyTelegram(errors), clock=clock, successor=False, sleep=slept.append)
     assert slept == waits
+
+
+# ─── una captura con muchos momios (23-nov-26) ──────────────────────────────
+
+def test_a_big_list_has_room_low_effort_and_is_read_with_streaming(checker, monkeypatch):
+    """23-nov-26: una lista de 8 partidos con 7-9 momios cada uno (60+) dio "no pude leer la captura
+    (stop=max_tokens)": el tope era 6000 y Haiku 5.5 piensa por defecto dentro de ese tope."""
+    C, _ = checker
+    import json
+    client = FakeClaude(json.dumps({"items": ITEMS[:2]}))
+    import src.utils.team_normalizer as tn
+    monkeypatch.setattr(tn, "normalize_team", lambda x: str(x).lower().replace("rb ", ""))
+    out = C.handle_message(PHOTO, "TOKEN", "555", engine=object(), client=client, http=FakeHttp(), fixtures=[RM])
+    assert "✅ Gana Real Madrid -300" in out and "⚠️" not in out
+    (kw,) = client.calls
+    assert kw["max_tokens"] == C.MAX_TOKENS >= 32000 and kw["output_config"] == {"effort": "low"}
+    assert "no escribas las claves que irían null o false" in kw["system"]
+
+
+def test_a_cut_answer_keeps_the_complete_prices_and_says_what_is_missing(checker, monkeypatch):
+    C, _ = checker
+    import json
+    import src.utils.team_normalizer as tn
+    monkeypatch.setattr(tn, "normalize_team", lambda x: str(x).lower().replace("rb ", ""))
+    cut = ('{"items": [' + json.dumps(ITEMS[0]) + ", " + json.dumps(ITEMS[1])
+           + ', {"patas": [{"local": "Real Madr')                            # el tercero, a medias
+    out = C.handle_message(PHOTO, "TOKEN", "555", engine=object(), client=FakeClaude(cut, stop="max_tokens"),
+                           http=FakeHttp(), fixtures=[RM])
+    assert "✅ Gana Real Madrid -300" in out and "❌ Empate +650" in out
+    assert "⚠️ la captura traía más momios de los que alcancé a leer: revisé 2" in out
+    out = C.handle_message(PHOTO, "TOKEN", "555", engine=object(),
+                           client=FakeClaude('{"items": [{"patas": [{"loc', stop="max_tokens"), http=FakeHttp(),
+                           fixtures=[RM])
+    assert out == "⚠️ la captura trae demasiados momios para leerlos de una vez: mándala en dos partes"
+    out = C.handle_message(PHOTO, "TOKEN", "555", engine=object(), client=FakeClaude("", stop="refusal"),
+                           http=FakeHttp(), fixtures=[RM])
+    assert out.startswith("⚠️ no pude leer la captura (Claude no quiso leerla)")
+
+
+def test_salvage_reads_only_whole_prices():
+    from scripts.playdoit_checker import salvage_items
+    assert salvage_items('{"items": [{"momio": "+120"}, {"momio": "-1') == [{"momio": "+120"}]
+    assert salvage_items('{"items": [\n  {"momio": "+120", "patas": [{"local": "A"}]},\n  {"momio": "+2') == \
+        [{"momio": "+120", "patas": [{"local": "A"}]}]
+    assert salvage_items("nada") == [] and salvage_items('{"items": [') == []

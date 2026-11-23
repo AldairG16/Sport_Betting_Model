@@ -182,5 +182,5 @@ def test_the_checker_reads_a_boost_and_answers_with_the_history(boost_checker, m
     out = C.handle_message(PHOTO, "TOKEN", "555", engine=object(), client=client, http=FakeHttp(), fixtures=[RM])
     assert "✅ vale: sale 34 de cada 100 en 1,420 partidos parecidos" in out
     assert "patas" in S.SYSTEM and "corners_total" in S.SYSTEM and "momio_antes" in S.SYSTEM
-    assert client.calls[0]["max_tokens"] == 6000
+    assert client.calls[0]["max_tokens"] == C.MAX_TOKENS >= 6000          # un boost trae más patas (23-nov: 32000)
     assert "Boosts y combinadas" in S.HELP

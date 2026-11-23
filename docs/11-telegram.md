@@ -26,6 +26,15 @@ le manda una captura de PlayDoit, Claude Haiku la lee y dice si el precio convie
 boosts y las combinadas (varias cosas en un solo momio): cuenta cada cuánto salieron todas juntas en partidos
 parecidos del historial ([08](08-picks-y-parlays.md)). También registra el canal.
 
+**Capturas grandes (23-nov-26).** La primera captura real del dueño, una lista de 8 partidos con 7 a 9 momios
+cada uno (más de 60), dio "no pude leer la captura (stop=max_tokens)". El tope era 6,000 tokens: cada momio ocupa
+unos 100, y Haiku 5.5 razona por defecto dentro de ese tope. El arreglo:
+- tope de 32,000, con streaming (el SDK no deja un tope así sin él) y esfuerzo bajo, porque leer momios no
+  necesita razonar. A $0.50 por millón de tokens de salida, el tope cuesta unos 1.6 centavos de dólar;
+- Claude ya no escribe los campos vacíos, y la descripción solo en boosts y combinadas;
+- si aun así se corta, se usan los momios que alcanzó a leer completos (`salvage_items`) y se le dice al dueño
+  que mande aparte lo que falte.
+
 Ante un 429 de Telegram se espera lo que pide (`retry_after`). Una corrida que no logra mandar su mensaje sale
 en rojo.
 
