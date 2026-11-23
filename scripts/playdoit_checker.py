@@ -34,6 +34,7 @@ Uso:
 
 import argparse
 import base64
+import json
 import os
 import sys
 import time
@@ -50,7 +51,12 @@ from src.utils.log import get_logger
 log = get_logger(__name__)
 
 MODEL = "claude-haiku-5-5"
-MAX_TOKENS = 6000           # un boost trae más patas; solo se cobra lo que se usa
+# 23-nov-26: una lista de 8 partidos con 7-9 momios cada uno (60+) se cortó en 6000 ("stop=max_tokens"): cada momio
+# ocupa ~100 y Haiku 5.5 piensa por defecto, y lo que piensa cuenta en el tope. Ahora 32000 (Haiku 5.5 deja hasta
+# 128K; a $0.50 por millón de salida el tope cuesta ~1.6 centavos de dólar), con streaming (el SDK no deja un tope
+# así sin él) y esfuerzo bajo: leer momios no necesita pensar. Solo se cobra lo que se usa.
+MAX_TOKENS = 32000
+EFFORT = "low"
 EST_COST_USD = 0.005
 OFFSET_KEY = "telegram_checker_offset"
 SPEND_KEY = "playdoit_checker_spend"
@@ -94,7 +100,9 @@ no repite los equipos pero está en la página de un partido, usa los de ese par
 visitante). Goles de un solo equipo → goles_local o goles_visitante. Lo que haga un jugador (anotar,
 remates, asistencias, tarjeta) → jugador, con seleccion lo que debe hacer (ej. "anota", "más de 1.5
 remates a puerta"). Si no se ve el equipo de una apuesta, no lo inventes: omítela. Si la imagen no es
-de momios, responde {"items": []}."""
+de momios, responde {"items": []}.
+Para que quepan muchos momios: no escribas las claves que irían null o false, y escribe "descripcion" solo
+en los boosts y las combinadas."""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -206,16 +214,18 @@ def read_screenshot(image: bytes, media_type: str, engine=None, client=None) -> 
             return None, "falta ANTHROPIC_API_KEY en el revisor"
         import anthropic
         client = anthropic.Anthropic()
-    resp = client.messages.create(
+    with client.messages.stream(
         model=MODEL,
         max_tokens=MAX_TOKENS,
         system=SYSTEM,
+        output_config={"effort": EFFORT},
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": media_type,
                                          "data": base64.standard_b64encode(image).decode("utf-8")}},
             {"type": "text", "text": "Extrae los momios de esta captura de PlayDoit."},
         ]}],
-    )
+    ) as stream:
+        resp = stream.get_final_message()
     u = extract_usage_from_response(resp)
     cost = record_call(engine, input_tokens=u["input_tokens"], output_tokens=u["output_tokens"],
                        model=MODEL, web_searches=0, cache_read_tokens=u["cache_read_tokens"])
@@ -223,13 +233,41 @@ def read_screenshot(image: bytes, media_type: str, engine=None, client=None) -> 
         _add_spent(float(cost or EST_COST_USD))
     except Exception as e:
         log.warning(f"⚠️  Revisor PlayDoit: gasto del día no guardado ({type(e).__name__})")
-    if resp.stop_reason in ("refusal", "max_tokens"):
-        return None, f"no pude leer la captura (stop={resp.stop_reason})"
+    if resp.stop_reason == "refusal":
+        return None, "no pude leer la captura (Claude no quiso leerla); mándala otra vez o recortada"
     raw = "\n".join(getattr(b, "text", "") for b in resp.content if getattr(b, "type", "") == "text")
+    if resp.stop_reason == "max_tokens":           # se cortó: lo que alcanzó a leer completo sirve (23-nov-26)
+        items = salvage_items(raw)
+        if not items:
+            return None, "la captura trae demasiados momios para leerlos de una vez: mándala en dos partes"
+        return items, (f"la captura traía más momios de los que alcancé a leer: revisé {len(items)}. Si falta "
+                       f"algún partido, mándame esa parte aparte")
     parsed = extract_json(raw)
     if not isinstance(parsed, dict) or not isinstance(parsed.get("items"), list):
         return None, "no entendí la captura; mándala con los momios y los equipos a la vista"
     return parsed["items"], ""
+
+
+def salvage_items(raw: str) -> list:
+    """Función pura: los momios completos de una respuesta cortada por el tope (max_tokens), cada objeto de
+    "items" que alcanzó a cerrarse; el último, a medias, se descarta."""
+    i = raw.find('"items"')
+    j = raw.find("[", i) if i != -1 else -1
+    if j == -1:
+        return []
+    dec, pos, out = json.JSONDecoder(), j + 1, []
+    while True:
+        while pos < len(raw) and raw[pos] in " \t\r\n,":
+            pos += 1
+        if pos >= len(raw) or raw[pos] != "{":
+            break
+        try:
+            obj, pos = dec.raw_decode(raw, pos)
+        except ValueError:
+            break
+        if isinstance(obj, dict):
+            out.append(obj)
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -283,7 +321,7 @@ def handle_message(message: dict, token: str, owner_chat: str, engine=None, clie
             from src.models.program_picks import load_bias
             history = lambda legs, fh, fa, fo, league: CO.history_probability(engine, legs, fh, fa, fo, league)
             rows = PP.evaluate_items(items, fixtures, normalize_team, load_bias(engine), history)
-            text = PP.format_reply(rows)
+            text = PP.format_reply(rows) + (f"\n\n⚠️ {why}" if why else "")   # leída a medias: se dice
             try:
                 PP.save_rows(engine, rows, message.get("message_id"))
             except Exception as e:
