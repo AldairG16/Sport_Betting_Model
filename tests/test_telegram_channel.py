@@ -224,24 +224,15 @@ def test_the_copy_goes_to_the_channel_and_its_failure_does_not_turn_the_run_red(
     assert [p["chat_id"] for m, p in posts if m in ("pinChatMessage", "unpinChatMessage")] == ["-100", "-100"]
 
 
-def test_the_morning_and_the_night_are_copied_without_the_dashboard(monkeypatch):
+def test_the_channel_gets_only_matches_not_the_night_the_week_or_the_notices(monkeypatch):
+    """20-nov-26, el dueño (4): al canal "solo partidos, cuando ya tengan alineación". La mañana ya no existe;
+    la noche, el domingo y los avisos técnicos no van al canal."""
     import scripts.notify_telegram as nt
     from src.models import telegram_reports as TR
     shared, sent = [], []
     monkeypatch.setattr(nt, "share_message", lambda t, what="": shared.append((what, t)) or True)
     monkeypatch.setattr(nt, "send_message", lambda m: sent.append(m) or True)
-    monkeypatch.setattr(nt, "_remember_announced", lambda day, stars: None)
-    monkeypatch.setattr(nt, "_format_paper_bets_section", lambda *a, **k: "🌍 MUNDIAL EN PAPEL")
-    day = "🤖 Otros 3 partidos de hoy no tienen 🎯: salen en \"Partidos de hoy\" (mensaje fijado)" \
-          f"{TR.DASHBOARD_BIT}, solo para seguirlos."
-    monkeypatch.setattr(nt, "_day_message", lambda d, when="Hoy": (day, 0, []))
-    nt.notify_best_bets()
-    nt.send_tomorrow_preview()
-    assert [w for w, _ in shared] == ["el mensaje de la mañana", "el avance de mañana"]
-    assert all("dashboard" not in t and "MUNDIAL" not in t for _, t in shared)
-    assert "dashboard" in sent[0] and "MUNDIAL" in sent[0]                   # al dueño, completo
-    assert TR.for_channel(day).endswith("(mensaje fijado), solo para seguirlos.")
-    # la noche
+    assert not hasattr(nt, "notify_best_bets") and not hasattr(nt, "send_tomorrow_preview")
     monkeypatch.setattr(TR, "load_picks", lambda *a: [])
     monkeypatch.setattr(TR, "load_parlays", lambda *a: [])
     monkeypatch.setattr(TR, "load_since", lambda *a: [])
@@ -249,52 +240,42 @@ def test_the_morning_and_the_night_are_copied_without_the_dashboard(monkeypatch)
     monkeypatch.setattr(TR, "tomorrow_counts", lambda *a: {})
     monkeypatch.setattr(TR, "evening_text", lambda *a: "🌙 Así terminó")
     nt.send_evening_summary(target_date=pd.Timestamp("2026-11-08").date())
-    assert shared[-1] == ("el resumen de la noche", "🌙 Así terminó")
-    # el reporte del domingo y los avisos técnicos no van al canal
-    for fn in (nt.send_weekly_report, nt.send_health_check):
-        assert "share_message" not in inspect.getsource(fn)
+    assert sent == ["🌙 Así terminó"] and shared == []                     # la noche, solo al dueño
+    for fn in (nt.send_weekly_report, nt.send_health_check, nt.send_evening_summary):
+        assert "share_message(" not in inspect.getsource(fn)
+    from src.models import final_alerts as FA                             # los parlays, solo al dueño
+    assert "share" not in inspect.getsource(FA.run_final_alerts)
 
 
-def test_final_picks_are_copied_only_after_they_reached_the_owner(monkeypatch):
-    from src.models import final_alerts as FA
-    monkeypatch.setattr(FA, "plan", lambda *a, **k: ([{"kind": "star"}], {"m": {"x": "y"}}))
-    monkeypatch.setattr(FA, "final_texts", lambda *a, **k: ["⏰ <b>Picks finales</b> 1", "⏰ (sigue)"])
-    monkeypatch.setattr(FA.pd, "read_sql", lambda *a, **k: pd.DataFrame())
+def test_the_matches_reach_the_channel_only_after_they_reached_the_owner(monkeypatch):
+    from src.models import match_blocks as MB
+    monkeypatch.setattr(MB, "plan", lambda *a, **k: {"am": [], "pm": None, "lineup": [{"row": 1}], "final": [],
+                                                      "state": {"days": {"am": "2026-11-08"}}})
+    monkeypatch.setattr(MB, "day_block_texts", lambda *a, **k: ["☀️ bloque"])
+    monkeypatch.setattr(MB, "lineup_texts", lambda *a, **k: ["📋 con alineación"])
+    monkeypatch.setattr(MB, "final_texts", lambda *a, **k: [])
+    monkeypatch.setattr(MB.TR, "load_parlays", lambda *a: [])
+    monkeypatch.setattr(MB.pd, "read_sql", lambda *a, **k: pd.DataFrame())
     st, shared = State(), []
-    kw = dict(engine=object(), now=NOW, load_state=st.get, save_state=st.save, covered=set(),
-              share=lambda t, what: shared.append((what, t)))
-    FA.run_final_alerts(send=lambda t: False, **kw)
-    assert shared == []                                                     # no le llegó al dueño: se reintenta
-    FA.run_final_alerts(send=lambda t: True, **kw)
-    assert shared == [("los picks finales", "⏰ <b>Picks finales</b> 1"), ("los picks finales", "⏰ (sigue)")]
+    kw = dict(engine=object(), now=NOW, load_state=st.get, save_state=st.save,
+              share=lambda t, what="": shared.append(t), unpin=lambda mid, chat_id=None: True)
+    MB.run_match_blocks(send=lambda t: False, **kw)
+    assert shared == [] and MB.STATE_KEY not in st                       # no le llegó al dueño: se reintenta
+    sent = []
+    MB.run_match_blocks(send=lambda t: sent.append(t) or True, **kw)
+    assert sent == ["☀️ bloque", "📋 con alineación"] and shared == ["📋 con alineación"]   # el bloque, solo al dueño
 
 
-def test_the_board_is_kept_in_the_channel_too(monkeypatch):
-    from src.models import today_board as TB
-    monkeypatch.setattr(pd, "read_sql", lambda *a, **k: pd.DataFrame(
-        [{"match": "a vs b", "display": "A vs B", "match_date": NOW + timedelta(hours=2), "label": "Gana A",
-          "family": "Ganador", "market": "home_win", "reason": "Sin ventaja", "min_us": None, "lineup": None,
-          "prev_label": None, "prev_star": None, "changed_at": None, "odds_fetched_at": NOW,
-          "specialty_fetched_at": None}]))
-    st, edits, pins, results = State(), [], [], []
+def test_the_old_pinned_board_is_taken_down_in_the_channel_too():
+    from src.models import match_blocks as MB
+    st = State()
     st[TC.KEY] = {"chat_id": "-100", "title": "Picks"}
-    ids = iter(range(100, 200))
+    st["telegram_today"] = {"day": "2026-11-19", "ids": [55]}
+    st[TC.BOARD_KEY] = {"day": "2026-11-19", "ids": [77]}
+    unpinned = []
+    n = MB.retire_board(st.get, st.save, lambda mid, chat_id=None: unpinned.append((mid, chat_id)) or True)
+    assert n == 2 and unpinned == [(55, None), (77, "-100")]
+    assert MB.retire_board(st.get, st.save, lambda mid, chat_id=None: unpinned.append(mid)) == 0   # una vez
+    assert len(unpinned) == 2
 
-    def edit(t, mid=None, silent=True, chat_id=None):
-        edits.append((chat_id, mid))
-        return mid or next(ids)
-    kw = dict(engine=object(), edit=edit, pin=lambda mid, unpin=None, chat_id=None: pins.append((chat_id, mid)),
-              load_state=st.get, save_state=st.save, channel_result=lambda ok, what, ch: results.append(ok))
-    TB.run_today_board(now=NOW, **kw)
-    assert edits == [(None, None), ("-100", None)] and pins == [(None, 100), ("-100", 101)]
-    assert st[TB.BOARD_KEY]["ids"] == [100] and st[TC.BOARD_KEY]["ids"] == [101] and results == [True]
-    TB.run_today_board(now=NOW + timedelta(minutes=30), **kw)
-    assert edits[-2:] == [(None, 100), ("-100", 101)] and len(pins) == 2      # se editan, no se repiten
-    kw["edit"] = lambda t, mid=None, silent=True, chat_id=None: None if chat_id else (mid or 100)
-    TB.run_today_board(now=NOW + timedelta(hours=1), **kw)
-    assert results[-1] is False                                             # el canal falló: se anota y se avisa
-    del st[TC.KEY]
-    edits.clear()
-    kw["edit"] = edit
-    TB.run_today_board(now=NOW + timedelta(hours=1, minutes=30), **kw)
-    assert [c for c, _ in edits] == [None]                                  # sin canal, solo el del dueño
+

@@ -49,47 +49,16 @@ def _plain(msg: str):
 
 # ─── mañana ──────────────────────────────────────────────────────────────────
 
-def test_the_morning_lists_the_targets_with_their_minimum_and_the_parlays():
-    picks = [_pick("rb leipzig vs augsburg", "14:30", display="RB Leipzig vs Augsburg"),
-             _pick("leeds united vs tottenham", "12:30", market="under25", reason="Sin ventaja: x",
-                   label="Menos de 2.5 goles", family="Goles")]
+def test_the_parlays_of_the_day_block_say_what_they_pay():
+    """Hasta el 19-nov-26 iban en el mensaje de la mañana; desde el 20-nov, en el bloque del día de su primer
+    partido (src/models/match_blocks.py)."""
     legs = [_leg(1, "dortmund vs elversberg", 1.28), _leg(2, "mainz vs bayern", 1.30, prob=0.73),
             _leg(3, "roma vs sassuolo", 1.28, prob=0.75), _leg(4, "valencia vs madrid", 1.26, prob=0.76)]
-    msg, n = TR.morning_text(DAY, picks, legs, MX)
-    assert n == 1
-    assert "☀️ <b>Hoy, sábado 7 nov</b>" in msg
-    assert "<b>08:30</b> RB Leipzig vs Augsburg\n   Gana RB Leipzig ⚡ · apuesta si PlayDoit paga <b>-250</b> o más" in msg
+    msg = "\n".join(TR.parlay_lines([d for d in TR.parlays_of(legs) if d["parlay"]], MX))
+    assert msg.startswith("🧩 <b>Parlays</b>")
     assert "Parlay del día · 4 partidos · paga <b>+168</b> (con el bono: <b>+181</b>)" in msg
     assert "se gana más o menos 1 de cada 3 veces" in msg
-    assert "🤖 Otro partido de hoy no tiene 🎯: sale en" in msg and "Leeds" not in msg
     _plain(msg)
-
-
-def test_a_morning_without_targets_only_says_it_for_sure_when_no_league_can_have_one():
-    """19-nov-26, el dueño: "mandemos los partidos pero después mandemos otro donde dice que no hay partidos
-    recomendados, no sabemos si habrá partidos recomendados porque no tenemos las alineaciones". Un partido de una
-    liga con 🎯 todavía puede serlo hasta su última revisión; uno de Brasil o la MLS, nunca."""
-    # Bundesliga (con pago anticipado): todavía puede haber 🎯
-    msg, n = TR.morning_text(DAY, [_pick("a vs b", "15:00", reason="No es el muy favorito")], [], MX)
-    assert n == 0
-    assert "🎯 Hoy, por ahora, no hay recomendados. Un partido de hoy es de ligas donde sí puede haber 🎯" in msg
-    assert "si alguno queda 🎯 llega en ese momento como pick final" in msg
-    assert "No hace falta apostar" not in msg and "no habrá" not in msg
-    assert "🤖 El partido de hoy sale en \"Partidos de hoy\" (mensaje fijado) y en el dashboard, con su pick." in msg
-    assert "Parlays" not in msg
-    _plain(msg)
-    # el 19-nov: solo Brasil y la MLS, donde el 🎯 no existe
-    br = [_pick(f"t{i} vs u{i}", "21:30", reason="x", league="soccer_brazil_campeonato") for i in range(4)]
-    br += [_pick("orlando vs cincinnati", "23:30", reason="x", league="soccer_usa_mls")]
-    msg, _ = TR.morning_text(DAY, br, [], MX)
-    assert ("🎯 Hoy no habrá recomendados: los 5 partidos de hoy son de ligas donde el 🎯 no existe (solo hay 🎯 "
-            "en las ligas con pago anticipado y en 12 de Europa y Asia).") in msg
-    assert "Los 5 partidos de hoy salen" in msg and "por ahora" not in msg
-    # una liga de las 12 de Europa y Asia también cuenta
-    two, _ = TR.morning_text(DAY, br + [_pick("x vs y", "15:00", reason="x", league="soccer_efl_champ")], [], MX)
-    assert "Un partido de hoy es de ligas donde sí puede haber 🎯" in two
-    tomorrow, _ = TR.morning_text(DAY, [], [], MX, when="Mañana")
-    assert tomorrow.startswith("🌙 <b>Mañana, sábado 7 nov</b>") and "Mañana todavía no hay partidos analizados" in tomorrow
 
 
 # ─── noche ───────────────────────────────────────────────────────────────────
@@ -108,7 +77,7 @@ def test_the_evening_says_how_each_target_ended_and_the_gain_on_50():
             _leg(3, "roma vs sassuolo", 1.28, "win")]
     since = [{"market": "home_win", "reason": None, "result": r, "profit": p}
              for r, p in [("win", 0.4)] * 111 + [("loss", -1.0)] * 92]
-    msg = TR.evening_text(DAY, picks, legs, since, {"stars": 11, "parlays": 3}, NIGHT, MX)
+    msg = TR.evening_text(DAY, picks, legs, since, {"stars": 11, "parlays": 3, "matches": 20}, NIGHT, MX)
     assert "🌙 <b>Así terminó el sábado 7 nov</b>" in msg
     assert "🎯 <b>Recomendados</b>: 1 ganado y 1 perdido · apostando 50 a cada uno: <b>-27</b>" in msg
     assert "✅ Rb Leipzig vs Augsburg — Gana Rb Leipzig: ganado ⚡ (cobrado por ir 2 goles arriba) (+23)" in msg
@@ -116,7 +85,7 @@ def test_the_evening_says_how_each_target_ended_and_the_gain_on_50():
     assert "❌ Parlay del día (3 partidos): perdido (2 de 3 ganados) · apostando 50: -50" in msg
     assert "🤖 <b>Los demás picks</b> (solo para seguirlos): 1 ganado y 0 perdidos · apostando 50 a cada uno: <b>+43</b> · 1 todavía sin resultado" in msg
     assert "📈 <b>Desde el 22 oct</b>, 🎯 recomendados: 111 de 203 ganados · apostando 50 a cada uno: <b>-2380</b>" in msg
-    assert "🗓️ <b>Mañana</b>: 11 🎯 recomendados y 3 parlays" in msg
+    assert "<b>Mañana</b>: 20 partidos. Llegan en dos bloques: a las 06:00" in msg
     # 18-nov-26: cada pick, también los que no son 🎯 ("we need to log every pick")
     assert "✅ Leeds vs Tottenham — Menos de 2.5 goles: ganado (+43)" in msg
     assert "⏳ Toulouse vs Strasbourg — Menos de 9.5 córners: esperando el dato oficial de córners" in msg
@@ -166,7 +135,7 @@ def test_a_pending_target_says_what_it_waits_for():
     assert TR.pick_status({**late, "result": "push"}, NIGHT)[1] == "anulado: se devuelve lo apostado"
     msg = TR.evening_text(DAY, [corners], [], [], {}, NIGHT, MX)
     assert "🎯 <b>Recomendados</b>: todavía no termina ninguno" in msg
-    assert "🗓️ <b>Mañana</b>: por ahora sin 🎯 recomendados." in msg and "Desde el 22 oct" not in msg
+    assert "<b>Mañana</b>: todavía no hay partidos analizados." in msg and "Desde el 22 oct" not in msg
 
 
 def test_a_won_parlay_shows_its_gain_with_the_bonus():
@@ -218,29 +187,23 @@ def _fake_db(monkeypatch, picks, legs):
     return seen
 
 
-def test_the_three_messages_read_the_program_picks_not_bets_history(monkeypatch):
+def test_the_messages_read_the_program_picks_not_bets_history(monkeypatch):
     import scripts.notify_telegram as nt
     from src.models import lineup_changes
     picks = [_pick("rb leipzig vs augsburg", "14:30", result="win", profit=0.45)]
     seen = _fake_db(monkeypatch, picks, [])
-    sent = []
+    sent, shared = [], []
     monkeypatch.setattr(nt, "send_message", lambda m: sent.append(m) or True)
-    monkeypatch.setattr(nt, "_local_today", lambda: DAY)
-    monkeypatch.setattr(nt, "PAPER_LOG_PATH", nt.Path("/nonexistent/paper.jsonl"))
     monkeypatch.setattr(lineup_changes, "weekly_lines", lambda engine: ["— <b>CAMBIOS CON LA ALINEACIÓN</b> —"])
-    announced, shared = [], []
-    monkeypatch.setattr(nt, "_remember_announced", lambda day, stars: announced.append((day, stars)))
     monkeypatch.setattr(nt, "share_message", lambda t, what="": shared.append(what) or True)
-    nt.notify_best_bets()
     nt.send_evening_summary(target_date=DAY)
     nt.send_weekly_report()
-    assert len(sent) == 3
-    assert "Gana Rb Leipzig" in sent[0] and nt.get_last_picks_shown() == 1
-    # v2.11.0: los 🎯 del mensaje quedan guardados para los picks finales
-    assert [(d, [r["match"] for r in st]) for d, st in announced] == [(DAY, ["rb leipzig vs augsburg"])]
-    assert "Así terminó el sábado 7 nov" in sent[1] and "ganado (+23)" in sent[1]
-    assert "REPORTE DE LA SEMANA" in sent[2] and "CAMBIOS CON LA ALINEACIÓN" in sent[2]
-    assert shared == ["el mensaje de la mañana", "el resumen de la noche"]          # el canal, sin el domingo
+    assert len(sent) == 2
+    assert "Así terminó el sábado 7 nov" in sent[0] and "ganado (+23)" in sent[0]
+    assert "REPORTE DE LA SEMANA" in sent[1] and "CAMBIOS CON LA ALINEACIÓN" in sent[1]
+    # 20-nov-26: al canal solo van los partidos con alineación (match_blocks); ni la noche ni el domingo
+    assert shared == []
+    assert not hasattr(nt, "notify_best_bets") and not hasattr(nt, "send_tomorrow_preview")   # sin mañana
     assert all("bets_history" not in s for s in seen) and any("program_picks" in s for s in seen)
     for m in sent:
         _plain(m)
@@ -254,9 +217,7 @@ def test_a_database_error_sends_nothing_instead_of_an_empty_summary(monkeypatch)
     monkeypatch.setattr(TR.pd, "read_sql", boom)
     sent = []
     monkeypatch.setattr(nt, "send_message", lambda m: sent.append(m) or True)
-    monkeypatch.setattr(nt, "_remember_announced", lambda day, stars: sent.append("guardó"))
     nt.send_evening_summary(target_date=DAY)
-    nt.notify_best_bets()
     nt.send_weekly_report()
     assert sent == []
 
@@ -270,7 +231,8 @@ def test_the_failure_notice_is_plain_and_no_longer_reads_bets_history(monkeypatc
     nt.send_health_check(mode="morning", picks_today=7, elapsed_seconds=618, steps_ok=40, steps_total=41)
     nt.send_health_check(mode="evening", picks_today=0, elapsed_seconds=95, steps_ok=30, steps_total=31)
     assert sent[0].startswith("⚠️ <b>La corrida de la mañana tuvo fallas</b>")
-    assert "1 de 41 pasos fallaron" in sent[0] and "Recomendados en el mensaje de hoy: <b>7</b>" in sent[0]
+    # 20-nov-26: sin mensaje de la mañana ya no dice cuántos 🎯 llevó
+    assert "1 de 41 pasos fallaron" in sent[0] and "Recomendados" not in sent[0]
     assert "Tardó: 10 min" in sent[0] and "Recomendados" not in sent[1] and "de la noche" in sent[1]
     for m in sent:
         _plain(m)

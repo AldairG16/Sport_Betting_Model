@@ -255,6 +255,20 @@ def pin_message(message_id: int, unpin: list | None = None, chat_id=None) -> boo
         return False
 
 
+def unpin_message(message_id: int, chat_id=None) -> bool:
+    """Quita `message_id` de arriba del chat (20-nov-26: el tablero "Partidos de hoy" que se editaba ya no se
+    usa; match_blocks.retire_board). Mejor esfuerzo."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/unpinChatMessage",
+                          json={"chat_id": chat_id or TELEGRAM_CHAT_ID, "message_id": message_id}, timeout=10)
+        return r.status_code == 200
+    except requests.RequestException as e:
+        print(f"   (no se pudo quitar el mensaje fijado {message_id}: {e})")
+        return False
+
+
 def channel_result(ok: bool, what: str, st: dict) -> None:
     """Anota cómo le fue al canal y, en la primera falla del día, le avisa al
     dueño en su chat (src/models/telegram_channel.py)."""
@@ -599,85 +613,9 @@ def _format_paper_bets_section(target_date, days_ahead: int = 0) -> str:
 # ============================================================
 # MAIN
 # ============================================================
-def _day_message(day, when: str = "Hoy") -> tuple[str, int, list]:
-    """El mensaje de un día con los 🎯 y los parlays del programa (los del
-    dashboard), en palabras normales (src/models/telegram_reports.py), y sus 🎯."""
-    from src.models import telegram_reports as TR
-    tz = ZoneInfo(USER_TIMEZONE)
-    a, b = TR.day_bounds(day, tz)
-    picks = TR.load_picks(engine, a, b)
-    msg, n_star = TR.morning_text(day, picks, TR.load_parlays(engine, day), tz, when=when)
-    return msg, n_star, [r for r in picks if TR.is_star(r)]
-
-
-def _remember_announced(day, stars: list) -> None:
-    """Los 🎯 que salieron en el mensaje (v2.11.0): el de los picks finales,
-    ~30 min antes de cada partido, avisa si alguno deja de serlo."""
-    try:
-        from src.models.final_alerts import remember_announced
-        remember_announced(day, stars)
-    except Exception as e:
-        log.error(f"❌ No se guardaron los 🎯 del mensaje: los picks finales no sabrán si alguno deja de serlo "
-                  f"({type(e).__name__}: {str(e)[:120]})")
-
-
-def _share_day(msg: str, what: str) -> None:
-    """El mensaje del día al canal, sin lo que solo tiene el dueño (sin la
-    sección del Mundial en papel ni el dashboard)."""
-    from src.models import telegram_reports as TR
-    share_message(TR.for_channel(msg), what)
-
-
-def notify_best_bets():
-    """La mañana: los 🎯 recomendados de HOY (hora local) y sus parlays.
-    Hasta v2.9.3 leía bets_history, que dejó de llenarse con el modo
-    colección (25-sep-26), y decía cada día "No apuestes nada" aunque el
-    dashboard sí recomendaba 🎯 (6-nov-26)."""
-    print("\n📲 ENVIANDO NOTIFICACION TELEGRAM...\n")
-    today = _local_today()
-    try:
-        msg, n_star, stars = _day_message(today, "Hoy")
-    except Exception as e:
-        log.error(f"❌ Telegram: no se pudieron leer los picks de hoy — mensaje no enviado: {e}")
-        return
-    base = msg
-    # Paper-trading (Mundial 2026): days_ahead=2 muestra hoy + mañana + pasado
-    paper_section = _format_paper_bets_section(today, days_ahead=2)
-    if paper_section:
-        msg = msg + "\n" + paper_section
-    if send_message(msg):
-        _set_last_picks_shown(n_star)
-        _remember_announced(today, stars)
-        print(f"✅ Mensaje de la mañana enviado: {n_star} 🎯 recomendados")
-        _share_day(base, "el mensaje de la mañana")
-    else:
-        print("❌ No se pudo enviar a Telegram")
-
-
-# ============================================================
-# PREVIEW DE MAÑANA (para recibir de noche)
-# ============================================================
-def send_tomorrow_preview():
-    """Los 🎯 recomendados de MAÑANA y sus parlays (si la corrida de la
-    mañana cae después del mediodía)."""
-    print("\n🌙 ENVIANDO PREVIEW DE MAÑANA...\n")
-    tomorrow = _local_tomorrow()
-    try:
-        msg, n_star, stars = _day_message(tomorrow, "Mañana")
-    except Exception as e:
-        log.error(f"❌ Telegram: no se pudieron leer los picks de mañana — preview no enviado: {e}")
-        return
-    base = msg
-    paper_section = _format_paper_bets_section(tomorrow)
-    if paper_section:
-        msg = msg + "\n" + paper_section
-    if send_message(msg):
-        _set_last_picks_shown(n_star)
-        _remember_announced(tomorrow, stars)
-        print(f"✅ Preview de mañana enviado: {n_star} 🎯 recomendados")
-        _share_day(base, "el avance de mañana")
-    else:
-        print("❌ No se pudo enviar preview a Telegram")
+# 20-nov-26: ya no hay mensaje de la mañana ni avance de mañana (notify_best_bets, send_tomorrow_preview). El
+# dueño: "tampoco quiero el mensaje de no hay partidos recomendados porque llena de basura". Los partidos del día
+# van por bloques desde el closing (src/models/match_blocks.py).
 
 
 # ============================================================
@@ -923,8 +861,7 @@ def send_health_check(
            f"{'tuvo fallas' if failed else 'terminó bien'}</b>\n\n")
     if failed:
         msg += f"⚙️ {failed} de {steps_total} pasos fallaron: hay que revisar el log.\n"
-    if mode == "morning":
-        msg += f"🎯 Recomendados en el mensaje de hoy: <b>{picks_today}</b>\n"
+    # 20-nov-26: sin mensaje de la mañana ya no se dice cuántos 🎯 llevó (los partidos van por bloques)
     msg += (f"💳 Créditos de The Odds API que quedan: {credits_remaining}\n"
             f"⏱️ Tardó: {elapsed_str}")
     send_message(msg)
@@ -1009,8 +946,7 @@ def send_evening_summary(target_date=None):
     print(f"🌙 Resumen del día: {today} ({USER_TIMEZONE}) · {len(picks)} picks, {n_star} 🎯")
     ok = send_message(msg)
     print("✅ Resumen nocturno enviado" if ok else "❌ Error enviando resumen nocturno")
-    if ok:
-        share_message(TR.for_channel(msg), "el resumen de la noche")
+    # 20-nov-26: ya no se copia al canal; ahí van solo los partidos con alineación (match_blocks)
 
 
 if __name__ == "__main__":
@@ -1030,4 +966,4 @@ if __name__ == "__main__":
     elif args.report:
         send_weekly_report()
     else:
-        notify_best_bets()
+        parser.print_help()

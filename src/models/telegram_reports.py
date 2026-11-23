@@ -17,10 +17,10 @@ Ahora leen lo mismo que el dashboard: los picks del programa
 8-nov-26 era × 100: el dueño, "todo a 50")
 y los momios en americano.
 
-- morning_text: los 🎯 de hoy con su momio mínimo, los parlays y cuántos
-  partidos más hay sin 🎯 (solo para seguirlos).
-- evening_text: cómo terminó cada 🎯, los parlays, los demás picks en una
-  línea, lo acumulado desde el 22-oct y cuántos 🎯 hay mañana.
+- (hasta el 19-nov-26, morning_text: el mensaje de la mañana. Desde el 20-nov los partidos del día van por
+  bloques: src/models/match_blocks.py.)
+- evening_text: cómo terminó cada 🎯, los parlays, cada uno de los demás picks,
+  lo acumulado desde el 22-oct y cuántos partidos hay mañana.
 - weekly_lines: la semana de 🎯, parlays y demás picks, por liga y lo
   acumulado.
 
@@ -285,83 +285,19 @@ def pick_status(r: dict, now: datetime) -> tuple[str, str]:
     return "⏳", "esperando el resultado oficial"
 
 
-# ─── mañana ──────────────────────────────────────────────────────────────────
+# ─── los parlays del bloque del día ─────────────────────────────────────────
 
-def star_league(league) -> bool:
-    """¿En esta liga puede haber 🎯? Las de pago anticipado y WIDE_LEAGUES (program_picks.strong_favourite)."""
-    from src.models.early_payout import PA_LEAGUES
-    from src.models.program_picks import WIDE_LEAGUES
-    return str(league or "") in PA_LEAGUES or str(league or "") in WIDE_LEAGUES
-
-
-def no_targets_text(picks: list, when: str = "Hoy") -> str:
-    """La línea del 🎯 cuando todavía no hay ninguno (19-nov-26). El dueño: "mandemos los partidos pero después
-    mandemos otro donde dice que no hay partidos recomendados, no sabemos si habrá partidos recomendados porque
-    no tenemos las alineaciones". La mañana decía "Hoy no hay recomendados… No hace falta apostar" como si fuera
-    seguro, y un partido de una liga con 🎯 todavía puede serlo: el pick se rehace con los momios y la alineación
-    hasta ~30 min antes, y si queda 🎯 sale en los picks finales (final_alerts). Solo se dice seguro cuando ningún
-    partido es de una liga con 🎯."""
-    hoy = when.lower()
-    matches = {r["match"] for r in picks}
-    open_ = {r["match"] for r in picks if star_league(r.get("league"))}
-    if not matches:
-        return f"🎯 {when} todavía no hay partidos analizados."
-    if not open_:
-        n = len(matches)
-        return (f"🎯 {when} no habrá recomendados: {'el partido' if n == 1 else f'los {n} partidos'} de {hoy} "
-                f"{'es' if n == 1 else 'son'} de ligas donde el 🎯 no existe (solo hay 🎯 en las ligas con pago "
-                f"anticipado y en 12 de Europa y Asia).")
-    k = len(open_)
-    return (f"🎯 {when}, por ahora, no hay recomendados. {'Un partido' if k == 1 else f'{k} partidos'} de {hoy} "
-            f"{'es' if k == 1 else 'son'} de ligas donde sí puede haber 🎯: el pick se revisa con los momios y la "
-            f"alineación hasta unos 30 min antes, y si alguno queda 🎯 llega en ese momento como pick final.")
-
-
-def morning_text(day, picks: list, parlay_rows: list, tz, when: str = "Hoy") -> tuple[str, int]:
-    """El mensaje de la mañana (o el avance de mañana, when="Mañana") y
-    cuántos 🎯 lleva."""
-    from src.models.early_payout import applies
-    from src.utils.min_odds import fmt_american
-    stars = [r for r in picks if is_star(r)]
-    others = len({r["match"] for r in picks if not is_star(r)})
-    hoy = when.lower()
-    lines = [f"{'☀️' if when == 'Hoy' else '🌙'} <b>{when}, {day_name(day)}</b>", ""]
-    if stars:
-        lines.append(f"🎯 <b>Recomendados</b> ({len(stars)})")
-        for r in stars:
-            ko = _ts(r["match_date"]).astimezone(tz)
-            mn = _num(r.get("min_us"))
-            price = (f"apuesta si PlayDoit paga <b>{fmt_american(int(mn))}</b> o más" if mn is not None
-                     else f"{us(r.get('playdoit_odds')) or 'sin momio'} en PlayDoit")
-            pa = " ⚡" if applies(r.get("league"), r.get("market")) else ""
-            lines.append(f"<b>{ko:%H:%M}</b> {html.escape(match_name(r))}\n"
-                         f"   {html.escape(pick_label(r))}{pa} · {price}")
-        lines.append("")
-    else:
-        lines += [no_targets_text(picks, when), ""]
-    pls = [d for d in parlays_of(parlay_rows) if d["parlay"]]
-    if pls:
-        lines.append("🧩 <b>Parlays</b>")
-        for d in pls:
-            p = d["parlay"]
-            pay = f"paga <b>{p['odds_us']}</b>" + (f" (con el bono: <b>{p['odds_bonus_us']}</b>)" if p["bonus"] else "")
-            odds = times_text(p.get("p_market"))
-            lines.append(f"{parlay_name(d, tz)} · {p['k']} partidos · {pay}"
-                         + (f"\n   se gana {odds}" if odds else ""))
-        lines += ["<i>El parlay final llega con los picks finales, en la última revisión antes de su primer "
-                  "partido.</i>", ""]
-    if others and stars:
-        lines.append(f"🤖 Otro partido de {hoy} no tiene 🎯: sale" if others == 1 else
-                     f"🤖 Otros {others} partidos de {hoy} no tienen 🎯: salen")
-        lines[-1] += f" en \"Partidos de hoy\" (mensaje fijado){DASHBOARD_BIT}, solo para seguirlos."
-    elif others:                                   # sin 🎯 (19-nov-26): ver no_targets_text
-        lines.append(f"🤖 El partido de {hoy} sale" if others == 1 else f"🤖 Los {others} partidos de {hoy} salen")
-        lines[-1] += f" en \"Partidos de hoy\" (mensaje fijado){DASHBOARD_BIT}, con su pick."
-    if stars:
-        lines.append("<i>⚡ = pago anticipado: si el equipo va 2 goles arriba, PlayDoit la paga como ganada. "
-                     "El pick final llega en la última revisión antes de cada partido: unos 30 min antes (15 si "
-                     "empieza a y cuarto o a menos cuarto), ya con la alineación si salió.</i>")
-    return "\n".join(lines).rstrip(), len(stars)
+def parlay_lines(pls: list, tz) -> list:
+    """Los parlays con bono (parlays_of, con parlay) en el bloque del día (match_blocks, 20-nov-26): lo que pagan
+    y "se gana más o menos 1 de cada N veces". Hasta el 19-nov iban en el mensaje de la mañana."""
+    lines = ["🧩 <b>Parlays</b>"]
+    for d in pls:
+        p = d["parlay"]
+        pay = f"paga <b>{p['odds_us']}</b>" + (f" (con el bono: <b>{p['odds_bonus_us']}</b>)" if p["bonus"] else "")
+        odds = times_text(p.get("p_market"))
+        lines.append(f"{parlay_name(d, tz)} · {p['k']} partidos · {pay}" + (f"\n   se gana {odds}" if odds else ""))
+    lines.append("<i>El parlay final llega en la última revisión antes de su primer partido.</i>")
+    return lines
 
 
 # ─── noche ───────────────────────────────────────────────────────────────────
@@ -411,13 +347,13 @@ def evening_text(day, picks: list, parlay_rows: list, since_rows: list, tomorrow
     if tot["n"]:
         lines.append(f"📈 <b>Desde el 22 oct</b>, 🎯 recomendados: {tot['won']} de {tot['n']} ganados"
                      + (f" · apostando {STAKE} a cada uno: <b>{money(tot['units'])}</b>" if tot["priced"] else ""))
-    n_star, n_parlay = int(tomorrow.get("stars") or 0), int(tomorrow.get("parlays") or 0)
-    if n_star or n_parlay:
-        lines.append(f"🗓️ <b>Mañana</b>: {n_star} 🎯 recomendado{'s' if n_star != 1 else ''}"
-                     + (f" y {n_parlay} parlay{'s' if n_parlay != 1 else ''}" if n_parlay else "")
-                     + ". La lista llega en el mensaje de la mañana.")
+    # 20-nov-26: sin "por ahora sin 🎯" (el dueño: "como vamos a saber si hay o no"); cuántos partidos y cuándo llegan
+    n = int(tomorrow.get("matches") or 0)
+    if n:
+        lines.append(f"🗓️ <b>Mañana</b>: {n} partido{'s' if n != 1 else ''}. Llegan en dos bloques: a las 06:00 los "
+                     "de antes de las 12:00 y a las 12:00 los demás; cada uno vuelve a llegar con su alineación.")
     else:
-        lines.append("🗓️ <b>Mañana</b>: por ahora sin 🎯 recomendados.")
+        lines.append("🗓️ <b>Mañana</b>: todavía no hay partidos analizados.")
     return "\n".join(lines).rstrip()
 
 
@@ -497,4 +433,5 @@ def tomorrow_counts(engine, day, tz) -> dict:
     a, b = day_bounds(pd.Timestamp(day) + pd.Timedelta(days=1), tz)
     picks = load_picks(engine, a, b)
     parlays = parlays_of(load_parlays(engine, pd.Timestamp(day) + pd.Timedelta(days=1)))
-    return {"stars": sum(1 for r in picks if is_star(r)), "parlays": len(parlays)}
+    return {"stars": sum(1 for r in picks if is_star(r)), "parlays": len(parlays),
+            "matches": len({r["match"] for r in picks})}

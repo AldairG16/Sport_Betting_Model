@@ -379,21 +379,6 @@ def step_goalscorer_resolve():
         log.error(f"⚠️  Goalscorer resolve falló: {e}")
 
 
-def step_notify():
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    from config.settings import USER_TIMEZONE
-    now_local = datetime.now(ZoneInfo(USER_TIMEZONE))
-    if now_local.hour >= 12:
-        # Después del mediodía → mostrar picks de MAÑANA
-        from scripts.notify_telegram import send_tomorrow_preview
-        send_tomorrow_preview()
-    else:
-        # Mañana temprano → mostrar picks de HOY
-        from scripts.notify_telegram import notify_best_bets
-        notify_best_bets()
-
-
 def step_closing_odds():
     from scripts.update_closing_odds import update_closing_odds
     update_closing_odds()
@@ -721,9 +706,10 @@ def run_morning(logger: Logger, force_fetch: bool = False):
     # Antes: el usuario veía "Sin value bets para hoy" sin saber que era un bug.
     if predict_ok:
         run_step(logger, "Goalscorer picks", step_goalscorer_picks)
-        run_step(logger, "Telegram",      step_notify)
+        # 20-nov-26: ya no hay mensaje de la mañana; los partidos del día salen por bloques desde el
+        # closing (src/models/match_blocks.py)
     else:
-        logger.log("⚠️  Saltando step_notify — predictions falló. Enviando alerta.")
+        logger.log("⚠️  Predictions falló. Enviando alerta.")
         _alert_step_failed("Predictions")
 
 
@@ -770,11 +756,6 @@ def step_notify_evening():
     target_day = evening_target_day(datetime.now(_ZI(_TZ)))
     print(f"   Resumen nocturno anclado al día local: {target_day}")
     send_evening_summary(target_date=target_day)
-
-
-def step_notify_tomorrow():
-    from scripts.notify_telegram import send_tomorrow_preview
-    send_tomorrow_preview()
 
 
 def run_evening(logger: Logger):
@@ -834,7 +815,6 @@ def run_full(logger: Logger, force_fetch: bool = False):
 
     run_step(logger, "Fetch odds",   step_fetch_odds, force_fetch)
     run_step(logger, "Predictions",  step_predict)
-    run_step(logger, "Notify",       step_notify)
     run_step(logger, "Closing odds",  step_closing_odds)
     run_step(logger, "Fetch results", step_fetch_results)
     run_step(logger, "Results",       step_results)
@@ -1233,8 +1213,8 @@ def run_closing(logger: Logger):
     run_step(logger, "Alineaciones publicadas", step_capture_lineups)
     run_step(logger, "Picks del programa", step_program_picks)
     run_step(logger, "Alertas de alineación", step_lineup_alerts)
-    run_step(logger, "Partidos de hoy (Telegram)", step_today_board)
-    run_step(logger, "Picks finales (Telegram)", step_final_alerts)
+    run_step(logger, "Partidos por bloques (Telegram)", step_match_blocks)
+    run_step(logger, "Parlays finales (Telegram)", step_final_alerts)
 
 
 def _kickoffs_soon(hours: float) -> int:
@@ -1304,19 +1284,19 @@ def step_lineup_alerts():
     run_lineup_alerts(capture=False, notify=False)
 
 
-def step_today_board():
-    """El mensaje "Partidos de hoy" de Telegram (30-oct-26): hora de inicio, pick,
-    de cuándo son sus cuotas y si cambió. Se edita en cada closing sin sonar
-    (src/models/today_board.py)."""
-    from src.models.today_board import run_today_board
-    run_today_board()
+def step_match_blocks():
+    """Los partidos en Telegram por bloques (20-nov-26, src/models/match_blocks.py): el bloque de antes de las
+    12:00 (desde las 06:00) y el de las 12:00 en adelante, solo al dueño; los partidos que acaban de tener
+    alineación y el último aviso, al dueño y al canal. Mensajes nuevos: nada se edita ni se fija. Reemplaza
+    "Partidos de hoy" (un mensaje fijado que se editaba), el mensaje de la mañana y los picks finales de cada 🎯."""
+    from src.models.match_blocks import run_match_blocks
+    run_match_blocks()
 
 
 def step_final_alerts():
-    """Los picks finales en Telegram (v2.11.0, 8-nov-26): en la última revisión
-    antes de cada partido, los 🎯, los que dejaron de serlo y el parlay que se
-    fija ahí, una sola vez. Va después de "Picks del programa", que rehace
-    picks y parlays (src/models/final_alerts.py)."""
+    """Los parlays finales en Telegram (v2.11.0, 8-nov-26): en la última revisión
+    antes de su primer partido, una sola vez, solo al dueño. Desde el 20-nov los
+    partidos (🎯 o no) van por bloques (step_match_blocks)."""
     from src.models.final_alerts import run_final_alerts
     run_final_alerts()
 
@@ -1465,9 +1445,8 @@ def main():
 
         # ── Health check: resumen de salud del ciclo ──────────────────────
         # Solo para modos que generan apuestas (morning, evening, full).
-        # En la mañana dice cuántos 🎯 llevó el mensaje (el contador
-        # `_LAST_PICKS_SHOWN` de notify_telegram, que fija notify_best_bets o
-        # send_tomorrow_preview al mandarlo).
+        # (Desde el 20-nov-26 no hay mensaje de la mañana: get_last_picks_shown
+        # queda en 0 y el aviso ya no dice cuántos 🎯 llevó.)
         if args.mode in ("morning", "evening", "full"):
             try:
                 # (6-nov-26) ya no cuenta las "pending" de bets_history, que

@@ -389,10 +389,13 @@ def test_the_closing_saves_the_parlay_right_after_the_picks(monkeypatch):
 def test_the_closing_warns_after_redoing_the_parlay_with_the_lineups(monkeypatch):
     from tests.test_program_picks import _steps
     names, steps, O = _steps(monkeypatch, "run_closing")
-    # v2.11.0: el parlay va en los picks finales (src/models/final_alerts.py)
-    assert names.index("Picks finales (Telegram)") > names.index("Picks del programa")
+    # v2.11.0: el parlay va en los picks finales (src/models/final_alerts.py); desde el 20-nov-26, "Parlays
+    # finales", y los partidos por bloques (src/models/match_blocks.py), también después de rehacer los picks
+    assert names.index("Parlays finales (Telegram)") > names.index("Picks del programa")
+    assert names.index("Partidos por bloques (Telegram)") > names.index("Picks del programa")
     assert names.index("Picks del programa") > names.index("Alineaciones publicadas")
-    assert steps["Picks finales (Telegram)"] is O.step_final_alerts and "Parlay listo (Telegram)" not in names
+    assert steps["Parlays finales (Telegram)"] is O.step_final_alerts and "Parlay listo (Telegram)" not in names
+    assert steps["Partidos por bloques (Telegram)"] is O.step_match_blocks
 
 
 def test_a_rescheduled_match_voids_its_parlay_leg_too():
