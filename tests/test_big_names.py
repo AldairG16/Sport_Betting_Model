@@ -173,7 +173,7 @@ def test_the_dashboard_shows_the_warning_with_or_without_target():
     assert V.saved_pick({**p, "form_note": None})["form_note"] == ""                    # picks de antes: sin aviso
     info = B._pick_info({**p, "match_date": "2026-11-07T15:00:00Z", "result": None, "profit": None, "source": None})
     assert info["form_note"] == note
-    assert re.search(r"^function formTag\(pk\)\{", js, re.M) and "whyTag(pk) + formTag(pk) + lineupTag(" in js
+    assert re.search(r"^function formTag\(pk\)\{", js, re.M) and "whyTag(pk) + formTag(pk) + markTag(pk) + lineupTag(" in js
     assert app.count("form_note") == 2                                                 # las dos lecturas de picks la traen
 
 
