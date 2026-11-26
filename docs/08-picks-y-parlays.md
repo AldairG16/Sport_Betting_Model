@@ -54,6 +54,9 @@ pena solo si PlayDoit lo paga a -260 o mejor", "no llega a muy favorito para est
   quepan (en orden de hora), uno de 6 con los 6 más fuertes y uno de 9 con los 9 más fuertes, juntando los
   dos días y con los 🎯 de las 12 ligas nuevas también. Un partido antes de las 5:00 de México no entra.
 - Cada pierna es el 🎯 de su partido. Se fija al empezar la primera pierna y se avisa una vez por Telegram.
+- **El gemelo de otros mercados, solo para medir** (desde v2.16.0, 25-nov-26; abajo): cada parlay con bono
+  tiene uno con los mismos partidos y la apuesta más segura de otro mercado. No se recomienda ni va a
+  Telegram; se ve en la pestaña Parlay, comparado con su parlay con bono.
 
 **PlayDoit** no está en ninguna API. Su precio se toma como el promedio de las casas europeas (con evidencia de
 que coincide: PlayDoit/promedio ≈ 1.01 en favoritos). El revisor de capturas (`playdoit_checker.py`) lee lo
@@ -539,6 +542,36 @@ Lo que eligió el dueño (1b, 2c, 3a, 4a):
   piernas del mismo fin de semana y desde las 5:00 de México, y 70+ en una liga nueva).
 - Lo que no se puede: leer el precio real de PlayDoit (el widget de Altenar responde 403 a scripts: no se
   raspa). El parlay usa el promedio de las casas; el dueño ve el precio real al apostarlo.
+- **El gemelo de otros mercados, 25-nov-2026 (v2.16.0).** El dueño, tras 4 ganados y 7 perdidos: "podemos
+  hacer diferentes, como un parlay de ganar y otro con los diferentes mercados… necesitamos mirar por qué se
+  ganan esos partidos". Lo medido antes (solo lectura):
+  - **Qué separa a los 🎯 que ganan de los que pierden:** 8,022 de la historia (2012-26), 20 cosas que se
+    saben antes del partido (local o visitante, racha, forma, descanso, ascendido, jornada, mes, goles
+    esperados…). Ninguna, más allá del precio. Cuando no ganan, 2 de cada 3 es empate. Por liga, Turquía
+    (+9.3 pts) y Grecia (+8.7) ganan más de lo esperado en las tres épocas y Holanda menos en todos los
+    rangos (70+: −5.1% solo), pero quitar a Holanda de la escalera deja lo mismo por fin de semana (+39.7
+    contra +40.9): no se cambió.
+  - **Otros mercados:** solo más/menos 2.5 tiene 14 años de precios. De 65+ a −500 o más largo, gana 69.5 de
+    cada 100 (esperado 68.5) y pierde 3.5 de cada 100 solo; un parlay de 3 de goles por fin de semana, −3.1
+    (±4.3). Meter una pierna de goles en el de 6 baja de +22 a +17. En vivo (desde el 22-oct), los picks
+    seguros (65+) que no eran de ganador ganaron 35 de 53 (−10 de cada 100). Córners, tarjetas y ambos
+    anotan no tienen historia de precios.
+  - **La forma de armarlos** (526 fines de semana, 50 a cada uno): hoy (de 3, 6 y 9) +48 por fin de semana,
+    en verde 40 de cada 100; sin el de 9, +28 y 47; solo de 3, +15 y 56; dobles sin bono, +8 y 54. Ninguna
+    gana más y más seguido: el dueño eligió dejarla (1).
+  - **Lo que eligió (1 y 4):** los parlays no cambian y se mide el gemelo. Cada parlay con bono guardado tiene
+    uno (`twin_parlays`, rule `RULE_OTHER` 'medir') con el mismo horario, tipo y número (se fija con él) y en
+    cada partido la apuesta más segura de otro mercado (`other_leg`): goles 1.5/2.5/3.5, ambos anotan,
+    córners o tarjetas, la de más probabilidad sin margen de las casas, de `OTHER_MIN_PROB` (60) o más, a
+    −500 o más largo; nunca el ganador ni el empate. Córners y tarjetas, con lo que dan las casas
+    (`_market_props`), sin el modelo. Un partido sin una se queda fuera; con menos de 3 no hay gemelo. Sin
+    pago anticipado.
+  - Telegram, los avisos y el chequeo 18 leen solo rule 'bono'. La liquidación es la misma de todas las
+    piernas. El chequeo 16 revisa también los gemelos (`other_parlay_problems`).
+  - **Dashboard:** la pestaña Parlay tiene "Con otros mercados · solo para medir": los comparados (los dos ya
+    terminados, `dashboard.parlay.paired`), cuántos ganó cada uno y cuánto dejarían apostando 50; abajo, los
+    gemelos por jugar y terminados (`/api/board/parlay?rule=medir`). La pestaña normal ya no lee los de la
+    regla vieja ('seguro').
 
 ---
 

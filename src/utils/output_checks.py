@@ -311,6 +311,39 @@ def bono_parlay_problems(rows: list) -> list:
     return bad
 
 
+def other_parlay_problems(rows: list, bono: list) -> list:
+    """25-nov-26: cada gemelo de otros mercados (rule 'medir', solo para
+    medir) es el de un parlay con bono guardado: el mismo horario, tipo y
+    número, de OTHER_MIN_LEGS piernas o más y no más que él, con partidos de
+    ese parlay y sin repetir; cada pierna de otro mercado (nunca el ganador ni
+    el empate) de OTHER_MIN_PROB o más a −500 o más largo. rows / bono: las
+    piernas de cada regla (slot, kind, seq, match, market, market_prob,
+    playdoit_odds)."""
+    from src.models import program_parlays as PL
+    key = (lambda r: (str(r["slot"]), r.get("kind"), r.get("seq")))
+    real, twins = defaultdict(set), defaultdict(list)
+    for r in bono:
+        real[key(r)].add(r["match"])
+    for r in rows:
+        twins[key(r)].append(r)
+    bad = []
+    for k, legs in twins.items():
+        name = f"{k[1]} {k[2]} de {k[0][:16]}"
+        if k not in real:
+            bad.append(f"{name}: no tiene su parlay con bono")
+            continue
+        if not PL.OTHER_MIN_LEGS <= len(legs) <= len(real[k]):
+            bad.append(f"{name}: {len(legs)} piernas")
+        if len({x["match"] for x in legs}) != len(legs):
+            bad.append(f"{name}: un partido repetido")
+        for x in legs:
+            p, o = _num(x.get("market_prob")), _num(x.get("playdoit_odds"))
+            if (x["match"] not in real[k] or x.get("market") in PL.WINNER_MARKETS or p is None
+                    or p < PL.OTHER_MIN_PROB - 1e-9 or o is None or o < PL.MIN_LEG_ODDS - 1e-9):
+                bad.append(f"{name}: {x['match']} {x.get('market')} ({p}, {o})")
+    return bad
+
+
 def legs_off_target(legs: list, picks: list) -> list:
     """Función pura (6-nov-26): las piernas de un parlay con bono por jugar que
     no son el 🎯 de su partido (el pick guardado con ese mercado y sin motivo).
@@ -1132,15 +1165,25 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     except Exception as e:
         problems.append(f"Pago anticipado: no se pudo revisar ({type(e).__name__})")
 
-    # 16) la regla del parlay con bono (v2.9.0)
+    # 16) la regla del parlay con bono (v2.9.0) y la de su gemelo de otros
+    #     mercados, solo para medir (25-nov-26)
     try:
-        legs = q("""SELECT slot, kind, seq, match, match_date, market, league, market_prob, playdoit_odds
-                    FROM program_parlays
-                    WHERE rule = 'bono' AND slot >= NOW() - make_interval(days => :d)""", d=days).to_dict("records")
+        rows16 = q("""SELECT rule, slot, kind, seq, match, match_date, market, league, market_prob, playdoit_odds
+                      FROM program_parlays
+                      WHERE rule IN ('bono', 'medir') AND slot >= NOW() - make_interval(days => :d)""",
+                   d=days).to_dict("records")
+        legs = [x for x in rows16 if x.get("rule") == "bono"]
+        twins = [x for x in rows16 if x.get("rule") == "medir"]
         bad = bono_parlay_problems(legs)
         seen.append(f"parlays con bono ({len({(str(x['slot']), x['kind'], x['seq']) for x in legs})})")
         if bad:
             problems.append(f"Parlay con bono: {len(bad)} fuera de la regla ({'; '.join(bad[:3])})")
+        bad = other_parlay_problems(twins, legs)
+        if twins:
+            seen.append(f"gemelos de otros mercados ({len({(str(x['slot']), x['kind'], x['seq']) for x in twins})})")
+        if bad:
+            problems.append(f"Parlay de otros mercados (solo para medir): {len(bad)} fuera de su regla "
+                            f"({'; '.join(bad[:3])})")
     except Exception as e:
         if "does not exist" not in str(e):        # la columna rule nace con el primer snapshot de v2.9.0
             problems.append(f"Parlay con bono: no se pudo revisar ({type(e).__name__})")

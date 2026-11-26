@@ -912,26 +912,37 @@ def api_board_parlay():
     from src.models import program_parlays as _pl
     from src.models import program_picks as _pp
     from src.utils.team_normalizer import normalize_team
+    # v2.16.0 (25-nov-26): ?rule=medir, los gemelos de otros mercados (solo para medir),
+    # con sus parlays con bono para compararlos
+    rule = request.args.get("rule") or _pl.RULE
+    if rule not in (_pl.RULE, _pl.RULE_OTHER):
+        rule = _pl.RULE
     # la tabla nace con el primer parlay que guarda el pipeline; * porque las columnas
     # (slot de v2.7.0, rule/kind/seq/pa de v2.9.0) las agrega el pipeline
-    legs = _q("SELECT * FROM program_parlays ORDER BY day DESC, rank", optional=True)
+    legs = _q("SELECT * FROM program_parlays WHERE rule IN (:a, :b) ORDER BY day DESC, rank",
+              {"a": _pl.RULE, "b": rule}, optional=True)
     if g.get("db_down"):
         return _no_data()
     if not legs.empty and "rule" in legs.columns:
-        legs = legs[legs["rule"] == _pl.RULE]
-    elif not legs.empty:
-        legs = legs.iloc[0:0]
+        real = legs[legs["rule"] == _pl.RULE]
+        legs = legs[legs["rule"] == rule]
+    else:
+        legs = real = legs.iloc[0:0]
     live = official = None
-    open_legs = legs[legs["result"].isna()] if not legs.empty else legs
+    shown = pd.concat([legs, real]) if rule != _pl.RULE else legs
+    open_legs = shown[shown["result"].isna()] if not shown.empty else shown
     if not open_legs.empty:                     # sin liquidar: el marcador de ESPN o el oficial
         p = {"d": (pd.to_datetime(open_legs["match_date"], utc=True).min() - pd.Timedelta(days=2)).to_pydatetime()}
         live = _q("""SELECT * FROM live_scores WHERE kickoff >= :d""", p, optional=True)
         official = _q("""SELECT date, LOWER(home_team) AS h, LOWER(away_team) AS a, home_goals, away_goals,
                                 home_corners, away_corners, home_yellow, away_yellow, home_red, away_red
                          FROM matches WHERE date >= CAST(:d AS date) AND home_goals IS NOT NULL""", p)
-    board = _px.parlay_board(legs, live, normalize=normalize_team, official=official,
-                             covered=set(espn_leagues()))
-    return jsonify({"ok": True, **board,
+    covered = set(espn_leagues())
+    board = _px.parlay_board(legs, live, normalize=normalize_team, official=official, covered=covered, rule=rule)
+    if rule != _pl.RULE:
+        bono = _px.parlay_board(real, live, normalize=normalize_team, official=official, covered=covered)
+        board["pair"] = _px.paired(board["parlays"], bono["parlays"])
+    return jsonify({"ok": True, **board, "rule": rule, "other_min_prob": _pl.OTHER_MIN_PROB,
                     "rules": {"strong": _pl.STRONG_FAV, "price_band": _pl.PRICE_BAND,
                               "min_odds_us": _odds_us(_pl.MIN_LEG_ODDS),
                               "day_min": _pl.DAY_MIN_LEGS, "slot_min": _pl.SLOT_MIN_LEGS, "max_legs": _pl.MAX_LEGS,
@@ -1289,6 +1300,14 @@ PAGE = """<!DOCTYPE html>
   <div class="kpis" id="xkpis"></div>
   <div class="tbl"><table><thead><tr><th>Día</th><th>Parlay</th><th>Partidos</th><th>Momio</th><th>Resultado</th></tr></thead>
     <tbody id="xhist"></tbody></table></div>
+  <div class="day">Con otros mercados · solo para medir</div>
+  <div class="small muted" id="mrule" style="margin-bottom:8px"></div>
+  <div class="kpis" id="mkpis"></div>
+  <details><summary class="small">Ver los parlays de otros mercados</summary>
+    <div id="mnext" class="muted" style="margin-top:6px"></div>
+    <div class="tbl"><table><thead><tr><th>Día</th><th>Parlay</th><th>Partidos</th><th>Momio</th><th>Resultado</th></tr></thead>
+      <tbody id="mhist"></tbody></table></div>
+  </details>
 </div>
 
 <div class="pane" id="tab-resultados">

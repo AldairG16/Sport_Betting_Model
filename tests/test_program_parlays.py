@@ -517,6 +517,136 @@ def test_parlay_endpoint_and_tab(monkeypatch):
     assert "/api/board/parlay" in js and "_px.parlays" in js and "odds_bonus_us" in js and "_pxK" not in js
 
 
+# ─── el gemelo de otros mercados, solo para medir (25-nov-26) ─────────────
+# El dueño: "podemos hacer diferentes, como un parlay de ganar y otro con los
+# diferentes mercados". Eligió dejar los parlays como están y medirlo (1 y 4).
+
+def _goals_up(home="napoli", away="lecce", **kw):
+    # más de 1.5 del promedio de las casas 1.18 / 4.40 → 79 de cada 100, pero PlayDoit ≈ 1.18: más corto que -500
+    # menos de 3.5 1.36 / 3.10 → 69.5 de cada 100, PlayDoit ≈ 1.36 (-278): esa es la pierna
+    return _up(home, away, consensus_over15_odds=1.18, consensus_under15_odds=4.40,
+               consensus_over35_odds=3.10, consensus_under35_odds=1.36, **kw)
+
+
+def test_the_other_leg_is_the_safest_other_market_at_minus_500_or_longer():
+    leg = PL.other_leg(_mvs(), SimpleNamespace(**_goals_up()))
+    assert leg["market"] == "under_3.5" and leg["market_prob"] == pytest.approx(0.695, abs=1e-3)
+    assert leg["playdoit_odds"] >= PL.MIN_LEG_ODDS                    # el más de 1.5 paga menos que -500: fuera
+    # nunca el ganador ni el empate, aunque sea lo más seguro
+    assert PL.other_leg(_mvs(), SimpleNamespace(**_up())) is None     # más de 2.5 a 56 de cada 100: no llega a 60
+    # córners y tarjetas con lo que dan las casas, sin el modelo
+    corners = PL.other_leg(_mvs(), SimpleNamespace(**_up(corners_line=8.5, corners_over_odds=1.36,
+                                                         corners_under_odds=3.30)))
+    assert corners["market"] == "corners_over_8.5" and corners["family"] == "Córners"
+    assert corners["label"] == "Más de 8.5 córners" and corners["model"] is None
+    assert corners["playdoit_odds"] == pytest.approx(1.36 * PP.TWO_WAY_AVG_RATIO)
+
+
+def test_each_bonus_parlay_has_a_twin_with_the_same_matches_and_slot():
+    mvs, _ = _four()
+    up = pd.DataFrame([_goals_up(h, a) for h, a in [("napoli", "lecce"), ("roma", "como"),
+                                                    ("inter", "genoa"), ("milan", "torino")]])
+    plain = PL.build_parlays(mvs, up)
+    assert [p["rule"] for p in plain] == ["bono"]                     # sin twins: como siempre
+    built = PL.build_parlays(mvs, up, twins=True)
+    (real,), (twin,) = [p for p in built if p["rule"] == "bono"], [p for p in built if p["rule"] == "medir"]
+    assert (twin["kind"], twin["seq"], twin["slot"]) == (real["kind"], real["seq"], real["slot"])
+    assert {x["match"] for x in twin["legs"]} == {x["match"] for x in real["legs"]}
+    assert all(x["market"] == "under_3.5" and x["rule"] == "medir" and x["pa"] is False for x in twin["legs"])
+    assert [x["rank"] for x in twin["legs"]] == [1, 2, 3, 4] and twin["legs"][0]["day"] == real["legs"][0]["day"]
+
+
+def test_a_twin_skips_matches_without_a_safe_other_market_and_needs_three():
+    legs = [_leg(f"m{i} vs r{i}", f"2030-01-08 {17 + i}:45") for i in range(4)]
+    (real,) = PL.group_parlays(legs)
+    other = lambda m: {**_leg(m, "2030-01-08 18:45", p=0.66), "market": "under_3.5", "family": "Goles",
+                       "label": "Menos de 3.5 goles", "pa": False}
+    three = {m: other(m) for m in ("m0 vs r0", "m1 vs r1", "m3 vs r3")}
+    (twin,) = PL.twin_parlays([real], three)
+    assert len(twin["legs"]) == 3 and twin["slot"] == real["slot"]  # se fija junto con su parlay
+    assert PL.twin_parlays([real], {m: three[m] for m in list(three)[:2]}) == []
+
+
+def test_the_snapshot_saves_the_twin_and_telegram_never_reads_it(monkeypatch):
+    eng = FakeEngine()
+    reads = _reads()
+    reads["FROM upcoming_matches"] = pd.DataFrame([_goals_up(h, a) for h, a in [
+        ("napoli", "lecce"), ("roma", "como"), ("inter", "genoa"), ("milan", "torino")]])
+    _patch(monkeypatch, reads)
+    assert PL.snapshot_parlays(engine=eng) == 8                      # 4 piernas con bono + 4 del gemelo
+    (_, params), = eng.statements("INSERT INTO program_parlays")
+    assert sorted(params[f"rule{k}"] for k in range(8)) == ["bono"] * 4 + ["medir"] * 4
+    # los avisos y los mensajes leen solo los parlays con bono
+    assert "rule = :rule" in PA._SQL
+    from src.models import final_alerts as FA, telegram_reports as TR
+    import inspect
+    assert "PL.RULE" in inspect.getsource(FA.run_final_alerts) and "rule = 'bono'" in TR.PARLAYS_SQL
+
+
+def test_the_board_compares_each_twin_with_its_bonus_parlay():
+    real = [_row(i, result="loss" if i == 1 else "win") for i in range(1, 5)]
+    twin = [{**_row(i, result="win", market="under_3.5", rule="medir"), "label": "Menos de 3.5 goles", "pa": False}
+            for i in range(1, 4)]
+    b = _board(real + twin)
+    assert len(b["parlays"]) == 1 and b["parlays"][0]["parlay"]["status"] == "loss"      # la pestaña: solo bono
+    o = X.parlay_board(pd.DataFrame(real + twin), pd.DataFrame(), now=NOW, rule="medir")
+    (d,) = o["parlays"]
+    assert d["parlay"]["status"] == "win" and d["parlay"]["k"] == 3 and d["parlay"]["bonus"] == 0.05
+    pair = X.paired(o["parlays"], b["parlays"])
+    assert (pair["other"]["n"], pair["other"]["won"], pair["bono"]["n"], pair["bono"]["won"]) == (1, 1, 1, 0)
+    assert pair["other"]["units"] == pytest.approx((1.5 ** 3 - 1) * 1.05, abs=0.01) and pair["bono"]["units"] == -1.0
+    # un gemelo sin su parlay con bono liquidado no se compara
+    assert X.paired(o["parlays"], [])["other"]["n"] == 0
+
+
+def test_the_twin_endpoint_and_its_section(monkeypatch):
+    import dashboard.app as A
+    real = [_row(i, result="win") for i in range(1, 5)]
+    twin = [{**_row(i, result="win", market="under_3.5", rule="medir"), "label": "Menos de 3.5 goles"}
+            for i in range(1, 4)]
+    seen = []
+
+    def fake_q(sql, params=None, optional=False):
+        s = " ".join(sql.split())
+        if "FROM program_parlays" in s:
+            seen.append(params)
+            rules = set((params or {}).values())
+            return pd.DataFrame([r for r in real + twin if r["rule"] in rules])
+        if "FROM live_scores" in s or "FROM matches" in s:
+            return pd.DataFrame()
+        raise AssertionError(s[:90])
+    monkeypatch.setattr(A, "_q", fake_q)
+    c = A.app.test_client()
+    main = c.get("/api/board/parlay").get_json()
+    assert main["rule"] == "bono" and len(main["parlays"]) == 1 and "pair" not in main
+    assert seen[-1] == {"a": "bono", "b": "bono"}                     # ya no lee los de la regla vieja
+    d = c.get("/api/board/parlay?rule=medir").get_json()
+    assert d["rule"] == "medir" and d["parlays"][0]["legs"][0]["label"] == "Menos de 3.5 goles"
+    assert d["pair"]["other"]["n"] == 1 and d["pair"]["bono"]["n"] == 1 and d["other_min_prob"] == 0.60
+    assert c.get("/api/board/parlay?rule=seguro").get_json()["rule"] == "bono"   # otra regla: la de siempre
+    html = c.get("/").get_data(as_text=True)
+    for el_id in ('id="mrule"', 'id="mkpis"', 'id="mnext"', 'id="mhist"', "solo para medir"):
+        assert el_id in html
+    from pathlib import Path
+    js = (Path(A.__file__).parent / "ui_es5.js").read_text(encoding="utf-8")
+    assert "/api/board/parlay?rule=medir" in js and "renderOther" in js and "no es para apostar" in js
+
+
+def test_the_daily_check_catches_a_twin_outside_its_rule():
+    from src.utils import output_checks as OC
+    slot = pd.Timestamp("2030-01-08 18:00", tz="UTC")
+    real = [{"slot": slot, "kind": "dia", "seq": 1, "match": f"m{i} vs r{i}", "market": "home_win",
+             "league": "soccer_epl", "market_prob": 0.70, "playdoit_odds": 1.40} for i in range(4)]
+    twin = [{**x, "market": "under_3.5", "market_prob": 0.66, "playdoit_odds": 1.35} for x in real[:3]]
+    assert OC.other_parlay_problems(twin, real) == []
+    assert any("no tiene su parlay" in x for x in OC.other_parlay_problems(twin, []))
+    assert any("2 piernas" in x for x in OC.other_parlay_problems(twin[:2], real))
+    assert any("home_win" in x for x in OC.other_parlay_problems([{**twin[0], "market": "home_win"}] + twin[1:], real))
+    assert any("0.55" in x for x in OC.other_parlay_problems([{**twin[0], "market_prob": 0.55}] + twin[1:], real))
+    assert any("1.1" in x for x in OC.other_parlay_problems([{**twin[0], "playdoit_odds": 1.10}] + twin[1:], real))
+    assert any("x vs y" in x for x in OC.other_parlay_problems([{**twin[0], "match": "x vs y"}] + twin[1:], real))
+
+
 # ─── el aviso de Telegram ──────────────────────────────────────────────────
 
 MX = ZoneInfo("America/Mexico_City")
