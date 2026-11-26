@@ -65,6 +65,18 @@ de semana, deja +19.8 por cada 100 apostados (±4.6; +23, +20, +15 por época) y
 en 85 de cada 100 fines de semana se gana al menos uno; el parlay del día de
 sábado y domingo dejaba +27.6 pero en 41 de cada 100. Apostando 50 a cada uno:
 +49.6 por fin de semana contra +23.4.
+
+25-nov-26, el gemelo de otros mercados, solo para medir (RULE_OTHER 'medir').
+El dueño: "podemos hacer diferentes, como un parlay de ganar y otro con los
+diferentes mercados". En la historia (2019-26) las apuestas de goles de 65+
+pierden 3.5 de cada 100 solas y un parlay de 3 de goles −3; desde el 22-oct,
+las seguras que no eran de ganador ganaron 35 de 53 (−10 de cada 100). Eligió
+dejar los parlays como están y medirlo (1 y 4): cada parlay con bono tiene un
+gemelo con los mismos partidos y el mismo horario, pero con la apuesta más
+segura de otro mercado de cada partido (other_leg: goles, ambos anotan,
+córners o tarjetas; OTHER_MIN_PROB o más según las casas, a −500 o más
+largo). No se recomienda ni va a Telegram (los avisos leen rule 'bono'); se
+ve en la pestaña Parlay, comparado con su parlay con bono.
 """
 
 import math
@@ -103,6 +115,12 @@ MX_OFFSET = pd.Timedelta(hours=6)    # México, UTC-6 fijo
 SETTLED = ("win", "loss", "push", "half_win", "half_loss")
 LINEUP_OK = "confirmada"     # = program_picks.LINEUP_OK: la pierna se eligió con la alineación
 LEAGUE_MIN_N = 10            # (v2.6.0) picks liquidados para juzgar una liga en winning_leagues
+# El gemelo de otros mercados, solo para medir (25-nov-26)
+RULE_OTHER = "medir"
+OTHER_MIN_PROB = 0.60        # la apuesta más segura de otro mercado: 60 de cada 100 o más según las casas
+OTHER_MIN_LEGS = 3           # con menos no hay bono: el gemelo no se guarda
+WINNER_MARKETS = ("home_win", "draw", "away_win")
+PROPS = (("corners", "Córners", "córners"), ("cards", "Tarjetas", "tarjetas"))
 
 PARLAYS_DDL = """
     CREATE TABLE IF NOT EXISTS program_parlays (
@@ -265,6 +283,35 @@ def strong_leg(r: dict, u, ratio=None, bias=None, weak=None, leagues=LEAGUES) ->
     return fav
 
 
+def _market_props(u) -> list:
+    """Córners y tarjetas con lo que dan las casas, sin el modelo (25-nov-26):
+    la línea, su probabilidad sin margen y el momio estimado de PlayDoit (como
+    PP.candidates). El gemelo no necesita al modelo: elige por el mercado."""
+    g = (lambda col: getattr(u, col, None) if u is not None else None)
+    out = []
+    for prop, fam, name in PROPS:
+        line, over, under = _num(g(f"{prop}_line")), _num(g(f"{prop}_over_odds")), _num(g(f"{prop}_under_odds"))
+        mk = PP.devig2(over, under)
+        if line is None or mk is None:
+            continue
+        out.append(PP._cand(f"{prop}_over_{line}", f"Más de {line} {name}", fam, None, mk, over,
+                            over * PP.TWO_WAY_AVG_RATIO))
+        out.append(PP._cand(f"{prop}_under_{line}", f"Menos de {line} {name}", fam, None, 1 - mk, under,
+                            under * PP.TWO_WAY_AVG_RATIO))
+    return out
+
+
+def other_leg(r: dict, u, ratio=None, bias=None) -> dict | None:
+    """La apuesta más segura de otro mercado de un partido (25-nov-26, solo
+    para medir): goles (1.5, 2.5, 3.5), ambos anotan, córners o tarjetas, la de
+    más probabilidad sin margen, de OTHER_MIN_PROB o más, que PlayDoit pague a
+    −500 o más largo (lo que pide el bono). Nunca el ganador ni el empate."""
+    cs = (PP._candidates_of(r, u, None, ratio, bias) or []) + _market_props(u)
+    ok = [c for c in cs if c["market"] not in WINNER_MARKETS and c["market_prob"] is not None
+          and c["market_prob"] >= OTHER_MIN_PROB and c["playdoit_odds"] and c["playdoit_odds"] >= MIN_LEG_ODDS]
+    return max(ok, key=lambda c: (c["market_prob"], c["market"])) if ok else None
+
+
 def _ranked(legs: list) -> list:
     return sorted(legs, key=lambda x: (-x["market_prob"], PP._utc(x["match_date"]), x["match"]))
 
@@ -276,9 +323,27 @@ def _by_time(legs: list) -> list:
 def _parlay(kind: str, seq: int, day, legs: list) -> dict:
     slot = min(PP._utc(x["match_date"]) for x in legs)        # se fija 5 min antes de su primer partido
     day = mx_day(slot).date() if day is None else day
-    return {"kind": kind, "seq": seq, "slot": slot,
+    return {"kind": kind, "seq": seq, "slot": slot, "rule": RULE,
             "legs": [{**x, "day": day, "slot": slot.to_pydatetime(), "rank": i + 1, "rule": RULE, "kind": kind,
                       "seq": seq} for i, x in enumerate(_ranked(legs))]}
+
+
+def twin_parlays(parlays: list, others: dict) -> list:
+    """Función pura (25-nov-26): el gemelo de otros mercados de cada parlay con
+    bono, solo para medir. Los mismos partidos, el mismo horario, tipo y número
+    (se fija junto con él); en cada partido, su apuesta más segura de otro
+    mercado (others: {partido: pierna de other_leg}). El partido que no tiene
+    una se queda fuera; con menos de OTHER_MIN_LEGS no hay gemelo."""
+    out = []
+    for p in parlays:
+        legs = [others[x["match"]] for x in p["legs"] if x["match"] in others]
+        if len(legs) < OTHER_MIN_LEGS:
+            continue
+        day, slot = p["legs"][0]["day"], PP._utc(p["slot"])
+        out.append({"kind": p["kind"], "seq": p["seq"], "slot": slot, "rule": RULE_OTHER,
+                    "legs": [{**x, "day": day, "slot": slot.to_pydatetime(), "rank": i + 1, "rule": RULE_OTHER,
+                              "kind": p["kind"], "seq": p["seq"]} for i, x in enumerate(_ranked(legs))]})
+    return out
 
 
 def ladder_parlays(legs: list, saturday, exclude: dict | None = None, fixed: dict | None = None) -> list:
@@ -350,11 +415,12 @@ def group_parlays(found: list, exclude: dict | None = None, fixed_seq: dict | No
 
 def build_parlays(mvs: pd.DataFrame, upcoming: pd.DataFrame, ratio=None, normalize=None, bias=None,
                   lineups_for=None, exclude: dict | None = None, fixed_seq: dict | None = None,
-                  fixed_ladder: dict | None = None) -> list:
+                  fixed_ladder: dict | None = None, twins: bool = False) -> list:
     """Función pura: los parlays con bono (group_parlays) de los partidos de
     model_vs_sharp que todavía no empiezan (la fila más reciente de cada uno)
     con sus momios de ahora (upcoming). Las piernas salen de LADDER_LEAGUES;
-    group_parlays deja entre semana solo las de pago anticipado."""
+    group_parlays deja entre semana solo las de pago anticipado. twins: también
+    el gemelo de otros mercados de cada uno (twin_parlays, rule RULE_OTHER)."""
     from src.models.side_bias import is_skipped
     up = {PP.match_key(r.home_team_norm, r.away_team_norm, normalize): r for r in upcoming.itertuples(index=False)}
     latest = {}
@@ -367,7 +433,7 @@ def build_parlays(mvs: pd.DataFrame, upcoming: pd.DataFrame, ratio=None, normali
             continue
         h, _, a = str(r["match"]).partition(" vs ")
         latest[(PP.match_key(h, a, normalize), str(r["match_date"]))] = r
-    found = []
+    found, others = [], {}
     for (key, _), r in latest.items():
         u = up.get(key)
         if u is None:
@@ -378,15 +444,24 @@ def build_parlays(mvs: pd.DataFrame, upcoming: pd.DataFrame, ratio=None, normali
         if not leg:
             continue
         team = u.home_team if leg["market"] == "home_win" else u.away_team
+        base = {"match": str(r["match"]).lower(), "match_date": PP._utc(r["match_date"]).to_pydatetime(),
+                "league": r.get("league"), "display": f"{u.home_team} vs {u.away_team}", "lineup": lineup}
         found.append({
-            "match": str(r["match"]).lower(), "match_date": PP._utc(r["match_date"]).to_pydatetime(),
-            "league": r.get("league"), "display": f"{u.home_team} vs {u.away_team}",
-            "market": leg["market"], "label": f"Gana {team}", "family": "Ganador",
+            **base, "market": leg["market"], "label": f"Gana {team}", "family": "Ganador",
             "model_prob": round(float(leg["model"]), 3) if leg.get("model") is not None else None,
             "market_prob": round(float(leg["market_prob"]), 3), "safety": round(float(leg["market_prob"]), 3),
-            "playdoit_odds": round(float(leg["playdoit_odds"]), 4), "lineup": lineup,
+            "playdoit_odds": round(float(leg["playdoit_odds"]), 4),
             "pa": EP.applies(r.get("league"), leg["market"])})
-    return group_parlays(found, exclude, fixed_seq, fixed_ladder)
+        other = other_leg(r, u, ratio, bias) if twins else None
+        if other:
+            others[base["match"]] = {
+                **base, "market": other["market"], "label": other["label"], "family": other["family"],
+                "model_prob": round(float(other["model"]), 3) if other.get("model") is not None else None,
+                "market_prob": round(float(other["market_prob"]), 3),
+                "safety": round(float(other["market_prob"]), 3),
+                "playdoit_odds": round(float(other["playdoit_odds"]), 4), "pa": False}
+    built = group_parlays(found, exclude, fixed_seq, fixed_ladder)
+    return built + twin_parlays(built, others) if twins else built
 
 
 def _ensure(conn) -> None:
@@ -447,7 +522,8 @@ def snapshot_parlays(hours: int = PP.SNAPSHOT_HOURS, engine=None) -> int:
             gone = {str(m).lower() for m in mvs["match"] if PP._row_key({"match": m}, normalize_team) in early}
             mvs = mvs[~mvs["match"].astype(str).str.lower().isin(gone)]
             built = build_parlays(mvs, up, PP._ratio(engine), normalize_team, PP.load_bias(engine),
-                                  PP._lineups_for(engine, normalize_team), exclude, fixed_seq, fixed_ladder)
+                                  PP._lineups_for(engine, normalize_team), exclude, fixed_seq, fixed_ladder,
+                                  twins=True)
         built = [p for p in built if p["slot"] > lock and p["slot"] not in locked]
         rows = [leg for p in built for leg in p["legs"]]
         keep = sorted(s for s in locked if s > lock)
@@ -466,10 +542,13 @@ def snapshot_parlays(hours: int = PP.SNAPSHOT_HOURS, engine=None) -> int:
     except Exception as e:
         log.error(f"❌ Parlays no guardados: {type(e).__name__}: {str(e)[:200]}")
         return 0
-    days = sum(1 for p in built if p["kind"] == "dia")
-    ladder = sum(1 for p in built if p["kind"] in LADDER)
-    print(f"🧩 Parlays con bono: {days} del día, {len(built) - days - ladder} de un horario y {ladder} de la "
-          f"escalera del fin de semana ({len(rows)} piernas)"
+    bono = [p for p in built if p.get("rule", RULE) == RULE]
+    twins = len(built) - len(bono)
+    days = sum(1 for p in bono if p["kind"] == "dia")
+    ladder = sum(1 for p in bono if p["kind"] in LADDER)
+    print(f"🧩 Parlays con bono: {days} del día, {len(bono) - days - ladder} de un horario y {ladder} de la "
+          f"escalera del fin de semana ({sum(len(p['legs']) for p in bono)} piernas)"
+          + (f" · {twins} gemelo(s) de otros mercados, solo para medir" if twins else "")
           + (f" · {len(locked)} horario(s) ya fijos, sin tocar" if locked else ""))
     return len(rows)
 

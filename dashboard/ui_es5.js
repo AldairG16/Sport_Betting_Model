@@ -785,12 +785,15 @@ function pxName(d){
 function pxBonus(p){
   return p.bonus ? Math.round(p.bonus * 1000) / 10 + '%' : '';
 }
-function pxBlock(d){
+// other (25-nov-26): el gemelo de otros mercados, solo para medir
+function pxBlock(d, other){
   var p = d.parlay, h = '<div class="small" style="margin:6px 0 4px"><b>' + pxName(d) + '</b> · ' + p.k + ' partidos' +
-    (d.kind === 'horario' ? ' <span class="muted">(empiezan a la misma hora: se arma ya con todas las alineaciones)</span>' : '') +
-    (PX_LADDER[d.kind] ? ' <span class="muted">(escalera del fin de semana: cada parlay se apuesta aparte)</span>' : '') + '</div>';
+    (other ? ' <span class="muted">(con otros mercados: solo para medir)</span>' :
+     (d.kind === 'horario' ? ' <span class="muted">(empiezan a la misma hora: se arma ya con todas las alineaciones)</span>' : '') +
+     (PX_LADDER[d.kind] ? ' <span class="muted">(escalera del fin de semana: cada parlay se apuesta aparte)</span>' : '')) + '</div>';
   h += '<div class="tbl" style="margin-bottom:8px"><table><thead><tr><th>Hora</th><th>Partido</th><th>Apuesta</th><th>Momio</th>' +
-       '<th class="hide-sm" title="De cada 100 partidos así, cuántos gana este equipo según Pinnacle">Gana</th><th></th></tr></thead><tbody>';
+       (other ? '<th class="hide-sm" title="De cada 100 partidos así, cuántas veces sale según las casas, sin su margen">Sale</th>' :
+        '<th class="hide-sm" title="De cada 100 partidos así, cuántos gana este equipo según Pinnacle">Gana</th>') + '<th></th></tr></thead><tbody>';
   for (var i = 0; i < d.legs.length; i++) {
     var x = d.legs[i];
     h += '<tr><td class="nw">' + mxtime(x.kickoff) + '</td><td>' + esc(x.match) + '<div class="small muted">' + esc(x.league) + '</div></td>' +
@@ -802,7 +805,23 @@ function pxBlock(d){
   h += '</tbody></table><div class="xsum"><span title="Momio del parlay en PlayDoit (el aproximado de cada partido, multiplicado)">paga <b>' + esc(p.odds_us || '—') + '</b></span>' +
        (p.bonus ? '<span title="PlayDoit suma este bono a la ganancia">con el bono de ' + pxBonus(p) + ': <b class="big">' + esc(p.odds_bonus_us || '—') + '</b></span>' : '') +
        '<span class="muted" title="Probabilidad de que salgan todos (según Pinnacle; el pago anticipado la sube un poco): ~' + p100(p.p_market) + '">se gana ' + pxOdds(p.p_market) + '</span>' +
-       '<span>' + pxStatus(p) + '</span>' + pxReady(d) + '</div></div>';
+       '<span>' + pxStatus(p) + '</span>' +
+       (other ? '<span class="small muted">solo para medir: no es para apostar</span>' : pxReady(d)) + '</div></div>';
+  return h;
+}
+// el historial de los parlays terminados (los de hoy que siguen pendientes, arriba)
+function pxHist(list, today){
+  var h = '';
+  for (var i = 0; i < list.length; i++) {
+    var d = list[i], p = d.parlay;
+    if (d.day >= today && p.status === 'pending') continue;
+    var legs = [];
+    for (var j = 0; j < d.legs.length; j++)
+      legs.push(pxIcon(d.legs[j]) + ' ' + esc(d.legs[j].label) + ' <span class="muted">· ' + esc(d.legs[j].match) + '</span>');
+    h += '<tr><td class="nw">' + shortDate(d.day) + '</td><td class="nw">' + pxName(d) + '</td><td class="small">' + legs.join('<br>') +
+         '</td><td class="nw">' + esc(p.odds_bonus_us || p.odds_us || '') + (p.bonus ? ' <span class="small muted">(' + pxBonus(p) + ')</span>' : '') +
+         '</td><td class="nw">' + pxStatus(p) + '</td></tr>';
+  }
   return h;
 }
 function renderParlay(){
@@ -836,22 +855,45 @@ function renderParlay(){
     kpi(t.pa, '⚡ Cobrados por ir 2 goles arriba') +
     kpi(td.n ? money(td.units) + ' en ' + td.n : '—', 'Del día') + kpi(th.n ? money(th.units) + ' en ' + th.n : '—', 'De un horario') +
     kpi(tf.n ? money(tf.units) + ' en ' + tf.n : '—', 'Del fin de semana');
-  h = '';
-  for (i = 0; i < _px.parlays.length; i++) {
-    var d = _px.parlays[i], p = d.parlay;
-    if (d.day >= today && p.status === 'pending') continue;
-    var legs = [];
-    for (var j = 0; j < d.legs.length; j++)
-      legs.push(pxIcon(d.legs[j]) + ' ' + esc(d.legs[j].label) + ' <span class="muted">· ' + esc(d.legs[j].match) + '</span>');
-    h += '<tr><td class="nw">' + shortDate(d.day) + '</td><td class="nw">' + pxName(d) + '</td><td class="small">' + legs.join('<br>') +
-         '</td><td class="nw">' + esc(p.odds_bonus_us || p.odds_us || '') + (p.bonus ? ' <span class="small muted">(' + pxBonus(p) + ')</span>' : '') +
-         '</td><td class="nw">' + pxStatus(p) + '</td></tr>';
+  el('xhist').innerHTML = pxHist(_px.parlays, today) ||
+    '<tr><td colspan="5" class="muted">Todavía no hay parlays con bono terminados: se guardan desde el 6 de noviembre.</td></tr>';
+}
+// ── El gemelo de otros mercados, solo para medir (v2.16.0, 25-nov-26) ──
+// El dueño: "podemos hacer diferentes, como un parlay de ganar y otro con los
+// diferentes mercados". Cada parlay con bono tiene un gemelo con los mismos
+// partidos y la apuesta más segura de otro mercado; se compara con él.
+var _pm = null;
+function renderOther(){
+  if (!_pm) return;
+  var i, h = '', today = mxday(), pr = _pm.pair || {}, o = pr.other || {n: 0}, b = pr.bono || {n: 0};
+  el('mrule').innerHTML = 'Cada parlay de arriba tiene un <b>gemelo</b>: los mismos partidos, a la misma hora, pero en vez del ganador ' +
+    'lleva la apuesta más segura de <b>otro mercado</b> de cada partido (goles, ambos anotan, córners o tarjetas): la que más sale según las casas, ' +
+    'de ' + Math.round((_pm.other_min_prob || 0.6) * 100) + ' de cada 100 o más, a -500 o mejor. No tiene pago anticipado (ese es solo del ganador). ' +
+    '<b>No es para apostar y no llega a Telegram:</b> sirve para ver con partidos reales qué sale más. En la historia, los parlays de goles ' +
+    'pierden unos 3 de cada 100 apostados.';
+  el('mkpis').innerHTML = kpi(o.n, 'Comparados (ya terminaron los dos)') +
+    kpi(o.n ? o.won + ' de ' + o.n : '—', '✅ Ganados con otros mercados') +
+    kpi(b.n ? b.won + ' de ' + b.n : '—', '✅ Los mismos con el ganador') +
+    kpi(o.n ? money(o.units) : '—', 'Con otros mercados, apostando 50 a cada uno', o.units >= 0 ? 'pos' : 'neg') +
+    kpi(b.n ? money(b.units) : '—', 'Los mismos con el ganador (con el bono)', b.units >= 0 ? 'pos' : 'neg') +
+    kpi(o.legs ? o.legs_won + ' / ' + o.legs : '—', 'Partidos que salieron con otros mercados (' + p100(o.legs_hit) + ')') +
+    kpi(b.legs ? b.legs_won + ' / ' + b.legs : '—', 'Con el ganador (' + p100(b.legs_hit) + ')');
+  var next = [], lastDay = '';
+  for (i = _pm.parlays.length - 1; i >= 0; i--) if (_pm.parlays[i].day >= today) next.push(_pm.parlays[i]);
+  for (i = 0; i < next.length; i++) {
+    if (next[i].day !== lastDay) { h += '<div class="day">' + dayLabel(next[i].day) + '</div>'; lastDay = next[i].day; }
+    h += pxBlock(next[i], true);
   }
-  el('xhist').innerHTML = h || '<tr><td colspan="5" class="muted">Todavía no hay parlays con bono terminados: se guardan desde el 6 de noviembre.</td></tr>';
+  el('mnext').innerHTML = h || '<div class="muted">Por ahora no hay gemelos por jugar: salen con cada parlay con bono que tenga 3 partidos o más ' +
+    'con una apuesta segura de otro mercado.</div>';
+  el('mhist').innerHTML = pxHist(_pm.parlays, today) ||
+    '<tr><td colspan="5" class="muted">Todavía no hay gemelos terminados: se guardan desde el 25 de noviembre.</td></tr>';
 }
 function loadParlay(){
   getJSON('/api/board/parlay', function(d){ _px = d; renderParlay(); },
     function(msg){ el('xnext').innerHTML = '<div class="muted">' + esc(msg) + '</div>'; });
+  getJSON('/api/board/parlay?rule=medir', function(d){ _pm = d; renderOther(); },
+    function(msg){ el('mrule').innerHTML = esc(msg); });
 }
 
 // ── Equipos ──

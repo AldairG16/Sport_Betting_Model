@@ -21,6 +21,10 @@ los de antes siguen en la tabla.
 v2.15.0 (16-nov-26): sábado y domingo, la escalera del fin de semana (de 3,
 de 6 y de 9; src/models/program_parlays.py). Se ve como el del día: lista
 cuando vieron la alineación los de su primer horario.
+
+v2.16.0 (25-nov-26): el gemelo de otros mercados (rule 'medir'), solo para
+medir: los mismos partidos con la apuesta más segura de otro mercado. Se ve
+aparte, comparado con su parlay con bono (paired).
 """
 
 import math
@@ -183,21 +187,34 @@ def _official_for(official: list, key: str, kick: pd.Timestamp) -> dict | None:
     return None
 
 
+def paired(other: list, bono: list) -> dict:
+    """(25-nov-26) Los gemelos de otros mercados contra su parlay con bono:
+    los mismos partidos y el mismo horario, solo los que ya se liquidaron los
+    dos. other / bono: los "parlays" de parlay_board de cada regla."""
+    key = (lambda d: (d["slot"], d["kind"], d["seq"]))
+    real = {key(d): d for d in bono if d["parlay"]["settled"]}
+    twins = [d for d in other if d["parlay"]["settled"] and key(d) in real]
+    return {"other": record(twins), "bono": record([real[key(d)] for d in twins])}
+
+
 def parlay_board(legs: pd.DataFrame, live: pd.DataFrame | None, now=None, normalize=None,
-                 official: pd.DataFrame | None = None, covered=None) -> dict:
+                 official: pd.DataFrame | None = None, covered=None, rule=None) -> dict:
     """La pestaña: cada parlay con bono (del día y de un horario) con sus
     piernas, del más reciente; si ya vio las alineaciones que necesita (ready)
     y cuáles faltan (waiting); el historial de todos y por tipo.
     official: filas de `matches` (h, a, date, goles, córners, tarjetas) para
-    lo que ESPN no cubre. covered: las ligas con alineación en ESPN."""
+    lo que ESPN no cubre. covered: las ligas con alineación en ESPN.
+    rule: la de los parlays que se ven (RULE; RULE_OTHER, los gemelos de otros
+    mercados, desde el 25-nov-26)."""
     from src.models.program_parlays import LOCK_MINUTES, RULE
+    rule = rule or RULE
     now = _utc(now if now is not None else pd.Timestamp.now(tz="UTC"))
     idx = _live_index(live.to_dict("records") if live is not None and not live.empty else [], normalize)
     off = official.to_dict("records") if official is not None and not official.empty else []
     rows = legs.to_dict("records") if legs is not None and not legs.empty else []
     groups = {}
     for r in rows:
-        if r.get("rule") != RULE or r.get("slot") is None or pd.isna(r.get("slot")):
+        if r.get("rule") != rule or r.get("slot") is None or pd.isna(r.get("slot")):
             continue
         key, kick = str(r["match"]).lower(), _utc(r["match_date"])
         scores = [] if _str(r.get("result")) else [_live_for(idx, key, kick), _official_for(off, key, kick)]

@@ -41,7 +41,7 @@ primera vez que las usa.
 |---|---|
 | `model_vs_sharp` | El análisis de cada partido: probabilidades del modelo y de Pinnacle, goles esperados, y si ya no vale (`skipped_at`, `skip_reason`) |
 | `program_picks` | El pick de cada partido (mercado, momio mínimo en PlayDoit, si es 🎯 y por qué no, y el aviso de que un grande de nombre viene mal), su resultado y ganancia; el pick antes de la alineación y los cambios |
-| `program_parlays` | Los parlays del día y de cada horario, con sus piernas, bono y resultado |
+| `program_parlays` | Los parlays del día y de cada horario, con sus piernas, bono y resultado. `rule`: 'bono' (los que se recomiendan), 'medir' (el gemelo de otros mercados, solo para medir, desde el 25-nov-26) y 'seguro' (la regla vieja, hasta el 6-nov) |
 | `shadow_bets` | Candidatas sombra: lo que el modelo propondría en cada mercado, con cuota, cierre y resultado. De aquí aprende |
 | `model_proposals` | Lo que el modelo propuso y por qué no se apostó |
 | `lineup_alerts` | Avisos de alineación (4+ titulares fuera) con el veredicto de Claude |

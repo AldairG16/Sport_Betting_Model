@@ -36,7 +36,7 @@ Además, cada corrida avisa sus **errores tolerados** (los que no la tumbaron) y
 | 13 | El ritmo de créditos de The Odds API |
 | 14 | Ni el pick ni el parlay se rehacen con el partido ya empezado |
 | 15 | El pago anticipado cobrado fue 2 goles arriba |
-| 16 | La regla del parlay con bono |
+| 16 | La regla del parlay con bono y la de su gemelo de otros mercados (solo para medir, desde el 25-nov) |
 | 17 | Lo que se ve por jugar, una vez (sin horarios viejos ni nombres de antes de un alias) |
 | 18 | Cada pierna de un parlay por jugar es el 🎯 de su partido |
 | 19 | Al canal le llega lo que se le manda |
