@@ -28,7 +28,7 @@ Además, cada corrida avisa sus **errores tolerados** (los que no la tumbaron) y
 | 5 | Lo aprendido por el weekly al día |
 | 6, 6b | Los datos que alimentan al modelo (fechas espejo, fechas futuras, repetidos, tablas viejas) y los tiros de ESPN. `model_vs_sharp` y `program_picks` no cuentan como viejas si la última corrida no tenía partidos que analizar (`analysis_idle`, 11-nov-26) |
 | 7 | El marcador provisional del dashboard (ESPN) contra el oficial |
-| 8 | Ningún 🎯 a un equipo con 4+ titulares fuera |
+| 8 | Ningún 🎯 a un equipo con 4+ titulares fuera. Desde v2.17.0 también: que salga la marca de las bajas que pesan (ninguna en 30+ picks con alineación = no llegan los goles o las posiciones) y que las alineaciones traigan el puesto de los titulares (más de 20% sin él: la marca de la defensa no los ve) |
 | 9 | Córners y tarjetas de ESPN de lo jugado |
 | 10 | Un partido reprogramado no cuenta dos veces |
 | 11 | El 🎯 contra el mercado (una familia que gana muy por debajo de lo que esperaba el mercado elige peor que él) |

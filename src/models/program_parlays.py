@@ -439,7 +439,8 @@ def build_parlays(mvs: pd.DataFrame, upcoming: pd.DataFrame, ratio=None, normali
         if u is None:
             continue
         h, _, a = key.partition(" vs ")
-        weak, lineup = lineups_for(h, a, r["match_date"]) if lineups_for else ({}, None)
+        # la marca por el peso de las bajas (26-nov-26) no quita el 🎯: tampoco la pierna
+        weak, lineup, _ = PP.lineup_parts(lineups_for(h, a, r["match_date"]) if lineups_for else None)
         leg = strong_leg(r, u, ratio, bias, weak, LADDER_LEAGUES)
         if not leg:
             continue

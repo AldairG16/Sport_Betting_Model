@@ -675,6 +675,29 @@ def closing_coverage(rows: list) -> dict:
 
 LINEUP_SINCE = "2026-10-27"      # desde aquí el pick se recalcula con la alineación (v2.5.0)
 UNSEEN_MAX = 0.30                # más picks sin ver su alineación publicada que esto: el paso falla
+# La marca de las bajas que pesan (v2.17.0, lineup_alerts.mark_text). Medido en ESPN 2019-26: ~12% de los
+# equipo-partidos la traen (≈ 1 de cada 5 partidos). Sin ninguna en MARK_MIN_SEEN partidos que vieron su
+# alineación, algo no llega (goles o posiciones en lineups): 0.8^30 ≈ 0.1%.
+MARK_SINCE = "2026-11-27"
+MARK_MIN_SEEN = 30
+POSITIONS_MAX_MISSING = 0.20     # alineaciones de la ventana sin la posición de los titulares
+
+
+def positions_coverage(rows: list) -> dict:
+    """Función pura (26-nov-26): las alineaciones de la ventana sin la
+    posición de los titulares (positions vacío): sin ella la marca de la
+    defensa no ve a nadie. rows: lineups (sport_key, team, positions)."""
+    import json
+    by = {}
+    for r in rows:
+        pos = r.get("positions")
+        pos = json.loads(pos) if isinstance(pos, str) else pos
+        lg = by.setdefault(str(r.get("sport_key")), [0, 0])
+        lg[0] += 1
+        lg[1] += not (isinstance(pos, dict) and pos)
+    total, missing = sum(v[0] for v in by.values()), sum(v[1] for v in by.values())
+    worst = sorted((lg for lg, v in by.items() if v[1]), key=lambda lg: -by[lg][1] / by[lg][0])
+    return {"total": total, "missing": missing, "leagues": worst}
 
 
 def lineup_pick_problems(picks: list, lineups: list, profiles: dict) -> dict:
@@ -694,7 +717,8 @@ def lineup_pick_problems(picks: list, lineups: list, profiles: dict) -> dict:
         home, away = (r["team"], r["opponent"]) if r["is_home"] else (r["opponent"], r["team"])
         xi = r["starters"] if isinstance(r["starters"], list) else json.loads(r["starters"] or "[]")
         idx.setdefault(f"{home} vs {away}", []).append((pd.Timestamp(r["kickoff"]), r["team"], xi))
-    out = {"weak_rule": [], "unseen": [], "with_lineup": 0}
+    out = {"weak_rule": [], "unseen": [], "with_lineup": 0, "marked": 0, "mark_seen": 0}
+    since = pd.Timestamp(MARK_SINCE, tz="UTC")
     for p in picks:
         k = pd.Timestamp(p["match_date"])
         got = {t: xi for kk, t, xi in idx.get(p["match"], []) if abs((kk - k).total_seconds()) <= 3 * 3600}
@@ -704,6 +728,10 @@ def lineup_pick_problems(picks: list, lineups: list, profiles: dict) -> dict:
         out["with_lineup"] += 1
         if not isinstance(p.get("lineup"), str):
             out["unseen"].append(p["match"])
+        elif (k.tz_convert("UTC") if k.tzinfo else k.tz_localize("UTC")) >= since:
+            # la marca de las bajas que pesan (v2.17.0): cuántos picks que vieron la alineación la traen
+            out["mark_seen"] += 1
+            out["marked"] += isinstance(p.get("lineup_mark"), str) and bool(p["lineup_mark"].strip())
         team = {"home_win": home, "away_win": away}.get(p.get("market"))
         if team and not isinstance(p.get("reason"), str) and team in profiles:
             a = absences(got[team], profiles[team])
@@ -1006,11 +1034,11 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
     if idle_note:
         seen.append("sin partidos que analizar en los próximos 3 días")
     try:
-        pk = q("""SELECT match, match_date, market, reason, lineup FROM program_picks
+        pk = q("""SELECT match, match_date, market, reason, lineup, lineup_mark FROM program_picks
                   WHERE match_date BETWEEN GREATEST(NOW() - make_interval(days => :d), CAST(:since AS timestamptz))
                                        AND NOW() AND market IS NOT NULL""", d=days, since=LINEUP_SINCE).to_dict("records")
         if pk:
-            lu = q("""SELECT team, opponent, is_home, kickoff, starters FROM lineups
+            lu = q("""SELECT sport_key, team, opponent, is_home, kickoff, starters, positions FROM lineups
                       WHERE kickoff BETWEEN GREATEST(NOW() - make_interval(days => :d), CAST(:since AS timestamptz))
                                         - INTERVAL '3 hours' AND NOW()""", d=days, since=LINEUP_SINCE).to_dict("records")
             from src.models.lineup_alerts import load_profiles
@@ -1022,6 +1050,16 @@ def run_output_checks(engine=None, normalize=None, days: int = 3) -> list:
             if lp["with_lineup"] >= 10 and len(lp["unseen"]) > UNSEEN_MAX * lp["with_lineup"]:
                 problems.append(f"Picks y alineaciones: {len(lp['unseen'])} de {lp['with_lineup']} picks no vieron "
                                 f"la alineación publicada (el closing no los recalculó; p. ej. {lp['unseen'][0]})")
+            # la marca de las bajas que pesan (v2.17.0): que salga, y que la defensa tenga posiciones
+            if lp["mark_seen"]:
+                seen.append(f"marcas de bajas que pesan ({lp['marked']} de {lp['mark_seen']})")
+            if lp["mark_seen"] >= MARK_MIN_SEEN and not lp["marked"]:
+                problems.append(f"Picks y alineaciones: ninguna marca de bajas que pesan en {lp['mark_seen']} picks "
+                                "con alineación (¿faltan los goles o las posiciones en lineups?)")
+            pc = positions_coverage([r for r in lu if pd.Timestamp(r["kickoff"]) >= pd.Timestamp(MARK_SINCE, tz="UTC")])
+            if pc["total"] >= 20 and pc["missing"] > POSITIONS_MAX_MISSING * pc["total"]:
+                problems.append(f"Alineaciones sin posición: {pc['missing']} de {pc['total']} "
+                                f"({', '.join(pc['leagues'][:3])}): la marca de la defensa no los ve")
     except Exception as e:
         if "does not exist" not in str(e):        # la tabla y la columna lineup nacen con el closing
             problems.append(f"Picks y alineaciones: no se pudo revisar ({type(e).__name__})")

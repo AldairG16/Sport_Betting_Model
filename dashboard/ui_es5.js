@@ -283,12 +283,13 @@ function upRow(m, i){
             '  ·  Pinnacle: ' + p100(pin[0]) + ' / ' + p100(pin[1]) + ' / ' + p100(pin[2]);
   // v2.2: todos los partidos analizados tienen pick; 🎯 = pasa la regla
   var pick = pk.label ? (pk.rule ? '🎯 ' : '') + famIcon(pk.family) + ' <b>' + esc(pk.label) + '</b>' +
-             (pk.playdoit_us ? ' <span class="muted">' + esc(pk.playdoit_us) + '</span>' : '') + whyTag(pk) + formTag(pk) + lineupTag(pk, m.lineups_covered) :
+             (pk.playdoit_us ? ' <span class="muted">' + esc(pk.playdoit_us) + '</span>' : '') + whyTag(pk) + formTag(pk) + markTag(pk) + lineupTag(pk, m.lineups_covered) :
              noPick(pk.reason);
   var tipPick = pk.label ? 'Qué tan probable lo ve: el programa ' + p100(pk.model) + ', las casas ' + p100(pk.market_prob) +
                 ' · el momio es el aproximado de PlayDoit' +
                 (pk.rule ? ' · 🎯 apuesta recomendada' : (pk.star_note || pk.reason ? ' · sin 🎯: ' + (pk.star_note || pk.reason) : '')) +
-                (pk.form_note ? ' · ' + (pk.form_note.charAt(0) === '⭐' ? '' : '⚠️ ') + pk.form_note : '') : (pk.reason || '');
+                (pk.form_note ? ' · ' + (pk.form_note.charAt(0) === '⭐' ? '' : '⚠️ ') + pk.form_note : '') +
+                (pk.lineup_mark ? ' · ⚠️ ' + pk.lineup_mark : '') : (pk.reason || '');
   var al = _alerts[m.match] ? ' <span title="' + esc(_alerts[m.match]) + '">⚠️</span>' : '';
   return '<div class="m" id="u' + i + '"><div class="mr" onclick="openUp(' + i + ')">' +
          '<div class="time">' + mxtime(m.match_date) + '<span class="small muted">' + esc(m.league) + '</span></div>' +
@@ -413,6 +414,15 @@ function formTag(pk){
   }
   return h;
 }
+// Las bajas que pesan (26-nov-26): le faltan los que meten un tercio de sus goles o le cambia la defensa.
+// Solo marca: el 🎯 se queda (la casa ya lo cuenta en el momio); el pick para seguir no va a que gane ese equipo
+function markTag(pk){
+  if (!pk || !pk.lineup_mark) return '';
+  var parts = String(pk.lineup_mark).split(' · '), i, h = '';
+  for (i = 0; i < parts.length; i++)
+    h += '<div class="small" title="' + esc(parts[i] + '. Es una marca: la casa ya lo cuenta en el momio, el 🎯 no cambia.') + '">⚠️ ' + esc(parts[i]) + '</div>';
+  return h;
+}
 function whyTag(pk){
   if (!pk || pk.rule || !(pk.reason || pk.star_note)) return '';
   var txt = pk.star_note ? noteShort(pk.star_note) : shortWhy(pk.reason);
@@ -440,6 +450,7 @@ function pastRow(r, i){
               (pk.old_model ? ' · versión del programa con error (antes del 22 oct)' : '') +
               (pk.rule ? ' · 🎯 apuesta recomendada' : (pk.star_note || pk.reason ? ' · sin 🎯: ' + (pk.star_note || pk.reason) : '')) +
               (pk.form_note ? ' · ' + (pk.form_note.charAt(0) === '⭐' ? '' : '⚠️ ') + pk.form_note : '') +
+              (pk.lineup_mark ? ' · ⚠️ ' + pk.lineup_mark : '') +
               (pk.rebuilt ? ' · rehecho con la predicción guardada antes del partido' : '') +
               (pk.provisional ? ' · provisional: ya terminó, cuenta en los totales cuando se cobre' : '')) + '">' + (pk.rebuilt ? '↺ ' : '') +
               (played ? ok(pk.result === 'win' || pk.result === 'half_win') : '⏳') + ' ' + (pk.rule ? '🎯 ' : '') + famIcon(pk.family) + ' ' + esc(pk.label) +

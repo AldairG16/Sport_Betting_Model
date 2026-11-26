@@ -108,10 +108,11 @@ def saved_pick(p) -> dict:
     lineup = p.get("lineup") if isinstance(p.get("lineup"), str) else None    # None: aún sin alineación (v2.5.0)
     note = p.get("star_note") if isinstance(p.get("star_note"), str) else ""    # por qué no es 🎯 (6-nov-26)
     form = p.get("form_note") if isinstance(p.get("form_note"), str) else ""    # un grande que viene mal (13-nov-26)
+    mark = p.get("lineup_mark") if isinstance(p.get("lineup_mark"), str) else ""   # bajas que pesan (26-nov-26)
     return {"label": p.get("label"), "family": p.get("family"), "market": p.get("market"),
             "model": _num(p.get("model_prob")), "market_prob": _num(p.get("market_prob")),
             "playdoit_us": fmt_american(to_american(po)) if po else "", "rule": not reason, "reason": reason,
-            "lineup": lineup, "star_note": note, "form_note": form}
+            "lineup": lineup, "star_note": note, "form_note": form, "lineup_mark": mark}
 
 
 def predictions(mvs: pd.DataFrame, upcoming: pd.DataFrame, pending_matches: set,

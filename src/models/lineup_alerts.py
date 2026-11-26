@@ -34,6 +34,23 @@ Si la alineación casi no comparte jugadores con la historia del equipo
 (KNOWN_MIN), no es la suya (emparejamiento equivocado) o es un equipo
 alterno: no se avisa. El 23-oct llegaron avisos de 8 y 9 titulares fuera
 que eran la alineación de otro partido.
+
+Peso de cada jugador y la defensa (26-nov-26). El dueño: "el psg y el bayern
+… perdieron, y eso se debe a que ninguno de sus 3 delanteros jugo … cada
+jugador tiene diferente peso en el equipo", y después "imagina que ahora es
+la defensa la que no esta disponible o se movio". Eligió marcar a cualquier
+equipo, favorito o no, y que la marca cambie solo el pick "para seguir": el
+🎯 se queda. Dos marcas (mark_text):
+  - ataque: los titulares habituales que faltan metieron un tercio o más
+    (WEIGHT_SHARE) de los goles del equipo en sus últimos 15 (con 5+ goles);
+  - defensa: de su línea de atrás titular (portero y defensas, por la
+    posición que más jugó cada uno) faltan o juegan en otro puesto 3 o más
+    (BACK_CHANGED). Con 2 marcaría a 1 de cada 5 equipos: rotación normal.
+Medido el 26-nov en 66,292 equipo-partidos de ESPN 2019-26 contra el cierre
+de Pinnacle: ninguna de las dos le gana al momio (ataque −0.1 pts, defensa
+cambiada −0.5, portero fuera −1.0; a los favoritos de 65+ sin 2 defensas la
+casa hasta los castiga de más, +4.7). Por eso es una marca, no quita el 🎯.
+La alerta (y la revisión de Claude) sigue siendo solo con 4+ fuera.
 """
 
 import json
@@ -57,6 +74,11 @@ MIN_WIN_PROB = 0.20         # "el rival gana" solo si Pinnacle le da 20%+: los l
 KNOWN_MIN = 5               # titulares que tienen que haber jugado antes en el equipo
 MIN_ALERT_ODDS = 1.40       # momio mínimo que vale la pena avisar (el piso de los picks): un
                             # "empate o favorito" a −1579 no es una apuesta (24-oct-26)
+WEIGHT_SHARE = 1 / 3        # marca de ataque: los que faltan metieron un tercio o más de los goles
+MIN_TEAM_GOALS = 5          # con menos goles en sus últimos 15, el reparto no dice nada
+BACK_CHANGED = 3            # marca de defensa: de su línea de atrás titular, fuera o en otro puesto
+BACK_POS = frozenset({"G", "CD", "CD-L", "CD-R", "LB", "RB", "D", "SW"})    # portero y defensas (ESPN)
+MAX_MARK_NAMES = 4
 
 TABLE = "lineup_alerts"
 DDL = f"""
@@ -97,30 +119,45 @@ ALTER = f"""
 
 def team_profile(history: list) -> dict:
     """history: partidos TERMINADOS del equipo, del más reciente, cada uno
-    {"starters": [ids], "goals": {id: goles}, "names": {id: nombre}}."""
+    {"starters": [ids], "goals": {id: goles}, "names": {id: nombre}} y, si se
+    sabe, "positions": {id: posición de ESPN} de los titulares. usual_pos: la
+    posición que más jugó cada titular habitual (de los partidos con posición,
+    pos_n)."""
     h = history[:HISTORY_MATCHES]
     n = len(h)
-    starts, goals, names = {}, {}, {}
+    starts, goals, names, pos, pos_n = {}, {}, {}, {}, 0
     for m in h:
         for pid in m.get("starters") or []:
             starts[pid] = starts.get(pid, 0) + 1
         for pid, g in (m.get("goals") or {}).items():
             goals[pid] = goals.get(pid, 0) + int(g or 0)
         names.update(m.get("names") or {})
+        ps = m.get("positions") or {}
+        pos_n += bool(ps)
+        for pid, p in ps.items():
+            if p:
+                seen = pos.setdefault(pid, {})
+                seen[p] = seen.get(p, 0) + 1
     regulars = {pid for pid, c in starts.items() if n >= MIN_TEAM_MATCHES and c / n >= REGULAR_SHARE}
     top = max(goals, key=goals.get) if goals else None
     if top is not None and goals[top] < MIN_TOP_GOALS:
         top = None
     # todos los que estuvieron en la plantilla (titulares y banca)
     pool = set(starts) | set(names)
+    usual = {pid: max(sorted(pos[pid]), key=pos[pid].get) for pid in regulars if pid in pos}
     return {"n": n, "regulars": regulars, "top": top, "top_goals": goals.get(top, 0), "names": names,
-            "pool": pool}
+            "pool": pool, "goals": goals, "team_goals": sum(goals.values()), "usual_pos": usual, "pos_n": pos_n}
 
 
-def absences(starters: list, profile: dict) -> dict:
+def absences(starters: list, profile: dict, positions: dict | None = None) -> dict:
     """Titulares habituales que no salen y si falta el goleador. Si el XI
     casi no comparte jugadores con la plantilla del equipo (KNOWN_MIN), no
-    es la suya: foreign, sin bajas."""
+    es la suya: foreign, sin bajas. positions: {id: posición de hoy} de los
+    titulares (si ESPN la dio). Además (26-nov-26): heavy/share = los que
+    faltan y que metieron goles, y qué parte de los goles del equipo hicieron
+    (0 con menos de MIN_TEAM_GOALS); back = su línea de atrás titular
+    (portero y defensas): quién no juega y quién juega en otro puesto (None
+    sin posiciones en su historia)."""
     if profile["n"] < MIN_TEAM_MATCHES:
         return {"missing": [], "top_out": None, "known": False}
     xi = set(starters or [])
@@ -129,9 +166,73 @@ def absences(starters: list, profile: dict) -> dict:
         return {"missing": [], "top_out": None, "known": False, "foreign": True}
     missing = sorted(profile["regulars"] - xi)
     top = profile["top"]
-    return {"missing": [profile["names"].get(p, p) for p in missing],
-            "top_out": profile["names"].get(top, top) if top and top not in xi else None,
-            "known": True}
+    names = profile["names"]
+    gl, tg = profile.get("goals") or {}, profile.get("team_goals") or 0
+    heavy = sorted((p for p in missing if gl.get(p, 0) > 0), key=lambda p: (-gl[p], str(p)))
+    back = None
+    if profile.get("pos_n", 0) >= MIN_TEAM_MATCHES:
+        usual, today = profile.get("usual_pos") or {}, positions or {}
+        line = sorted(p for p in profile["regulars"] if usual.get(p) in BACK_POS)
+        back = {"n": len(line), "out": [names.get(p, p) for p in line if p not in xi],
+                "moved": [(names.get(p, p), today[p]) for p in line
+                          if p in xi and today.get(p) and today[p] not in BACK_POS]}
+    return {"missing": [names.get(p, p) for p in missing],
+            "top_out": names.get(top, top) if top and top not in xi else None,
+            "known": True, "heavy": [names.get(p, p) for p in heavy],
+            "share": round(sum(gl.get(p, 0) for p in missing) / tg, 3) if tg >= MIN_TEAM_GOALS else 0.0,
+            "back": back}
+
+
+def _and(names: list) -> str:
+    """"A", "A y B", "A, B y C" (con … después de MAX_MARK_NAMES)."""
+    names = [str(x) for x in names]
+    if len(names) > MAX_MARK_NAMES:
+        return ", ".join(names[:MAX_MARK_NAMES]) + "…"
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " y " + names[-1]
+
+
+def _where(pos: str) -> str:
+    """El puesto de ESPN dicho en corto: de portero, de defensa, de medio, de delantero."""
+    p = str(pos or "").upper()
+    if p == "G":
+        return "de portero"
+    if p in BACK_POS:
+        return "de defensa"
+    if "F" in p:
+        return "de delantero"
+    return "de medio" if "M" in p else f"de {pos}"
+
+
+def weight_out(a: dict) -> bool:
+    """Marca de ataque: los que faltan metieron un tercio o más de los goles."""
+    return bool(a.get("known")) and (a.get("share") or 0) >= WEIGHT_SHARE - 1e-9 and bool(a.get("heavy"))
+
+
+def back_changed(a: dict) -> bool:
+    """Marca de defensa: de su línea de atrás titular faltan o se movieron 3+."""
+    b = a.get("back") if a.get("known") else None
+    return bool(b) and len(b["out"]) + len(b["moved"]) >= BACK_CHANGED
+
+
+def mark_text(a: dict) -> str | None:
+    """La marca de un equipo en palabras del dueño, sin su nombre ("le faltan
+    Kane y Olise, que metieron 39 de cada 100 goles del equipo; le cambia la
+    defensa: no juegan Neuer y Upamecano, y Kim juega de medio"). None si no
+    tiene ninguna."""
+    parts = []
+    if weight_out(a):
+        many = len(a["heavy"]) > 1
+        parts.append(f"le {'faltan' if many else 'falta'} {_and(a['heavy'])}, que "
+                     f"{'metieron' if many else 'metió'} {round(100 * a['share'])} de cada 100 goles del equipo")
+    if back_changed(a):
+        b = a["back"]
+        bits = []
+        if b["out"]:
+            bits.append(f"no {'juegan' if len(b['out']) > 1 else 'juega'} {_and(b['out'])}")
+        if b["moved"]:
+            bits.append(", ".join(f"{nm} juega {_where(p)}" for nm, p in b["moved"][:MAX_MARK_NAMES]))
+        parts.append("le cambia la defensa: " + ", y ".join(bits))
+    return "; ".join(parts) or None
 
 
 def triggered(a: dict) -> bool:
@@ -278,8 +379,8 @@ def value_at_close(min_american: int | None, pin_close_prob: float | None) -> fl
 # toda la plantilla, tres veces por closing (picks, parlays y alertas) y en cada
 # recarga del dashboard: parte de los 5.58 GB que agotaron la transferencia de Neon.
 PROFILES_SQL = """
-    SELECT team, starters, goals, names FROM (
-        SELECT team, kickoff, starters, goals, names,
+    SELECT team, starters, goals, names, positions FROM (
+        SELECT team, kickoff, starters, goals, names, positions,
                ROW_NUMBER() OVER (PARTITION BY team ORDER BY kickoff DESC) AS rn
         FROM lineups
         WHERE completed AND team = ANY(:t)
@@ -287,19 +388,33 @@ PROFILES_SQL = """
     WHERE rn <= :n
     ORDER BY team, kickoff DESC
 """
+_PROFILES_SQL_NO_POSITIONS = (PROFILES_SQL.replace("names, positions FROM (", "names, NULL AS positions FROM (")
+                              .replace("names, positions,\n", "names,\n"))
+
+
+def _load(v):
+    return v if isinstance(v, (list, dict)) else json.loads(v or "null")
 
 
 def load_profiles(engine, teams: list) -> dict:
-    """team_profile de cada equipo con sus partidos terminados en `lineups`."""
+    """team_profile de cada equipo con sus partidos terminados en `lineups`.
+    Sin la columna de posiciones (nace con el primer closing de v2.17.0), sin
+    posiciones."""
     if not teams:
         return {}
-    with engine.connect() as conn:
-        rows = conn.execute(text(PROFILES_SQL), {"t": list(teams), "n": HISTORY_MATCHES}).fetchall()
+    params = {"t": list(teams), "n": HISTORY_MATCHES}
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(PROFILES_SQL), params).fetchall()
+    except Exception as e:
+        if "positions" not in str(e):
+            raise
+        with engine.connect() as conn:
+            rows = conn.execute(text(_PROFILES_SQL_NO_POSITIONS), params).fetchall()
     hist = {}
-    for team, st, gl, nm in rows:
-        load = lambda v: v if isinstance(v, (list, dict)) else json.loads(v or "null")
-        hist.setdefault(team, []).append({"starters": load(st) or [], "goals": load(gl) or {},
-                                          "names": load(nm) or {}})
+    for team, st, gl, nm, ps in rows:
+        hist.setdefault(team, []).append({"starters": _load(st) or [], "goals": _load(gl) or {},
+                                          "names": _load(nm) or {}, "positions": _load(ps) or {}})
     return {t: team_profile(h) for t, h in hist.items()}
 
 

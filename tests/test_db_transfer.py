@@ -59,17 +59,20 @@ def test_profiles_read_only_the_last_15_matches_of_each_team():
     from src.models import lineup_alerts as LA
     assert "ROW_NUMBER() OVER (PARTITION BY team ORDER BY kickoff DESC)" in LA.PROFILES_SQL
     con = sqlite3.connect(":memory:")
-    con.execute("CREATE TABLE lineups (team TEXT, kickoff TEXT, starters TEXT, goals TEXT, names TEXT, completed INT)")
+    con.execute("CREATE TABLE lineups (team TEXT, kickoff TEXT, starters TEXT, goals TEXT, names TEXT, completed INT, "
+                "positions TEXT)")
     for i in range(40):
-        con.execute("INSERT INTO lineups VALUES ('alpha', ?, ?, '{}', '{}', 1)", (f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}", f"[{i}]"))
+        con.execute("INSERT INTO lineups VALUES ('alpha', ?, ?, '{}', '{}', 1, '{}')", (f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}", f"[{i}]"))
     for i in range(5):
-        con.execute("INSERT INTO lineups VALUES ('beta', ?, '[]', '{}', '{}', 1)", (f"2026-05-{i + 1:02d}",))
-    con.execute("INSERT INTO lineups VALUES ('alpha', '2026-12-01', '[99]', '{}', '{}', 0)")   # sin terminar
-    sql = LA.PROFILES_SQL.replace("team = ANY(:t)", "team IN ('alpha', 'beta')").replace(":n", str(LA.HISTORY_MATCHES))
-    rows = con.execute(sql).fetchall()
-    alpha = [r[1] for r in rows if r[0] == "alpha"]
-    assert len(alpha) == 15 and alpha[0] == "[39]" and alpha[-1] == "[25]"      # los más recientes, en orden
-    assert sum(r[0] == "beta" for r in rows) == 5
+        con.execute("INSERT INTO lineups VALUES ('beta', ?, '[]', '{}', '{}', 1, NULL)", (f"2026-05-{i + 1:02d}",))
+    con.execute("INSERT INTO lineups VALUES ('alpha', '2026-12-01', '[99]', '{}', '{}', 0, '{}')")   # sin terminar
+    for q in (LA.PROFILES_SQL, LA._PROFILES_SQL_NO_POSITIONS):      # con la columna de posiciones y sin ella
+        sql = q.replace("team = ANY(:t)", "team IN ('alpha', 'beta')").replace(":n", str(LA.HISTORY_MATCHES))
+        rows = con.execute(sql).fetchall()
+        alpha = [r[1] for r in rows if r[0] == "alpha"]
+        assert len(alpha) == 15 and alpha[0] == "[39]" and alpha[-1] == "[25]"      # los más recientes, en orden
+        assert sum(r[0] == "beta" for r in rows) == 5 and len(rows[0]) == 5
+    assert "positions" not in LA._PROFILES_SQL_NO_POSITIONS.replace("NULL AS positions", "")
 
 
 def test_profiles_pass_the_window_to_the_query():

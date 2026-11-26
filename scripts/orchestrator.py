@@ -1065,9 +1065,11 @@ def step_timing_learning():
 
 def step_lineup_history():
     """Alineaciones de los partidos terminados de los últimos 10 días (ESPN,
-    gratis) para saber quién es titular habitual y goleador."""
-    from src.features.espn_lineups import backfill_lineups
+    gratis) para saber quién es titular habitual y goleador, y la posición de
+    los titulares que falte (26-nov-26: la defensa titular de cada equipo)."""
+    from src.features.espn_lineups import backfill_lineups, fill_positions
     backfill_lineups(days=10)
+    fill_positions()
 
 
 def step_historical_odds():

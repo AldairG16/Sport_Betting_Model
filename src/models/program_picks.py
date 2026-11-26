@@ -62,6 +62,15 @@ para el favorito de 65%+ según Pinnacle en las ligas con pago anticipado
 pick es el favorito. Los demás partidos siguen mostrando su pick, sin 🎯
 (NOT_STRONG), y el 🎯 de goles se quita. El favorito con 4+ titulares fuera
 no es 🎯.
+
+26-nov-26 (v2.17.0), la marca por el peso de los jugadores y la defensa
+(lineup_alerts.mark_text). El dueño eligió (2): a cualquier equipo, favorito o
+no, al que le faltan los que meten un tercio de sus goles o le cambian 3+ de
+su defensa titular, se le marca (program_picks.lineup_mark: se ve en el
+dashboard y en Telegram) y el pick "para seguir" no es que gane ese equipo
+(si queda otra cosa); el 🎯 se queda, porque la casa ya lo cuenta en el momio
+(medido en 66,292 equipo-partidos). La regla de 4+ fuera sigue igual y se mide
+cada semana (lineup_changes).
 """
 
 import math
@@ -133,10 +142,12 @@ PICKS_ALTERS = ("ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS source TEXT"
                 # por qué no tiene 🎯, dicho por el favorito (star_note, 6-nov-26)
                 "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS star_note TEXT",
                 # aviso de que un grande de nombre viene mal (big_names, 13-nov-26). Solo informa
-                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS form_note TEXT")
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS form_note TEXT",
+                # las bajas que pesan (26-nov-26, lineup_marks): solo marca, no quita el 🎯
+                "ALTER TABLE program_picks ADD COLUMN IF NOT EXISTS lineup_mark TEXT")
 _COLS = ("match", "match_date", "league", "display", "market", "label", "family", "reason", "model_prob",
          "market_prob", "lean", "min_us", "best_odds", "playdoit_odds", "value", "lineup", "star_note",
-         "form_note")
+         "form_note", "lineup_mark")
 
 NO_EDGE = "Sin ventaja: el programa ve lo mismo que el mercado"
 TOO_FAR = "El programa se separa demasiado del mercado: probablemente se equivoca"
@@ -409,12 +420,47 @@ def lineup_check(home: str, away: str, absent: dict | None) -> tuple:
     return weak, LINEUP_OK + (": " + "; ".join(notes) if notes else "")
 
 
+def lineup_marks(home: str, away: str, absent: dict | None) -> dict:
+    """{mercado: marca} del ganador al que le pesan las bajas (26-nov-26,
+    lineup_alerts.mark_text): le faltan los que meten un tercio de sus goles
+    o le cambia la defensa. Cualquier equipo, favorito o no. No quita el 🎯:
+    solo cambia el pick para seguir (decide) y se ve (lineup_mark)."""
+    from src.models.lineup_alerts import mark_text
+    from dashboard.display import team_name
+    if not absent or absent.get("home") is None or absent.get("away") is None:
+        return {}
+    out = {}
+    for side, team, market in (("home", home, "home_win"), ("away", away, "away_win")):
+        txt = mark_text(absent[side]) if absent[side].get("known") else None
+        if txt:
+            out[market] = f"A {team_name(team)} {txt}"
+    return out
+
+
+def lineup_view(home: str, away: str, absent: dict | None) -> tuple:
+    """(weak, nota, marcas): lo que el pick ve de la alineación publicada."""
+    weak, note = lineup_check(home, away, absent)
+    return weak, note, lineup_marks(home, away, absent)
+
+
+def lineup_parts(got) -> tuple:
+    """(weak, nota, marcas) de lo que da lineups_for (dos o tres partes)."""
+    got = tuple(got or ({}, None))
+    return (got + ({},))[:3]
+
+
+def mark_of(soft: dict | None) -> str | None:
+    """La marca que se guarda (lineup_mark): la del local y la del visitante."""
+    return " · ".join(soft[m] for m in ("home_win", "away_win") if m in (soft or {})) or None
+
+
 def _row(r: dict, kick, display, pick_: dict | None, reason: str | None, source=None, lineup=None,
-         star_note=None, form_note=None) -> dict:
+         star_note=None, form_note=None, lineup_mark=None) -> dict:
     base = {"match": str(r["match"]).lower(), "match_date": pd.Timestamp(kick).to_pydatetime(),
             "league": r.get("league"), "display": display, "source": source, "lineup": lineup,
             "star_note": star_note if pick_ and reason else None,
-            "form_note": form_note if pick_ else None}     # con 🎯 o sin él: es un aviso, no un motivo
+            "form_note": form_note if pick_ else None,     # con 🎯 o sin él: es un aviso, no un motivo
+            "lineup_mark": lineup_mark}                    # las bajas que pesan (26-nov-26): solo marca
     if not pick_:
         return {**base, **{c: None for c in ("market", "label", "family", "model_prob", "market_prob", "lean",
                                              "min_us", "best_odds", "playdoit_odds", "value")}, "reason": reason}
@@ -540,11 +586,15 @@ def no_star_note(cs: list, league, weak: dict | None = None, teams=("el local", 
     return (weak or {}).get(fav["market"])
 
 
-def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=None, paused=()) -> tuple:
+def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=None, paused=(),
+           soft=None) -> tuple:
     """(pick, motivo) para una fila de model_vs_sharp con los momios de ahora
     (u) y los de cuando se analizó (then_snap). bias: sesgo por lado aprendido.
     weak: los ganadores con la alineación debilitada (lineup_check). paused:
     regiones (side_bias.region_of) con el 🎯 en pausa por el filtro aprendido.
+    soft: los ganadores marcados por el peso de las bajas (lineup_marks): no
+    le quitan el 🎯 al favorito fuerte, pero el pick para seguir los evita
+    como a weak (26-nov-26).
     v2.9.0: el 🎯 es solo el favorito fuerte (strong_favourite); los demás
     picks se ven sin 🎯."""
     from src.models.side_bias import is_skipped, region_of
@@ -558,7 +608,7 @@ def decide(r: dict, u, then_snap=None, props=None, ratio=None, bias=None, weak=N
     if fav is not None and fav["market"] not in weak:
         return {**fav, "strong": True}, None
     pick, why = choose(cs, _market_then(r, then_snap, ratio), r.get("league"), _num(r.get("league_factor")) is not None,
-                       weak)
+                       {**(soft or {}), **weak})
     low = r.get("low_history")
     if pick and low and not (isinstance(low, float) and pd.isna(low)):
         why = f"{LOW_HISTORY}: {low}"                     # se ve el pick, nunca 🎯
@@ -686,7 +736,7 @@ def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame |
     upcoming_matches. snaps: odds_history, para los momios de cuando se
     analizó. props_for(home, away, league, kickoff) → {prop: fn(línea)}.
     bias: sesgo aprendido (side_bias: por lado, región y goles).
-    lineups_for(home, away, kickoff) → (weak, nota) de lineup_check.
+    lineups_for(home, away, kickoff) → (weak, nota[, marcas]) de lineup_view.
     paused: regiones con el 🎯 en pausa (filter_learner.paused_regions).
     form_for(local, visitante, liga, nombres) → aviso de que un grande de nombre
     viene mal (big_names). No entra a decide: el pick no cambia.
@@ -708,8 +758,8 @@ def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame |
         then = _snap_before(idx, key, r["match_date"], r["created_at"]) if r.get("created_at") is not None else None
         h, _, a = key.partition(" vs ")
         props = props_for(h, a, r.get("league"), r["match_date"]) if props_for else None
-        weak, lineup = lineups_for(h, a, r["match_date"]) if lineups_for else ({}, None)
-        pk, why = decide(r, u, then, props, ratio, bias, weak, paused)
+        weak, lineup, soft = lineup_parts(lineups_for(h, a, r["match_date"]) if lineups_for else None)
+        pk, why = decide(r, u, then, props, ratio, bias, weak, paused, soft)
         note = form = None
         if pk and (why or form_for or groups_for):
             from dashboard.display import team_name
@@ -723,7 +773,7 @@ def build_picks(mvs: pd.DataFrame, upcoming: pd.DataFrame, snaps: pd.DataFrame |
                                  pk["market"], teams[0] if pk["market"] == "home_win" else teams[1])
                 form = " · ".join(x for x in (firm, form) if x) or None
         rows.append(_row(r, r["match_date"], f"{u.home_team} vs {u.away_team}" if u is not None else None, pk, why,
-                         lineup=lineup, star_note=note, form_note=form))
+                         lineup=lineup, star_note=note, form_note=form, lineup_mark=mark_of(soft)))
     return rows
 
 
@@ -767,17 +817,26 @@ def _utc(t) -> pd.Timestamp:
     return t.tz_convert("UTC") if t.tzinfo else t.tz_localize("UTC")
 
 
+_UPCOMING_LINEUPS_SQL = """
+    SELECT team, opponent, is_home, kickoff, starters, positions FROM lineups
+    WHERE NOT completed AND kickoff BETWEEN NOW() - INTERVAL '3 hours' AND NOW() + INTERVAL '1 day'
+"""
+
+
 def _lineups_for(engine, normalize=None):
-    """fn(home, away, kickoff) → (weak, nota) con las alineaciones publicadas
-    de los próximos partidos (lineups sin terminar: el closing las guarda
-    ~1 h antes, justo antes de este paso). None si no hay ninguna."""
+    """fn(home, away, kickoff) → (weak, nota, marcas) con las alineaciones
+    publicadas de los próximos partidos (lineups sin terminar: el closing las
+    guarda ~1 h antes, justo antes de este paso). None si no hay ninguna."""
     import json
     from src.models import lineup_alerts as LA
     try:
-        lu = pd.read_sql(text("""
-            SELECT team, opponent, is_home, kickoff, starters FROM lineups
-            WHERE NOT completed AND kickoff BETWEEN NOW() - INTERVAL '3 hours' AND NOW() + INTERVAL '1 day'
-        """), engine)
+        try:
+            lu = pd.read_sql(text(_UPCOMING_LINEUPS_SQL), engine)
+        except Exception as e:                     # sin la columna de posiciones todavía (v2.17.0)
+            if "positions" not in str(e):
+                raise
+            lu = pd.read_sql(text(_UPCOMING_LINEUPS_SQL.replace(", positions FROM", ", NULL AS positions FROM")),
+                             engine)
         if lu.empty:
             return None
         profiles = LA.load_profiles(engine, sorted(set(lu["team"])))
@@ -789,15 +848,17 @@ def _lineups_for(engine, normalize=None):
     for r in lu.itertuples(index=False):
         home, away = (r.team, r.opponent) if r.is_home else (r.opponent, r.team)
         xi = r.starters if isinstance(r.starters, list) else json.loads(r.starters or "[]")
+        pos = (r.positions if isinstance(r.positions, dict)
+               else json.loads(r.positions) if isinstance(r.positions, str) else None) or {}
         prof = profiles.get(r.team)
-        ab = LA.absences(xi, prof) if prof else {"missing": [], "top_out": None, "known": False}
+        ab = LA.absences(xi, prof, pos) if prof else {"missing": [], "top_out": None, "known": False}
         idx.setdefault(match_key(home, away, normalize), []).append((_utc(r.kickoff), "home" if r.is_home else "away", ab))
 
     def fn(home, away, kickoff):
         k = _utc(kickoff)
         got = {side: ab for t, side, ab in idx.get(match_key(home, away, normalize), [])
                if abs((t - k).total_seconds()) <= 3 * 3600}
-        return lineup_check(home, away, got)
+        return lineup_view(home, away, got)
     return fn
 
 

@@ -17,6 +17,12 @@ que habría dejado el 🎯 de antes contra lo que deja el de después (sin 🎯 
 no se apuesta = 0). El veredicto pide MIN_N cambios con algún 🎯 y una
 diferencia de Z_VERDICT desviaciones; mientras no, dice cuántos faltan.
 Solo mide: no cambia nada del pick.
+
+26-nov-26, el dueño eligió (3) para la regla de 4+ titulares fuera: se queda
+y se mide. Desde aquí el bloque dice también cuántos 🎯 quitó esa regla y
+cómo habría salido el 🎯 de antes (removed_star), y cuántos picks para seguir
+cambiaron en partidos con la marca de las bajas que pesan (lineup_mark: los
+que meten un tercio de los goles o la defensa cambiada, que no quita el 🎯).
 """
 
 import math
@@ -29,13 +35,14 @@ from src.utils.log import get_logger
 log = get_logger(__name__)
 
 SETTLED = ("win", "loss", "push", "half_win", "half_loss")
+WEAK_REASON = "Alineación:"      # el motivo de la regla de 4+ fuera (program_picks.WEAKENED)
 MIN_N = 20                   # cambios con algún 🎯 para dar veredicto
 Z_VERDICT = 2.0
 
 _SQL = """
     SELECT match, display, match_date, label, market, reason, playdoit_odds, result, profit,
            pre_lineup_label, pre_lineup_market, pre_lineup_star, pre_lineup_odds, pre_lineup_at,
-           pre_lineup_result, pre_lineup_profit
+           pre_lineup_result, pre_lineup_profit, lineup_mark
     FROM program_picks
     WHERE pre_lineup_at IS NOT NULL AND match_date < NOW()
 """
@@ -92,7 +99,10 @@ def summarize(rows: list) -> dict:
         if ub is None or ua is None:
             unknown += 1
         changed.append({"before_win": r.get("pre_lineup_result") == "win", "after_win": r.get("result") == "win",
-                        "star_before": star_before, "star_after": star_after, "ub": ub, "ua": ua})
+                        "star_before": star_before, "star_after": star_after, "ub": ub, "ua": ua,
+                        "weak_rule": star_before and not star_after
+                        and str(_txt(r.get("reason")) or "").startswith(WEAK_REASON),
+                        "marked": bool(_txt(r.get("lineup_mark")))})
     known = [c for c in changed if c["ub"] is not None and c["ua"] is not None]
     rel = [c["ua"] - c["ub"] for c in known if c["star_before"] or c["star_after"]]
     n = len(rel)
@@ -117,6 +127,17 @@ def summarize(rows: list) -> dict:
         "bets_before": sum(1 for c in known if c["star_before"]), "units_before": sum(c["ub"] for c in known),
         "bets_after": sum(1 for c in known if c["star_after"]), "units_after": sum(c["ua"] for c in known),
         "n_star": n, "z": z, "verdict": verdict,
+        # la regla de 4+ fuera (26-nov-26: se queda y se mide): los 🎯 que quitó y cómo salía el de antes
+        "removed_star": sum(1 for c in changed if c["weak_rule"]),
+        "removed_won": sum(1 for c in changed if c["weak_rule"] and c["before_win"]),
+        "removed_units": sum(c["ub"] for c in changed if c["weak_rule"] and c["ub"] is not None),
+        # la marca de las bajas que pesan: cambia solo el pick para seguir (el 🎯 se queda)
+        "marked_changed": sum(1 for c in changed if c["marked"] and not c["weak_rule"]
+                              and c["star_before"] == c["star_after"]),
+        "marked_before": sum(1 for c in changed if c["marked"] and not c["weak_rule"]
+                             and c["star_before"] == c["star_after"] and c["before_win"]),
+        "marked_after": sum(1 for c in changed if c["marked"] and not c["weak_rule"]
+                            and c["star_before"] == c["star_after"] and c["after_win"]),
     }
 
 
@@ -153,8 +174,25 @@ def format_lines(week: dict, total: dict, since) -> list:
     lines.append(f"Desde el {since:%d-%m}: {total['changed']} cambios · en los 🎯, con el pick de antes "
                  f"{_u(total['units_before'])} y con el nuevo {_u(total['units_after'])}"
                  + (f" ({total['unknown']} sin momio guardado no cuentan en la ganancia)" if total["unknown"] else ""))
+    lines += rule_lines(total)
     lines += [f"¿Conviene cambiar el pick con la alineación? {plain_verdict(total)}", ""]
     return lines
+
+
+def rule_lines(total: dict) -> list:
+    """La regla de 4+ fuera y la marca de las bajas que pesan, desde que se miden (26-nov-26)."""
+    out = []
+    n = int(total.get("removed_star") or 0)
+    if n:
+        out.append(f"  La regla de 4 o más titulares fuera quitó {n} 🎯: el 🎯 de antes habría ganado "
+                   f"{total['removed_won']} de {n} ({_u(total['removed_units'])}).")
+    m = int(total.get("marked_changed") or 0)
+    if m:
+        many = m != 1
+        out.append(f"  Con la marca de bajas que pesan {'cambiaron' if many else 'cambió'} {m} "
+                   f"{'picks' if many else 'pick'} para seguir: el de antes ganó {total['marked_before']} y el "
+                   f"nuevo {total['marked_after']}.")
+    return out
 
 
 def weekly_lines(engine=None, days: int = 7, now=None) -> list:

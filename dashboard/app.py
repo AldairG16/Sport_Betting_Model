@@ -555,7 +555,7 @@ def api_predictions():
     # dos, el más reciente: la clave es el partido sin la fecha
     picks = _q("""
         SELECT match, label, family, market, model_prob, market_prob, playdoit_odds, reason, lineup, star_note,
-               form_note
+               form_note, lineup_mark
         FROM program_picks WHERE match_date BETWEEN NOW() - INTERVAL '3 hours' AND NOW() + INTERVAL '3 days'
           AND result IS DISTINCT FROM 'stale'
         ORDER BY picked_at NULLS FIRST
@@ -609,14 +609,18 @@ def api_lineups():
     fx = fx.sort_values("match_date")
     teams = sorted(set(fx.home_team_norm) | set(fx.away_team_norm))
     load = lambda v: v if isinstance(v, (list, dict)) else _js.loads(v or "null")
+    # positions (v2.17.0): la columna la crea cada closing (espn_lineups.save_lineups)
     lu = _q("""
-        SELECT team, kickoff, formation, starters, names FROM lineups
+        SELECT team, kickoff, formation, starters, names, positions FROM lineups
         WHERE team = ANY(:t) AND kickoff BETWEEN NOW() - INTERVAL '4 hours' AND NOW() + INTERVAL '16 hours'
     """, {"t": teams})
     lineups = {}
     for r in (lu.itertuples(index=False) if not lu.empty else []):
+        pos = getattr(r, "positions", None)
+        pos = pos if isinstance(pos, (dict, str)) else None
         lineups.setdefault(r.team, []).append({"kickoff": r.kickoff, "formation": r.formation,
-                                               "starters": load(r.starters), "names": load(r.names)})
+                                               "starters": load(r.starters), "names": load(r.names),
+                                               "positions": load(pos) or {}})
     try:
         profiles = _cached_profiles(load_profiles, teams)
     except Exception as e:
@@ -845,7 +849,7 @@ def _load_past_rows() -> list:
     mvs = _q("""SELECT match, match_date, p_home, p_draw, p_away, pin_home, pin_draw, pin_away, low_history
                 FROM model_vs_sharp WHERE match_date >= CAST(:s AS date) - 2 AND skipped_at IS NULL""", p)
     picks = _q("""SELECT match, match_date, league, label, family, market, reason, model_prob, market_prob, result,
-                         profit, source, playdoit_odds, star_note, form_note
+                         profit, source, playdoit_odds, star_note, form_note, lineup_mark
                   FROM program_picks WHERE match_date >= CAST(:s AS date) - 2""", p)
     bets = _q("""SELECT match, match_date, market, result, profit, stake FROM bets_history
                  WHERE match_date >= CAST(:s AS date) - 2""", p)

@@ -16,7 +16,7 @@ Funciones puras: dashboard/app.py hace las consultas.
 import pandas as pd
 
 from dashboard.display import league_name
-from src.models.lineup_alerts import MIN_TEAM_MATCHES, TRIGGER_MISSING
+from src.models.lineup_alerts import MIN_TEAM_MATCHES, TRIGGER_MISSING, absences, mark_text
 from src.utils.min_odds import fmt_american
 
 MATCH_WINDOW_MIN = 90          # la alineación es del partido si arranca a ±90 min
@@ -44,8 +44,11 @@ def team_lineup(row: dict | None, profile: dict | None) -> dict:
     missing = [{"name": pnames.get(p) or names.get(p) or p, "bench": p in bench}
                for p in sorted(regulars - xi)]
     top = str(profile["top"]) if profile.get("top") is not None else None
+    # las bajas que pesan (26-nov-26): los que meten un tercio de sus goles o la defensa cambiada
+    ab = absences(starters, profile, {str(k): v for k, v in (row.get("positions") or {}).items()})
     return {**out, "known": True, "missing": missing,
-            "top_out": (pnames.get(top) or top) if top and top not in xi else None}
+            "top_out": (pnames.get(top) or top) if top and top not in xi else None,
+            "mark": (mark_text(ab) if ab.get("known") else None) or ""}
 
 
 def _pick_row(rows: list, kickoff) -> dict | None:
@@ -83,9 +86,19 @@ def _names(missing: list) -> str:
 
 
 def verdict(home: str, away: str, lh: dict, la: dict, alerts: list, move: dict | None) -> dict:
-    """Veredicto del partido: pending / alert / weak / rotation / normal."""
+    """Veredicto del partido: pending / alert / weak / rotation / normal. Con
+    las bajas que pesan de cada equipo al final (marks, 26-nov-26)."""
     if not lh.get("published") or not la.get("published"):
         return {"level": "pending", "text": "⏳ Alineación todavía no publicada (sale ~1 h antes del partido)."}
+    v = _verdict(home, away, lh, la, alerts, move)
+    marks = [f"A {name} {t['mark']}" for name, t in ((home, lh), (away, la)) if t.get("mark")]
+    if marks:
+        v["text"] += (" ⚠️ " + ". ".join(marks) + ". Es una marca: la casa ya lo cuenta en el momio, el 🎯 se "
+                      "queda; el pick para seguir no va a que gane ese equipo.")
+    return {**v, "marks": marks}
+
+
+def _verdict(home: str, away: str, lh: dict, la: dict, alerts: list, move: dict | None) -> dict:
     mv = ""
     if move and abs(move["delta"]) >= 0.02:
         mv = (f" Pinnacle {'subió' if move['delta'] > 0 else 'bajó'} {abs(move['delta']) * 100:.0f} pts "

@@ -30,7 +30,7 @@ primera vez que las usa.
 | `live_scores` | ~2 mil | El marcador de ESPN de los partidos de hoy (en juego, terminados y pospuestos) |
 | `espn_kickoffs` | ~160 | La hora de inicio según ESPN (fija el pick al empezar) |
 | `espn_matches`, `espn_teams` | ~1,500 / ~400 | Historia de copas, Europa y amistosos de ESPN |
-| `lineups` | 5,400 | El once de cada equipo por partido (ESPN): titulares, goles, nombres |
+| `lineups` | 5,400 | El once de cada equipo por partido (ESPN): titulares, goles, nombres y, desde v2.17.0, el puesto de cada titular (`positions`: G, CD, LB, M, F…) |
 | `kalshi_history` | 70 mil | Probabilidades de Kalshi (segunda referencia sin margen) |
 | `club_elo` | ~600 | Fuerza de cada club según ClubElo |
 | `team_xg_real`, `player_club_goals` | ~100 / ~1,000 | xG real por equipo y goles por jugador (Understat/FotMob) |
@@ -40,7 +40,7 @@ primera vez que las usa.
 | Tabla | Qué guarda |
 |---|---|
 | `model_vs_sharp` | El análisis de cada partido: probabilidades del modelo y de Pinnacle, goles esperados, y si ya no vale (`skipped_at`, `skip_reason`) |
-| `program_picks` | El pick de cada partido (mercado, momio mínimo en PlayDoit, si es 🎯 y por qué no, y el aviso de que un grande de nombre viene mal), su resultado y ganancia; el pick antes de la alineación y los cambios |
+| `program_picks` | El pick de cada partido (mercado, momio mínimo en PlayDoit, si es 🎯 y por qué no, el aviso de que un grande de nombre viene mal y la marca de las bajas que pesan, `lineup_mark`), su resultado y ganancia; el pick antes de la alineación y los cambios |
 | `program_parlays` | Los parlays del día y de cada horario, con sus piernas, bono y resultado. `rule`: 'bono' (los que se recomiendan), 'medir' (el gemelo de otros mercados, solo para medir, desde el 25-nov-26) y 'seguro' (la regla vieja, hasta el 6-nov) |
 | `shadow_bets` | Candidatas sombra: lo que el modelo propondría en cada mercado, con cuota, cierre y resultado. De aquí aprende |
 | `model_proposals` | Lo que el modelo propuso y por qué no se apostó |
