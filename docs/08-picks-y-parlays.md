@@ -36,6 +36,14 @@ marca o sin ella. En el historial esos favoritos ganan 81 de cada 100; el resto,
 100). Lo dicen la leyenda y cada tarjeta del dashboard, y cada partido en Telegram ("solo para seguir", sin
 momio mínimo desde el 14-nov-26; por bloques desde el 20-nov-26, [11](11-telegram.md)).
 
+**La marca de las bajas que pesan** (`lineup_mark`, v2.17.0, 26-nov-26): con la alineación publicada, a cualquier
+equipo, favorito o no, se le marca si le faltan los titulares que metieron **un tercio o más de sus goles** en sus
+últimos 15, o si de su **línea de atrás titular** (portero y defensas, por el puesto que más jugó cada uno) **faltan
+o juegan en otro puesto 3 o más**. Se ve en la tarjeta del dashboard, en la pestaña Alineaciones y en Telegram
+("⚠️ A Bayern le faltan Kane y Olise, que metieron 39 de cada 100 goles del equipo"). **El 🎯 se queda** (la casa
+ya lo cuenta en el momio); **el pick para seguir no es que gane ese equipo** si queda otra cosa. Detalle abajo, en
+"La marca de las bajas que pesan".
+
 **El aviso "viene mal"** (`form_note`, v2.12.2, 13-nov-26): si en el partido juega un equipo grande de nombre que
 viene con 15 puntos o menos de sus últimos 30 en liga, el pick lo dice ("Juventus viene mal: 15 puntos de sus
 últimos 30 en liga"), con 🎯 o sin él. **Solo informa: el pick y el 🎯 no cambian** ([09](09-aprendizaje.md)).
@@ -155,6 +163,29 @@ de responder "cómo nos fue con los picks".
     - Dashboard: 📋 el pick ya vio la alineación; ⏳ todavía no (sale ~1 h antes: para
       apostar, esperar ese pick); "· sin alineación" en las ligas que ESPN no cubre
       (`espn_leagues`), donde el pick nunca la ve.
+    - **La marca de las bajas que pesan (v2.17.0, 26-nov-2026).** El dueño, después de que el PSG y el
+      Bayern perdieran sin sus delanteros: "cada jugador tiene diferente peso en el equipo… analiza eso", y
+      después "imagina que ahora es la defensa la que no esta disponible o se movio". Eligió (2): marcar a
+      cualquier equipo y cambiar solo el pick para seguir; la regla de 4+ fuera se queda y se mide (3).
+      - `lineup_alerts.absences` (con la posición de hoy) y `mark_text`. Ataque: los titulares habituales que
+        faltan metieron un tercio o más (`WEIGHT_SHARE`) de los goles del equipo en sus últimos 15 (con 5+
+        goles, `MIN_TEAM_GOALS`; goles de `lineups.goals`, sin asistencias). Defensa: de su línea de atrás
+        titular (`BACK_POS`: portero y defensas, por el puesto que más jugó, `usual_pos`) faltan o juegan en
+        otro puesto 3 o más (`BACK_CHANGED`). La posición sale de ESPN (`lineups.positions`; la historia la
+        llena `espn_lineups.fill_positions` en el weekly). Sin posiciones en su historia, la defensa no se juzga.
+      - `program_picks.lineup_marks` → `lineup_view` (weak, nota, marcas) → `decide(..., soft=)`: el favorito
+        fuerte marcado sigue siendo 🎯; en los demás, `choose` evita al ganador marcado como a uno de 4+
+        (si no queda otra cosa, se ve con la marca de motivo). Parlays: la pierna no cambia.
+      - Medido el 26-nov en 66,292 equipo-partidos de ESPN 2019-26 contra el cierre de Pinnacle (`h7_defense`):
+        nada de esto le gana al momio. Faltan los que meten un tercio de los goles: −0.1 pts; 2+ defensas
+        fuera: −0.9; portero fuera: −1.0; un defensa en otro puesto: +0.4; a los favoritos de 65+ sin 2
+        defensas la casa los castiga de más (+4.7). Con 2 cambios atrás marcaría a 1 de cada 5 equipos
+        (rotación normal); con 3, al 3.6%. Ataque o defensa: ~12% de los equipo-partidos.
+      - En vivo (desde el 22-oct, solo ataque, 1/3): 97 equipos marcados de más además de los de 4+; de
+        haber quitado el 🎯, se iban 7 y 6 ganaron (Rennes, Fortuna Sittard, Dortmund sin Guirassy, Paris FC,
+        Galatasaray sin Osimhen, Bodø/Glimt; perdió Inter Miami sin Messi). Por eso no lo quita.
+      - El reporte semanal ("CAMBIOS CON LA ALINEACIÓN") dice cuántos 🎯 quitó la regla de 4+ y cómo salía
+        el de antes, y cuántos picks para seguir cambió la marca.
   - Si es un partido entre ligas distintas (`CROSS_LEAGUE`: Champions, Europa League…), el
     análisis tiene que traer el ajuste por fuerza de liga (`model_vs_sharp.league_factor` no
     NULL; [07](07-modelo.md), "Fuerza de liga"). Sin él el programa sobrevalora a quien golea en una liga débil:

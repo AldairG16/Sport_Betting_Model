@@ -49,7 +49,8 @@ KEEP_DAYS = 2
 CHUNK_CHARS = 3800             # Telegram corta en 4096
 
 _SQL = """
-    SELECT match, display, match_date, league, label, family, market, reason, min_us, lineup, form_note, result
+    SELECT match, display, match_date, league, label, family, market, reason, min_us, lineup, form_note, result,
+           lineup_mark
     FROM program_picks
     WHERE match_date > :now AND match_date < :end AND result IS DISTINCT FROM 'stale'
     ORDER BY match_date, display
@@ -106,7 +107,18 @@ def match_lines(r: dict, tz, day=None, before: str | None = None, missing=()) ->
     if before is not None and before != sig(r):
         lines.append(f"   🔄 antes: {before_text(before)}")
     lines += [f"   {t}" for t in missing]
+    lines += [f"   {t}" for t in mark_lines(r)]
     return lines
+
+
+def mark_lines(r: dict) -> list:
+    """Las bajas que pesan (26-nov-26, program_picks.lineup_mark), una línea por equipo: '⚠️ A Bayern le faltan
+    Kane y Olise, que metieron 39 de cada 100 goles del equipo (es una marca: el 🎯 se queda)'."""
+    mark = TR._str(r.get("lineup_mark"))
+    if not mark:
+        return []
+    tail = " <i>(es una marca: el 🎯 se queda, la casa ya lo cuenta en el momio)</i>" if TR.is_star(r) else ""
+    return [f"⚠️ {html.escape(part)}{tail}" for part in mark.split(" · ") if part.strip()]
 
 
 def _chunks(head: str, blocks: list, more: str) -> list:

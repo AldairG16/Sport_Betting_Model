@@ -10,7 +10,7 @@ palabras normales y momios americanos.
 |---|---|---|---|
 | **Bloque de la mañana** | En la primera revisión desde las 06:00: todos los partidos de hoy de antes de las 12:00, cada uno con su pick, "🎯 RECOMENDADO" y su momio mínimo o "solo para seguir", ✅ si ya tiene alineación, y los parlays que empiezan ahí | Dueño | `match_blocks.py` |
 | **Bloque de la tarde** | En la primera revisión desde las 12:00: los de las 12:00 hasta las 06:00 del día siguiente | Dueño | `match_blocks.py` |
-| **Con alineación** | En cada revisión, un mensaje nuevo con los partidos que acaban de tener alineación (1, 3, los que haya), con su pick ya revisado y "antes: …" si cambió desde el bloque | Dueño y canal | `match_blocks.py` |
+| **Con alineación** | En cada revisión, un mensaje nuevo con los partidos que acaban de tener alineación (1, 3, los que haya), con su pick ya revisado, "antes: …" si cambió desde el bloque y, desde v2.17.0, una línea ⚠️ por equipo con las bajas que pesan ("A Bayern le faltan Kane y Olise, que metieron 39 de cada 100 goles del equipo"; con 🎯: "es una marca: el 🎯 se queda") | Dueño y canal | `match_blocks.py` |
 | **Último aviso** | En la última revisión antes del partido: el que cambió después de mandarse ("cambió a última hora") y el que nunca tuvo alineación (su pick final) | Dueño y canal | `match_blocks.py` |
 | **Parlays finales** | En la última revisión antes de su primer partido | Dueño | `final_alerts.py` |
 | **La noche** | ~21:05: cómo terminó cada pick y cuántos partidos hay mañana | Dueño | `notify_telegram.py`, `telegram_reports.py` |

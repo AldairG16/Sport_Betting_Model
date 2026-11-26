@@ -20,6 +20,13 @@ sale la alineación.
 Los nombres se guardan con normalize_team; en un partido por jugar, con los
 nombres y la hora del sistema.
 
+Posición de cada titular (26-nov-26, peso de cada jugador): ESPN dice dónde
+juega cada titular (G portero, CD/LB/RB defensa, M medio, F delantero…). Se
+guarda en `positions` ({id: posición}) para saber cuál es la defensa titular
+de cada equipo y si hoy falta o se movió (src/models/lineup_alerts.py). La
+historia ya guardada sin posición la llena fill_positions (weekly): solo los
+últimos partidos de cada equipo, que es lo que usa el perfil.
+
 Emparejamiento estricto (23-oct-26): el de Kalshi sumaba el parecido de los
 dos nombres y una palabra larga compartida contaba como nombre igual. El
 23-oct la alineación de Gimnasia Mendoza vs Platense se guardó también como
@@ -66,11 +73,14 @@ DDL = f"""
         starters JSONB NOT NULL,
         names JSONB,
         goals JSONB,
+        positions JSONB,
         completed BOOLEAN NOT NULL DEFAULT FALSE,
         captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (sport_key, kickoff, team)
     )
 """
+ALTER = f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS positions JSONB"
+POSITIONS_PER_TEAM = 20     # partidos terminados de cada equipo que fill_positions completa (el perfil usa 15)
 
 
 def espn_leagues() -> dict:
@@ -116,8 +126,9 @@ def parse_scoreboard(data: dict | None) -> list:
 
 
 def parse_summary(data: dict | None) -> dict | None:
-    """{"home"|"away": {"starters", "names", "goals", "formation"}} o None si
-    todavía no hay 11 titulares de cada lado (alineación sin publicar)."""
+    """{"home"|"away": {"starters", "names", "goals", "formation", "positions"}}
+    o None si todavía no hay 11 titulares de cada lado (alineación sin
+    publicar). positions: {id: posición de ESPN} de los titulares."""
     out = {}
     for r in (data or {}).get("rosters", []):
         side = r.get("homeAway")
@@ -130,10 +141,13 @@ def parse_summary(data: dict | None) -> dict | None:
             g = next((s.get("value") for s in p.get("stats", []) if s.get("name") == "totalGoals"), 0)
             if p.get("athlete") and g:
                 goals[str(p["athlete"]["id"])] = int(g)
+        positions = {str(p["athlete"]["id"]): (p.get("position") or {}).get("abbreviation")
+                     for p in roster if p.get("starter") and p.get("athlete")
+                     and (p.get("position") or {}).get("abbreviation")}
         out[side] = {"starters": starters,
                      "names": {str(p["athlete"]["id"]): p["athlete"].get("displayName")
                                for p in roster if p.get("athlete")},
-                     "goals": goals, "formation": r.get("formation")}
+                     "goals": goals, "formation": r.get("formation"), "positions": positions}
     return out if {"home", "away"} <= set(out) else None
 
 
@@ -207,7 +221,8 @@ def lineup_rows(sport_key: str, event: dict, summary: dict, home: str, away: str
         rows.append({"sport_key": sport_key, "kickoff": kick, "team": team, "opponent": opp,
                      "is_home": side == "home", "event_id": event["event"], "formation": s["formation"],
                      "starters": json.dumps(s["starters"]), "names": json.dumps(s["names"], ensure_ascii=False),
-                     "goals": json.dumps(s["goals"]), "completed": bool(event["completed"])})
+                     "goals": json.dumps(s["goals"]), "positions": json.dumps(s.get("positions") or {}),
+                     "completed": bool(event["completed"])})
     return rows
 
 
@@ -218,18 +233,24 @@ def lineup_rows(sport_key: str, event: dict, summary: dict, home: str, away: str
 def save_lineups(engine, rows: list) -> int:
     """Upsert: una alineación por partido y equipo; la del partido terminado
     (con goles) reemplaza a la previa."""
+    # la columna de posiciones nace aquí (cada closing pasa por aquí, aunque no haya filas):
+    # el perfil y los picks la leen después
+    with engine.begin() as conn:
+        conn.execute(text(DDL))
+        conn.execute(text(ALTER))
     if not rows:
         return 0
     with engine.begin() as conn:
-        conn.execute(text(DDL))
         for r in rows:
             conn.execute(text(f"""
                 INSERT INTO {TABLE} (sport_key, kickoff, team, opponent, is_home, event_id, formation,
-                                     starters, names, goals, completed)
+                                     starters, names, goals, positions, completed)
                 VALUES (:sport_key, :kickoff, :team, :opponent, :is_home, :event_id, :formation,
-                        CAST(:starters AS jsonb), CAST(:names AS jsonb), CAST(:goals AS jsonb), :completed)
+                        CAST(:starters AS jsonb), CAST(:names AS jsonb), CAST(:goals AS jsonb),
+                        CAST(:positions AS jsonb), :completed)
                 ON CONFLICT (sport_key, kickoff, team) DO UPDATE SET
                     starters = EXCLUDED.starters, names = EXCLUDED.names, goals = EXCLUDED.goals,
+                    positions = EXCLUDED.positions,
                     formation = EXCLUDED.formation, completed = EXCLUDED.completed,
                     event_id = EXCLUDED.event_id, captured_at = NOW()
                 WHERE NOT {TABLE}.completed
@@ -256,6 +277,7 @@ def backfill_lineups(days: int = 10, leagues: dict | None = None, engine=None, g
     today = datetime.now(timezone.utc).date()
     with engine.begin() as conn:
         conn.execute(text(DDL))
+        conn.execute(text(ALTER))
         have = {r[0] for r in conn.execute(text(
             f"SELECT DISTINCT event_id FROM {TABLE} WHERE completed AND event_id IS NOT NULL"))}
     months = sorted({d.strftime("%Y%m") for d in _days(today - timedelta(days=days), today)})
@@ -291,6 +313,56 @@ def backfill_lineups(days: int = 10, leagues: dict | None = None, engine=None, g
         print(f"📋 Alineaciones (historial ESPN): {saved // 2} partidos nuevos en {len(leagues)} ligas"
               + (f" ({unnamed} sin su partido en matches: nombre de ESPN)" if unnamed else ""))
     return saved
+
+
+_NO_POSITIONS_SQL = f"""
+    SELECT DISTINCT sport_key, event_id FROM (
+        SELECT sport_key, event_id, positions,
+               ROW_NUMBER() OVER (PARTITION BY team ORDER BY kickoff DESC) AS rn
+        FROM {TABLE} WHERE completed AND event_id IS NOT NULL
+    ) x
+    WHERE rn <= :n AND positions IS NULL
+"""
+
+
+def fill_positions(engine=None, per_team: int = POSITIONS_PER_TEAM, leagues: dict | None = None, get=None,
+                   workers: int = 4, verbose: bool = True) -> int:
+    """La posición de los titulares de los partidos TERMINADOS ya guardados sin
+    ella (26-nov-26): solo los últimos `per_team` de cada equipo, que es lo que
+    usa el perfil (team_profile). Una consulta a ESPN por partido; si ESPN ya
+    no lo da, se guarda {} para no volver a pedirlo. Devuelve los equipo-partido
+    completados."""
+    from concurrent.futures import ThreadPoolExecutor
+    if engine is None:
+        from config.database import engine
+    leagues = leagues or espn_leagues()
+    with engine.begin() as conn:
+        conn.execute(text(DDL))
+        conn.execute(text(ALTER))
+        todo = [(r[0], str(r[1])) for r in conn.execute(text(_NO_POSITIONS_SQL), {"n": per_team}).fetchall()
+                if r[0] in leagues]
+    if not todo:
+        return 0
+
+    def one(item):
+        sport_key, eid = item
+        return item, parse_summary(_get(leagues[sport_key], "summary", f"event={eid}", get))
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        got = list(ex.map(one, todo))
+    filled = 0
+    with engine.begin() as conn:
+        for (sport_key, eid), summ in got:
+            for side, is_home in (("home", True), ("away", False)):
+                pos = (summ or {}).get(side, {}).get("positions") or {}
+                n = conn.execute(text(f"""
+                    UPDATE {TABLE} SET positions = CAST(:p AS jsonb)
+                    WHERE sport_key = :s AND event_id = :e AND is_home = :h AND positions IS NULL
+                """), {"p": json.dumps(pos), "s": sport_key, "e": eid, "h": is_home}).rowcount
+                filled += n if pos else 0
+    if verbose:
+        print(f"📋 Alineaciones: posición de los titulares en {filled} equipo-partidos "
+              f"({len(todo)} partidos revisados en ESPN)")
+    return filled
 
 
 def capture_upcoming(window_min: tuple = (5, 80), engine=None, get=None) -> list:

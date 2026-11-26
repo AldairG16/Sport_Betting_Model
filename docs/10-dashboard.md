@@ -4,14 +4,14 @@
 
 Un `.exe` que corre en la PC del dueño y se abre en el navegador: **http://127.0.0.1:5050**. Es
 `dashboard/app.py` (Flask) con `dashboard/ui_es5.js`; lee la base (no escribe, salvo su consumo y el
-respaldo). Versión en `VERSION` (2.16.0 en noviembre de 2026).
+respaldo). Versión en `VERSION` (2.17.0 en noviembre de 2026).
 
 **Pestañas:**
 
 | Pestaña | Qué muestra |
 |---|---|
 | Encabezado | Los 🎯 cobrados desde el 22-oct (cuántos se ganaron y lo que van dejando apostando 50) y la hora de la última actualización |
-| Próximos | Cada partido de los próximos 3 días con su pick, el 🎯 o por qué no, de cada 100 (programa y Pinnacle), la alineación y el marcador en vivo |
+| Próximos | Cada partido de los próximos 3 días con su pick, el 🎯 o por qué no, de cada 100 (programa y Pinnacle), la alineación, la marca ⚠️ de las bajas que pesan (desde v2.17.0: le faltan los que meten un tercio de sus goles o le cambia la defensa) y el marcador en vivo |
 | Parlay | Los parlays por jugar y los ya cobrados; abajo, "Con otros mercados · solo para medir": cada parlay comparado con su gemelo de otros mercados (desde v2.16.0) |
 | Anteriores | Lo que ya pasó, con el resultado de cada pick |
 | Ganadas y perdidas | Por día, por tipo de pick y por liga |
